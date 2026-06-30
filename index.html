@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BJUT-AL</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="app" class="app-container">
+      <!-- Sidebar / Bottom Navigation (Responsive) -->
+      <nav id="nav">
+        <div class="nav-brand">
+          <div class="logo"></div>
+          <h2>BJUT-AL</h2>
+        </div>
+        <ul class="nav-items">
+          <li class="nav-item active" data-target="dashboard">
+            <i data-lucide="layout-dashboard"></i> <span>控制台</span>
+          </li>
+          <li class="nav-item" data-target="accounts">
+            <i data-lucide="users"></i> <span>账号管理</span>
+          </li>
+          <li class="nav-item" data-target="logs">
+            <i data-lucide="file-text"></i> <span>运行日志</span>
+          </li>
+          <li class="nav-item" data-target="settings">
+            <i data-lucide="settings"></i> <span>设置</span>
+          </li>
+        </ul>
+      </nav>
+
+      <!-- Main Content Area -->
+      <main id="main-content">
+        <!-- Dashboard -->
+        <section id="dashboard" class="page active">
+          <header class="page-header">
+            <h1>控制台</h1>
+            <p>校园网状态与快捷操作</p>
+          </header>
+          
+          <div class="status-card glass-card">
+            <div class="status-header">
+              <div class="status-icon" id="network-icon"><i data-lucide="wifi"></i></div>
+              <div class="status-info">
+                <h3 id="network-status">正在检测网络...</h3>
+                <p id="network-detail">请稍候</p>
+              </div>
+            </div>
+            <div class="status-action">
+              <button id="btn-login" class="btn btn-primary" disabled>
+                <i data-lucide="log-in"></i> 立即登录
+              </button>
+            </div>
+          </div>
+
+          <div class="info-grid">
+            <div class="info-card glass-card">
+              <i data-lucide="user"></i>
+              <div class="info-content">
+                <h4>当前登录账号</h4>
+                <p id="info-account">未登录</p>
+              </div>
+            </div>
+            <div class="info-card glass-card">
+              <i data-lucide="activity"></i>
+              <div class="info-content">
+                <h4>账户余额</h4>
+                <p id="info-balance">--</p>
+              </div>
+            </div>
+            <div class="info-card glass-card">
+              <i data-lucide="bar-chart-2"></i>
+              <div class="info-content">
+                <h4>套餐剩余流量</h4>
+                <p id="info-flow">--</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Accounts -->
+        <section id="accounts" class="page">
+          <header class="page-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+            <div>
+              <h1>账号管理</h1>
+              <p>管理您的校园网登录账号，拖动可改变优先级</p>
+            </div>
+            <button id="btn-show-add" class="btn btn-primary"><i data-lucide="plus"></i> 添加账号</button>
+          </header>
+          
+          <div class="accounts-container">
+            <div id="accounts-list" class="accounts-list">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </section>
+
+        <!-- Add Account Modal -->
+        <div id="add-modal" class="modal-overlay hidden">
+          <div class="modal-content glass-card">
+            <h3>添加新账号</h3>
+            <form id="add-account-form">
+              <div class="form-group">
+                <label for="acc-username">用户名 (学号/工号)</label>
+                <input type="text" id="acc-username" required placeholder="请输入用户名">
+              </div>
+              <div class="form-group">
+                <label for="acc-password">密码</label>
+                <div class="password-input-wrap">
+                  <input type="password" id="acc-password" required placeholder="请输入密码">
+                  <button type="button" class="btn-icon toggle-password hide-password" data-target="acc-password"><i data-lucide="eye"></i></button>
+                </div>
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-add">取消</button>
+                <button type="submit" class="btn btn-primary">添加账号</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Edit Account Modal -->
+        <div id="edit-modal" class="modal-overlay hidden">
+          <div class="modal-content glass-card">
+            <h3>修改账号</h3>
+            <form id="edit-account-form">
+              <input type="hidden" id="edit-acc-index">
+              <div class="form-group">
+                <label for="edit-acc-username">用户名 (学号/工号)</label>
+                <input type="text" id="edit-acc-username" required>
+              </div>
+              <div class="form-group">
+                <label for="edit-acc-password">密码</label>
+                <div class="password-input-wrap">
+                  <input type="password" id="edit-acc-password" required>
+                  <button type="button" class="btn-icon toggle-password hide-password" data-target="edit-acc-password"><i data-lucide="eye"></i></button>
+                </div>
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-edit">取消</button>
+                <button type="submit" class="btn btn-primary">保存修改</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Logs -->
+        <section id="logs" class="page">
+          <header class="page-header">
+            <h1>运行日志</h1>
+            <p>查看系统运行状态和错误信息</p>
+            <button id="btn-clear-logs" class="btn btn-secondary btn-sm" style="margin-left: auto;">清空日志</button>
+          </header>
+          
+          <div class="logs-container glass-card">
+            <div id="logs-content" class="logs-content">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </section>
+
+        <!-- Settings -->
+        <section id="settings" class="page">
+          <header class="page-header">
+            <h1>设置</h1>
+            <p>自定义应用程序行为</p>
+          </header>
+          
+          <div class="settings-container">
+            <div class="settings-group glass-card">
+              <h3>自动化设置</h3>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>后台自动登录</h4>
+                  <p>当检测到校园网断开时自动进行登录</p>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="setting-auto-login">
+                  <span class="slider round"></span>
+                </label>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>自动检测间隔</h4>
+                  <p>网络状态检测的频率 (秒)</p>
+                </div>
+                <input type="number" id="setting-check-interval" class="input-inline" min="5" value="15">
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
