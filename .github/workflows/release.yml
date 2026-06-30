@@ -92,14 +92,17 @@ jobs:
         run: npm run tauri android init
 
       - name: Build Tauri Android App
-        uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
+        run: npm run tauri android build
+
+      - name: Get version
+        id: package-version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Upload Android APK
+        uses: softprops/action-gh-release@v2
         with:
-          tagName: app-v__VERSION__
-          releaseName: "BJUT-AL v__VERSION__"
-          releaseBody: "See the assets to download this version and install."
-          releaseDraft: true
-          prerelease: false
-          args: 'android build'
+          tag_name: app-v${{ steps.package-version.outputs.version }}
+          draft: true
+          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
