@@ -122,9 +122,9 @@ jobs:
         uses: ilharp/sign-android-release@v1
         id: sign_app
         with:
-          releaseDirectory: apk-to-sign
-          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          alias: key0
+          releaseDir: apk-to-sign
+          signingKey: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          keyAlias: key0
           keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
           buildToolsVersion: 34.0.0
