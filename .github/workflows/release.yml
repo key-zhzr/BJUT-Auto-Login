@@ -127,6 +127,7 @@ jobs:
           alias: key0
           keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          buildToolsVersion: 34.0.0
 
       - name: Get version
         id: package-version
