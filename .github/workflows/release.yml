@@ -94,7 +94,17 @@ jobs:
       - name: Build Tauri Android App
         env:
           NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
-        run: npm run tauri android build -- --debug
+        run: npm run tauri android build
+
+      - name: Sign Android Release
+        uses: r0adkll/sign-android-release@v1
+        id: sign_app
+        with:
+          releaseDirectory: src-tauri/gen/android/app/build/outputs/apk
+          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          alias: key0
+          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Get version
         id: package-version
@@ -105,4 +115,4 @@ jobs:
         with:
           tag_name: app-v${{ steps.package-version.outputs.version }}
           draft: true
-          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          files: ${{ steps.sign_app.outputs.signedReleaseFile }}
