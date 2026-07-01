@@ -22,7 +22,9 @@ jobs:
           - platform: 'ubuntu-22.04'
             args: ''
           - platform: 'windows-latest'
-            args: ''
+            args: '--target x86_64-pc-windows-msvc'
+          - platform: 'windows-latest'
+            args: '--target aarch64-pc-windows-msvc'
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
@@ -42,7 +44,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.platform == 'windows-latest' && 'aarch64-pc-windows-msvc,x86_64-pc-windows-msvc' || '' }}
 
       - name: Install NPM dependencies
         run: npm install
@@ -58,6 +60,17 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Rename macOS aarch64 to arm64
+        if: matrix.platform == 'macos-latest' && matrix.args == '--target aarch64-apple-darwin'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          gh release download app-v$VERSION -p "*aarch64.dmg" --dir .
+          mv BJUT-Auto-Login_${VERSION}_aarch64.dmg BJUT-Auto-Login_${VERSION}_arm64.dmg
+          gh release upload app-v$VERSION BJUT-Auto-Login_${VERSION}_arm64.dmg --clobber
+          gh release delete-asset app-v$VERSION BJUT-Auto-Login_${VERSION}_aarch64.dmg -y
 
   build-android:
     runs-on: ubuntu-latest

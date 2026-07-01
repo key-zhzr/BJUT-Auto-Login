@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "tauri-app",
+        "title": "BJUT-Auto-Login",
         "width": 800,
         "height": 600,
         "dragDropEnabled": false
@@ -26,6 +26,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["zh-CN"]
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
