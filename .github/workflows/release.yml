@@ -94,7 +94,7 @@ jobs:
       - name: Build Tauri Android App
         env:
           NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
-        run: npm run tauri android build
+        run: npm run tauri android build -- --debug
 
       - name: Get version
         id: package-version
