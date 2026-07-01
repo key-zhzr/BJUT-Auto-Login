@@ -100,11 +100,16 @@ jobs:
           NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
         run: npm run tauri android build -- --split-per-abi
 
+      - name: Prepare APKs for signing
+        run: |
+          mkdir -p apk-to-sign
+          find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
+
       - name: Sign Android Release
         uses: r0adkll/sign-android-release@v1
         id: sign_app
         with:
-          releaseDirectory: src-tauri/gen/android/app/build/outputs/apk
+          releaseDirectory: apk-to-sign
           signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           alias: key0
           keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -119,4 +124,4 @@ jobs:
         with:
           tag_name: app-v${{ steps.package-version.outputs.version }}
           draft: true
-          files: ${{ steps.sign_app.outputs.signedReleaseFile }}
+          files: apk-to-sign/*-signed.apk
