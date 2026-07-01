@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-app",
+  "productName": "BJUT-Auto-Login",
   "version": "0.1.0",
   "identifier": "cn.edu.bjut.al",
   "build": {

@@ -16,7 +16,9 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            args: '--target universal-apple-darwin'
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest'
+            args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
             args: ''
           - platform: 'windows-latest'
@@ -88,13 +90,15 @@ jobs:
       - name: Install NPM dependencies
         run: npm install
 
-      - name: Init Android Project
-        run: npm run tauri android init
+      - name: Init Android Project and Icons
+        run: |
+          npm run tauri android init
+          npx tauri icon
 
       - name: Build Tauri Android App
         env:
           NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
-        run: npm run tauri android build
+        run: npm run tauri android build -- --split-per-abi
 
       - name: Sign Android Release
         uses: r0adkll/sign-android-release@v1
