@@ -237,14 +237,13 @@ function setupEventListeners() {
     if (index === -1) return;
 
     if (btn.classList.contains('action-delete')) {
-      if (!confirm(`确定要删除账号 ${accounts[index].user} 吗？`)) return;
-      log('账号管理', `已删除账号 ${accounts[index].user}`);
-      accounts.splice(index, 1);
-      if (accounts.length > 0 && !accounts.find(a => a.isDefault)) {
-        accounts[0].isDefault = true;
+      const deleteModal = document.getElementById('delete-modal');
+      const deleteText = document.getElementById('delete-modal-text');
+      if (deleteModal && deleteText) {
+        deleteModal.setAttribute('data-delete-index', index.toString());
+        deleteText.textContent = `确定要删除账号 ${accounts[index].user} 吗？`;
+        deleteModal.classList.remove('hidden');
       }
-      saveAccounts();
-      renderAccounts();
     } else if (btn.classList.contains('action-default')) {
       const item = accounts.splice(index, 1)[0];
       accounts.unshift(item);
@@ -260,6 +259,32 @@ function setupEventListeners() {
     }
   });
 
+  // Delete Modal Events
+  const btnCancelDelete = document.getElementById('btn-cancel-delete');
+  const btnConfirmDelete = document.getElementById('btn-confirm-delete');
+  const deleteModal = document.getElementById('delete-modal');
+  
+  if (btnCancelDelete && btnConfirmDelete && deleteModal) {
+    btnCancelDelete.addEventListener('click', () => {
+      deleteModal.classList.add('hidden');
+    });
+    
+    btnConfirmDelete.addEventListener('click', () => {
+      const idxStr = deleteModal.getAttribute('data-delete-index');
+      if (idxStr) {
+        const index = parseInt(idxStr, 10);
+        log('账号管理', `已删除账号 ${accounts[index].user}`);
+        accounts.splice(index, 1);
+        if (accounts.length > 0 && !accounts.find(a => a.isDefault)) {
+          accounts[0].isDefault = true;
+        }
+        saveAccounts();
+        renderAccounts();
+        deleteModal.classList.add('hidden');
+      }
+    });
+  }
+
   // Drag and Drop using SortableJS
   Sortable.create(accountsList, {
     handle: '.drag-handle',
@@ -273,7 +298,35 @@ function setupEventListeners() {
         accounts.splice(newIndex, 0, item);
         accounts.forEach((a, i) => a.isDefault = (i === 0));
         saveAccounts();
-        renderAccounts();
+        
+        // Update DOM attributes manually to allow Sortable drop animation to complete smoothly
+        Array.from(accountsList.children).forEach((el, i) => {
+          el.setAttribute('data-index', i.toString());
+          el.querySelectorAll('button[data-index]').forEach(btn => btn.setAttribute('data-index', i.toString()));
+          
+          const badge = el.querySelector('.account-badge');
+          if (badge) {
+            badge.textContent = i === 0 ? '默认' : '备用';
+            badge.className = \`account-badge \${i === 0 ? 'text-primary font-bold' : 'text-muted'}\`;
+          }
+          
+          el.querySelectorAll('.action-default').forEach(btn => {
+            const b = btn as HTMLButtonElement;
+            if (i === 0) {
+              b.disabled = true;
+              b.style.color = 'var(--text-muted)';
+              b.style.cursor = 'not-allowed';
+              b.style.opacity = '0.5';
+              b.setAttribute('title', '已置顶');
+            } else {
+              b.disabled = false;
+              b.style.color = '';
+              b.style.cursor = 'pointer';
+              b.style.opacity = '1';
+              b.setAttribute('title', '设为默认 (置顶)');
+            }
+          });
+        });
         log('账号管理', '账号顺序已更新，最高优先级将作为默认账号');
       }
     }
@@ -308,26 +361,28 @@ function renderAccounts() {
     const avatarText = acc.user.length >= 2 ? acc.user.slice(-2) : acc.user;
     
     item.innerHTML = `
-      <div class="account-info-row" style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; width: 100%;">
-        <div style="display: flex; align-items: center; gap: 0.8rem; flex: 1; overflow: hidden;">
-          <div class="drag-handle" style="cursor: grab;"><i data-lucide="grip-vertical"></i></div>
-          <div class="account-avatar" style="width: 40px; height: 40px; border-radius: 50%; background: var(--primary-color); color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.1rem; flex-shrink: 0;">${avatarText}</div>
-          <div style="display: flex; flex-direction: column; overflow: hidden;">
-            <h4 style="margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 1rem;">${acc.user}</h4>
-            <span style="font-size: 0.75rem; color: ${acc.isDefault ? 'var(--primary-color)' : 'var(--text-muted)'}; font-weight: ${acc.isDefault ? 'bold' : 'normal'};">${acc.isDefault ? '默认' : '备用'}</span>
-          </div>
+      <div class="account-left">
+        <div class="drag-handle"><i data-lucide="grip-vertical"></i></div>
+        <div class="account-avatar">${avatarText}</div>
+        <div class="account-user">
+          <h4>${acc.user}</h4>
+          <span class="account-badge ${acc.isDefault ? 'text-primary font-bold' : 'text-muted'}">${acc.isDefault ? '默认' : '备用'}</span>
         </div>
-        <div style="display: flex; gap: 0.3rem;">
-          <button class="btn-icon action-edit" style="position: relative;" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
-          <button class="btn-icon action-default" style="position: relative; ${acc.isDefault ? 'color: var(--text-muted); cursor: not-allowed; opacity: 0.5;' : ''}" data-index="${index}" title="${acc.isDefault ? '已置顶' : '设为默认 (置顶)'}" ${acc.isDefault ? 'disabled' : ''}><i data-lucide="arrow-up-circle"></i></button>
+        <div class="account-mobile-actions">
+          <button class="btn-icon action-edit" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
+          <button class="btn-icon action-default" style="${acc.isDefault ? 'color: var(--text-muted); cursor: not-allowed; opacity: 0.5;' : ''}" data-index="${index}" title="${acc.isDefault ? '已置顶' : '设为默认 (置顶)'}" ${acc.isDefault ? 'disabled' : ''}><i data-lucide="arrow-up-circle"></i></button>
         </div>
       </div>
-      <div class="account-pass-row" style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.8rem; padding-left: 3rem; width: 100%;">
-        <div style="display: flex; align-items: center; gap: 0.5rem;">
+      <div class="account-right">
+        <div class="account-password">
           <span class="password-text" data-password="${acc.pass}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted);">**********</span>
-          <button class="btn-icon action-toggle-password hide-password" style="position: relative; padding: 0.2rem;" title="显示/隐藏密码"><i data-lucide="eye"></i></button>
+          <button class="btn-icon action-toggle-password hide-password" style="padding: 0.2rem;" title="显示/隐藏密码"><i data-lucide="eye"></i></button>
         </div>
-        <button class="btn-icon danger action-delete" style="position: relative;" data-index="${index}" title="删除"><i data-lucide="trash-2"></i></button>
+        <div class="account-desktop-actions">
+          <button class="btn-icon action-edit" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
+          <button class="btn-icon action-default" style="${acc.isDefault ? 'color: var(--text-muted); cursor: not-allowed; opacity: 0.5;' : ''}" data-index="${index}" title="${acc.isDefault ? '已置顶' : '设为默认 (置顶)'}" ${acc.isDefault ? 'disabled' : ''}><i data-lucide="arrow-up-circle"></i></button>
+        </div>
+        <button class="btn-icon danger action-delete" data-index="${index}" title="删除"><i data-lucide="trash-2"></i></button>
       </div>
     `;
     accountsList.appendChild(item);

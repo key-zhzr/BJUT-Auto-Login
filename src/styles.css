@@ -286,6 +286,7 @@ main {
   align-items: center;
   padding: 1rem;
   border-bottom: 1px solid var(--card-border);
+  gap: 1rem;
 }
 
 .account-item:last-child {
@@ -303,10 +304,56 @@ main {
   height: 40px;
   border-radius: 50%;
   background: var(--primary-color);
+  color: white;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: bold;
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.account-left, .account-right {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.account-left {
+  flex: 1;
+  overflow: hidden;
+}
+
+.account-user {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.account-user h4 {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 1rem;
+}
+
+.account-badge {
+  font-size: 0.75rem;
+}
+
+.text-primary { color: var(--primary-color); }
+.text-muted { color: var(--text-muted); }
+.font-bold { font-weight: bold; }
+
+.account-mobile-actions { display: none; }
+.account-desktop-actions { display: flex; gap: 0.3rem; }
+
+.account-password {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 /* Forms */
@@ -427,6 +474,17 @@ input:checked + .slider:before { transform: translateX(24px); }
   }
   .accounts-container {
     grid-template-columns: 1fr;
+  }
+  .account-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.8rem;
+  }
+  .account-desktop-actions { display: none; }
+  .account-mobile-actions { display: flex; gap: 0.3rem; }
+  .account-right {
+    justify-content: space-between;
+    padding-left: 2.8rem;
   }
   .status-card {
     flex-direction: column;

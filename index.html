@@ -148,6 +148,18 @@
           </div>
         </div>
 
+        <!-- Delete Confirmation Modal -->
+        <div id="delete-modal" class="modal-overlay hidden">
+          <div class="modal-content glass-card">
+            <h3>确认删除</h3>
+            <p id="delete-modal-text" style="margin-bottom: 1.5rem; color: var(--text-muted); font-size: 0.95rem;">确定要删除该账号吗？</p>
+            <div class="modal-actions">
+              <button type="button" class="btn btn-secondary" id="btn-cancel-delete">取消</button>
+              <button type="button" class="btn btn-danger" id="btn-confirm-delete" style="background: var(--error); color: white;">删除</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Logs -->
         <section id="logs" class="page">
           <header class="page-header">
