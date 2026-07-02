@@ -291,6 +291,9 @@ function setupEventListeners() {
     animation: 300,
     easing: "cubic-bezier(0.25, 1, 0.5, 1)",
     ghostClass: 'dragging',
+    forceFallback: true,
+    fallbackClass: 'dragging-fallback',
+    fallbackOnBody: true,
     onEnd: (evt) => {
       const { oldIndex, newIndex } = evt;
       if (oldIndex !== undefined && newIndex !== undefined && oldIndex !== newIndex) {

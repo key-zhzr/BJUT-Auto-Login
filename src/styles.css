@@ -529,8 +529,11 @@ input:checked + .slider:before { transform: translateX(24px); }
 .password-input-wrap input {
   padding-right: 2.5rem;
 }
+.password-input-wrap .btn-icon {
+  position: absolute;
+  right: 0.5rem;
+}
 .btn-icon {
-  position: absolute; right: 0.5rem;
   background: transparent; border: none; color: var(--text-muted);
   cursor: pointer; padding: 0.25rem; display: flex; align-items: center;
   justify-content: center;
@@ -575,5 +578,15 @@ input:checked + .slider:before { transform: translateX(24px); }
   opacity: 0.5;
   background: rgba(59, 130, 246, 0.1);
   border-radius: 8px;
+}
+.dragging-fallback {
+  opacity: 0.95 !important;
+  background: var(--card-bg) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 1px solid var(--primary-color) !important;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5) !important;
+  border-radius: 16px !important;
+  cursor: grabbing !important;
+  z-index: 9999 !important;
 }
 
