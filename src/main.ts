@@ -245,12 +245,72 @@ function setupEventListeners() {
         deleteModal.classList.remove('hidden');
       }
     } else if (btn.classList.contains('action-default')) {
-      const item = accounts.splice(index, 1)[0];
-      accounts.unshift(item);
+      // First: Get current rects
+      const firstRects = new Map<HTMLElement, DOMRect>();
+      Array.from(accountsList.children).forEach(child => {
+        firstRects.set(child as HTMLElement, child.getBoundingClientRect());
+      });
+      
+      const account = accounts.splice(index, 1)[0];
+      accounts.unshift(account);
       accounts.forEach((a, i) => a.isDefault = (i === 0));
       saveAccounts();
-      renderAccounts();
-      log('账号管理', `已将 ${accounts[0].user} 设为默认账号并置顶`);
+      
+      // Move DOM element to top
+      const itemToMove = accountsList.children[index] as HTMLElement;
+      accountsList.prepend(itemToMove);
+      
+      // Update attributes manually
+      Array.from(accountsList.children).forEach((el, i) => {
+        el.setAttribute('data-index', i.toString());
+        el.querySelectorAll('button[data-index]').forEach(b => b.setAttribute('data-index', i.toString()));
+        
+        const badge = el.querySelector('.account-badge');
+        if (badge) {
+          badge.textContent = i === 0 ? '默认' : '备用';
+          badge.className = `account-badge ${i === 0 ? 'text-primary font-bold' : 'text-muted'}`;
+        }
+        
+        el.querySelectorAll('.action-default').forEach(defaultBtn => {
+          const b = defaultBtn as HTMLButtonElement;
+          if (i === 0) {
+            b.disabled = true;
+            b.style.color = 'var(--text-muted)';
+            b.style.cursor = 'not-allowed';
+            b.style.opacity = '0.5';
+            b.setAttribute('title', '已置顶');
+          } else {
+            b.disabled = false;
+            b.style.color = '';
+            b.style.cursor = 'pointer';
+            b.style.opacity = '1';
+            b.setAttribute('title', '设为默认 (置顶)');
+          }
+        });
+      });
+      
+      // Last, Invert, Play
+      Array.from(accountsList.children).forEach(child => {
+        const el = child as HTMLElement;
+        const first = firstRects.get(el);
+        if (!first) return;
+        const last = el.getBoundingClientRect();
+        
+        const dx = first.left - last.left;
+        const dy = first.top - last.top;
+        
+        if (dx !== 0 || dy !== 0) {
+          el.animate([
+            { transform: `translate(${dx}px, ${dy}px)` },
+            { transform: 'translate(0, 0)' }
+          ], {
+            duration: 400,
+            easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)'
+          });
+        }
+      });
+      
+      log('账号管理', `已将账号 ${account.user} 置顶`);
     } else if (btn.classList.contains('action-edit')) {
       editAccIndex.value = index.toString();
       editAccUsername.value = accounts[index].user;
@@ -286,13 +346,64 @@ function setupEventListeners() {
   }
 
   // Drag and Drop using SortableJS
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+
   Sortable.create(accountsList, {
     handle: '.drag-handle',
     animation: 300,
     easing: "cubic-bezier(0.25, 1, 0.5, 1)",
     ghostClass: 'dragging',
+    forceFallback: true,
+    fallbackClass: 'dragging-fallback',
+    fallbackOnBody: true,
+    onStart: (evt) => {
+      const e = evt.originalEvent as MouseEvent | TouchEvent;
+      const rect = evt.item.getBoundingClientRect();
+      let clientX = 0, clientY = 0;
+      if (e) {
+        if ('touches' in e && e.touches.length > 0) {
+          clientX = e.touches[0].clientX;
+          clientY = e.touches[0].clientY;
+        } else if ('clientX' in e) {
+          clientX = (e as MouseEvent).clientX;
+          clientY = (e as MouseEvent).clientY;
+        }
+      }
+      dragOffsetX = clientX - rect.left;
+      dragOffsetY = clientY - rect.top;
+    },
     onEnd: (evt) => {
-      const { oldIndex, newIndex } = evt;
+      const { oldIndex, newIndex, item, originalEvent } = evt;
+      
+      // Calculate drop position for custom animation
+      const e = originalEvent as MouseEvent | TouchEvent;
+      let clientX = 0, clientY = 0;
+      if (e) {
+        if ('changedTouches' in e && e.changedTouches && e.changedTouches.length > 0) {
+          clientX = e.changedTouches[0].clientX;
+          clientY = e.changedTouches[0].clientY;
+        } else if ('clientX' in e) {
+          clientX = (e as MouseEvent).clientX;
+          clientY = (e as MouseEvent).clientY;
+        }
+      }
+      
+      if (clientX > 0 && clientY > 0) {
+        const rect = item.getBoundingClientRect();
+        const startX = clientX - dragOffsetX;
+        const startY = clientY - dragOffsetY;
+        const dx = startX - rect.left;
+        const dy = startY - rect.top;
+        
+        item.animate([
+          { transform: `translate(${dx}px, ${dy}px)`, zIndex: 9999, boxShadow: '0 10px 25px rgba(0,0,0,0.5)', opacity: 0.95 },
+          { transform: 'translate(0, 0)', zIndex: 9999, boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)', opacity: 1 }
+        ], {
+          duration: 350,
+          easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)'
+        });
+      }
       if (oldIndex !== undefined && newIndex !== undefined && oldIndex !== newIndex) {
         const item = accounts.splice(oldIndex, 1)[0];
         accounts.splice(newIndex, 0, item);
@@ -339,7 +450,12 @@ function log(module: string, message: string, type: 'info' | 'error' | 'success'
   const entry = document.createElement('div');
   entry.className = 'log-entry';
   entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-${type}">[${module}] ${message}</span>`;
-  logsContent.prepend(entry);
+  logsContent.appendChild(entry);
+  
+  const container = document.querySelector('.logs-container');
+  if (container) {
+    container.scrollTop = container.scrollHeight;
+  }
 }
 
 // Accounts
