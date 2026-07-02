@@ -358,7 +358,7 @@ function setupEventListeners() {
     fallbackClass: 'dragging-fallback',
     fallbackOnBody: true,
     onStart: (evt) => {
-      const e = evt.originalEvent as MouseEvent | TouchEvent;
+      const e = (evt as any).originalEvent as MouseEvent | TouchEvent;
       const rect = evt.item.getBoundingClientRect();
       let clientX = 0, clientY = 0;
       if (e) {
@@ -374,10 +374,10 @@ function setupEventListeners() {
       dragOffsetY = clientY - rect.top;
     },
     onEnd: (evt) => {
-      const { oldIndex, newIndex, item, originalEvent } = evt;
+      const { oldIndex, newIndex, item } = evt;
       
       // Calculate drop position for custom animation
-      const e = originalEvent as MouseEvent | TouchEvent;
+      const e = (evt as any).originalEvent as MouseEvent | TouchEvent;
       let clientX = 0, clientY = 0;
       if (e) {
         if ('changedTouches' in e && e.changedTouches && e.changedTouches.length > 0) {
