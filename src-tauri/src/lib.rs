@@ -13,29 +13,35 @@ fn get_network_info(app: tauri::AppHandle) -> serde_json::Value {
         let vm_ptr = ctx.vm().cast();
         let activity_ptr = ctx.context().cast();
 
-        if let Ok(vm) = unsafe { jni::JavaVM::from_raw(vm_ptr) } {
-            if let Ok(mut env) = vm.attach_current_thread() {
-                let activity = unsafe { jni::objects::JObject::from_raw(&env, activity_ptr) };
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr) };
+        let _ = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr) };
+            
+            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
+            if let Ok(class) = env.find_class(&class_name) {
+                let method_name = jni::strings::JNIString::from("getNetworkInfo");
+                let sig_str = "(Landroid/content/Context;)Ljava/lang/String;";
+                let runtime_sig: jni::signature::RuntimeMethodSignature = sig_str.parse().unwrap();
+                let sig = jni::signature::MethodSignature::from(&runtime_sig);
                 
-                if let Ok(class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
-                    if let Ok(jvalue) = env.call_static_method(
-                        class,
-                        "getNetworkInfo",
-                        "(Landroid/content/Context;)Ljava/lang/String;",
-                        &[jni::objects::JValue::Object(&activity)],
-                    ) {
-                        if let Ok(jstring) = jvalue.l() {
-                            if let Ok(s) = env.get_string((&jstring).into()) {
-                                let json_str: String = s.into();
-                                if let Ok(val) = serde_json::from_str(&json_str) {
-                                    result = val;
-                                }
+                if let Ok(jvalue) = env.call_static_method(
+                    class,
+                    &method_name,
+                    &sig,
+                    &[jni::objects::JValue::Object(&activity)],
+                ) {
+                    if let Ok(jobject) = jvalue.l() {
+                        let jstring = unsafe { jni::objects::JString::from_raw(env, jobject.as_raw().cast()) };
+                        if let Ok(json_str) = jstring.try_to_string(env) {
+                            if let Ok(val) = serde_json::from_str(&json_str) {
+                                result = val;
                             }
                         }
                     }
                 }
             }
-        }
+            Ok(())
+        });
         return result;
     }
 
