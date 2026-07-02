@@ -307,7 +307,7 @@ function setupEventListeners() {
           const badge = el.querySelector('.account-badge');
           if (badge) {
             badge.textContent = i === 0 ? '默认' : '备用';
-            badge.className = \`account-badge \${i === 0 ? 'text-primary font-bold' : 'text-muted'}\`;
+            badge.className = `account-badge ${i === 0 ? 'text-primary font-bold' : 'text-muted'}`;
           }
           
           el.querySelectorAll('.action-default').forEach(btn => {
