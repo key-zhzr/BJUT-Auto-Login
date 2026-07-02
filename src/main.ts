@@ -105,10 +105,45 @@ function setupEventListeners() {
     logsContent.innerHTML = '';
   });
 
-  settingAutoLogin.addEventListener('change', (e) => {
+  settingAutoLogin.addEventListener('change', async (e) => {
     autoLoginEnabled = (e.target as HTMLInputElement).checked;
     localStorage.setItem('bjut_auto_login', autoLoginEnabled.toString());
     log('设置', `自动登录已${autoLoginEnabled ? '开启' : '关闭'}`);
+    
+    // 如果是开启自动登录，且可能在移动端运行
+    if (autoLoginEnabled && navigator.userAgent.toLowerCase().includes('android')) {
+      alert('【安卓后台保活提示】\\n为确保后台自动登录正常运行，请前往系统设置：\\n1. 授予本应用“通知”权限\\n2. 允许本应用“自启动”和“后台运行”\\n\\n我们将尝试发送常驻通知以防止程序被系统清理。');
+      // 尝试请求通知权限并发送常驻通知
+      if ('Notification' in window) {
+        if (Notification.permission !== 'granted') {
+          await Notification.requestPermission();
+        }
+        if (Notification.permission === 'granted') {
+          try {
+            // 使用 Service Worker 维持常驻通知
+            if ('serviceWorker' in navigator) {
+              const registration = await navigator.serviceWorker.ready;
+              registration.showNotification('校园网自动登录运行中', {
+                body: '保持后台运行以随时检测并自动重连校园网',
+                icon: '/icons/128x128.png',
+                requireInteraction: true, // 类似常驻通知
+                tag: 'bjut-al-keepalive',
+                silent: true
+              });
+            } else {
+              new Notification('校园网自动登录运行中', {
+                body: '保持后台运行以随时检测并自动重连校园网',
+                requireInteraction: true,
+                tag: 'bjut-al-keepalive',
+                silent: true
+              });
+            }
+          } catch (err) {
+            console.error('Failed to show notification:', err);
+          }
+        }
+      }
+    }
   });
 
   settingCheckInterval.addEventListener('change', (e) => {
@@ -116,10 +151,24 @@ function setupEventListeners() {
     if (val >= 5) {
       checkInterval = val;
       localStorage.setItem('bjut_check_interval', checkInterval.toString());
-      log('设置', `检测间隔设置为 ${val} 秒`);
+      log('设置', `前台检测间隔设置为 ${val} 秒`);
       startNetworkCheckLoop();
     }
   });
+
+  const settingCheckIntervalBg = document.getElementById('setting-check-interval-bg') as HTMLInputElement;
+  if (settingCheckIntervalBg) {
+    let checkIntervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
+    settingCheckIntervalBg.value = checkIntervalBg.toString();
+    settingCheckIntervalBg.addEventListener('change', (e) => {
+      const val = parseInt((e.target as HTMLInputElement).value, 10);
+      if (val >= 5) {
+        checkIntervalBg = val;
+        localStorage.setItem('bjut_check_interval_bg', checkIntervalBg.toString());
+        log('设置', `后台检测间隔设置为 ${val} 秒`);
+      }
+    });
+  }
 
   // Password visibility toggle
   document.querySelectorAll('.toggle-password').forEach(btn => {
@@ -174,11 +223,11 @@ function setupEventListeners() {
       const parent = btn.closest('div');
       const textSpan = parent?.querySelector('.password-text') as HTMLElement;
       if (textSpan) {
-        if (textSpan.textContent === '***') {
+        if (textSpan.textContent === '**********') {
           textSpan.textContent = textSpan.getAttribute('data-password') || '';
           btn.classList.remove('hide-password');
         } else {
-          textSpan.textContent = '***';
+          textSpan.textContent = '**********';
           btn.classList.add('hide-password');
         }
       }
@@ -188,6 +237,7 @@ function setupEventListeners() {
     if (index === -1) return;
 
     if (btn.classList.contains('action-delete')) {
+      if (!confirm(`确定要删除账号 ${accounts[index].user} 吗？`)) return;
       log('账号管理', `已删除账号 ${accounts[index].user}`);
       accounts.splice(index, 1);
       if (accounts.length > 0 && !accounts.find(a => a.isDefault)) {
@@ -213,7 +263,8 @@ function setupEventListeners() {
   // Drag and Drop using SortableJS
   Sortable.create(accountsList, {
     handle: '.drag-handle',
-    animation: 150,
+    animation: 300,
+    easing: "cubic-bezier(0.25, 1, 0.5, 1)",
     ghostClass: 'dragging',
     onEnd: (evt) => {
       const { oldIndex, newIndex } = evt;
@@ -254,20 +305,28 @@ function renderAccounts() {
     const item = document.createElement('div');
     item.className = 'account-item glass-card';
     item.setAttribute('data-index', index.toString());
+    const avatarText = acc.user.length >= 2 ? acc.user.slice(-2) : acc.user;
+    
     item.innerHTML = `
-      <div class="account-info">
-        <div class="drag-handle"><i data-lucide="grip-vertical"></i></div>
-        <div class="account-avatar">${acc.user.charAt(0).toUpperCase()}</div>
-        <div>
-          <h4>${acc.user}</h4>
-          <span style="font-size: 0.8rem; color: var(--text-muted)">${acc.isDefault ? '默认账号 (第一顺位)' : '备用账号'}</span>
+      <div class="account-info-row" style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; width: 100%;">
+        <div style="display: flex; align-items: center; gap: 0.8rem; flex: 1; overflow: hidden;">
+          <div class="drag-handle" style="cursor: grab;"><i data-lucide="grip-vertical"></i></div>
+          <div class="account-avatar" style="width: 40px; height: 40px; border-radius: 50%; background: var(--primary-color); color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.1rem; flex-shrink: 0;">${avatarText}</div>
+          <div style="display: flex; flex-direction: column; overflow: hidden;">
+            <h4 style="margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 1rem;">${acc.user}</h4>
+            <span style="font-size: 0.75rem; color: ${acc.isDefault ? 'var(--primary-color)' : 'var(--text-muted)'}; font-weight: ${acc.isDefault ? 'bold' : 'normal'};">${acc.isDefault ? '默认' : '备用'}</span>
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.3rem;">
+          <button class="btn-icon action-edit" style="position: relative;" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
+          <button class="btn-icon action-default" style="position: relative; ${acc.isDefault ? 'color: var(--text-muted); cursor: not-allowed; opacity: 0.5;' : ''}" data-index="${index}" title="${acc.isDefault ? '已置顶' : '设为默认 (置顶)'}" ${acc.isDefault ? 'disabled' : ''}><i data-lucide="arrow-up-circle"></i></button>
         </div>
       </div>
-      <div style="display: flex; gap: 0.5rem; align-items: center;">
-        <span class="password-text" data-password="${acc.pass}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted);">***</span>
-        <button class="btn-icon action-toggle-password hide-password" style="position: relative; padding: 0.2rem;" title="显示/隐藏密码"><i data-lucide="eye"></i></button>
-        <button class="btn-icon action-edit" style="position: relative;" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
-        ${!acc.isDefault ? `<button class="btn-icon action-default" style="position: relative;" data-index="${index}" title="设为默认 (置顶)"><i data-lucide="arrow-up-circle"></i></button>` : ''}
+      <div class="account-pass-row" style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.8rem; padding-left: 3rem; width: 100%;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span class="password-text" data-password="${acc.pass}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted);">**********</span>
+          <button class="btn-icon action-toggle-password hide-password" style="position: relative; padding: 0.2rem;" title="显示/隐藏密码"><i data-lucide="eye"></i></button>
+        </div>
         <button class="btn-icon danger action-delete" style="position: relative;" data-index="${index}" title="删除"><i data-lucide="trash-2"></i></button>
       </div>
     `;
@@ -278,9 +337,17 @@ function renderAccounts() {
 
 // Network Check Loop
 function startNetworkCheckLoop() {
-  if (checkTimer) clearInterval(checkTimer);
-  checkNetwork();
-  checkTimer = setInterval(checkNetwork, checkInterval * 1000) as any;
+  if (checkTimer) clearTimeout(checkTimer);
+  
+  const tick = async () => {
+    await checkNetwork();
+    const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
+    const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
+    const currentInterval = document.hidden ? intervalBg : intervalFg;
+    checkTimer = setTimeout(tick, currentInterval * 1000) as any;
+  };
+  
+  tick();
 }
 
 async function checkNetwork() {
