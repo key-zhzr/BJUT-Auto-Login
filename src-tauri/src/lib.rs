@@ -10,7 +10,7 @@ fn get_network_info(app: tauri::AppHandle) -> serde_json::Value {
     {
         use tauri::Manager;
         let mut result = serde_json::json!({});
-        let _ = app.android_environment(|env, activity, _ctx| {
+        let _ = app.run_on_android_context(|env, activity, _webview| {
             if let Ok(class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
                 if let Ok(jvalue) = env.call_static_method(
                     class,
