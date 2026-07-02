@@ -534,6 +534,7 @@ input:checked + .slider:before { transform: translateX(24px); }
   right: 0.5rem;
 }
 .btn-icon {
+  position: relative;
   background: transparent; border: none; color: var(--text-muted);
   cursor: pointer; padding: 0.25rem; display: flex; align-items: center;
   justify-content: center;
