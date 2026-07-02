@@ -60,7 +60,9 @@ nav {
 .logo {
   width: 32px;
   height: 32px;
-  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  background-image: url('/logo.png');
+  background-size: cover;
+  background-position: center;
   border-radius: 8px;
   box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
 }
@@ -392,7 +394,7 @@ input:focus {
 
 /* Logs */
 .logs-container {
-  height: 60vh;
+  height: 75vh;
   overflow-y: auto;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 0.85rem;
