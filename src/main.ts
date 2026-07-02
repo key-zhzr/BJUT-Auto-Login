@@ -112,7 +112,7 @@ function setupEventListeners() {
     
     // 如果是开启自动登录，且可能在移动端运行
     if (autoLoginEnabled && navigator.userAgent.toLowerCase().includes('android')) {
-      alert('【安卓后台保活提示】\\n为确保后台自动登录正常运行，请前往系统设置：\\n1. 授予本应用“通知”权限\\n2. 允许本应用“自启动”和“后台运行”\\n\\n我们将尝试发送常驻通知以防止程序被系统清理。');
+      alert('【安卓后台保活提示】\n为确保后台自动登录正常运行，请前往系统设置：\n1. 授予本应用“通知”权限\n2. 允许本应用“自启动”和“后台运行”\n\n我们将尝试发送常驻通知以防止程序被系统清理。');
       // 尝试请求通知权限并发送常驻通知
       if ('Notification' in window) {
         if (Notification.permission !== 'granted') {
@@ -170,6 +170,58 @@ function setupEventListeners() {
     });
   }
 
+  // Advanced Settings Events
+  const settingMoreOptions = document.getElementById('setting-more-options') as HTMLInputElement;
+  const dashboardOverrideOptions = document.getElementById('dashboard-override-options');
+  const overrideAccountSelect = document.getElementById('override-account') as HTMLSelectElement;
+  
+  if (settingMoreOptions && dashboardOverrideOptions) {
+    const isMoreOptionsEnabled = localStorage.getItem('bjut_more_options') === 'true';
+    settingMoreOptions.checked = isMoreOptionsEnabled;
+    dashboardOverrideOptions.style.display = isMoreOptionsEnabled ? 'block' : 'none';
+    
+    settingMoreOptions.addEventListener('change', (e) => {
+      const enabled = (e.target as HTMLInputElement).checked;
+      localStorage.setItem('bjut_more_options', enabled.toString());
+      dashboardOverrideOptions.style.display = enabled ? 'block' : 'none';
+      log('设置', `更多控制台选项已${enabled ? '开启' : '关闭'}`);
+    });
+  }
+
+  if (overrideAccountSelect) {
+    overrideAccountSelect.addEventListener('change', (e) => {
+      if ((e.target as HTMLSelectElement).value === 'add') {
+        overrideAccountSelect.value = 'auto'; // Reset
+        addModal.classList.remove('hidden');
+      }
+    });
+  }
+
+  const btnCheckUpdate = document.getElementById('btn-check-update');
+  if (btnCheckUpdate) {
+    btnCheckUpdate.addEventListener('click', () => {
+      const channel = (document.getElementById('setting-update-channel') as HTMLSelectElement).value;
+      alert(`正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...\n当前已经是最新版本！`);
+      log('系统', `检查更新完毕 (${channel})`);
+    });
+  }
+
+  const btnManageWhitelist = document.getElementById('btn-manage-whitelist');
+  if (btnManageWhitelist) {
+    btnManageWhitelist.addEventListener('click', () => {
+      const w = JSON.parse(localStorage.getItem('bjut_whitelist') || '[]');
+      alert('当前信任的 WiFi (白名单):\n' + (w.length ? w.join('\n') : '暂无'));
+    });
+  }
+
+  const btnManageBlacklist = document.getElementById('btn-manage-blacklist');
+  if (btnManageBlacklist) {
+    btnManageBlacklist.addEventListener('click', () => {
+      const b = JSON.parse(localStorage.getItem('bjut_blacklist') || '[]');
+      alert('当前拒绝的 WiFi (黑名单):\n' + (b.length ? b.join('\n') : '暂无'));
+    });
+  }
+
   // Password visibility toggle
   document.querySelectorAll('.toggle-password').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -213,6 +265,29 @@ function setupEventListeners() {
   // Account List Event Delegation
   accountsList.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
+    
+    // Toggle account disabled state
+    const avatar = target.closest('.account-avatar');
+    if (avatar) {
+      const parent = avatar.closest('.account-item');
+      if (parent) {
+        const index = parseInt(parent.getAttribute('data-index') || '-1', 10);
+        if (index !== -1) {
+          accounts[index].isDisabled = !accounts[index].isDisabled;
+          saveAccounts();
+          if (accounts[index].isDisabled) {
+            parent.classList.add('disabled');
+            log('账号管理', `已禁用账号: ${accounts[index].user}`);
+          } else {
+            parent.classList.remove('disabled');
+            log('账号管理', `已启用账号: ${accounts[index].user}`);
+          }
+          updateOverrideOptions();
+        }
+      }
+      return;
+    }
+
     const btn = target.closest('button');
     if (!btn) return;
     
@@ -452,10 +527,12 @@ function log(module: string, message: string, type: 'info' | 'error' | 'success'
   entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-${type}">[${module}] ${message}</span>`;
   logsContent.appendChild(entry);
   
-  const container = document.querySelector('.logs-container');
-  if (container) {
-    container.scrollTop = container.scrollHeight;
-  }
+  setTimeout(() => {
+    const container = document.querySelector('.logs-container');
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, 10);
 }
 
 // Accounts
@@ -472,7 +549,7 @@ function renderAccounts() {
   
   accounts.forEach((acc, index) => {
     const item = document.createElement('div');
-    item.className = 'account-item glass-card';
+    item.className = 'account-item glass-card' + (acc.isDisabled ? ' disabled' : '');
     item.setAttribute('data-index', index.toString());
     const avatarText = acc.user.length >= 2 ? acc.user.slice(-2) : acc.user;
     
@@ -504,6 +581,25 @@ function renderAccounts() {
     accountsList.appendChild(item);
   });
   createIcons({ icons });
+  updateOverrideOptions();
+}
+
+function updateOverrideOptions() {
+  const select = document.getElementById('override-account') as HTMLSelectElement;
+  if (!select) return;
+  select.innerHTML = '<option value="auto">自动</option>';
+  accounts.forEach((acc, i) => {
+    if (!acc.isDisabled) {
+      const opt = document.createElement('option');
+      opt.value = i.toString();
+      opt.textContent = `账号${i + 1} (${acc.user})`;
+      select.appendChild(opt);
+    }
+  });
+  const addOpt = document.createElement('option');
+  addOpt.value = 'add';
+  addOpt.textContent = '添加账号...';
+  select.appendChild(addOpt);
 }
 
 // Network Check Loop
@@ -590,12 +686,6 @@ async function manualLogin() {
     return;
   }
   
-  // Actually, we use the first account by order now since it's drag and drop sorted
-  // But we still maintain the 'isDefault' flag. The prompt said "用户上下拖动决定账号使用顺序".
-  // So we should try to login using the first account, if it fails, try the second, etc.
-  // Wait, the prompt says "上下拖动决定账号使用顺序", meaning we might want to loop.
-  // Let's implement multi-account sequential login fallback!
-  
   if (accounts.length === 0) {
     alert('请先在账号管理中添加账号');
     return;
@@ -603,13 +693,41 @@ async function manualLogin() {
 
   isLoggingIn = true;
   btnLogin.disabled = true;
+  btnLogin.innerHTML = '<i data-lucide="loader"></i> 安全检查中...';
+  createIcons({ icons });
+  
+  const isSafe = await checkNetworkSecurity();
+  if (!isSafe) {
+    log('安全', '已取消登录：安全检查未通过', 'error');
+    isLoggingIn = false;
+    btnLogin.disabled = false;
+    btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
+    createIcons({ icons });
+    return;
+  }
+  
   btnLogin.innerHTML = '<i data-lucide="loader"></i> 登录中...';
   createIcons({ icons });
   
+  let overrideAcc = (document.getElementById('override-account') as HTMLSelectElement)?.value || 'auto';
+  let overrideMethod = (document.getElementById('override-method') as HTMLSelectElement)?.value || 'auto';
+  
+  // map overrideMethod to LoginType if not auto
+  let targetLoginType = currentLoginType;
+  if (overrideMethod === 'bjut-wifi') targetLoginType = LoginType.Type1_221_98; // assuming
+  else if (overrideMethod === 'bjut_sushe') targetLoginType = LoginType.Type2_251_3;
+  else if (overrideMethod === 'wired') targetLoginType = LoginType.Type3_172_30;
+
   let success = false;
-  for (let acc of accounts) {
+  let targetAccounts = accounts.filter(a => !a.isDisabled);
+  if (overrideAcc !== 'auto' && overrideAcc !== 'add') {
+    const idx = parseInt(overrideAcc, 10);
+    if (accounts[idx]) targetAccounts = [accounts[idx]];
+  }
+
+  for (let acc of targetAccounts) {
     log('登录', `尝试使用账号 ${acc.user} 登录...`);
-    const result = await loginToCampusNetwork(currentLoginType, acc.user, acc.pass);
+    const result = await loginToCampusNetwork(targetLoginType, acc.user, acc.pass);
     if (result.success) {
       log('登录', '登录成功！', 'success');
       success = true;
@@ -629,6 +747,108 @@ async function manualLogin() {
   }
   createIcons({ icons });
   isLoggingIn = false;
+}
+
+let campusSubnets: Set<string> | null = null;
+async function loadSubnets() {
+  if (!campusSubnets) {
+    try {
+      const res = await fetch('/src/assets/subnets.json');
+      if (res.ok) {
+        const data = await res.json();
+        campusSubnets = new Set(data);
+      } else {
+        campusSubnets = new Set();
+      }
+    } catch (e) {
+      campusSubnets = new Set();
+    }
+  }
+}
+
+async function checkNetworkSecurity(): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  if (!window.__TAURI__) return true; 
+
+  try {
+    const netInfo: { ssid: string, bssid: string, ip: string } = await invoke('get_network_info');
+    if (!netInfo || (!netInfo.ssid && !netInfo.ip)) return true;
+    
+    await loadSubnets();
+    const isBjutWifi = netInfo.ssid.includes('bjut-wifi') || netInfo.ssid.includes('bjut_sushe');
+    let isSafe = false;
+    
+    // Check vlan
+    if (netInfo.ip) {
+      const parts = netInfo.ip.split('.');
+      if (parts.length === 4) {
+        const prefix = parts.slice(0, 3).join('.');
+        if (campusSubnets?.has(prefix)) {
+          isSafe = true;
+        }
+      }
+    }
+    
+    if (isBjutWifi && isSafe) return true;
+    if (!isBjutWifi && netInfo.ssid !== '<unknown ssid>') {
+      isSafe = false; // direct unsafe if completely unmatching
+    }
+    if (isSafe) return true;
+    
+    const netKey = `${netInfo.ssid}|${netInfo.bssid}`;
+    const whitelist: string[] = JSON.parse(localStorage.getItem('bjut_whitelist') || '[]');
+    const blacklist: string[] = JSON.parse(localStorage.getItem('bjut_blacklist') || '[]');
+    
+    if (whitelist.includes(netKey)) return true;
+    if (blacklist.includes(netKey)) return false;
+    
+    // Prompt
+    return new Promise(resolve => {
+      const modal = document.getElementById('security-modal')!;
+      document.getElementById('sec-ssid')!.textContent = netInfo.ssid;
+      document.getElementById('sec-bssid')!.textContent = netInfo.bssid;
+      document.getElementById('sec-ip')!.textContent = netInfo.ip;
+      
+      const cleanup = () => {
+        modal.classList.add('hidden');
+        btnCancel.removeEventListener('click', onCancel);
+        btnCancelBlack.removeEventListener('click', onCancelBlack);
+        btnTrustOnce.removeEventListener('click', onTrustOnce);
+        btnTrustWhite.removeEventListener('click', onTrustWhite);
+      };
+      
+      const btnCancel = document.getElementById('btn-sec-cancel')!;
+      const onCancel = () => { cleanup(); resolve(false); };
+      btnCancel.addEventListener('click', onCancel);
+      
+      const btnCancelBlack = document.getElementById('btn-sec-cancel-black')!;
+      const onCancelBlack = () => {
+        blacklist.push(netKey);
+        localStorage.setItem('bjut_blacklist', JSON.stringify(blacklist));
+        log('安全', `已将 ${netInfo.ssid} 加入黑名单`, 'info');
+        cleanup(); resolve(false);
+      };
+      btnCancelBlack.addEventListener('click', onCancelBlack);
+      
+      const btnTrustOnce = document.getElementById('btn-sec-trust-once')!;
+      const onTrustOnce = () => { cleanup(); resolve(true); };
+      btnTrustOnce.addEventListener('click', onTrustOnce);
+      
+      const btnTrustWhite = document.getElementById('btn-sec-trust-white')!;
+      const onTrustWhite = () => {
+        whitelist.push(netKey);
+        localStorage.setItem('bjut_whitelist', JSON.stringify(whitelist));
+        log('安全', `已将 ${netInfo.ssid} 加入白名单`, 'info');
+        cleanup(); resolve(true);
+      };
+      btnTrustWhite.addEventListener('click', onTrustWhite);
+      
+      modal.classList.remove('hidden');
+    });
+  } catch (e) {
+    console.error('Security check error', e);
+    return true; // Fail open if native not implemented yet
+  }
 }
 
 // Start

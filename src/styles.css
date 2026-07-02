@@ -74,6 +74,25 @@ nav {
   gap: 0.5rem;
 }
 
+.account-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  border-radius: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  transition: all 0.3s ease;
+}
+.account-item.disabled {
+  opacity: 0.4;
+  filter: grayscale(1);
+}
+.account-item.disabled .account-avatar {
+  background: var(--text-muted);
+}
+
 .nav-item {
   display: flex;
   align-items: center;
@@ -463,9 +482,14 @@ input:checked + .slider:before { transform: translateX(24px); }
     align-items: center;
   }
   .nav-brand {
+    padding: 0;
+    margin-right: auto;
     margin-bottom: 0;
   }
-  .nav-brand h2 { display: none; }
+  .nav-brand h2 {
+    font-size: 1.2rem;
+    margin-left: 0.5rem;
+  }
   .nav-items {
     flex-direction: row;
   }

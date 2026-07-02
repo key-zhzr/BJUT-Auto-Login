@@ -41,6 +41,27 @@
             <h1>控制台</h1>
           </header>
           
+          <div id="dashboard-override-options" class="glass-card" style="display: none; padding: 1rem; margin-bottom: 1rem; border-radius: 12px;">
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+              <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 150px;">
+                <label for="override-account" style="font-size: 0.85rem;">登录账号</label>
+                <select id="override-account" class="input-inline" style="width: 100%; border-radius: 6px;">
+                  <option value="auto">自动</option>
+                  <!-- Populated by JS -->
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 150px;">
+                <label for="override-method" style="font-size: 0.85rem;">登录方式</label>
+                <select id="override-method" class="input-inline" style="width: 100%; border-radius: 6px;">
+                  <option value="auto">自动检测</option>
+                  <option value="bjut-wifi">bjut-wifi</option>
+                  <option value="bjut_sushe">bjut_sushe</option>
+                  <option value="wired">有线lgn</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          
           <div class="status-card glass-card">
             <div class="status-header">
               <div class="status-icon" id="network-icon"><i data-lucide="wifi"></i></div>
@@ -159,11 +180,30 @@
           </div>
         </div>
 
+        <!-- Security Confirmation Modal -->
+        <div id="security-modal" class="modal-overlay hidden">
+          <div class="modal-content glass-card" style="border: 2px solid var(--error);">
+            <h3 style="color: var(--error); display: flex; align-items: center; gap: 0.5rem;"><i data-lucide="shield-alert"></i> 安全警告</h3>
+            <p style="margin-bottom: 1rem; font-size: 0.95rem;">检测到当前网络环境存在风险，疑似伪造的校园网。</p>
+            <div style="background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 8px; margin-bottom: 1.5rem; font-family: monospace; font-size: 0.85rem; color: var(--text-muted);">
+              <div>SSID: <span id="sec-ssid"></span></div>
+              <div>BSSID: <span id="sec-bssid"></span></div>
+              <div>IP: <span id="sec-ip"></span></div>
+            </div>
+            <div class="modal-actions" style="flex-direction: column; gap: 0.5rem;">
+              <button type="button" class="btn btn-primary" id="btn-sec-cancel" style="width: 100%;">取消登录</button>
+              <button type="button" class="btn btn-secondary" id="btn-sec-cancel-black" style="width: 100%;">取消并将该WiFi加入黑名单</button>
+              <button type="button" class="btn btn-secondary" id="btn-sec-trust-once" style="width: 100%; border-color: var(--warning); color: var(--warning);">信任一次 (继续登录)</button>
+              <button type="button" class="btn btn-secondary" id="btn-sec-trust-white" style="width: 100%; border-color: var(--warning); color: var(--warning);">信任并将该WiFi加入白名单</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Logs -->
         <section id="logs" class="page">
-          <header class="page-header">
-            <h1>运行日志</h1>
-            <button id="btn-clear-logs" class="btn btn-secondary btn-sm" style="margin-left: auto;">清空日志</button>
+          <header class="page-header" style="display: flex; align-items: center;">
+            <h1 style="margin: 0;">运行日志</h1>
+            <button id="btn-clear-logs" class="btn btn-sm" style="margin-left: auto; color: #ff4d4f; border: 1px solid #ff4d4f; background: transparent;">清空日志</button>
           </header>
           
           <div class="logs-container glass-card">
@@ -208,7 +248,55 @@
                 <input type="number" id="setting-check-interval-bg" class="input-inline" min="5" value="60">
               </div>
             </div>
-          </div>
+            
+            <div class="settings-group glass-card" style="margin-top: 1rem;">
+              <h3>网络与安全</h3>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>受信任的 WiFi (白名单)</h4>
+                  <p>在此列表中的网络将跳过安全提示</p>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="btn-manage-whitelist">管理</button>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>不信任的 WiFi (黑名单)</h4>
+                  <p>在此列表中的网络将被拒绝登录</p>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="btn-manage-blacklist">管理</button>
+              </div>
+            </div>
+
+            <div class="settings-group glass-card" style="margin-top: 1rem;">
+              <h3>高级设置</h3>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>更多控制台选项</h4>
+                  <p>在控制台显示指定的账号和登录方式组件</p>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="setting-more-options">
+                  <span class="slider round"></span>
+                </label>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>更新通道</h4>
+                  <p>选择您想接收的更新版本类型</p>
+                </div>
+                <select id="setting-update-channel" class="input-inline">
+                  <option value="release">正式版 (Release)</option>
+                  <option value="prerelease">预览版 (Pre-release)</option>
+                </select>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>检查更新</h4>
+                  <p>当前版本: v0.1.0</p>
+                </div>
+                <button class="btn btn-primary btn-sm" id="btn-check-update">检查更新</button>
+              </div>
+            </div>
         </section>
       </main>
     </div>
