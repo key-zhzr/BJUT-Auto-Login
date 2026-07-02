@@ -102,10 +102,6 @@ jobs:
       - name: Install NPM dependencies
         run: npm install
 
-      - name: Init Android Project and Icons
-        run: |
-          npm run tauri android init
-          npx tauri icon
 
       - name: Build Tauri Android App
         env:
