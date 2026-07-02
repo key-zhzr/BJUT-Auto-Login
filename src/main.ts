@@ -768,7 +768,7 @@ async function loadSubnets() {
 
 async function checkNetworkSecurity(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core');
-  if (!window.__TAURI__) return true; 
+  if (!(window as any).__TAURI__) return true; 
 
   try {
     const netInfo: { ssid: string, bssid: string, ip: string } = await invoke('get_network_info');
