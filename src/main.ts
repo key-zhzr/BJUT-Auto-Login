@@ -932,9 +932,17 @@ async function checkNetworkSecurity(): Promise<boolean> {
     if (netInfo.ip) {
       const parts = netInfo.ip.split('.');
       if (parts.length === 4) {
-        const prefix = parts.slice(0, 3).join('.');
-        if (campusSubnets?.has(prefix)) {
-          isSafe = true;
+        const p1 = parseInt(parts[0], 10);
+        const p2 = parseInt(parts[1], 10);
+        
+        if (p1 === 10) {
+          if ((p2 >= 17 && p2 <= 27) || p2 === 121 || p2 === 126 || p2 === 226) {
+            isSafe = true;
+          }
+        } else if (p1 === 172) {
+          if (p2 >= 17 && p2 <= 27) {
+            isSafe = true;
+          }
         }
       }
     }
