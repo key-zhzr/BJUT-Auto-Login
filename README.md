@@ -1,7 +1,5 @@
 # BJUT-Auto-Login (BJUT-AL)
 
-![BJUT-AL App Icon](src/assets/app_icon.png)
-
 **BJUT-Auto-Login (BJUT-AL)** 是一款专为北京工业大学（BJUT）校园网（`bjut_wifi` / `bjut_sushe`）设计的现代化、跨平台自动登录客户端。基于最新的 **Tauri V2** 构建，支持 Windows、macOS、Linux 以及 Android 平台，拥有极佳的性能、极小的体积以及全平台的沉浸式原生体验。
 
 ---
