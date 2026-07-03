@@ -53,6 +53,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: "-"
         with:
           tagName: v0.1.1
           releaseName: "BJUT-AL v0.1.1"
