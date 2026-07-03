@@ -13,27 +13,23 @@ fn get_network_info(app: tauri::AppHandle) -> serde_json::Value {
         let vm_ptr = ctx.vm().cast();
         let activity_ptr = ctx.context().cast();
 
-        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr) };
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr).unwrap() };
         let _ = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
             let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr) };
             
-            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
-            if let Ok(class) = env.find_class(&class_name) {
-                let method_name = jni::strings::JNIString::from("getNetworkInfo");
-                let sig_str = "(Landroid/content/Context;)Ljava/lang/String;";
-                let runtime_sig: jni::signature::RuntimeMethodSignature = sig_str.parse().unwrap();
-                let sig = jni::signature::MethodSignature::from(&runtime_sig);
-                
+            let class_name = "cn/edu/bjut/al/NetworkHelper";
+            if let Ok(class) = env.find_class(class_name) {
                 if let Ok(jvalue) = env.call_static_method(
                     class,
-                    &method_name,
-                    &sig,
-                    &[jni::objects::JValue::Object(&activity)],
+                    "getNetworkInfo",
+                    "(Landroid/content/Context;)Ljava/lang/String;",
+                    &[jni::objects::JValue::Object(&activity).into()],
                 ) {
                     if let Ok(jobject) = jvalue.l() {
-                        let jstring = unsafe { jni::objects::JString::from_raw(env, jobject.as_raw().cast()) };
-                        if let Ok(json_str) = jstring.try_to_string(env) {
-                            if let Ok(val) = serde_json::from_str(&json_str) {
+                        let jstring: jni::objects::JString = jobject.into();
+                        if let Ok(json_str) = env.get_string(&jstring) {
+                            let json_str_rust: String = json_str.into();
+                            if let Ok(val) = serde_json::from_str(&json_str_rust) {
                                 result = val;
                             }
                         }
