@@ -1,6 +1,7 @@
 import { createIcons, icons } from 'lucide';
 import Sortable from 'sortablejs';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
 if (navigator.userAgent.includes('Mac OS X')) {
   document.body.classList.add('is-macos');
@@ -244,34 +245,20 @@ function setupEventListeners() {
     if (autoLoginEnabled && navigator.userAgent.toLowerCase().includes('android')) {
       customAlert('【安卓后台保活提示】\n为确保后台自动登录正常运行，请前往系统设置：\n1. 授予本应用“通知”权限\n2. 允许本应用“自启动”和“后台运行”\n\n我们将尝试发送常驻通知以防止程序被系统清理。');
       // 尝试请求通知权限并发送常驻通知
-      if ('Notification' in window) {
-        if (Notification.permission !== 'granted') {
-          await Notification.requestPermission();
+      try {
+        let permissionGranted = await isPermissionGranted();
+        if (!permissionGranted) {
+          const permission = await requestPermission();
+          permissionGranted = permission === 'granted';
         }
-        if (Notification.permission === 'granted') {
-          try {
-            // 使用 Service Worker 维持常驻通知
-            if ('serviceWorker' in navigator) {
-              const registration = await navigator.serviceWorker.ready;
-              registration.showNotification('校园网自动登录运行中', {
-                body: '保持后台运行以随时检测并自动重连校园网',
-                icon: '/icons/128x128.png',
-                requireInteraction: true, // 类似常驻通知
-                tag: 'bjut-al-keepalive',
-                silent: true
-              });
-            } else {
-              new Notification('校园网自动登录运行中', {
-                body: '保持后台运行以随时检测并自动重连校园网',
-                requireInteraction: true,
-                tag: 'bjut-al-keepalive',
-                silent: true
-              });
-            }
-          } catch (err) {
-            console.error('Failed to show notification:', err);
-          }
+        if (permissionGranted) {
+          sendNotification({
+            title: '校园网自动登录运行中',
+            body: '保持后台运行以随时检测并自动重连校园网',
+          });
         }
+      } catch (err) {
+        console.error('Failed to request notification permission or send notification:', err);
       }
     }
   });
