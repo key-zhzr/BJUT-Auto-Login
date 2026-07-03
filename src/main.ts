@@ -1,5 +1,134 @@
 import { createIcons, icons } from 'lucide';
 import Sortable from 'sortablejs';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+
+if (navigator.userAgent.includes('Mac OS X')) {
+  document.body.classList.add('is-macos');
+}
+
+document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
+  try { getCurrentWindow().minimize(); } catch(err) {}
+});
+document.getElementById('titlebar-maximize')?.addEventListener('click', () => {
+  try { getCurrentWindow().toggleMaximize(); } catch(err) {}
+});
+document.getElementById('titlebar-close')?.addEventListener('click', () => {
+  try { getCurrentWindow().close(); } catch(err) {}
+});
+
+
+const ENCRYPT_KEY = 'bjut-al-secret-key-2026';
+function encrypt(text: string): string {
+  let res = '';
+  for(let i=0; i<text.length; i++) res += String.fromCharCode(text.charCodeAt(i) ^ ENCRYPT_KEY.charCodeAt(i % ENCRYPT_KEY.length));
+  return btoa(res);
+}
+function decrypt(base64: string): string {
+  let res = '';
+  try {
+    const text = atob(base64);
+    for(let i=0; i<text.length; i++) res += String.fromCharCode(text.charCodeAt(i) ^ ENCRYPT_KEY.charCodeAt(i % ENCRYPT_KEY.length));
+  } catch(e) {}
+  return res;
+}
+function getAccounts(): any[] {
+  try {
+    const raw = localStorage.getItem('bjut_accounts');
+    if (!raw) return [];
+    if (raw.startsWith('[')) {
+      const parsed = JSON.parse(raw);
+      saveAccounts(parsed);
+      return parsed;
+    }
+    return JSON.parse(decrypt(raw));
+  } catch(e) { return []; }
+}
+function saveAccounts(accs: any[]) {
+  localStorage.setItem('bjut_accounts', encrypt(JSON.stringify(accs)));
+}
+
+function customAlert(text: string, title = '提示'): Promise<void> {
+  return new Promise(resolve => {
+    const modal = document.getElementById('alert-modal');
+    if (!modal) { alert(text); resolve(); return; }
+    document.getElementById('alert-modal-title')!.textContent = title;
+    document.getElementById('alert-modal-text')!.textContent = text;
+    const btnOk = document.getElementById('btn-alert-ok')!;
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      btnOk.removeEventListener('click', onOk);
+    };
+    const onOk = () => { cleanup(); resolve(); };
+    btnOk.addEventListener('click', onOk);
+    modal.classList.remove('hidden');
+  });
+}
+function customConfirm(text: string, title = '确认'): Promise<boolean> {
+  return new Promise(resolve => {
+    const modal = document.getElementById('confirm-modal');
+    if (!modal) { resolve(confirm(text)); return; }
+    document.getElementById('confirm-modal-title')!.textContent = title;
+    document.getElementById('confirm-modal-text')!.textContent = text;
+    const btnOk = document.getElementById('btn-confirm-ok')!;
+    const btnCancel = document.getElementById('btn-confirm-cancel')!;
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      btnOk.removeEventListener('click', onOk);
+      btnCancel.removeEventListener('click', onCancel);
+    };
+    const onOk = () => { cleanup(); resolve(true); };
+    const onCancel = () => { cleanup(); resolve(false); };
+    btnOk.addEventListener('click', onOk);
+    btnCancel.addEventListener('click', onCancel);
+    modal.classList.remove('hidden');
+  });
+}
+function showListManageModal(title: string, list: string[], onSave: (list: string[]) => void) {
+  const modal = document.getElementById('list-manage-modal');
+  if (!modal) { alert(list.join('\n')); return; }
+  document.getElementById('list-manage-title')!.textContent = title;
+  const content = document.getElementById('list-manage-content')!;
+  content.innerHTML = '';
+  
+  if (list.length === 0) {
+    content.innerHTML = '<div style="color: var(--text-muted); padding: 0.5rem;">暂无数据</div>';
+  } else {
+    list.forEach((item, index) => {
+      const div = document.createElement('div');
+      div.style.display = 'flex';
+      div.style.justifyContent = 'space-between';
+      div.style.padding = '0.5rem';
+      div.style.borderBottom = '1px solid var(--card-border)';
+      div.innerHTML = `
+        <span style="word-break: break-all;">${item}</span>
+        <button class="btn-icon danger" style="padding: 0 0.5rem;" data-idx="${index}"><i data-lucide="trash-2"></i></button>
+      `;
+      content.appendChild(div);
+    });
+  }
+  
+  const closeBtn = document.getElementById('btn-list-manage-close')!;
+  const cleanup = () => {
+    modal.classList.add('hidden');
+    content.removeEventListener('click', onClickList);
+    closeBtn.removeEventListener('click', onClose);
+  };
+  const onClickList = (e: Event) => {
+    const btn = (e.target as HTMLElement).closest('.danger');
+    if (btn) {
+      const idx = parseInt(btn.getAttribute('data-idx') || '0', 10);
+      list.splice(idx, 1);
+      onSave(list);
+      showListManageModal(title, list, onSave);
+    }
+  };
+  const onClose = () => { cleanup(); };
+  content.addEventListener('click', onClickList);
+  closeBtn.addEventListener('click', onClose);
+  modal.classList.remove('hidden');
+  createIcons({ icons });
+}
+
 import { checkInternet, detectLoginType, loginToCampusNetwork, fetchUserInfo, LoginType, NetworkState } from './network';
 
 // UI Elements
@@ -33,7 +162,7 @@ const editAccUsername = document.getElementById('edit-acc-username') as HTMLInpu
 const editAccPassword = document.getElementById('edit-acc-password') as HTMLInputElement;
 
 // State
-let accounts: any[] = JSON.parse(localStorage.getItem('bjut_accounts') || '[]');
+
 let currentNetworkState = NetworkState.Offline;
 let currentLoginType = LoginType.Unknown;
 let autoLoginEnabled = localStorage.getItem('bjut_auto_login') === 'true';
@@ -88,12 +217,13 @@ function setupEventListeners() {
     const pass = (document.getElementById('acc-password') as HTMLInputElement).value;
     
     if (user && pass) {
-      if (accounts.find(a => a.user === user)) {
-        alert('该账号已存在');
+      const accounts = getAccounts();
+      if (accounts.find((a:any) => a.user === user)) {
+        customAlert('该账号已存在');
         return;
       }
       accounts.push({ user, pass, isDefault: accounts.length === 0 });
-      saveAccounts();
+      saveAccounts(accounts);
       renderAccounts();
       addAccountForm.reset();
       addModal.classList.add('hidden');
@@ -112,7 +242,7 @@ function setupEventListeners() {
     
     // 如果是开启自动登录，且可能在移动端运行
     if (autoLoginEnabled && navigator.userAgent.toLowerCase().includes('android')) {
-      alert('【安卓后台保活提示】\n为确保后台自动登录正常运行，请前往系统设置：\n1. 授予本应用“通知”权限\n2. 允许本应用“自启动”和“后台运行”\n\n我们将尝试发送常驻通知以防止程序被系统清理。');
+      customAlert('【安卓后台保活提示】\n为确保后台自动登录正常运行，请前往系统设置：\n1. 授予本应用“通知”权限\n2. 允许本应用“自启动”和“后台运行”\n\n我们将尝试发送常驻通知以防止程序被系统清理。');
       // 尝试请求通知权限并发送常驻通知
       if ('Notification' in window) {
         if (Notification.permission !== 'granted') {
@@ -201,7 +331,7 @@ function setupEventListeners() {
   if (btnCheckUpdate) {
     btnCheckUpdate.addEventListener('click', () => {
       const channel = (document.getElementById('setting-update-channel') as HTMLSelectElement).value;
-      alert(`正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...\n当前已经是最新版本！`);
+      customAlert(`正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...\n当前已经是最新版本！`);
       log('系统', `检查更新完毕 (${channel})`);
     });
   }
@@ -210,7 +340,7 @@ function setupEventListeners() {
   if (btnManageWhitelist) {
     btnManageWhitelist.addEventListener('click', () => {
       const w = JSON.parse(localStorage.getItem('bjut_whitelist') || '[]');
-      alert('当前信任的 WiFi (白名单):\n' + (w.length ? w.join('\n') : '暂无'));
+      showListManageModal('信任的 WiFi (白名单)', w, (newList) => localStorage.setItem('bjut_whitelist', JSON.stringify(newList)));
     });
   }
 
@@ -218,7 +348,66 @@ function setupEventListeners() {
   if (btnManageBlacklist) {
     btnManageBlacklist.addEventListener('click', () => {
       const b = JSON.parse(localStorage.getItem('bjut_blacklist') || '[]');
-      alert('当前拒绝的 WiFi (黑名单):\n' + (b.length ? b.join('\n') : '暂无'));
+      showListManageModal('拒绝的 WiFi (黑名单)', b, (newList) => localStorage.setItem('bjut_blacklist', JSON.stringify(newList)));
+    });
+  }
+
+  
+  const btnExportConfig = document.getElementById('btn-export-config');
+  const btnImportConfig = document.getElementById('btn-import-config');
+  
+  if (btnExportConfig) {
+    btnExportConfig.addEventListener('click', async () => {
+      const config = {
+        accounts: getAccounts(),
+        autoLogin: localStorage.getItem('bjut_auto_login'),
+        checkInterval: localStorage.getItem('bjut_check_interval'),
+        checkIntervalBg: localStorage.getItem('bjut_check_interval_bg'),
+        whitelist: localStorage.getItem('bjut_whitelist'),
+        blacklist: localStorage.getItem('bjut_blacklist'),
+        moreOptions: localStorage.getItem('bjut_more_options')
+      };
+      const encrypted = encrypt(JSON.stringify(config));
+      try {
+        await navigator.clipboard.writeText(encrypted);
+        customAlert('配置已加密并复制到剪贴板。');
+      } catch (e) {
+        customAlert('复制到剪贴板失败，请手动复制：\n' + encrypted);
+      }
+    });
+  }
+
+  if (btnImportConfig) {
+    btnImportConfig.addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text) {
+          customAlert('剪贴板为空');
+          return;
+        }
+        const confirmResult = await customConfirm('导入配置将覆盖当前设置和账号，是否继续？');
+        if (!confirmResult) return;
+        
+        const decrypted = decrypt(text.trim());
+        if (!decrypted) {
+          customAlert('无效的配置数据或解密失败');
+          return;
+        }
+        
+        const config = JSON.parse(decrypted);
+        if (config.accounts) saveAccounts(config.accounts);
+        if (config.autoLogin !== undefined && config.autoLogin !== null) localStorage.setItem('bjut_auto_login', config.autoLogin);
+        if (config.checkInterval !== undefined && config.checkInterval !== null) localStorage.setItem('bjut_check_interval', config.checkInterval);
+        if (config.checkIntervalBg !== undefined && config.checkIntervalBg !== null) localStorage.setItem('bjut_check_interval_bg', config.checkIntervalBg);
+        if (config.whitelist) localStorage.setItem('bjut_whitelist', config.whitelist);
+        if (config.blacklist) localStorage.setItem('bjut_blacklist', config.blacklist);
+        if (config.moreOptions !== undefined && config.moreOptions !== null) localStorage.setItem('bjut_more_options', config.moreOptions);
+        
+        customAlert('导入成功，请刷新或重启应用以应用更改！');
+        setTimeout(() => location.reload(), 1500);
+      } catch (e) {
+        customAlert('导入失败：' + String(e));
+      }
     });
   }
 
@@ -249,13 +438,14 @@ function setupEventListeners() {
     const pass = editAccPassword.value;
 
     if (user && pass && !isNaN(index)) {
-      if (accounts.findIndex((a, i) => a.user === user && i !== index) !== -1) {
-        alert('该账号名已存在');
+      const accounts = getAccounts();
+      if (accounts.findIndex((a:any, i) => a.user === user && i !== index) !== -1) {
+        customAlert('该账号名已存在');
         return;
       }
       accounts[index].user = user;
       accounts[index].pass = pass;
-      saveAccounts();
+      saveAccounts(accounts);
       renderAccounts();
       editModal.classList.add('hidden');
       log('账号管理', `已修改账号: ${user}`);
@@ -273,8 +463,9 @@ function setupEventListeners() {
       if (parent) {
         const index = parseInt(parent.getAttribute('data-index') || '-1', 10);
         if (index !== -1) {
+          const accounts = getAccounts();
           accounts[index].isDisabled = !accounts[index].isDisabled;
-          saveAccounts();
+          saveAccounts(accounts);
           if (accounts[index].isDisabled) {
             parent.classList.add('disabled');
             log('账号管理', `已禁用账号: ${accounts[index].user}`);
@@ -298,11 +489,11 @@ function setupEventListeners() {
       const parent = btn.closest('div');
       const textSpan = parent?.querySelector('.password-text') as HTMLElement;
       if (textSpan) {
-        if (textSpan.textContent === '**********') {
+        if (textSpan.textContent === '*************') {
           textSpan.textContent = textSpan.getAttribute('data-password') || '';
           btn.classList.remove('hide-password');
         } else {
-          textSpan.textContent = '**********';
+          textSpan.textContent = '*************';
           btn.classList.add('hide-password');
         }
       }
@@ -315,6 +506,7 @@ function setupEventListeners() {
       const deleteModal = document.getElementById('delete-modal');
       const deleteText = document.getElementById('delete-modal-text');
       if (deleteModal && deleteText) {
+        const accounts = getAccounts();
         deleteModal.setAttribute('data-delete-index', index.toString());
         deleteText.textContent = `确定要删除账号 ${accounts[index].user} 吗？`;
         deleteModal.classList.remove('hidden');
@@ -326,10 +518,11 @@ function setupEventListeners() {
         firstRects.set(child as HTMLElement, child.getBoundingClientRect());
       });
       
+      const accounts = getAccounts();
       const account = accounts.splice(index, 1)[0];
       accounts.unshift(account);
-      accounts.forEach((a, i) => a.isDefault = (i === 0));
-      saveAccounts();
+      accounts.forEach((a:any, i:any) => a.isDefault = (i === 0));
+      saveAccounts(accounts);
       
       // Move DOM element to top
       const itemToMove = accountsList.children[index] as HTMLElement;
@@ -387,6 +580,7 @@ function setupEventListeners() {
       
       log('账号管理', `已将账号 ${account.user} 置顶`);
     } else if (btn.classList.contains('action-edit')) {
+      const accounts = getAccounts();
       editAccIndex.value = index.toString();
       editAccUsername.value = accounts[index].user;
       editAccPassword.value = accounts[index].pass;
@@ -408,12 +602,13 @@ function setupEventListeners() {
       const idxStr = deleteModal.getAttribute('data-delete-index');
       if (idxStr) {
         const index = parseInt(idxStr, 10);
+        const accounts = getAccounts();
         log('账号管理', `已删除账号 ${accounts[index].user}`);
         accounts.splice(index, 1);
-        if (accounts.length > 0 && !accounts.find(a => a.isDefault)) {
+        if (accounts.length > 0 && !accounts.find((a:any) => a.isDefault)) {
           accounts[0].isDefault = true;
         }
-        saveAccounts();
+        saveAccounts(accounts);
         renderAccounts();
         deleteModal.classList.add('hidden');
       }
@@ -421,8 +616,6 @@ function setupEventListeners() {
   }
 
   // Drag and Drop using SortableJS
-  let dragOffsetX = 0;
-  let dragOffsetY = 0;
 
   Sortable.create(accountsList, {
     handle: '.drag-handle',
@@ -432,88 +625,46 @@ function setupEventListeners() {
     forceFallback: true,
     fallbackClass: 'dragging-fallback',
     fallbackOnBody: true,
-    onStart: (evt) => {
-      const e = (evt as any).originalEvent as MouseEvent | TouchEvent;
-      const rect = evt.item.getBoundingClientRect();
-      let clientX = 0, clientY = 0;
-      if (e) {
-        if ('touches' in e && e.touches.length > 0) {
-          clientX = e.touches[0].clientX;
-          clientY = e.touches[0].clientY;
-        } else if ('clientX' in e) {
-          clientX = (e as MouseEvent).clientX;
-          clientY = (e as MouseEvent).clientY;
-        }
-      }
-      dragOffsetX = clientX - rect.left;
-      dragOffsetY = clientY - rect.top;
-    },
     onEnd: (evt) => {
-      const { oldIndex, newIndex, item } = evt;
-      
-      // Calculate drop position for custom animation
-      const e = (evt as any).originalEvent as MouseEvent | TouchEvent;
-      let clientX = 0, clientY = 0;
-      if (e) {
-        if ('changedTouches' in e && e.changedTouches && e.changedTouches.length > 0) {
-          clientX = e.changedTouches[0].clientX;
-          clientY = e.changedTouches[0].clientY;
-        } else if ('clientX' in e) {
-          clientX = (e as MouseEvent).clientX;
-          clientY = (e as MouseEvent).clientY;
-        }
-      }
-      
-      if (clientX > 0 && clientY > 0) {
-        const rect = item.getBoundingClientRect();
-        const startX = clientX - dragOffsetX;
-        const startY = clientY - dragOffsetY;
-        const dx = startX - rect.left;
-        const dy = startY - rect.top;
-        
-        item.animate([
-          { transform: `translate(${dx}px, ${dy}px)`, zIndex: 9999, boxShadow: '0 10px 25px rgba(0,0,0,0.5)', opacity: 0.95 },
-          { transform: 'translate(0, 0)', zIndex: 9999, boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)', opacity: 1 }
-        ], {
-          duration: 350,
-          easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)'
-        });
-      }
+      const { oldIndex, newIndex } = evt;
       if (oldIndex !== undefined && newIndex !== undefined && oldIndex !== newIndex) {
-        const item = accounts.splice(oldIndex, 1)[0];
-        accounts.splice(newIndex, 0, item);
-        accounts.forEach((a, i) => a.isDefault = (i === 0));
-        saveAccounts();
-        
-        // Update DOM attributes manually to allow Sortable drop animation to complete smoothly
-        Array.from(accountsList.children).forEach((el, i) => {
-          el.setAttribute('data-index', i.toString());
-          el.querySelectorAll('button[data-index]').forEach(btn => btn.setAttribute('data-index', i.toString()));
+        // Defer DOM updates and data saving until AFTER SortableJS drop animations finish
+        setTimeout(() => {
+          const accounts = getAccounts();
+          const item = accounts.splice(oldIndex, 1)[0];
+          accounts.splice(newIndex, 0, item);
+          accounts.forEach((a:any, i) => a.isDefault = (i === 0));
+          saveAccounts(accounts);
           
-          const badge = el.querySelector('.account-badge');
-          if (badge) {
-            badge.textContent = i === 0 ? '默认' : '备用';
-            badge.className = `account-badge ${i === 0 ? 'text-primary font-bold' : 'text-muted'}`;
-          }
-          
-          el.querySelectorAll('.action-default').forEach(btn => {
-            const b = btn as HTMLButtonElement;
-            if (i === 0) {
-              b.disabled = true;
-              b.style.color = 'var(--text-muted)';
-              b.style.cursor = 'not-allowed';
-              b.style.opacity = '0.5';
-              b.setAttribute('title', '已置顶');
-            } else {
-              b.disabled = false;
-              b.style.color = '';
-              b.style.cursor = 'pointer';
-              b.style.opacity = '1';
-              b.setAttribute('title', '设为默认 (置顶)');
+          // Update DOM in-place
+          const domItems = accountsList.querySelectorAll('.account-item');
+          domItems.forEach((el, index) => {
+            el.setAttribute('data-index', index.toString());
+            const badge = el.querySelector('.account-badge');
+            if (badge) {
+              badge.className = index === 0 ? 'account-badge text-primary font-bold' : 'account-badge text-muted';
+              badge.textContent = index === 0 ? '默认' : '备用';
+            }
+            const defaultBtn = el.querySelector('.action-default') as HTMLButtonElement;
+            if (defaultBtn) {
+              if (index === 0) {
+                defaultBtn.style.color = 'var(--text-muted)';
+                defaultBtn.style.cursor = 'not-allowed';
+                defaultBtn.style.opacity = '0.5';
+                defaultBtn.title = '已置顶';
+                defaultBtn.disabled = true;
+              } else {
+                defaultBtn.style.color = '';
+                defaultBtn.style.cursor = '';
+                defaultBtn.style.opacity = '';
+                defaultBtn.title = '设为默认 (置顶)';
+                defaultBtn.disabled = false;
+              }
             }
           });
-        });
-        log('账号管理', '账号顺序已更新，最高优先级将作为默认账号');
+          
+          log('账号管理', '账号顺序已更新，最高优先级将作为默认账号');
+        }, 310);
       }
     }
   });
@@ -527,20 +678,17 @@ function log(module: string, message: string, type: 'info' | 'error' | 'success'
   entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-${type}">[${module}] ${message}</span>`;
   logsContent.appendChild(entry);
   
-  setTimeout(() => {
-    const container = document.querySelector('.logs-container');
+  requestAnimationFrame(() => {
+    const container = logsContent.parentElement;
     if (container) {
       container.scrollTop = container.scrollHeight;
     }
-  }, 10);
+  });
 }
 
 // Accounts
-function saveAccounts() {
-  localStorage.setItem('bjut_accounts', JSON.stringify(accounts));
-}
-
 function renderAccounts() {
+  const accounts = getAccounts();
   accountsList.innerHTML = '';
   if (accounts.length === 0) {
     accountsList.innerHTML = '<div style="color: var(--text-muted); padding: 1rem;">暂无账号，请添加。</div>';
@@ -568,7 +716,7 @@ function renderAccounts() {
       </div>
       <div class="account-right">
         <div class="account-password">
-          <span class="password-text" data-password="${acc.pass}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted);">**********</span>
+          <span class="password-text" data-password="${acc.pass}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted); display: inline-block; width: 7.5em; text-align: left;">*************</span>
           <button class="btn-icon action-toggle-password hide-password" style="padding: 0.2rem;" title="显示/隐藏密码"><i data-lucide="eye"></i></button>
         </div>
         <div class="account-desktop-actions">
@@ -585,6 +733,7 @@ function renderAccounts() {
 }
 
 function updateOverrideOptions() {
+  const accounts = getAccounts();
   const select = document.getElementById('override-account') as HTMLSelectElement;
   if (!select) return;
   select.innerHTML = '<option value="auto">自动</option>';
@@ -682,12 +831,13 @@ async function updateUserInfo() {
 
 async function manualLogin() {
   if (currentNetworkState !== NetworkState.BjutCampus) {
-    alert('当前无需登录或未连接校园网');
+    customAlert('当前无需登录或未连接校园网');
     return;
   }
   
+  const accounts = getAccounts();
   if (accounts.length === 0) {
-    alert('请先在账号管理中添加账号');
+    customAlert('请先在账号管理中添加账号');
     return;
   }
 

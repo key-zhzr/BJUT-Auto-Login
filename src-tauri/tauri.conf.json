@@ -11,12 +11,17 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "BJUT-Auto-Login",
         "width": 800,
         "height": 600,
-        "dragDropEnabled": false
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "transparent": true,
+        "shadow": false
       }
     ],
     "security": {

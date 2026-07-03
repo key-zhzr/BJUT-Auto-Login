@@ -10,6 +10,19 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   </head>
   <body>
+    <!-- Custom Titlebar -->
+    <div data-tauri-drag-region class="titlebar">
+      <div class="titlebar-button" id="titlebar-minimize">
+        <i data-lucide="minus" style="width: 14px; height: 14px; pointer-events: none;"></i>
+      </div>
+      <div class="titlebar-button" id="titlebar-maximize">
+        <i data-lucide="square" style="width: 12px; height: 12px; pointer-events: none;"></i>
+      </div>
+      <div class="titlebar-button titlebar-close" id="titlebar-close">
+        <i data-lucide="x" style="width: 16px; height: 16px; pointer-events: none;"></i>
+      </div>
+    </div>
+    
     <div id="app" class="app-container">
       <!-- Sidebar / Bottom Navigation (Responsive) -->
       <nav id="nav">
@@ -281,6 +294,13 @@
               </div>
               <div class="setting-item">
                 <div class="setting-info">
+                  <h4>当前版本</h4>
+                  <p>v0.1.1</p>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="btn-check-update">检查更新</button>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
                   <h4>更新通道</h4>
                   <p>选择您想接收的更新版本类型</p>
                 </div>
@@ -291,14 +311,53 @@
               </div>
               <div class="setting-item">
                 <div class="setting-info">
-                  <h4>检查更新</h4>
-                  <p>当前版本: v0.1.0</p>
+                  <h4>配置导入/导出</h4>
+                  <p>将当前配置加密并导出到剪贴板，或从剪贴板导入</p>
                 </div>
-                <button class="btn btn-primary btn-sm" id="btn-check-update">检查更新</button>
+                <div style="display:flex; gap: 0.5rem;">
+                  <button class="btn btn-secondary btn-sm" id="btn-export-config"><i data-lucide="clipboard-copy"></i> 导出</button>
+                  <button class="btn btn-secondary btn-sm" id="btn-import-config"><i data-lucide="clipboard-paste"></i> 导入</button>
+                </div>
               </div>
             </div>
         </section>
       </main>
+    </div>
+
+    <!-- Generic Alert Modal -->
+    <div id="alert-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card">
+        <h3 id="alert-modal-title">提示</h3>
+        <p id="alert-modal-text" style="margin-bottom: 1.5rem; color: var(--text-muted); font-size: 0.95rem; white-space: pre-wrap;"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="btn-alert-ok">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Generic Confirm Modal -->
+    <div id="confirm-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card">
+        <h3 id="confirm-modal-title">确认</h3>
+        <p id="confirm-modal-text" style="margin-bottom: 1.5rem; color: var(--text-muted); font-size: 0.95rem; white-space: pre-wrap;"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-confirm-cancel">取消</button>
+          <button type="button" class="btn btn-primary" id="btn-confirm-ok">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- List Manage Modal (For Whitelist/Blacklist) -->
+    <div id="list-manage-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card" style="max-width: 500px;">
+        <h3 id="list-manage-title">管理列表</h3>
+        <div id="list-manage-content" style="max-height: 300px; overflow-y: auto; margin-bottom: 1rem; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 0.5rem;">
+          <!-- Dynamically populated list items -->
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="btn-list-manage-close">关闭</button>
+        </div>
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

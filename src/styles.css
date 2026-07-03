@@ -18,6 +18,10 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+html {
+  background: transparent;
+}
+
 body {
   font-family: 'Inter', sans-serif;
   background: radial-gradient(circle at top left, #1e1b4b, #0f172a);
@@ -25,16 +29,26 @@ body {
   min-height: 100vh;
   display: flex;
   overflow: hidden;
+  position: relative;
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
+}
+body:not(.is-macos) {
+  border-radius: 12px;
 }
 
 .app-container {
   display: flex;
   width: 100vw;
   height: 100vh;
+  padding-top: 30px; /* Space for titlebar */
+}
+@media (max-width: 768px) {
+  .app-container {
+    padding-top: 0;
+  }
 }
 
 /* Navigation */
@@ -83,7 +97,7 @@ nav {
   border-radius: 12px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  transition: all 0.3s ease;
+  transition: background-color 0.3s ease, border-color 0.3s ease, opacity 0.3s ease, filter 0.3s ease, box-shadow 0.3s ease;
 }
 .account-item.disabled {
   opacity: 0.4;
@@ -599,8 +613,16 @@ input:checked + .slider:before { transform: translateX(24px); }
   display: flex;
   align-items: center;
   padding-right: 0.5rem;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
 }
 .drag-handle:active { cursor: grabbing; }
+.account-item {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
 .account-item.dragging {
   opacity: 0.5;
   background: rgba(59, 130, 246, 0.1);
@@ -615,5 +637,76 @@ input:checked + .slider:before { transform: translateX(24px); }
   border-radius: 16px !important;
   cursor: grabbing !important;
   z-index: 9999 !important;
+  pointer-events: none !important;
 }
 
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Custom Titlebar (Desktop Only) */
+.titlebar {
+  -webkit-app-region: drag;
+  height: 30px;
+  background: rgba(15, 23, 42, 0.8);
+  backdrop-filter: blur(10px);
+  user-select: none;
+  display: flex;
+  justify-content: flex-end;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
+.titlebar-button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 40px;
+  height: 30px;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  cursor: default;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+.titlebar-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+.titlebar-button.titlebar-close:hover {
+  background: #e81123;
+}
+@media (max-width: 768px) {
+  .titlebar {
+    display: none;
+  }
+}
+
+.is-macos .titlebar-button {
+  display: none !important;
+}
+.is-macos .titlebar {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+  border: none !important;
+  padding-left: 80px;
+}
