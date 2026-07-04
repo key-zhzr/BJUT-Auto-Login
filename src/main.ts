@@ -243,7 +243,15 @@ function setupEventListeners() {
     
     // 如果是开启自动登录，且可能在移动端运行
     if (autoLoginEnabled && navigator.userAgent.toLowerCase().includes('android')) {
-      customAlert('【安卓后台保活提示】\n为确保后台自动登录正常运行，请前往系统设置：\n1. 授予本应用“通知”权限\n2. 允许本应用“自启动”和“后台运行”\n\n我们将尝试发送常驻通知以防止程序被系统清理。');
+      customAlert('【安卓后台保活提示】\n为确保后台自动登录正常运行，请授权“忽略电池优化”以保持后台存活。\n\n部分设备需手动前往系统设置允许“自启动”和“后台运行”。');
+      
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('request_battery_optimizations');
+      } catch (e) {
+        console.warn('Failed to request battery optimization:', e);
+      }
+
       // 尝试请求通知权限并发送常驻通知
       try {
         let permissionGranted = await isPermissionGranted();
@@ -613,14 +621,36 @@ function setupEventListeners() {
     fallbackClass: 'dragging-fallback',
     fallbackOnBody: true,
     onEnd: (evt) => {
-      const { oldIndex, newIndex } = evt;
+      const { oldIndex, newIndex, item } = evt;
+      
+      // Custom drop animation for the dropped item
+      item.style.transition = 'none';
+      item.style.transform = 'scale(1.05) translateY(-5px)';
+      item.style.boxShadow = '0 10px 25px rgba(0,0,0,0.2)';
+      item.style.zIndex = '100';
+      
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          item.style.transition = 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease';
+          item.style.transform = 'scale(1) translateY(0)';
+          item.style.boxShadow = '';
+          
+          setTimeout(() => {
+            item.style.transition = '';
+            item.style.transform = '';
+            item.style.zIndex = '';
+          }, 300);
+        });
+      });
+
       if (oldIndex !== undefined && newIndex !== undefined && oldIndex !== newIndex) {
-        // Defer DOM updates and data saving until AFTER SortableJS drop animations finish
+        // Wait for all Sortable slide animations to completely finish before updating DOM texts
+        // so we don't interrupt the transform transitions of sibling elements.
         setTimeout(() => {
           const accounts = getAccounts();
-          const item = accounts.splice(oldIndex, 1)[0];
-          accounts.splice(newIndex, 0, item);
-          accounts.forEach((a:any, i) => a.isDefault = (i === 0));
+          const accItem = accounts.splice(oldIndex, 1)[0];
+          accounts.splice(newIndex, 0, accItem);
+          accounts.forEach((a:any, i:number) => a.isDefault = (i === 0));
           saveAccounts(accounts);
           
           // Update DOM in-place
@@ -756,6 +786,25 @@ function startNetworkCheckLoop() {
 async function checkNetwork() {
   if (isLoggingIn) return;
   
+  // Update Network Info UI if More Options is enabled
+  const settingMoreOptions = document.getElementById('setting-more-options') as HTMLInputElement;
+  if (settingMoreOptions && settingMoreOptions.checked) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      if ((window as any).__TAURI__) {
+        const netInfo: { ssid: string, bssid: string, ip: string } = await invoke('get_network_info');
+        const moreSsid = document.getElementById('more-ssid');
+        const moreBssid = document.getElementById('more-bssid');
+        const moreIp = document.getElementById('more-ip');
+        if (moreSsid) moreSsid.textContent = netInfo.ssid || '--';
+        if (moreBssid) moreBssid.textContent = netInfo.bssid || '--';
+        if (moreIp) moreIp.textContent = netInfo.ip || '--';
+      }
+    } catch (e) {
+      console.warn('Failed to get network info for UI:', e);
+    }
+  }
+
   const isInternetOk = await checkInternet();
   if (isInternetOk) {
     updateNetworkStatus(NetworkState.Online);
@@ -774,6 +823,17 @@ async function checkNetwork() {
       updateNetworkStatus(NetworkState.Offline);
     }
   }
+}
+
+// Listen to Rust background trigger
+import { listen } from '@tauri-apps/api/event';
+if ((window as any).__TAURI__) {
+  listen('trigger-auto-login', () => {
+    log('系统', '收到系统底层网络连通事件触发');
+    if (autoLoginEnabled && !isLoggingIn) {
+      manualLogin();
+    }
+  });
 }
 
 function updateNetworkStatus(state: NetworkState, type?: LoginType) {

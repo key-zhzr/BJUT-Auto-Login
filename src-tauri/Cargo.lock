@@ -3750,7 +3750,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "jni 0.22.4",
  "ndk-context",
@@ -3761,6 +3761,7 @@ dependencies = [
  "tauri-plugin-http",
  "tauri-plugin-notification",
  "tauri-plugin-opener",
+ "tokio",
 ]
 
 [[package]]

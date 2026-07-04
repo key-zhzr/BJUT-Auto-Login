@@ -73,8 +73,12 @@
                 </select>
               </div>
             </div>
+            <div id="dashboard-network-info" style="flex-basis: 100%; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem; color: var(--text-muted); display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.5rem;">
+              <div><strong>SSID:</strong> <span id="more-ssid">--</span></div>
+              <div><strong>BSSID:</strong> <span id="more-bssid">--</span></div>
+              <div><strong>IP:</strong> <span id="more-ip">--</span></div>
+            </div>
           </div>
-          
           <div class="status-card glass-card">
             <div class="status-header">
               <div class="status-icon" id="network-icon"><i data-lucide="wifi"></i></div>
@@ -295,7 +299,7 @@
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>当前版本</h4>
-                  <p>v0.1.1</p>
+                  <p>v0.1.2</p>
                 </div>
                 <button class="btn btn-secondary btn-sm" id="btn-check-update">检查更新</button>
               </div>
