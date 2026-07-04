@@ -55,8 +55,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: "-"
         with:
-          tagName: v0.1.2
-          releaseName: "BJUT-AL v0.1.2"
+          tagName: v0.1.3
+          releaseName: "BJUT-AL v0.1.3"
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
@@ -67,10 +67,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download v0.1.2 -p "*aarch64.dmg" --dir .
+          gh release download v0.1.3 -p "*aarch64.dmg" --dir .
           mv BJUT-Auto-Login_0.1.2_aarch64.dmg BJUT-Auto-Login_0.1.2_arm64.dmg || true
-          gh release upload v0.1.2 BJUT-Auto-Login_0.1.2_arm64.dmg --clobber || true
-          gh release delete-asset v0.1.2 BJUT-Auto-Login_0.1.2_aarch64.dmg -y || true
+          gh release upload v0.1.3 BJUT-Auto-Login_0.1.2_arm64.dmg --clobber || true
+          gh release delete-asset v0.1.3 BJUT-Auto-Login_0.1.2_aarch64.dmg -y || true
 
   build-android:
     runs-on: ubuntu-latest
@@ -132,6 +132,6 @@ jobs:
       - name: Upload Android APK
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.2
+          tag_name: v0.1.3
           draft: true
           files: apk-to-sign/*-signed.apk

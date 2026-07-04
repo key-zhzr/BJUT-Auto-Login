@@ -17,17 +17,15 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
         let _ = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
             let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr) };
             
-            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
-            if let Ok(class) = env.find_class(&class_name) {
-                let method_name = jni::strings::JNIString::from("getNetworkInfo");
-                let sig_str = "(Landroid/content/Context;)Ljava/lang/String;";
-                let runtime_sig: jni::signature::RuntimeMethodSignature = sig_str.parse().unwrap();
-                let sig = jni::signature::MethodSignature::from(&runtime_sig);
+            let class_name = "cn/edu/bjut/al/NetworkHelper";
+            if let Ok(class) = env.find_class(class_name) {
+                let method_name = "getNetworkInfo";
+                let sig = "(Landroid/content/Context;)Ljava/lang/String;";
                 
                 if let Ok(jvalue) = env.call_static_method(
                     class,
-                    &method_name,
-                    &sig,
+                    method_name,
+                    sig,
                     &[jni::objects::JValue::Object(&activity)],
                 ) {
                     if let Ok(jobject) = jvalue.l() {
@@ -66,12 +64,10 @@ fn request_battery_optimizations(_app: tauri::AppHandle) {
         let vm = unsafe { jni::JavaVM::from_raw(vm_ptr) };
         let _ = vm.attach_current_thread(|mut env| -> jni::errors::Result<()> {
             let activity = unsafe { jni::objects::JObject::from_raw(&mut env, activity_ptr) };
-            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/MainActivity");
-            if let Ok(class) = env.find_class(&class_name) {
-                let method_name = jni::strings::JNIString::from("requestBatteryOptimizations");
-                let sig_str = "()V";
-                let runtime_sig: jni::signature::RuntimeMethodSignature = sig_str.parse().unwrap();
-                let sig = jni::signature::MethodSignature::from(&runtime_sig);
+            let class_name = "cn/edu/bjut/al/MainActivity";
+            if let Ok(class) = env.find_class(class_name) {
+                let method_name = "requestBatteryOptimizations";
+                let sig = "()V";
                 
                 let _ = env.call_method(
                     activity,
@@ -144,4 +140,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![greet, get_network_info, request_battery_optimizations])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(target_os = "android")]
+fn test_android(app: tauri::AppHandle) {
+    let env = app.env();
 }
