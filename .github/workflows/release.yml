@@ -64,34 +64,66 @@ jobs:
           args: ${{ matrix.args }}
 
       - name: Rename and Prepare Assets
-        shell: bash
+        shell: python
+        env:
+          MATRIX_PLATFORM: ${{ matrix.platform }}
+          MATRIX_ARGS: ${{ matrix.args }}
+          VERSION: ${{ steps.get_version.outputs.version }}
         run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
-          mkdir -p release-artifacts
+          import os
+          import shutil
+          import sys
           
-          # Find macOS DMG
-          if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
-            if [[ "${{ matrix.args }}" == *"--target aarch64-apple-darwin"* ]]; then
-              cp src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg release-artifacts/BJUT-Auto-Login_${VERSION}_macOS_arm64.dmg || true
-            else
-              cp src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg release-artifacts/BJUT-Auto-Login_${VERSION}_macOS_x64.dmg || true
-            fi
-          fi
+          platform = os.environ.get("MATRIX_PLATFORM", "")
+          args = os.environ.get("MATRIX_ARGS", "")
+          version = os.environ.get("VERSION", "")
           
-          # Find Windows Installer
-          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
-            SUFFIX=""
-            if [[ "${{ matrix.args }}" == *"offlineInstaller"* ]]; then
-              SUFFIX="_Offline"
-            fi
-            cp src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe release-artifacts/BJUT-Auto-Login_${VERSION}_Windows_x64${SUFFIX}.exe || true
-          fi
+          os.makedirs("release-artifacts", exist_ok=True)
+          print("Searching for artifacts on platform={}, args={}, version={}...".format(platform, args, version))
           
-          # Find Linux Deb and AppImage
-          if [[ "${{ matrix.platform }}" == "ubuntu-22.04" ]]; then
-            cp src-tauri/target/release/bundle/deb/*.deb release-artifacts/BJUT-Auto-Login_${VERSION}_Linux_x64.deb || true
-            cp src-tauri/target/release/bundle/appimage/*.AppImage release-artifacts/BJUT-Auto-Login_${VERSION}_Linux_x64.AppImage || true
-          fi
+          copied = False
+          for root, dirs, files in os.walk("src-tauri/target"):
+              if "debug" in root.split(os.sep):
+                  continue
+              for file in files:
+                  file_path = os.path.join(root, file)
+                  
+                  # macOS
+                  if platform == "macos-latest" and file.endswith(".dmg"):
+                      if "aarch64" in args:
+                          dest = "release-artifacts/BJUT-Auto-Login_{}_macOS_arm64.dmg".format(version)
+                      else:
+                          dest = "release-artifacts/BJUT-Auto-Login_{}_macOS_x64.dmg".format(version)
+                      print("Found macOS DMG: {} -> {}".format(file_path, dest))
+                      shutil.copy2(file_path, dest)
+                      copied = True
+                      
+                  # Windows
+                  elif platform == "windows-latest" and file.endswith(".exe") and "bundle" in file_path:
+                      suffix = "_Offline" if "offlineInstaller" in args else ""
+                      dest = "release-artifacts/BJUT-Auto-Login_{}_Windows_x64{}.exe".format(version, suffix)
+                      print("Found Windows EXE: {} -> {}".format(file_path, dest))
+                      shutil.copy2(file_path, dest)
+                      copied = True
+                      
+                  # Linux
+                  elif platform == "ubuntu-22.04" and "bundle" in file_path:
+                      if file.endswith(".deb"):
+                          dest = "release-artifacts/BJUT-Auto-Login_{}_Linux_x64.deb".format(version)
+                          print("Found Linux DEB: {} -> {}".format(file_path, dest))
+                          shutil.copy2(file_path, dest)
+                          copied = True
+                      elif file.endswith(".AppImage"):
+                          dest = "release-artifacts/BJUT-Auto-Login_{}_Linux_x64.AppImage".format(version)
+                          print("Found Linux AppImage: {} -> {}".format(file_path, dest))
+                          shutil.copy2(file_path, dest)
+                          copied = True
+          
+          if not copied:
+              print("Error: No artifacts were found!")
+              sys.exit(1)
+          else:
+              print("Successfully copied all artifacts.")
 
       - name: Upload Local Artifact
         uses: actions/upload-artifact@v4
@@ -156,10 +188,30 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Rename and Prepare Android Assets
+        shell: python
+        env:
+          VERSION: ${{ steps.package-version.outputs.version }}
         run: |
-          VERSION="${{ steps.package-version.outputs.version }}"
-          mkdir -p android-release
-          cp apk-to-sign/app-aarch64-release-unsigned-signed.apk android-release/BJUT-Auto-Login_${VERSION}_Android_arm64.apk || true
+          import os
+          import shutil
+          import sys
+          
+          version = os.environ.get("VERSION", "")
+          os.makedirs("android-release", exist_ok=True)
+          
+          found = False
+          for file in os.listdir("apk-to-sign"):
+              if file.endswith("-signed.apk") or (file.endswith(".apk") and "unsigned" not in file):
+                  src = os.path.join("apk-to-sign", file)
+                  dest = "android-release/BJUT-Auto-Login_{}_Android_arm64.apk".format(version)
+                  print("Found signed APK: {} -> {}".format(src, dest))
+                  shutil.copy2(src, dest)
+                  found = True
+                  break
+          
+          if not found:
+              print("Error: No signed APK found!")
+              sys.exit(1)
 
       - name: Upload Local Artifact
         uses: actions/upload-artifact@v4
@@ -224,10 +276,30 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Rename and Prepare Android Assets
+        shell: python
+        env:
+          VERSION: ${{ steps.package-version.outputs.version }}
         run: |
-          VERSION="${{ steps.package-version.outputs.version }}"
-          mkdir -p android-release
-          cp apk-to-sign/app-x86_64-release-unsigned-signed.apk android-release/BJUT-Auto-Login_${VERSION}_Android_x86_64.apk || true
+          import os
+          import shutil
+          import sys
+          
+          version = os.environ.get("VERSION", "")
+          os.makedirs("android-release", exist_ok=True)
+          
+          found = False
+          for file in os.listdir("apk-to-sign"):
+              if file.endswith("-signed.apk") or (file.endswith(".apk") and "unsigned" not in file):
+                  src = os.path.join("apk-to-sign", file)
+                  dest = "android-release/BJUT-Auto-Login_{}_Android_x86_64.apk".format(version)
+                  print("Found signed APK: {} -> {}".format(src, dest))
+                  shutil.copy2(src, dest)
+                  found = True
+                  break
+          
+          if not found:
+              print("Error: No signed APK found!")
+              sys.exit(1)
 
       - name: Upload Local Artifact
         uses: actions/upload-artifact@v4
