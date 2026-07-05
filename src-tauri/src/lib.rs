@@ -8,39 +8,30 @@ fn greet(name: &str) -> String {
 fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
     #[cfg(target_os = "android")]
     {
-        use tauri::Manager;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let (tx, rx) = std::sync::mpsc::channel();
-            if let Some(window) = _app.get_webview_window("main") {
-                let _ = window.with_webview(move |webview| {
-                    webview.jni_handle().exec(move |env, activity, _webview| {
-                        let mut result = serde_json::json!({});
-                        if let Ok(class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
-                            if let Ok(jvalue) = env.call_static_method(
-                                class,
-                                "getNetworkInfo",
-                                "(Landroid/content/Context;)Ljava/lang/String;",
-                                &[jni::objects::JValue::Object(activity)],
-                            ) {
-                                if let Ok(jobject) = jvalue.l() {
-                                    let jstring: jni::objects::JString = jobject.into();
-                                    if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
-                                        if let Ok(val) = serde_json::from_str(&rust_str) {
-                                            result = val;
-                                        }
-                                    }
-                                }
+        let (tx, rx) = std::sync::mpsc::channel();
+        tauri::wry::prelude::dispatch(move |env, activity, _webview| {
+            let mut result = serde_json::json!({});
+            if let Ok(class) = tauri::wry::prelude::find_class(env, activity, "cn.edu.bjut.al.NetworkHelper".into()) {
+                if let Ok(jvalue) = env.call_static_method(
+                    class,
+                    "getNetworkInfo",
+                    "(Landroid/content/Context;)Ljava/lang/String;",
+                    &[jni::objects::JValue::Object(activity)],
+                ) {
+                    if let Ok(jobject) = jvalue.l() {
+                        let jstring: jni::objects::JString = jobject.into();
+                        if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
+                            if let Ok(val) = serde_json::from_str(&rust_str) {
+                                result = val;
                             }
                         }
-                        let _ = tx.send(result);
-                    });
-                });
-            } else {
-                let _ = tx.send(serde_json::json!({}));
+                    }
+                }
             }
-            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or(serde_json::json!({}))
-        }));
-        return result.unwrap_or(serde_json::json!({}));
+            let _ = tx.send(result);
+        });
+        return rx.recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or(serde_json::json!({"ssid": "", "bssid": "", "ip": ""}));
     }
 
     #[cfg(not(target_os = "android"))]
@@ -117,21 +108,14 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 fn request_battery_optimizations(_app: tauri::AppHandle) {
     #[cfg(target_os = "android")]
     {
-        use tauri::Manager;
-        if let Some(window) = _app.get_webview_window("main") {
-            let _ = window.with_webview(|webview| {
-                webview.jni_handle().exec(move |env, activity, _webview| {
-                    if let Ok(_class) = env.find_class("cn/edu/bjut/al/MainActivity") {
-                        let _ = env.call_method(
-                            activity,
-                            "requestBatteryOptimizations",
-                            "()V",
-                            &[],
-                        );
-                    }
-                });
-            });
-        }
+        tauri::wry::prelude::dispatch(move |env, activity, _webview| {
+            let _ = env.call_method(
+                activity,
+                "requestBatteryOptimizations",
+                "()V",
+                &[],
+            );
+        });
     }
 }
 
@@ -141,54 +125,56 @@ pub fn run() {
         .setup(|_app| {
             use tauri::Emitter;
 
-            let app_handle = _app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                // Wait for WebView to fully initialize before polling network info
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            // Background network poller - desktop only.
+            // On Android, the frontend's own startNetworkCheckLoop handles auto-login.
+            #[cfg(desktop)]
+            {
+                let app_handle = _app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut was_connected = false;
+                    loop {
+                        let mut is_connected = false;
 
-                let mut was_connected = false;
-                loop {
-                    let mut is_connected = false;
-
-                    #[cfg(target_os = "macos")]
-                    {
-                        let info = get_network_info(app_handle.clone());
-                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
-                            let s = ssid_val.replace("\"", "");
-                            if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
-                                is_connected = true;
+                        #[cfg(target_os = "macos")]
+                        {
+                            let info = get_network_info(app_handle.clone());
+                            if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
+                                let s = ssid_val.replace("\"", "");
+                                if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
+                                    is_connected = true;
+                                }
+                            }
+                            
+                            if !is_connected {
+                                if let Ok(output) = std::process::Command::new("ifconfig").output() {
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    if stdout.contains("inet 10.") {
+                                        is_connected = true;
+                                    }
+                                }
                             }
                         }
-                        
-                        if !is_connected {
-                            if let Ok(output) = std::process::Command::new("ifconfig").output() {
-                                let stdout = String::from_utf8_lossy(&output.stdout);
-                                if stdout.contains("inet 10.") {
+
+                        #[cfg(target_os = "windows")]
+                        {
+                            let info = get_network_info(app_handle.clone());
+                            if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
+                                let s = ssid_val.replace("\"", "");
+                                if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
                                     is_connected = true;
                                 }
                             }
                         }
-                    }
 
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        let info = get_network_info(app_handle.clone());
-                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
-                            let s = ssid_val.replace("\"", "");
-                            if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
-                                is_connected = true;
-                            }
+                        if is_connected && !was_connected {
+                            let _ = app_handle.emit("trigger-auto-login", ());
                         }
-                    }
+                        was_connected = is_connected;
 
-                    if is_connected && !was_connected {
-                        let _ = app_handle.emit("trigger-auto-login", ());
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
-                    was_connected = is_connected;
-
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                }
-            });
+                });
+            }
 
             #[cfg(desktop)]
             {
