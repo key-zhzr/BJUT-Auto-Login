@@ -29,9 +29,9 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                     &[jni::objects::JValue::Object(&activity)],
                 ) {
                     if let Ok(jobject) = jvalue.l() {
-                        let jstring = unsafe { jni::objects::JString::from_raw(&mut env, jobject.as_raw().cast()) };
-                        if let Ok(json_str) = jstring.try_to_string(&mut env) {
-                            if let Ok(val) = serde_json::from_str(&json_str) {
+                        let jstring: jni::objects::JString = jobject.into();
+                        if let Ok(json_str) = env.get_string(&jstring) {
+                            if let Ok(val) = serde_json::from_str(&json_str.to_string_lossy()) {
                                 result = val;
                             }
                         }
@@ -50,6 +50,10 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
+            unsafe {
+                let manager = objc2_core_location::CLLocationManager::new();
+                manager.requestWhenInUseAuthorization();
+            }
             if let Ok(client) = corewlan::WiFiClient::shared() {
                 if let Some(interface) = client.interface() {
                     if let Some(s) = interface.ssid() {
