@@ -24,7 +24,7 @@ jobs:
           - platform: 'windows-latest'
             args: '--target x86_64-pc-windows-msvc'
           - platform: 'windows-latest'
-            args: '--target aarch64-pc-windows-msvc'
+            args: '--target x86_64-pc-windows-msvc --config "{\"bundle\":{\"windows\":{\"webviewInstallMode\":{\"type\":\"offlineInstaller\"}}}}"'
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
@@ -49,28 +49,60 @@ jobs:
       - name: Install NPM dependencies
         run: npm install
 
+      - name: Get version
+        id: get_version
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
       - name: Build Tauri App
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: "-"
         with:
-          tagName: v0.1.13
-          releaseName: 'BJUT-Auto-Login v0.1.13'
-          releaseBody: "See the assets to download this version and install."
-          releaseDraft: true
-          prerelease: false
+          includeRelease: false
           args: ${{ matrix.args }}
 
-      - name: Rename macOS aarch64 to arm64
-        if: matrix.platform == 'macos-latest' && matrix.args == '--target aarch64-apple-darwin'
+      - name: Rename and Prepare Assets
+        shell: bash
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          mkdir -p release-artifacts
+          
+          # Find macOS DMG
+          if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
+            if [[ "${{ matrix.args }}" == *"--target aarch64-apple-darwin"* ]]; then
+              cp src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg release-artifacts/BJUT-Auto-Login_${VERSION}_macOS_arm64.dmg || true
+            else
+              cp src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg release-artifacts/BJUT-Auto-Login_${VERSION}_macOS_x64.dmg || true
+            fi
+          fi
+          
+          # Find Windows Installer
+          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+            SUFFIX=""
+            if [[ "${{ matrix.args }}" == *"offlineInstaller"* ]]; then
+              SUFFIX="_Offline"
+            fi
+            cp src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe release-artifacts/BJUT-Auto-Login_${VERSION}_Windows_x64${SUFFIX}.exe || true
+          fi
+          
+          # Find Linux Deb and AppImage
+          if [[ "${{ matrix.platform }}" == "ubuntu-22.04" ]]; then
+            cp src-tauri/target/release/bundle/deb/*.deb release-artifacts/BJUT-Auto-Login_${VERSION}_Linux_x64.deb || true
+            cp src-tauri/target/release/bundle/appimage/*.AppImage release-artifacts/BJUT-Auto-Login_${VERSION}_Linux_x64.AppImage || true
+          fi
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          name: 'BJUT-Auto-Login v${{ steps.get_version.outputs.version }}'
+          draft: true
+          files: release-artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download v0.1.4 -p "*aarch64.dmg" --dir .
-          mv BJUT-Auto-Login_0.1.2_aarch64.dmg BJUT-Auto-Login_0.1.2_arm64.dmg || true
-          gh release upload v0.1.4 BJUT-Auto-Login_0.1.2_arm64.dmg --clobber || true
-          gh release delete-asset v0.1.4 BJUT-Auto-Login_0.1.2_aarch64.dmg -y || true
 
   build-android:
     runs-on: ubuntu-latest
@@ -86,7 +118,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Setup Java
         uses: actions/setup-java@v3
@@ -103,11 +135,10 @@ jobs:
       - name: Install NPM dependencies
         run: npm install
 
-
       - name: Build Tauri Android App
         env:
           NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
-        run: npm run tauri android build -- --split-per-abi
+        run: npm run tauri android build -- --target aarch64 x86_64 --apk --split-per-abi
 
       - name: Prepare APKs for signing
         run: |
@@ -129,9 +160,20 @@ jobs:
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
+      - name: Rename and Prepare Android Assets
+        run: |
+          VERSION="${{ steps.package-version.outputs.version }}"
+          mkdir -p android-release
+          cp apk-to-sign/app-aarch64-release-unsigned-signed.apk android-release/BJUT-Auto-Login_${VERSION}_Android_arm64.apk || true
+          cp apk-to-sign/app-x86_64-release-unsigned-signed.apk android-release/BJUT-Auto-Login_${VERSION}_Android_x86_64.apk || true
+
       - name: Upload Android APK
         uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
-          tag_name: v0.1.4
+          tag_name: v${{ steps.package-version.outputs.version }}
+          name: 'BJUT-Auto-Login v${{ steps.package-version.outputs.version }}'
           draft: true
-          files: apk-to-sign/*-signed.apk
+          files: android-release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

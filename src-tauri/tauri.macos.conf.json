@@ -1,5 +1,10 @@
 {
   "app": {
     "macOSPrivateApi": true
+  },
+  "bundle": {
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
   }
 }

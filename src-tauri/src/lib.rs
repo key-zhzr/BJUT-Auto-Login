@@ -71,6 +71,7 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                     unsafe {
                         let manager = objc2_core_location::CLLocationManager::new();
                         manager.requestWhenInUseAuthorization();
+                        manager.startUpdatingLocation();
                         let _ = Box::leak(Box::new(manager));
                     }
                 });
@@ -100,19 +101,59 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "windows")]
         {
-            if let Ok(output) = std::process::Command::new("netsh").args(["wlan", "show", "interfaces"]).output() {
+            use std::os::windows::process::CommandExt;
+            let mut cmd = std::process::Command::new("netsh");
+            cmd.args(["wlan", "show", "interfaces"]);
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            if let Ok(output) = cmd.output() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 for line in stdout.lines() {
                     let line = line.trim();
-                    if line.starts_with("SSID") && !line.starts_with("BSSID") {
+                    let line_upper = line.to_uppercase();
+                    if line_upper.contains("BSSID") {
+                        if let Some(idx) = line.find(':') {
+                            bssid = line[idx + 1..].trim().to_string();
+                        }
+                    } else if line_upper.contains("SSID") {
                         if let Some(idx) = line.find(':') {
                             ssid = line[idx + 1..].trim().to_string();
                         }
                     }
-                    if line.starts_with("BSSID") {
-                        if let Some(idx) = line.find(':') {
-                            bssid = line[idx + 1..].trim().to_string();
+                }
+            }
+
+            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                if socket.connect("8.8.8.8:80").is_ok() {
+                    if let Ok(local_addr) = socket.local_addr() {
+                        ip = local_addr.ip().to_string();
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(output) = std::process::Command::new("nmcli")
+                .args(["-t", "-f", "active,ssid,bssid", "dev", "wifi"])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if line.starts_with("yes:") {
+                        let parts: Vec<&str> = line.split(':').collect();
+                        if parts.len() >= 3 {
+                            ssid = parts[1].to_string();
+                            let raw_bssid = parts[2..].join(":");
+                            bssid = raw_bssid.replace("\\:", ":");
                         }
+                    }
+                }
+            }
+
+            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                if socket.connect("8.8.8.8:80").is_ok() {
+                    if let Ok(local_addr) = socket.local_addr() {
+                        ip = local_addr.ip().to_string();
                     }
                 }
             }

@@ -47,7 +47,35 @@ class MainActivity : TauriActivity() {
     
     if (toRequest.isNotEmpty()) {
         androidx.core.app.ActivityCompat.requestPermissions(this, toRequest.toTypedArray(), 101)
+    } else {
+        // If foreground location is already granted, check for background location
+        requestBackgroundLocationPermission()
     }
+  }
+
+  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+      super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+      if (requestCode == 101) {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+              val hasFine = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+              if (hasFine) {
+                  requestBackgroundLocationPermission()
+              }
+          }
+      }
+  }
+
+  private fun requestBackgroundLocationPermission() {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          val hasBg = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_BACKGROUND_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+          if (!hasBg) {
+              androidx.core.app.ActivityCompat.requestPermissions(
+                  this,
+                  arrayOf(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+                  102
+              )
+          }
+      }
   }
 
   fun requestBatteryOptimizations() {
