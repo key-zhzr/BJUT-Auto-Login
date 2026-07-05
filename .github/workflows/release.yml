@@ -254,10 +254,28 @@ jobs:
           path: all-release-artifacts
 
       - name: Flatten folder structure
+        shell: python
         run: |
-          mkdir -p release-files
-          find all-release-artifacts -type f -exec cp {} release-files/ \;
-          ls -lh release-files
+          import os
+          import shutil
+          
+          src_dir = "all-release-artifacts"
+          dest_dir = "release-files"
+          os.makedirs(dest_dir, exist_ok=True)
+          
+          print("Flattening files from {} to {}...".format(src_dir, dest_dir))
+          file_count = 0
+          for root, dirs, files in os.walk(src_dir):
+              for file in files:
+                  src_path = os.path.join(root, file)
+                  dest_path = os.path.join(dest_dir, file)
+                  print("Copying {} -> {}".format(src_path, dest_path))
+                  shutil.copy2(src_path, dest_path)
+                  file_count += 1
+          
+          print("Successfully flattened {} files.".format(file_count))
+          if file_count == 0:
+              raise Exception("No release files were found to upload!")
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
