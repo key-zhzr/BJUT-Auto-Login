@@ -8,41 +8,37 @@ fn greet(name: &str) -> String {
 fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
     #[cfg(target_os = "android")]
     {
+        use tauri::Manager;
         let mut result = serde_json::json!({});
+        let mut env = _app.env();
         let ctx = ndk_context::android_context();
-        let vm_ptr = ctx.vm().cast();
         let activity_ptr = ctx.context().cast();
 
-        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr) };
-        let _ = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
-            let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr) };
+        let activity = unsafe { jni::objects::JObject::from_raw(&mut env, activity_ptr) };
+        let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
+        if let Ok(class) = env.find_class(&class_name) {
+            let method_name = jni::strings::JNIString::from("getNetworkInfo");
+            let sig_str = "(Landroid/content/Context;)Ljava/lang/String;";
             
-            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
-            if let Ok(class) = env.find_class(&class_name) {
-                let method_name = jni::strings::JNIString::from("getNetworkInfo");
-                let sig_str = "(Landroid/content/Context;)Ljava/lang/String;";
-                
-                if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
-                    let sig = jni::signature::MethodSignature::from(&runtime_sig);
-                    if let Ok(jvalue) = env.call_static_method(
-                        class,
-                        &method_name,
-                        &sig,
-                        &[jni::objects::JValue::Object(&activity)],
-                    ) {
-                        if let Ok(jobject) = jvalue.l() {
-                            let jstring = unsafe { jni::objects::JString::from_raw(env, jobject.as_raw().cast()) };
-                            if let Ok(json_str) = jstring.try_to_string(env) {
-                                if let Ok(val) = serde_json::from_str(&json_str) {
-                                    result = val;
-                                }
+            if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
+                let sig = jni::signature::MethodSignature::from(&runtime_sig);
+                if let Ok(jvalue) = env.call_static_method(
+                    class,
+                    &method_name,
+                    &sig,
+                    &[jni::objects::JValue::Object(&activity)],
+                ) {
+                    if let Ok(jobject) = jvalue.l() {
+                        let jstring = unsafe { jni::objects::JString::from_raw(&mut env, jobject.as_raw().cast()) };
+                        if let Ok(json_str) = jstring.try_to_string(&mut env) {
+                            if let Ok(val) = serde_json::from_str(&json_str) {
+                                result = val;
                             }
                         }
                     }
                 }
             }
-            Ok(())
-        });
+        }
         return result;
     }
 
@@ -54,17 +50,13 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
-            if let Ok(output) = std::process::Command::new("system_profiler").arg("SPAirPortDataType").output() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let lines: Vec<&str> = stdout.lines().collect();
-                for (i, line) in lines.iter().enumerate() {
-                    if line.contains("Current Network Information:") {
-                        if i + 1 < lines.len() {
-                            let ssid_line = lines[i + 1].trim();
-                            if let Some(s) = ssid_line.strip_suffix(":") {
-                                ssid = s.to_string();
-                            }
-                        }
+            if let Some(interfaces) = corewlan::CWInterface::interfaces() {
+                if let Some(interface) = interfaces.into_iter().next() {
+                    if let Some(s) = interface.ssid() {
+                        ssid = s;
+                    }
+                    if let Some(b) = interface.bssid() {
+                        bssid = b;
                     }
                 }
             }
@@ -112,30 +104,27 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 fn request_battery_optimizations(_app: tauri::AppHandle) {
     #[cfg(target_os = "android")]
     {
+        use tauri::Manager;
+        let mut env = _app.env();
         let ctx = ndk_context::android_context();
-        let vm_ptr = ctx.vm().cast();
         let activity_ptr = ctx.context().cast();
 
-        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr) };
-        let _ = vm.attach_current_thread(|mut env| -> jni::errors::Result<()> {
-            let activity = unsafe { jni::objects::JObject::from_raw(&mut env, activity_ptr) };
-            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/MainActivity");
-            if let Ok(class) = env.find_class(&class_name) {
-                let method_name = jni::strings::JNIString::from("requestBatteryOptimizations");
-                let sig_str = "()V";
-                
-                if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
-                    let sig = jni::signature::MethodSignature::from(&runtime_sig);
-                    let _ = env.call_method(
-                        activity,
-                        &method_name,
-                        &sig,
-                        &[],
-                    );
-                }
+        let activity = unsafe { jni::objects::JObject::from_raw(&mut env, activity_ptr) };
+        let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/MainActivity");
+        if let Ok(class) = env.find_class(&class_name) {
+            let method_name = jni::strings::JNIString::from("requestBatteryOptimizations");
+            let sig_str = "()V";
+            
+            if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
+                let sig = jni::signature::MethodSignature::from(&runtime_sig);
+                let _ = env.call_method(
+                    activity,
+                    &method_name,
+                    &sig,
+                    &[],
+                );
             }
-            Ok(())
-        });
+        }
     }
 }
 
