@@ -14,6 +14,9 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     
+    // Request permissions at runtime
+    requestAppPermissions()
+
     // Start Keep-Alive Service safely
     try {
         val serviceIntent = Intent(this, KeepAliveService::class.java)
@@ -24,6 +27,26 @@ class MainActivity : TauriActivity() {
         }
     } catch (e: Exception) {
         e.printStackTrace()
+    }
+  }
+
+  private fun requestAppPermissions() {
+    val permissions = mutableListOf<String>()
+    
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
+        permissions.add(android.Manifest.permission.NEARBY_WIFI_DEVICES)
+    }
+    
+    permissions.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+    permissions.add(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+    
+    val toRequest = permissions.filter {
+        androidx.core.content.ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    
+    if (toRequest.isNotEmpty()) {
+        androidx.core.app.ActivityCompat.requestPermissions(this, toRequest.toTypedArray(), 101)
     }
   }
 

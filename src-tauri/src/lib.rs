@@ -8,30 +8,53 @@ fn greet(name: &str) -> String {
 fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
     #[cfg(target_os = "android")]
     {
-        let (tx, rx) = std::sync::mpsc::channel();
-        tauri::wry::prelude::dispatch(move |env, activity, _webview| {
-            let mut result = serde_json::json!({});
-            if let Ok(class) = tauri::wry::prelude::find_class(env, activity, "cn.edu.bjut.al.NetworkHelper".into()) {
-                if let Ok(jvalue) = env.call_static_method(
-                    class,
-                    "getNetworkInfo",
-                    "(Landroid/content/Context;)Ljava/lang/String;",
-                    &[jni::objects::JValue::Object(activity)],
-                ) {
-                    if let Ok(jobject) = jvalue.l() {
-                        let jstring: jni::objects::JString = jobject.into();
-                        if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
-                            if let Ok(val) = serde_json::from_str(&rust_str) {
-                                result = val;
+        let mut result = serde_json::json!({"ssid": "", "bssid": "", "ip": ""});
+        if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
+            if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
+                if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
+                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    
+                    match tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.NetworkHelper".into()) {
+                        Ok(class) => {
+                            let method_call = env.call_static_method(
+                                class,
+                                "getNetworkInfo",
+                                "(Landroid/content/Context;)Ljava/lang/String;",
+                                &[jni::objects::JValue::Object(&activity)],
+                            );
+                            
+                            match method_call {
+                                Ok(jvalue) => {
+                                    if let Ok(jobject) = jvalue.l() {
+                                        let jstring: jni::objects::JString = jobject.into();
+                                        if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
+                                            if let Ok(val) = serde_json::from_str(&rust_str) {
+                                                result = val;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    if env.exception_check().unwrap_or(false) {
+                                        let _ = env.exception_clear();
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            if env.exception_check().unwrap_or(false) {
+                                let _ = env.exception_clear();
                             }
                         }
                     }
+                    
+                    if env.exception_check().unwrap_or(false) {
+                        let _ = env.exception_clear();
+                    }
                 }
             }
-            let _ = tx.send(result);
-        });
-        return rx.recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap_or(serde_json::json!({"ssid": "", "bssid": "", "ip": ""}));
+        }
+        return result;
     }
 
     #[cfg(not(target_os = "android"))]
@@ -42,7 +65,6 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
-            use tauri::Manager;
             static PROMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if !PROMPTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
                 let _ = _app.run_on_main_thread(|| {
@@ -108,14 +130,25 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 fn request_battery_optimizations(_app: tauri::AppHandle) {
     #[cfg(target_os = "android")]
     {
-        tauri::wry::prelude::dispatch(move |env, activity, _webview| {
-            let _ = env.call_method(
-                activity,
-                "requestBatteryOptimizations",
-                "()V",
-                &[],
-            );
-        });
+        if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
+            if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
+                if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
+                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    
+                    let call = env.call_method(
+                        &activity,
+                        "requestBatteryOptimizations",
+                        "()V",
+                        &[],
+                    );
+                    if call.is_err() {
+                        if env.exception_check().unwrap_or(false) {
+                            let _ = env.exception_clear();
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -123,6 +156,7 @@ fn request_battery_optimizations(_app: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .setup(|_app| {
+            #[cfg(desktop)]
             use tauri::Emitter;
 
             // Background network poller - desktop only.
