@@ -9,35 +9,38 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
     #[cfg(target_os = "android")]
     {
         use tauri::Manager;
-        let (tx, rx) = std::sync::mpsc::channel();
-        if let Some(window) = _app.get_webview_window("main") {
-            let _ = window.with_webview(move |webview| {
-                webview.jni_handle().exec(move |env, activity, _webview| {
-                    let mut result = serde_json::json!({});
-                    if let Ok(class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
-                        if let Ok(jvalue) = env.call_static_method(
-                            class,
-                            "getNetworkInfo",
-                            "(Landroid/content/Context;)Ljava/lang/String;",
-                            &[jni::objects::JValue::Object(activity)],
-                        ) {
-                            if let Ok(jobject) = jvalue.l() {
-                                let jstring: jni::objects::JString = jobject.into();
-                                if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
-                                    if let Ok(val) = serde_json::from_str(&rust_str) {
-                                        result = val;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            if let Some(window) = _app.get_webview_window("main") {
+                let _ = window.with_webview(move |webview| {
+                    webview.jni_handle().exec(move |env, activity, _webview| {
+                        let mut result = serde_json::json!({});
+                        if let Ok(class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
+                            if let Ok(jvalue) = env.call_static_method(
+                                class,
+                                "getNetworkInfo",
+                                "(Landroid/content/Context;)Ljava/lang/String;",
+                                &[jni::objects::JValue::Object(activity)],
+                            ) {
+                                if let Ok(jobject) = jvalue.l() {
+                                    let jstring: jni::objects::JString = jobject.into();
+                                    if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
+                                        if let Ok(val) = serde_json::from_str(&rust_str) {
+                                            result = val;
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    let _ = tx.send(result);
+                        let _ = tx.send(result);
+                    });
                 });
-            });
-        } else {
-            let _ = tx.send(serde_json::json!({}));
-        }
-        return rx.recv().unwrap_or(serde_json::json!({}));
+            } else {
+                let _ = tx.send(serde_json::json!({}));
+            }
+            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or(serde_json::json!({}))
+        }));
+        return result.unwrap_or(serde_json::json!({}));
     }
 
     #[cfg(not(target_os = "android"))]
@@ -140,6 +143,9 @@ pub fn run() {
 
             let app_handle = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                // Wait for WebView to fully initialize before polling network info
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
                 let mut was_connected = false;
                 loop {
                     let mut is_connected = false;
