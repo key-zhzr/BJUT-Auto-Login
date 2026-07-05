@@ -8,31 +8,31 @@ fn greet(name: &str) -> String {
 fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
     #[cfg(target_os = "android")]
     {
-        use tauri::Manager;
         let mut result = serde_json::json!({});
-        let mut env = _app.env();
         let ctx = ndk_context::android_context();
-        let activity_ptr = ctx.context().cast();
-
-        let activity = unsafe { jni::objects::JObject::from_raw(&mut env, activity_ptr) };
-        let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
-        if let Ok(class) = env.find_class(&class_name) {
-            let method_name = jni::strings::JNIString::from("getNetworkInfo");
-            let sig_str = "(Landroid/content/Context;)Ljava/lang/String;";
-            
-            if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
-                let sig = jni::signature::MethodSignature::from(&runtime_sig);
-                if let Ok(jvalue) = env.call_static_method(
-                    class,
-                    &method_name,
-                    &sig,
-                    &[jni::objects::JValue::Object(&activity)],
-                ) {
-                    if let Ok(jobject) = jvalue.l() {
-                        let jstring: jni::objects::JString = jobject.into();
-                        if let Ok(json_str) = env.get_string(&jstring) {
-                            if let Ok(val) = serde_json::from_str(&json_str.to_string_lossy()) {
-                                result = val;
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
+        if let Ok(mut env) = vm.attach_current_thread() {
+            let activity_ptr = ctx.context().cast();
+            let activity = unsafe { jni::objects::JObject::from_raw(&env, activity_ptr) };
+            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
+            if let Ok(class) = env.find_class(&class_name) {
+                let method_name = jni::strings::JNIString::from("getNetworkInfo");
+                let sig_str = "(Landroid/content/Context;)Ljava/lang/String;";
+                
+                if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
+                    let sig = jni::signature::MethodSignature::from(&runtime_sig);
+                    if let Ok(jvalue) = env.call_static_method(
+                        class,
+                        &method_name,
+                        &sig,
+                        &[jni::objects::JValue::Object(&activity)],
+                    ) {
+                        if let Ok(jobject) = jvalue.l() {
+                            let jstring: jni::objects::JString = jobject.into();
+                            if let Ok(json_str) = env.get_string(&jstring) {
+                                if let Ok(val) = serde_json::from_str(&json_str.to_string_lossy()) {
+                                    result = val;
+                                }
                             }
                         }
                     }
@@ -116,25 +116,25 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 fn request_battery_optimizations(_app: tauri::AppHandle) {
     #[cfg(target_os = "android")]
     {
-        use tauri::Manager;
-        let mut env = _app.env();
         let ctx = ndk_context::android_context();
-        let activity_ptr = ctx.context().cast();
-
-        let activity = unsafe { jni::objects::JObject::from_raw(&mut env, activity_ptr) };
-        let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/MainActivity");
-        if let Ok(class) = env.find_class(&class_name) {
-            let method_name = jni::strings::JNIString::from("requestBatteryOptimizations");
-            let sig_str = "()V";
-            
-            if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
-                let sig = jni::signature::MethodSignature::from(&runtime_sig);
-                let _ = env.call_method(
-                    activity,
-                    &method_name,
-                    &sig,
-                    &[],
-                );
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
+        if let Ok(mut env) = vm.attach_current_thread() {
+            let activity_ptr = ctx.context().cast();
+            let activity = unsafe { jni::objects::JObject::from_raw(&env, activity_ptr) };
+            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/MainActivity");
+            if let Ok(class) = env.find_class(&class_name) {
+                let method_name = jni::strings::JNIString::from("requestBatteryOptimizations");
+                let sig_str = "()V";
+                
+                if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
+                    let sig = jni::signature::MethodSignature::from(&runtime_sig);
+                    let _ = env.call_method(
+                        activity,
+                        &method_name,
+                        &sig,
+                        &[],
+                    );
+                }
             }
         }
     }
