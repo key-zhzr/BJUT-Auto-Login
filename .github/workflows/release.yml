@@ -93,18 +93,13 @@ jobs:
             cp src-tauri/target/release/bundle/appimage/*.AppImage release-artifacts/BJUT-Auto-Login_${VERSION}_Linux_x64.AppImage || true
           fi
 
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      - name: Upload Local Artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: v${{ steps.get_version.outputs.version }}
-          name: 'BJUT-Auto-Login v${{ steps.get_version.outputs.version }}'
-          draft: true
-          files: release-artifacts/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: desktop-artifacts-${{ matrix.platform }}-${{ strategy.job-index }}
+          path: release-artifacts/*
 
-  build-android:
+  build-android-arm64:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -118,7 +113,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - name: Setup Java
         uses: actions/setup-java@v3
@@ -138,7 +133,7 @@ jobs:
       - name: Build Tauri Android App
         env:
           NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
-        run: npm run tauri android build -- --target aarch64 x86_64 --apk --split-per-abi
+        run: npm run tauri android build -- --target aarch64 --apk
 
       - name: Prepare APKs for signing
         run: |
@@ -165,15 +160,111 @@ jobs:
           VERSION="${{ steps.package-version.outputs.version }}"
           mkdir -p android-release
           cp apk-to-sign/app-aarch64-release-unsigned-signed.apk android-release/BJUT-Auto-Login_${VERSION}_Android_arm64.apk || true
+
+      - name: Upload Local Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-artifact
+          path: android-release/*.apk
+
+  build-android-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        
+      - name: Setup NDK
+        run: echo "y" | sudo /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
+
+      - name: Install NPM dependencies
+        run: npm install
+
+      - name: Build Tauri Android App
+        env:
+          NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
+        run: npm run tauri android build -- --target x86_64 --apk
+
+      - name: Prepare APKs for signing
+        run: |
+          mkdir -p apk-to-sign
+          find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
+
+      - name: Sign Android Release
+        uses: ilharp/sign-android-release@v1
+        id: sign_app
+        with:
+          releaseDir: apk-to-sign
+          signingKey: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          keyAlias: key0
+          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          buildToolsVersion: 34.0.0
+
+      - name: Get version
+        id: package-version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Rename and Prepare Android Assets
+        run: |
+          VERSION="${{ steps.package-version.outputs.version }}"
+          mkdir -p android-release
           cp apk-to-sign/app-x86_64-release-unsigned-signed.apk android-release/BJUT-Auto-Login_${VERSION}_Android_x86_64.apk || true
 
-      - name: Upload Android APK
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      - name: Upload Local Artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: v${{ steps.package-version.outputs.version }}
-          name: 'BJUT-Auto-Login v${{ steps.package-version.outputs.version }}'
+          name: android-x86_64-artifact
+          path: android-release/*.apk
+
+  publish-release:
+    needs: [build-desktop, build-android-arm64, build-android-x86_64]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-release-artifacts
+
+      - name: Flatten folder structure
+        run: |
+          mkdir -p release-files
+          find all-release-artifacts -type f -exec cp {} release-files/ \;
+          ls -lh release-files
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          name: 'BJUT-Auto-Login v${{ steps.get_version.outputs.version }}'
           draft: true
-          files: android-release/*.apk
+          files: release-files/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
