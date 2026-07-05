@@ -19,3 +19,15 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+-keep class cn.edu.bjut.al.NetworkHelper {
+    public *;
+}
+
+-keep class cn.edu.bjut.al.MainActivity {
+    public void requestBatteryOptimizations();
+}
+
+-keep class cn.edu.bjut.al.KeepAliveService {
+    public *;
+}
