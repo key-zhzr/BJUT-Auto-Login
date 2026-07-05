@@ -50,10 +50,18 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
-            unsafe {
-                let manager = objc2_core_location::CLLocationManager::new();
-                manager.requestWhenInUseAuthorization();
+            use tauri::Manager;
+            static PROMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !PROMPTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let _ = _app.run_on_main_thread(|| {
+                    unsafe {
+                        let manager = objc2_core_location::CLLocationManager::new();
+                        manager.requestWhenInUseAuthorization();
+                        let _ = Box::leak(Box::new(manager));
+                    }
+                });
             }
+            
             if let Ok(client) = corewlan::WiFiClient::shared() {
                 if let Some(interface) = client.interface() {
                     if let Some(s) = interface.ssid() {

@@ -55,8 +55,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: "-"
         with:
-          tagName: v0.1.9
-          releaseName: 'BJUT-Auto-Login v0.1.9'
+          tagName: v0.1.10
+          releaseName: 'BJUT-Auto-Login v0.1.10'
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
