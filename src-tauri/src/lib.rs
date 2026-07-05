@@ -8,39 +8,36 @@ fn greet(name: &str) -> String {
 fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
     #[cfg(target_os = "android")]
     {
-        let mut result = serde_json::json!({});
-        let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
-        let _ = vm.attach_current_thread(|env| {
-            let activity_ptr = ctx.context().cast();
-            let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr) };
-            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
-            if let Ok(class) = env.find_class(&class_name) {
-                let method_name = jni::strings::JNIString::from("getNetworkInfo");
-                let sig_str = "(Landroid/content/Context;)Ljava/lang/String;";
-                
-                if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
-                    let sig = jni::signature::MethodSignature::from(&runtime_sig);
-                    if let Ok(jvalue) = env.call_static_method(
-                        class,
-                        &method_name,
-                        &sig,
-                        &[jni::objects::JValue::Object(&activity)],
-                    ) {
-                        if let Ok(jobject) = jvalue.l() {
-                            let jstring = unsafe { jni::objects::JString::from_raw(env, jobject.as_raw()) };
-                            if let Ok(rust_str) = env.get_string(&jstring).map(|s| s.to_string()) {
-                                if let Ok(val) = serde_json::from_str(&rust_str) {
-                                    result = val;
+        use tauri::Manager;
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Some(window) = _app.get_webview_window("main") {
+            let _ = window.with_webview(move |webview| {
+                webview.jni_handle().exec(move |env, activity, _webview| {
+                    let mut result = serde_json::json!({});
+                    if let Ok(class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
+                        if let Ok(jvalue) = env.call_static_method(
+                            class,
+                            "getNetworkInfo",
+                            "(Landroid/content/Context;)Ljava/lang/String;",
+                            &[jni::objects::JValue::Object(activity)],
+                        ) {
+                            if let Ok(jobject) = jvalue.l() {
+                                let jstring: jni::objects::JString = jobject.into();
+                                if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
+                                    if let Ok(val) = serde_json::from_str(&rust_str) {
+                                        result = val;
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            }
-            Ok::<_, jni::errors::Error>(())
-        });
-        return result;
+                    let _ = tx.send(result);
+                });
+            });
+        } else {
+            let _ = tx.send(serde_json::json!({}));
+        }
+        return rx.recv().unwrap_or(serde_json::json!({}));
     }
 
     #[cfg(not(target_os = "android"))]
@@ -117,28 +114,21 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 fn request_battery_optimizations(_app: tauri::AppHandle) {
     #[cfg(target_os = "android")]
     {
-        let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
-        let _ = vm.attach_current_thread(|env| {
-            let activity_ptr = ctx.context().cast();
-            let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr) };
-            let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/MainActivity");
-            if let Ok(_class) = env.find_class(&class_name) {
-                let method_name = jni::strings::JNIString::from("requestBatteryOptimizations");
-                let sig_str = "()V";
-                
-                if let Ok(runtime_sig) = sig_str.parse::<jni::signature::RuntimeMethodSignature>() {
-                    let sig = jni::signature::MethodSignature::from(&runtime_sig);
-                    let _ = env.call_method(
-                        activity,
-                        &method_name,
-                        &sig,
-                        &[],
-                    );
-                }
-            }
-            Ok::<_, jni::errors::Error>(())
-        });
+        use tauri::Manager;
+        if let Some(window) = _app.get_webview_window("main") {
+            let _ = window.with_webview(|webview| {
+                webview.jni_handle().exec(move |env, activity, _webview| {
+                    if let Ok(_class) = env.find_class("cn/edu/bjut/al/MainActivity") {
+                        let _ = env.call_method(
+                            activity,
+                            "requestBatteryOptimizations",
+                            "()V",
+                            &[],
+                        );
+                    }
+                });
+            });
+        }
     }
 }
 

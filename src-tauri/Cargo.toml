@@ -31,5 +31,4 @@ corewlan = "0.2.1"
 objc2-core-location = "0.3.2"
 
 [target.'cfg(target_os="android")'.dependencies]
-jni = "0.22.4"
-ndk-context = "0.1.1"
+jni = "0.21.1"
