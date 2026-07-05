@@ -11,7 +11,7 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
         let mut result = serde_json::json!({});
         let ctx = ndk_context::android_context();
         let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
-        if let Ok(mut env) = vm.attach_current_thread() {
+        let _ = vm.attach_current_thread(|mut env| {
             let activity_ptr = ctx.context().cast();
             let activity = unsafe { jni::objects::JObject::from_raw(&env, activity_ptr) };
             let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
@@ -28,9 +28,9 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                         &[jni::objects::JValue::Object(&activity)],
                     ) {
                         if let Ok(jobject) = jvalue.l() {
-                            let jstring: jni::objects::JString = jobject.into();
+                            let jstring = unsafe { jni::objects::JString::from_raw(jobject.as_raw()) };
                             if let Ok(json_str) = env.get_string(&jstring) {
-                                if let Ok(val) = serde_json::from_str(&json_str.to_string_lossy()) {
+                                if let Ok(val) = serde_json::from_str(&json_str.to_string()) {
                                     result = val;
                                 }
                             }
@@ -38,7 +38,8 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                     }
                 }
             }
-        }
+            Ok::<_, jni::errors::Error>(())
+        });
         return result;
     }
 
@@ -118,7 +119,7 @@ fn request_battery_optimizations(_app: tauri::AppHandle) {
     {
         let ctx = ndk_context::android_context();
         let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
-        if let Ok(mut env) = vm.attach_current_thread() {
+        let _ = vm.attach_current_thread(|mut env| {
             let activity_ptr = ctx.context().cast();
             let activity = unsafe { jni::objects::JObject::from_raw(&env, activity_ptr) };
             let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/MainActivity");
@@ -136,7 +137,8 @@ fn request_battery_optimizations(_app: tauri::AppHandle) {
                     );
                 }
             }
-        }
+            Ok::<_, jni::errors::Error>(())
+        });
     }
 }
 
