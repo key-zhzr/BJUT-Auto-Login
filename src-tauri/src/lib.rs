@@ -50,8 +50,8 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
-            if let Some(interfaces) = corewlan::CWInterface::interfaces() {
-                if let Some(interface) = interfaces.into_iter().next() {
+            if let Ok(client) = corewlan::WiFiClient::shared() {
+                if let Some(interface) = client.interface() {
                     if let Some(s) = interface.ssid() {
                         ssid = s;
                     }
