@@ -11,9 +11,9 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
         let mut result = serde_json::json!({});
         let ctx = ndk_context::android_context();
         let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
-        let _ = vm.attach_current_thread(|mut env| {
+        let _ = vm.attach_current_thread(|env| {
             let activity_ptr = ctx.context().cast();
-            let activity = unsafe { jni::objects::JObject::from_raw(&env, activity_ptr) };
+            let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr) };
             let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/NetworkHelper");
             if let Ok(class) = env.find_class(&class_name) {
                 let method_name = jni::strings::JNIString::from("getNetworkInfo");
@@ -28,9 +28,9 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                         &[jni::objects::JValue::Object(&activity)],
                     ) {
                         if let Ok(jobject) = jvalue.l() {
-                            let jstring = unsafe { jni::objects::JString::from_raw(jobject.as_raw()) };
-                            if let Ok(json_str) = env.get_string(&jstring) {
-                                if let Ok(val) = serde_json::from_str(&json_str.to_string()) {
+                            let jstring = unsafe { jni::objects::JString::from_raw(env, jobject.as_raw()) };
+                            if let Ok(rust_str) = env.get_string(&jstring).map(|s| s.to_string()) {
+                                if let Ok(val) = serde_json::from_str(&rust_str) {
                                     result = val;
                                 }
                             }
@@ -119,11 +119,11 @@ fn request_battery_optimizations(_app: tauri::AppHandle) {
     {
         let ctx = ndk_context::android_context();
         let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
-        let _ = vm.attach_current_thread(|mut env| {
+        let _ = vm.attach_current_thread(|env| {
             let activity_ptr = ctx.context().cast();
-            let activity = unsafe { jni::objects::JObject::from_raw(&env, activity_ptr) };
+            let activity = unsafe { jni::objects::JObject::from_raw(env, activity_ptr) };
             let class_name = jni::strings::JNIString::from("cn/edu/bjut/al/MainActivity");
-            if let Ok(class) = env.find_class(&class_name) {
+            if let Ok(_class) = env.find_class(&class_name) {
                 let method_name = jni::strings::JNIString::from("requestBatteryOptimizations");
                 let sig_str = "()V";
                 
