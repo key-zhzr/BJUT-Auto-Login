@@ -55,13 +55,9 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Build Tauri App
-        uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: "-"
-        with:
-          includeRelease: false
-          args: ${{ matrix.args }}
+        run: npm run tauri build -- ${{ matrix.args }}
 
       - name: Rename and Prepare Assets
         shell: python
