@@ -22,10 +22,14 @@ class KeepAliveService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(1, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(1, notification)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -39,13 +43,17 @@ class KeepAliveService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel(
-                CHANNEL_ID,
-                "Keep Alive Service Channel",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(serviceChannel)
+            try {
+                val serviceChannel = NotificationChannel(
+                    CHANNEL_ID,
+                    "Keep Alive Service Channel",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+                val manager = getSystemService(NotificationManager::class.java)
+                manager.createNotificationChannel(serviceChannel)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 }

@@ -14,12 +14,16 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     
-    // Start Keep-Alive Service
-    val serviceIntent = Intent(this, KeepAliveService::class.java)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        startForegroundService(serviceIntent)
-    } else {
-        startService(serviceIntent)
+    // Start Keep-Alive Service safely
+    try {
+        val serviceIntent = Intent(this, KeepAliveService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
     }
   }
 
