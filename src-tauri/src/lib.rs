@@ -48,10 +48,62 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
     #[cfg(not(target_os = "android"))]
     {
+        let mut ssid = String::new();
+        let mut bssid = String::new();
+        let mut ip = String::new();
+
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(output) = std::process::Command::new("system_profiler").arg("SPAirPortDataType").output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let lines: Vec<&str> = stdout.lines().collect();
+                for (i, line) in lines.iter().enumerate() {
+                    if line.contains("Current Network Information:") {
+                        if i + 1 < lines.len() {
+                            let ssid_line = lines[i + 1].trim();
+                            if let Some(s) = ssid_line.strip_suffix(":") {
+                                ssid = s.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Ok(output) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en0").output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let trimmed = stdout.trim();
+                if !trimmed.is_empty() {
+                    ip = trimmed.to_string();
+                } else if let Ok(output2) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en1").output() {
+                    ip = String::from_utf8_lossy(&output2.stdout).trim().to_string();
+                }
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(output) = std::process::Command::new("netsh").args(["wlan", "show", "interfaces"]).output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let line = line.trim();
+                    if line.starts_with("SSID") && !line.starts_with("BSSID") {
+                        if let Some(idx) = line.find(':') {
+                            ssid = line[idx + 1..].trim().to_string();
+                        }
+                    }
+                    if line.starts_with("BSSID") {
+                        if let Some(idx) = line.find(':') {
+                            bssid = line[idx + 1..].trim().to_string();
+                        }
+                    }
+                }
+            }
+        }
+
         serde_json::json!({
-            "ssid": "bjut-wifi",
-            "bssid": "00:11:22:33:44:55",
-            "ip": "10.21.221.98"
+            "ssid": ssid,
+            "bssid": bssid,
+            "ip": ip
         })
     }
 }
@@ -101,10 +153,20 @@ pub fn run() {
 
                     #[cfg(target_os = "macos")]
                     {
-                        if let Ok(output) = std::process::Command::new("ifconfig").output() {
-                            let stdout = String::from_utf8_lossy(&output.stdout);
-                            if stdout.contains("inet 10.") {
+                        let info = get_network_info(app_handle.clone());
+                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
+                            let s = ssid_val.replace("\"", "");
+                            if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
                                 is_connected = true;
+                            }
+                        }
+                        
+                        if !is_connected {
+                            if let Ok(output) = std::process::Command::new("ifconfig").output() {
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                if stdout.contains("inet 10.") {
+                                    is_connected = true;
+                                }
                             }
                         }
                     }
@@ -112,8 +174,8 @@ pub fn run() {
                     #[cfg(not(target_os = "macos"))]
                     {
                         let info = get_network_info(app_handle.clone());
-                        if let Some(ssid) = info.get("ssid").and_then(|s| s.as_str()) {
-                            let s = ssid.replace("\"", "");
+                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
+                            let s = ssid_val.replace("\"", "");
                             if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
                                 is_connected = true;
                             }
@@ -149,8 +211,4 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-#[cfg(target_os = "android")]
-fn test_android(app: tauri::AppHandle) {
-    let env = app.env();
-}
 
