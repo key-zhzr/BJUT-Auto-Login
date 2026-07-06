@@ -335,6 +335,17 @@
               </div>
               <div class="setting-item">
                 <div class="setting-info">
+                  <h4>日志详细等级</h4>
+                  <p>控制“运行日志”页面记录的日志级别</p>
+                </div>
+                <select id="setting-log-level" class="input-inline">
+                  <option value="debug">DEBUG (调试)</option>
+                  <option value="info" selected>INFO (信息 - 默认)</option>
+                  <option value="error">ERROR (错误)</option>
+                </select>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
                   <h4>配置导入/导出</h4>
                   <p>将当前配置加密并导出到剪贴板，或从剪贴板导入</p>
                 </div>
@@ -342,6 +353,13 @@
                   <button class="btn btn-secondary btn-sm" id="btn-export-config"><i data-lucide="clipboard-copy"></i> 导出</button>
                   <button class="btn btn-secondary btn-sm" id="btn-import-config"><i data-lucide="clipboard-paste"></i> 导入</button>
                 </div>
+              </div>
+              <div class="setting-item" id="setting-quit-item">
+                <div class="setting-info">
+                  <h4>退出应用</h4>
+                  <p>彻底关闭应用并释放后台运行的保活服务（仅桌面端）</p>
+                </div>
+                <button class="btn btn-danger btn-sm" id="btn-quit-app">退出</button>
               </div>
             </div>
         </section>

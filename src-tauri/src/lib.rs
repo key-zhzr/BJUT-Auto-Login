@@ -328,6 +328,11 @@ fn stop_keep_alive_service(_app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+#[tauri::command]
 fn get_local_ip() -> String {
     let mut ip = String::new();
     
@@ -485,32 +490,16 @@ pub fn run() {
                 }
 
                 // System Tray Setup
-                use tauri::menu::{Menu, MenuItem};
-                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+                use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-                let show_i = MenuItem::with_id(_app, "show", "显示主窗口", true, None::<&str>)?;
-                let quit_i = MenuItem::with_id(_app, "quit", "退出", true, None::<&str>)?;
-                let menu = Menu::with_items(_app, &[&show_i, &quit_i])?;
-
-                let mut tray_builder = TrayIconBuilder::new().menu(&menu);
+                let mut tray_builder = TrayIconBuilder::new();
                 if let Some(ic) = _app.default_window_icon().cloned() {
                     tray_builder = tray_builder.icon(ic);
                 }
                 
                 let _tray = tray_builder
-                    .on_menu_event(|app, event| {
-                        if event.id == "show" {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                        } else if event.id == "quit" {
-                            app.exit(0);
-                        }
-                    })
                     .on_tray_icon_event(|tray, event| {
                         if let TrayIconEvent::Click {
-                            button: MouseButton::Left,
                             button_state: MouseButtonState::Up,
                             ..
                         } = event
@@ -551,7 +540,8 @@ pub fn run() {
             request_background_permissions,
             start_keep_alive_service,
             stop_keep_alive_service,
-            get_local_ip
+            get_local_ip,
+            exit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

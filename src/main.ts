@@ -9,13 +9,16 @@ if (navigator.userAgent.includes('Mac OS X')) {
 document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
   try { getCurrentWindow().minimize(); } catch(err) {}
 });
+let isWindowMaximized = false;
 document.getElementById('titlebar-maximize')?.addEventListener('click', async () => {
   try {
     const win = getCurrentWindow();
-    if (await win.isMaximized()) {
+    if (isWindowMaximized) {
       await win.unmaximize();
+      isWindowMaximized = false;
     } else {
       await win.maximize();
+      isWindowMaximized = true;
     }
   } catch(err) {}
 });
@@ -156,6 +159,7 @@ const settingAutoLogin = document.getElementById('setting-auto-login') as HTMLIn
 const settingWifiChangeDetect = document.getElementById('setting-wifi-change-detect') as HTMLInputElement;
 const settingAutostart = document.getElementById('setting-autostart') as HTMLInputElement;
 const settingCheckInterval = document.getElementById('setting-check-interval') as HTMLInputElement;
+const settingLogLevel = document.getElementById('setting-log-level') as HTMLSelectElement;
 
 // Add Modal
 const addModal = document.getElementById('add-modal')!;
@@ -191,10 +195,11 @@ function init() {
   settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
   settingCheckInterval.value = checkInterval.toString();
 
-  // Handle autostart element visibility and status
+  // Handle autostart and quit element visibility and status
   const isAndroid = navigator.userAgent.toLowerCase().includes('android');
   if (!(window as any).__TAURI__ || isAndroid) {
     document.getElementById('setting-autostart-item')?.style.setProperty('display', 'none');
+    document.getElementById('setting-quit-item')?.style.setProperty('display', 'none');
   } else {
     import('@tauri-apps/plugin-autostart').then(async ({ isEnabled }) => {
       try {
@@ -203,6 +208,11 @@ function init() {
         console.warn('Failed to query autostart status:', e);
       }
     });
+  }
+
+  // Initialize log level selector
+  if (settingLogLevel) {
+    settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
   }
   
   setupNavigation();
@@ -452,6 +462,32 @@ function setupEventListeners() {
       if ((e.target as HTMLSelectElement).value === 'add') {
         overrideAccountSelect.value = 'auto'; // Reset
         addModal.classList.remove('hidden');
+      }
+    });
+  }
+
+  if (settingLogLevel) {
+    settingLogLevel.addEventListener('change', (e) => {
+      const level = (e.target as HTMLSelectElement).value;
+      localStorage.setItem('bjut_log_level', level);
+      log('设置', `日志详细等级已设置为 ${level.toUpperCase()}`);
+    });
+  }
+
+  const btnQuitApp = document.getElementById('btn-quit-app');
+  if (btnQuitApp) {
+    btnQuitApp.addEventListener('click', async () => {
+      if (confirm('确定要退出应用吗？这将彻底关闭后台网络自动登录服务。')) {
+        if ((window as any).__TAURI__) {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('exit_app');
+          } catch (e) {
+            console.error('Failed to exit app:', e);
+          }
+        } else {
+          window.close();
+        }
       }
     });
   }
@@ -822,7 +858,16 @@ function setupEventListeners() {
 }
 
 // Logging
-function log(module: string, message: string, type: 'info' | 'error' | 'success' = 'info') {
+function log(module: string, message: string, type: 'info' | 'error' | 'success' | 'debug' = 'info') {
+  const currentLevel = localStorage.getItem('bjut_log_level') || 'info';
+  
+  if (currentLevel === 'error' && type !== 'error') {
+    return;
+  }
+  if (currentLevel === 'info' && type === 'debug') {
+    return;
+  }
+
   const time = new Date().toLocaleTimeString();
   const entry = document.createElement('div');
   entry.className = 'log-entry';

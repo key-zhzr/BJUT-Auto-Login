@@ -480,6 +480,21 @@ input:checked + .slider:before { transform: translateX(24px); }
   align-items: center;
   padding: 1rem 0;
   border-bottom: 1px solid var(--card-border);
+  gap: 1rem;
+}
+.setting-info {
+  flex: 1;
+  min-width: 0;
+}
+.setting-item .switch,
+.setting-item input,
+.setting-item select,
+.setting-item button {
+  flex-shrink: 0;
+}
+.log-debug {
+  color: #8c92a6;
+  font-style: italic;
 }
 
 /* Responsive */
