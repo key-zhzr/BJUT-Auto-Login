@@ -29,6 +29,7 @@
         }
       ]
     },
-    "notification:default"
+    "notification:default",
+    "autostart:default"
   ]
 }

@@ -424,7 +424,7 @@ fn get_local_ip() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .setup(|_app| {
             // Background network poller.
             // On desktop, it emits to frontend. On Android, it evaluates JS directly.
@@ -498,19 +498,86 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
+                use tauri::Manager;
+                
+                // Set frameless for non-macOS desktop windows
                 #[cfg(not(target_os = "macos"))]
                 {
-                    use tauri::Manager;
                     if let Some(window) = _app.get_webview_window("main") {
                         let _ = window.set_decorations(false);
                     }
                 }
+
+                // Prevent window close, hide instead to keep in system tray
+                if let Some(window) = _app.get_webview_window("main") {
+                    let window_clone = window.clone();
+                    window.on_window_event(move |event| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            api.prevent_close();
+                            let _ = window_clone.hide();
+                        }
+                    });
+                }
+
+                // System Tray Setup
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let show_i = MenuItem::with_id(_app, "show", "显示主窗口", true, None::<&str>)?;
+                let quit_i = MenuItem::with_id(_app, "quit", "退出", true, None::<&str>)?;
+                let menu = Menu::with_items(_app, &[&show_i, &quit_i])?;
+
+                let mut tray_builder = TrayIconBuilder::new().menu(&menu);
+                if let Some(ic) = _app.default_window_icon().cloned() {
+                    tray_builder = tray_builder.icon(ic);
+                }
+                
+                let _tray = tray_builder
+                    .on_menu_event(|app, event| {
+                        if event.id == "show" {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        } else if event.id == "quit" {
+                            app.exit(0);
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                if window.is_visible().unwrap_or(false) {
+                                    let _ = window.hide();
+                                } else {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                        }
+                    })
+                    .build(_app)?;
             }
             Ok(())
-        })
+        });
+
+    #[allow(unused_mut)]
+    let mut builder = builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_autostart::Builder::default().build());
+    }
+
+    builder
         .invoke_handler(tauri::generate_handler![
             greet, 
             get_network_info, 

@@ -9,8 +9,15 @@ if (navigator.userAgent.includes('Mac OS X')) {
 document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
   try { getCurrentWindow().minimize(); } catch(err) {}
 });
-document.getElementById('titlebar-maximize')?.addEventListener('click', () => {
-  try { getCurrentWindow().toggleMaximize(); } catch(err) {}
+document.getElementById('titlebar-maximize')?.addEventListener('click', async () => {
+  try {
+    const win = getCurrentWindow();
+    if (await win.isMaximized()) {
+      await win.unmaximize();
+    } else {
+      await win.maximize();
+    }
+  } catch(err) {}
 });
 document.getElementById('titlebar-close')?.addEventListener('click', () => {
   try { getCurrentWindow().close(); } catch(err) {}
@@ -147,6 +154,7 @@ const logsContent = document.getElementById('logs-content')!;
 const btnClearLogs = document.getElementById('btn-clear-logs')!;
 const settingAutoLogin = document.getElementById('setting-auto-login') as HTMLInputElement;
 const settingWifiChangeDetect = document.getElementById('setting-wifi-change-detect') as HTMLInputElement;
+const settingAutostart = document.getElementById('setting-autostart') as HTMLInputElement;
 const settingCheckInterval = document.getElementById('setting-check-interval') as HTMLInputElement;
 
 // Add Modal
@@ -182,6 +190,20 @@ function init() {
   settingAutoLogin.checked = autoLoginEnabled;
   settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
   settingCheckInterval.value = checkInterval.toString();
+
+  // Handle autostart element visibility and status
+  const isAndroid = navigator.userAgent.toLowerCase().includes('android');
+  if (!(window as any).__TAURI__ || isAndroid) {
+    document.getElementById('setting-autostart-item')?.style.setProperty('display', 'none');
+  } else {
+    import('@tauri-apps/plugin-autostart').then(async ({ isEnabled }) => {
+      try {
+        settingAutostart.checked = await isEnabled();
+      } catch (e) {
+        console.warn('Failed to query autostart status:', e);
+      }
+    });
+  }
   
   setupNavigation();
   setupEventListeners();
@@ -365,6 +387,28 @@ function setupEventListeners() {
         if (wifiChangeTimer) {
           clearTimeout(wifiChangeTimer);
           wifiChangeTimer = null;
+        }
+      }
+    });
+  }
+
+  if (settingAutostart) {
+    settingAutostart.addEventListener('change', async (e) => {
+      const enabled = (e.target as HTMLInputElement).checked;
+      if ((window as any).__TAURI__) {
+        try {
+          const { enable, disable } = await import('@tauri-apps/plugin-autostart');
+          if (enabled) {
+            await enable();
+            log('设置', '已启用开机自启动');
+          } else {
+            await disable();
+            log('设置', '已停用开机自启动');
+          }
+        } catch (err) {
+          console.error('Failed to change autostart status:', err);
+          log('设置', `设置开机自启动失败: ${String(err)}`);
+          settingAutostart.checked = !enabled; // revert
         }
       }
     });
