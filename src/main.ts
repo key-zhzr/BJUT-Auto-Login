@@ -1,7 +1,6 @@
 import { createIcons, icons } from 'lucide';
 import Sortable from 'sortablejs';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
 if (navigator.userAgent.includes('Mac OS X')) {
   document.body.classList.add('is-macos');
@@ -181,8 +180,74 @@ function init() {
   setupEventListeners();
   renderAccounts();
   log('系统', '应用启动');
-  
-  startNetworkCheckLoop();
+
+  // Register triggerAutoLogin globally for eval call from Rust
+  (window as any).triggerAutoLogin = () => {
+    log('系统', '收到系统底层网络连通事件触发 (Eval)');
+    if (autoLoginEnabled && !isLoggingIn) {
+      manualLogin();
+    }
+  };
+
+  const tosAccepted = localStorage.getItem('bjut_tos_accepted') === 'true';
+  if (!tosAccepted) {
+    const tosModal = document.getElementById('tos-modal')!;
+    tosModal.classList.remove('hidden');
+    
+    document.getElementById('btn-tos-agree')!.addEventListener('click', async () => {
+      localStorage.setItem('bjut_tos_accepted', 'true');
+      tosModal.classList.add('hidden');
+      log('系统', '已同意用户协议与隐私政策');
+      
+      // Request foreground permissions
+      if ((window as any).__TAURI__) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('request_foreground_permissions');
+          log('系统', '已申请前台网络定位相关权限');
+        } catch (e) {
+          console.error('Failed to request foreground permissions:', e);
+        }
+      }
+      
+      startNetworkCheckLoop();
+    });
+    
+    document.getElementById('btn-tos-disagree')!.addEventListener('click', async () => {
+      if ((window as any).__TAURI__) {
+        try {
+          getCurrentWindow().close();
+        } catch (e) {
+          window.close();
+        }
+      } else {
+        window.close();
+      }
+    });
+  } else {
+    // Already accepted
+    if ((window as any).__TAURI__) {
+      import('@tauri-apps/api/core').then(async ({ invoke }) => {
+        try {
+          await invoke('request_foreground_permissions');
+        } catch (e) {
+          console.error('Failed to request foreground permissions:', e);
+        }
+        
+        // Also check if keep alive service needs to run
+        if (autoLoginEnabled && navigator.userAgent.toLowerCase().includes('android')) {
+          try {
+            await invoke('start_keep_alive_service');
+            log('系统', '后台保活服务已启动');
+          } catch (e) {
+            console.error('Failed to start keep-alive service:', e);
+          }
+        }
+      });
+    }
+    
+    startNetworkCheckLoop();
+  }
 }
 
 // Navigation
@@ -241,32 +306,31 @@ function setupEventListeners() {
     localStorage.setItem('bjut_auto_login', autoLoginEnabled.toString());
     log('设置', `自动登录已${autoLoginEnabled ? '开启' : '关闭'}`);
     
-    // 如果是开启自动登录，且可能在移动端运行
-    if (autoLoginEnabled && navigator.userAgent.toLowerCase().includes('android')) {
-      customAlert('【安卓后台保活提示】\n为确保后台自动登录正常运行，请授权“忽略电池优化”以保持后台存活。\n\n部分设备需手动前往系统设置允许“自启动”和“后台运行”。');
+    if ((window as any).__TAURI__) {
+      const { invoke } = await import('@tauri-apps/api/core');
       
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('request_battery_optimizations');
-      } catch (e) {
-        console.warn('Failed to request battery optimization:', e);
-      }
-
-      // 尝试请求通知权限并发送常驻通知
-      try {
-        let permissionGranted = await isPermissionGranted();
-        if (!permissionGranted) {
-          const permission = await requestPermission();
-          permissionGranted = permission === 'granted';
+      if (autoLoginEnabled) {
+        if (navigator.userAgent.toLowerCase().includes('android')) {
+          customAlert('【安卓后台保活提示】\n已开启后台自动登录！应用将请求“始终允许”后台定位权限与通知权限，并拉起后台保活服务，以保证断网自动重连稳定性。\n\n另外，建议您授权“忽略电池优化”。');
+          
+          try {
+            await invoke('request_background_permissions');
+            await invoke('request_battery_optimizations');
+            await invoke('start_keep_alive_service');
+            log('系统', '已开启后台保活服务，并申请后台权限');
+          } catch (e) {
+            console.error('Failed to request background services:', e);
+          }
         }
-        if (permissionGranted) {
-          sendNotification({
-            title: '校园网自动登录运行中',
-            body: '保持后台运行以随时检测并自动重连校园网',
-          });
+      } else {
+        if (navigator.userAgent.toLowerCase().includes('android')) {
+          try {
+            await invoke('stop_keep_alive_service');
+            log('系统', '已停止后台保活服务');
+          } catch (e) {
+            console.error('Failed to stop background service:', e);
+          }
         }
-      } catch (err) {
-        console.error('Failed to request notification permission or send notification:', err);
       }
     }
   });

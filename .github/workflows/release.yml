@@ -24,7 +24,9 @@ jobs:
           - platform: 'windows-latest'
             args: '--target x86_64-pc-windows-msvc'
           - platform: 'windows-latest'
-            args: '--target x86_64-pc-windows-msvc --config "{\"bundle\":{\"windows\":{\"webviewInstallMode\":{\"type\":\"offlineInstaller\"}}}}"'
+            args: '--target aarch64-pc-windows-msvc'
+          - platform: 'windows-latest'
+            args: '--target x86_64-pc-windows-msvc -c tauri.offline.conf.json'
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
@@ -96,8 +98,9 @@ jobs:
                       
                   # Windows
                   elif platform == "windows-latest" and file.endswith(".exe") and "bundle" in file_path:
-                      suffix = "_Offline" if "offlineInstaller" in args else ""
-                      dest = "release-artifacts/BJUT-Auto-Login_{}_Windows_x64{}.exe".format(version, suffix)
+                      arch = "arm64" if "aarch64" in args else "x64"
+                      suffix = "_Offline" if "tauri.offline.conf.json" in args else ""
+                      dest = "release-artifacts/BJUT-Auto-Login_{}_Windows_{}{}.exe".format(version, arch, suffix)
                       print("Found Windows EXE: {} -> {}".format(file_path, dest))
                       shutil.copy2(file_path, dest)
                       copied = True

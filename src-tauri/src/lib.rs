@@ -193,63 +193,185 @@ fn request_battery_optimizations(_app: tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn request_foreground_permissions(_app: tauri::AppHandle) {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
+            if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
+                if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
+                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    let _ = env.call_method(
+                        &activity,
+                        "requestForegroundPermissions",
+                        "()V",
+                        &[],
+                    );
+                    if env.exception_check().unwrap_or(false) {
+                        let _ = env.exception_clear();
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        static PROMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !PROMPTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let _ = _app.run_on_main_thread(|| {
+                unsafe {
+                    let manager = objc2_core_location::CLLocationManager::new();
+                    manager.requestWhenInUseAuthorization();
+                    manager.startUpdatingLocation();
+                    let _ = Box::leak(Box::new(manager));
+                }
+            });
+        }
+    }
+}
+
+#[tauri::command]
+fn request_background_permissions(_app: tauri::AppHandle) {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
+            if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
+                if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
+                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    let _ = env.call_method(
+                        &activity,
+                        "requestBackgroundPermissions",
+                        "()V",
+                        &[],
+                    );
+                    if env.exception_check().unwrap_or(false) {
+                        let _ = env.exception_clear();
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn start_keep_alive_service(_app: tauri::AppHandle) {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
+            if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
+                if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
+                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    let _ = env.call_method(
+                        &activity,
+                        "startKeepAliveService",
+                        "()V",
+                        &[],
+                    );
+                    if env.exception_check().unwrap_or(false) {
+                        let _ = env.exception_clear();
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn stop_keep_alive_service(_app: tauri::AppHandle) {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
+            if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
+                if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
+                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    let _ = env.call_method(
+                        &activity,
+                        "stopKeepAliveService",
+                        "()V",
+                        &[],
+                    );
+                    if env.exception_check().unwrap_or(false) {
+                        let _ = env.exception_clear();
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|_app| {
-            #[cfg(desktop)]
-            use tauri::Emitter;
+            // Background network poller.
+            // On desktop, it emits to frontend. On Android, it evaluates JS directly.
+            let app_handle = _app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut was_connected = false;
+                loop {
+                    let mut is_connected = false;
 
-            // Background network poller - desktop only.
-            // On Android, the frontend's own startNetworkCheckLoop handles auto-login.
-            #[cfg(desktop)]
-            {
-                let app_handle = _app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let mut was_connected = false;
-                    loop {
-                        let mut is_connected = false;
-
-                        #[cfg(target_os = "macos")]
-                        {
-                            let info = get_network_info(app_handle.clone());
-                            if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
-                                let s = ssid_val.replace("\"", "");
-                                if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
-                                    is_connected = true;
-                                }
-                            }
-                            
-                            if !is_connected {
-                                if let Ok(output) = std::process::Command::new("ifconfig").output() {
-                                    let stdout = String::from_utf8_lossy(&output.stdout);
-                                    if stdout.contains("inet 10.") {
-                                        is_connected = true;
-                                    }
-                                }
+                    #[cfg(target_os = "android")]
+                    {
+                        let info = get_network_info(app_handle.clone());
+                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
+                            let s = ssid_val.replace("\"", "");
+                            if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
+                                is_connected = true;
                             }
                         }
+                    }
 
-                        #[cfg(target_os = "windows")]
-                        {
-                            let info = get_network_info(app_handle.clone());
-                            if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
-                                let s = ssid_val.replace("\"", "");
-                                if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let info = get_network_info(app_handle.clone());
+                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
+                            let s = ssid_val.replace("\"", "");
+                            if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
+                                is_connected = true;
+                            }
+                        }
+                        
+                        if !is_connected {
+                            if let Ok(output) = std::process::Command::new("ifconfig").output() {
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                if stdout.contains("inet 10.") {
                                     is_connected = true;
                                 }
                             }
                         }
+                    }
 
-                        if is_connected && !was_connected {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let info = get_network_info(app_handle.clone());
+                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
+                            let s = ssid_val.replace("\"", "");
+                            if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
+                                is_connected = true;
+                            }
+                        }
+                    }
+
+                    if is_connected && !was_connected {
+                        #[cfg(desktop)]
+                        {
+                            use tauri::Emitter;
                             let _ = app_handle.emit("trigger-auto-login", ());
                         }
-                        was_connected = is_connected;
-
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        #[cfg(target_os = "android")]
+                        {
+                            use tauri::Manager;
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.eval("if (window.triggerAutoLogin) { window.triggerAutoLogin(); }");
+                            }
+                        }
                     }
-                });
-            }
+                    was_connected = is_connected;
+
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            });
 
             #[cfg(desktop)]
             {
@@ -266,9 +388,15 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, get_network_info, request_battery_optimizations])
+        .invoke_handler(tauri::generate_handler![
+            greet, 
+            get_network_info, 
+            request_battery_optimizations,
+            request_foreground_permissions,
+            request_background_permissions,
+            start_keep_alive_service,
+            stop_keep_alive_service
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-
-

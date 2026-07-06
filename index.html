@@ -328,6 +328,28 @@
       </main>
     </div>
 
+    <!-- Terms of Service Modal -->
+    <div id="tos-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card" style="max-width: 500px; text-align: left;">
+        <h3 style="display: flex; align-items: center; gap: 0.5rem;"><i data-lucide="shield-check" style="color: var(--text-primary);"></i> 用户协议与隐私政策</h3>
+        <div style="max-height: 250px; overflow-y: auto; margin-bottom: 1.5rem; background: rgba(0,0,0,0.15); border-radius: 8px; padding: 1rem; font-size: 0.85rem; line-height: 1.5; color: var(--text-muted);">
+          <p>欢迎使用 BJUT Auto Login（北京工业大学校园网自动登录助手）。在您使用本应用前，请仔细阅读并同意以下条款：</p>
+          <p style="margin-top: 0.5rem; font-weight: bold; color: var(--text-primary);">1. 权限申请与数据使用说明：</p>
+          <p>• <strong>网络与 Wi-Fi 信息 (SSID/BSSID)：</strong>应用需要读取当前连接的 Wi-Fi 名称以识别您是否连接到了北京工业大学的校园网，并触发自动登录逻辑。</p>
+          <p>• <strong>定位权限：</strong>根据操作系统安全策略（Android 与 macOS），获取当前连接的 Wi-Fi SSID 和 BSSID 必须拥有定位权限。我们声明<strong>绝对不会</strong>收集、上传或跟踪您的任何实际地理位置信息。</p>
+          <p>• <strong>本地存储：</strong>您添加的校园网账号和密码将仅加密存储在您的设备本地 (LocalStorage) 中，<strong>绝对不会</strong>发送到任何第三方服务器。</p>
+          <p style="margin-top: 0.5rem; font-weight: bold; color: var(--text-primary);">2. 后台自动登录与电池忽略权限：</p>
+          <p>• 为实现断网自动重连，Android 端会使用前台常驻服务。您可选择授予后台定位权限以及“忽略电池优化”权限以保持连接稳定性。</p>
+          <p style="margin-top: 0.5rem; font-weight: bold; color: var(--text-primary);">3. 免责声明：</p>
+          <p>• 本软件为开源第三方助手工具，不对因使用本软件导致的任何服务中断、账户问题或其它任何损失承担责任。请严格遵守国家法律法规及北京工业大学校园网服务条款。</p>
+        </div>
+        <div class="modal-actions" style="gap: 1rem;">
+          <button type="button" class="btn btn-secondary" id="btn-tos-disagree" style="flex: 1;">不同意并退出</button>
+          <button type="button" class="btn btn-primary" id="btn-tos-agree" style="flex: 1;">同意并继续</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Generic Alert Modal -->
     <div id="alert-modal" class="modal-overlay hidden">
       <div class="modal-content glass-card">

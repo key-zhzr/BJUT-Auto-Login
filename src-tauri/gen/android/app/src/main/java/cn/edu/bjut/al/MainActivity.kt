@@ -13,28 +13,12 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
-    
-    // Request permissions at runtime
-    requestAppPermissions()
-
-    // Start Keep-Alive Service safely
-    try {
-        val serviceIntent = Intent(this, KeepAliveService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
   }
 
-  private fun requestAppPermissions() {
+  fun requestForegroundPermissions() {
     val permissions = mutableListOf<String>()
     
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
         permissions.add(android.Manifest.permission.NEARBY_WIFI_DEVICES)
     }
     
@@ -47,35 +31,48 @@ class MainActivity : TauriActivity() {
     
     if (toRequest.isNotEmpty()) {
         androidx.core.app.ActivityCompat.requestPermissions(this, toRequest.toTypedArray(), 101)
-    } else {
-        // If foreground location is already granted, check for background location
-        requestBackgroundLocationPermission()
     }
   }
 
-  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-      super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-      if (requestCode == 101) {
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-              val hasFine = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
-              if (hasFine) {
-                  requestBackgroundLocationPermission()
-              }
-          }
-      }
+  fun requestBackgroundPermissions() {
+    val permissions = mutableListOf<String>()
+    
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        permissions.add(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+    }
+    
+    val toRequest = permissions.filter {
+        androidx.core.content.ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    
+    if (toRequest.isNotEmpty()) {
+        androidx.core.app.ActivityCompat.requestPermissions(this, toRequest.toTypedArray(), 102)
+    }
   }
 
-  private fun requestBackgroundLocationPermission() {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-          val hasBg = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_BACKGROUND_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
-          if (!hasBg) {
-              androidx.core.app.ActivityCompat.requestPermissions(
-                  this,
-                  arrayOf(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION),
-                  102
-              )
-          }
-      }
+  fun startKeepAliveService() {
+    try {
+        val serviceIntent = Intent(this, KeepAliveService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+  }
+
+  fun stopKeepAliveService() {
+    try {
+        val serviceIntent = Intent(this, KeepAliveService::class.java)
+        stopService(serviceIntent)
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
   }
 
   fun requestBatteryOptimizations() {
