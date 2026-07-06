@@ -90,7 +90,7 @@
               <div><strong>IP:</strong> <span id="more-ip">--</span></div>
             </div>
           </div>
-          <div class="status-card glass-card">
+          <div class="status-card glass-card" style="margin-bottom: 1rem;">
             <div class="status-header">
               <div class="status-icon" id="network-icon"><i data-lucide="wifi"></i></div>
               <div class="status-info">
@@ -103,6 +103,23 @@
                 <i data-lucide="log-in"></i> 立即登录
               </button>
             </div>
+          </div>
+
+          <!-- Network Data Update Status Bar -->
+          <div class="glass-card" style="display: flex; justify-content: space-between; align-items: center; padding: 0.8rem 1.5rem; margin-bottom: 2rem; border-radius: 12px; font-size: 0.85rem; color: var(--text-muted);">
+            <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+              <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
+                <i data-lucide="clock" style="width: 14px; height: 14px;"></i> 
+                数据更新时间: <span id="update-timestamp" style="font-family: monospace; color: var(--text-main); font-weight: 500;">--</span>
+              </span>
+              <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
+                <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> 
+                <span id="countdown-text" style="font-family: monospace; color: var(--text-main); font-weight: 500;">--</span> 秒后更新
+              </span>
+            </div>
+            <button id="btn-manual-update" class="btn btn-secondary btn-sm" style="padding: 0.3rem 0.8rem; border-radius: 6px; display: inline-flex; align-items: center; gap: 0.3rem;">
+              <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i> 手动更新
+            </button>
           </div>
 
           <div class="info-grid">

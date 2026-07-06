@@ -289,6 +289,8 @@ let lastKnownIp = '';
 let wifiChangeTimer: number | null = null;
 let wifiChangeDetectEnabled = localStorage.getItem('bjut_wifi_change_detect') !== 'false';
 let connectivityTimer: number | null = null;
+let secondsToNextCheck = 0;
+let countdownInterval: number | null = null;
 
 // Initialize
 function init() {
@@ -577,6 +579,26 @@ function setupEventListeners() {
       const level = e.target.value;
       localStorage.setItem('bjut_log_level', level);
       log('设置', `日志详细等级已设置为 ${level.toUpperCase()}`);
+    });
+  }
+
+  const btnManualUpdate = document.getElementById('btn-manual-update');
+  if (btnManualUpdate) {
+    btnManualUpdate.addEventListener('click', async () => {
+      const btnIcon = btnManualUpdate.querySelector('i');
+      if (btnIcon) btnIcon.style.animation = 'spin 1s linear infinite';
+      
+      log('网络', '手动触发网络连通性检测...', 'info');
+      await checkNetwork();
+      
+      const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
+      const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
+      secondsToNextCheck = document.hidden ? intervalBg : intervalFg;
+      updateCountdownUI();
+      
+      setTimeout(() => {
+        if (btnIcon) btnIcon.style.animation = '';
+      }, 500);
     });
   }
 
@@ -1064,6 +1086,7 @@ function renderAccounts() {
   accountsList.innerHTML = '';
   if (accounts.length === 0) {
     accountsList.innerHTML = '<div style="color: var(--text-muted); padding: 1rem;">暂无账号，请添加。</div>';
+    updateOverrideOptions();
     return;
   }
   
@@ -1130,6 +1153,7 @@ function startWifiChangeCheckLoop() {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const currentIp: string = await invoke('get_local_ip');
+        log('网络', `[DEBUG] 执行 Wi-Fi 变更检测。当前 IP: ${currentIp || '未分配'} (上次 IP: ${lastKnownIp || '空'})`, 'debug');
         if (currentIp) {
           if (lastKnownIp && currentIp !== lastKnownIp) {
             log('网络', `检测到局域网 IP 发生变更: ${lastKnownIp} -> ${currentIp}，重新检测网络环境...`);
@@ -1152,24 +1176,50 @@ function startConnectivityCheckLoop() {
     clearTimeout(connectivityTimer);
     connectivityTimer = null;
   }
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
 
-  const tick = async () => {
+  const runCheck = async () => {
     await checkNetwork();
     const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
     const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
-    const currentInterval = document.hidden ? intervalBg : intervalFg;
-    connectivityTimer = setTimeout(tick, currentInterval * 1000) as any;
+    secondsToNextCheck = document.hidden ? intervalBg : intervalFg;
+    updateCountdownUI();
   };
 
-  tick();
+  countdownInterval = setInterval(() => {
+    if (isLoggingIn) return;
+    if (secondsToNextCheck > 0) {
+      secondsToNextCheck--;
+      updateCountdownUI();
+      if (secondsToNextCheck === 0) {
+        log('网络', `[DEBUG] 倒计时归零，触发自动网络连通性检测`, 'debug');
+        runCheck();
+      }
+    }
+  }, 1000) as any;
+
+  runCheck();
+}
+
+function updateCountdownUI() {
+  const countdownText = document.getElementById('countdown-text');
+  if (countdownText) {
+    countdownText.textContent = secondsToNextCheck.toString();
+  }
 }
 
 async function checkNetwork() {
   if (isLoggingIn) return;
+
+  const isBg = document.hidden;
+  log('网络', `[DEBUG] 开始检测网络连通性 (模式: ${isBg ? '后台' : '前台'})`, 'debug');
   
   // Update Network Info UI if More Options is enabled and app is in foreground
   const settingMoreOptions = document.getElementById('setting-more-options') as HTMLInputElement;
-  if (!document.hidden && settingMoreOptions && settingMoreOptions.checked) {
+  if (!isBg && settingMoreOptions && settingMoreOptions.checked) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       if ((window as any).__TAURI__) {
@@ -1180,6 +1230,7 @@ async function checkNetwork() {
         if (moreSsid) moreSsid.textContent = netInfo.ssid || '--';
         if (moreBssid) moreBssid.textContent = netInfo.bssid || '--';
         if (moreIp) moreIp.textContent = netInfo.ip || '--';
+        log('网络', `[DEBUG] 前台拉取详细 SSID 信息成功: SSID=${netInfo.ssid}, BSSID=${netInfo.bssid}, IP=${netInfo.ip}`, 'debug');
       }
     } catch (e) {
       console.warn('Failed to get network info for UI:', e);
@@ -1187,11 +1238,14 @@ async function checkNetwork() {
   }
 
   const isInternetOk = await checkInternet();
+  log('网络', `[DEBUG] 互联网可用性检测结果: ${isInternetOk ? '连通 (Online)' : '断开/受限'}`, 'debug');
+
   if (isInternetOk) {
     updateNetworkStatus(NetworkState.Online);
     await updateUserInfo();
   } else {
     const loginType = await detectLoginType();
+    log('网络', `[DEBUG] 检测到校园网环境判定: ${loginType !== LoginType.Unknown ? `需要登录认证 (${loginType})` : '非校园网/完全离线'}`, 'debug');
     if (loginType !== LoginType.Unknown) {
       updateNetworkStatus(NetworkState.BjutCampus, loginType);
       currentLoginType = loginType;
@@ -1203,6 +1257,12 @@ async function checkNetwork() {
     } else {
       updateNetworkStatus(NetworkState.Offline);
     }
+  }
+
+  // Update last check timestamp on UI
+  const updateTimestamp = document.getElementById('update-timestamp');
+  if (updateTimestamp) {
+    updateTimestamp.textContent = new Date().toLocaleTimeString();
   }
 }
 

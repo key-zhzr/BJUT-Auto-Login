@@ -338,41 +338,27 @@ fn get_local_ip() -> String {
     
     #[cfg(target_os = "windows")]
     {
-        let mut ipconfig_ips = Vec::new();
-        let mut cmd = std::process::Command::new("ipconfig");
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        if let Ok(output) = cmd.output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if line.contains("IPv4") {
-                    if let Some(idx) = line.find(':') {
-                        let extracted_ip = line[idx + 1..].trim().to_string();
-                        if !extracted_ip.is_empty() {
-                            ipconfig_ips.push(extracted_ip);
-                        }
+        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if socket.connect("8.8.8.8:80").is_ok() {
+                if let Ok(local_addr) = socket.local_addr() {
+                    let ip_str = local_addr.ip().to_string();
+                    if !ip_str.starts_with("127.") {
+                        ip = ip_str;
                     }
                 }
             }
         }
-        
-        let mut best_ip = String::new();
-        for extracted_ip in &ipconfig_ips {
-            if extracted_ip.starts_with("10.") || extracted_ip.starts_with("172.") {
-                best_ip = extracted_ip.clone();
-                break;
-            }
-        }
-        if best_ip.is_empty() && !ipconfig_ips.is_empty() {
-            for extracted_ip in &ipconfig_ips {
-                if !extracted_ip.starts_with("198.18.") && !extracted_ip.starts_with("127.") {
-                    best_ip = extracted_ip.clone();
-                    break;
+        if ip.is_empty() {
+            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                if socket.connect("10.21.221.98:80").is_ok() {
+                    if let Ok(local_addr) = socket.local_addr() {
+                        let ip_str = local_addr.ip().to_string();
+                        if !ip_str.starts_with("127.") {
+                            ip = ip_str;
+                        }
+                    }
                 }
             }
-        }
-        if !best_ip.is_empty() {
-            ip = best_ip;
         }
     }
 
@@ -490,21 +476,50 @@ pub fn run() {
                 }
 
                 // System Tray Setup
-                use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
                 let mut tray_builder = TrayIconBuilder::new();
-                if let Some(ic) = _app.default_window_icon().cloned() {
-                    tray_builder = tray_builder.icon(ic);
-                }
                 
-                let _tray = tray_builder
-                    .on_tray_icon_event(|tray, event| {
+                #[cfg(target_os = "macos")]
+                {
+                    let mac_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray_mac.png"))
+                        .expect("Failed to load macOS tray icon");
+                    tray_builder = tray_builder.icon(mac_icon);
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    if let Some(ic) = _app.default_window_icon().cloned() {
+                        tray_builder = tray_builder.icon(ic);
+                    }
+                }
+
+                // Create the system menu for right click / context menu
+                let show_i = MenuItem::with_id(_app, "show", "显示主窗口", true, None::<&str>)?;
+                let quit_i = MenuItem::with_id(_app, "quit", "退出", true, None::<&str>)?;
+                let menu = Menu::with_items(_app, &[&show_i, &quit_i])?;
+
+                let tray = tray_builder
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| {
+                        if event.id == "show" {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        } else if event.id == "quit" {
+                            app.exit(0);
+                        }
+                    })
+                    .on_tray_icon_event(|tray_event, event| {
                         if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
                             button_state: MouseButtonState::Up,
                             ..
                         } = event
                         {
-                            let app = tray.app_handle();
+                            let app = tray_event.app_handle();
                             if let Some(window) = app.get_webview_window("main") {
                                 if window.is_visible().unwrap_or(false) {
                                     let _ = window.hide();
@@ -516,6 +531,11 @@ pub fn run() {
                         }
                     })
                     .build(_app)?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = tray.set_icon_as_template(true);
+                }
             }
             Ok(())
         });

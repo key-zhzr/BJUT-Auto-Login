@@ -736,6 +736,10 @@ input:checked + .slider:before { transform: translateX(24px); }
   font-size: 0.9rem;
 }
 
+.custom-select.open {
+  z-index: 1001;
+}
+
 .custom-select-trigger {
   display: flex;
   justify-content: space-between;
@@ -746,7 +750,7 @@ input:checked + .slider:before { transform: translateX(24px); }
   border-radius: 8px;
   color: var(--text-main);
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
@@ -764,7 +768,7 @@ input:checked + .slider:before { transform: translateX(24px); }
 
 .custom-select-trigger i {
   flex-shrink: 0;
-  transition: transform 0.3s ease;
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   width: 14px;
   height: 14px;
 }
@@ -778,7 +782,7 @@ input:checked + .slider:before { transform: translateX(24px); }
   top: calc(100% + 5px);
   left: 0;
   right: 0;
-  background: rgba(26, 31, 54, 0.96);
+  background: rgba(26, 31, 54, 0.98);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--card-border);
@@ -786,8 +790,8 @@ input:checked + .slider:before { transform: translateX(24px); }
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
   opacity: 0;
   visibility: hidden;
-  transform: translateY(-10px);
-  transition: all 0.3s ease;
+  transform: translateY(-8px);
+  transition: opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.15s;
   z-index: 1000;
   max-height: 220px;
   overflow-y: auto;
@@ -803,7 +807,7 @@ input:checked + .slider:before { transform: translateX(24px); }
   padding: 0.5rem 0.8rem;
   color: var(--text-muted);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.1s ease, color 0.1s ease;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -818,4 +822,27 @@ input:checked + .slider:before { transform: translateX(24px); }
   background: rgba(79, 110, 242, 0.2);
   color: #4f6ef2;
   font-weight: 500;
+}
+
+/* Stacking contexts to prevent dropdown clipping */
+.setting-item {
+  position: relative;
+}
+.setting-item:has(.custom-select.open) {
+  z-index: 2000 !important;
+}
+.form-group {
+  position: relative;
+}
+.form-group:has(.custom-select.open) {
+  z-index: 2000 !important;
+}
+#dashboard-override-options:has(.custom-select.open) {
+  z-index: 2000 !important;
+}
+
+/* Manual update spin animation */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
