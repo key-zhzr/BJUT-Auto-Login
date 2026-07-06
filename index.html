@@ -58,19 +58,30 @@
             <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
               <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 150px;">
                 <label for="override-account" style="font-size: 0.85rem;">登录账号</label>
-                <select id="override-account" class="input-inline" style="width: 100%; border-radius: 6px;">
-                  <option value="auto">自动</option>
-                  <!-- Populated by JS -->
-                </select>
+                 <div class="custom-select" id="override-account" style="width: 100%;">
+                  <div class="custom-select-trigger">
+                    <span>自动</span>
+                    <i data-lucide="chevron-down"></i>
+                  </div>
+                  <div class="custom-select-options">
+                    <!-- Populated by JS -->
+                  </div>
+                </div>
               </div>
               <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 150px;">
                 <label for="override-method" style="font-size: 0.85rem;">登录方式</label>
-                <select id="override-method" class="input-inline" style="width: 100%; border-radius: 6px;">
-                  <option value="auto">自动检测</option>
-                  <option value="bjut-wifi">bjut-wifi</option>
-                  <option value="bjut_sushe">bjut_sushe</option>
-                  <option value="wired">有线lgn</option>
-                </select>
+                <div class="custom-select" id="override-method" style="width: 100%;">
+                  <div class="custom-select-trigger">
+                    <span>自动检测</span>
+                    <i data-lucide="chevron-down"></i>
+                  </div>
+                  <div class="custom-select-options">
+                    <div class="custom-option selected" data-value="auto">自动检测</div>
+                    <div class="custom-option" data-value="bjut-wifi">bjut-wifi</div>
+                    <div class="custom-option" data-value="bjut_sushe">bjut_sushe</div>
+                    <div class="custom-option" data-value="wired">有线lgn</div>
+                  </div>
+                </div>
               </div>
             </div>
             <div id="dashboard-network-info" style="flex-basis: 100%; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem; color: var(--text-muted); display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.5rem;">
@@ -328,21 +339,33 @@
                   <h4>更新通道</h4>
                   <p>选择您想接收的更新版本类型</p>
                 </div>
-                <select id="setting-update-channel" class="input-inline">
-                  <option value="release">正式版 (Release)</option>
-                  <option value="prerelease">预览版 (Pre-release)</option>
-                </select>
+                <div class="custom-select" id="setting-update-channel">
+                  <div class="custom-select-trigger">
+                    <span>正式版 (Release)</span>
+                    <i data-lucide="chevron-down"></i>
+                  </div>
+                  <div class="custom-select-options">
+                    <div class="custom-option selected" data-value="release">正式版 (Release)</div>
+                    <div class="custom-option" data-value="prerelease">预览版 (Pre-release)</div>
+                  </div>
+                </div>
               </div>
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>日志详细等级</h4>
                   <p>控制“运行日志”页面记录的日志级别</p>
                 </div>
-                <select id="setting-log-level" class="input-inline">
-                  <option value="debug">DEBUG (调试)</option>
-                  <option value="info" selected>INFO (信息 - 默认)</option>
-                  <option value="error">ERROR (错误)</option>
-                </select>
+                <div class="custom-select" id="setting-log-level">
+                  <div class="custom-select-trigger">
+                    <span>INFO (信息 - 默认)</span>
+                    <i data-lucide="chevron-down"></i>
+                  </div>
+                  <div class="custom-select-options">
+                    <div class="custom-option" data-value="debug">DEBUG (调试)</div>
+                    <div class="custom-option selected" data-value="info">INFO (信息 - 默认)</div>
+                    <div class="custom-option" data-value="error">ERROR (错误)</div>
+                  </div>
+                </div>
               </div>
               <div class="setting-item">
                 <div class="setting-info">

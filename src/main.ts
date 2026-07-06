@@ -141,6 +141,105 @@ function showListManageModal(title: string, list: string[], onSave: (list: strin
 
 import { checkInternet, detectLoginType, loginToCampusNetwork, fetchUserInfo, LoginType, NetworkState } from './network';
 
+class CustomSelect {
+  element: HTMLElement;
+  trigger: HTMLElement;
+  triggerSpan: HTMLSpanElement;
+  optionsContainer: HTMLElement;
+  private _value: string = '';
+  onChangeCallbacks: ((value: string) => void)[] = [];
+
+  constructor(elementId: string) {
+    this.element = document.getElementById(elementId)!;
+    this.trigger = this.element.querySelector('.custom-select-trigger')!;
+    this.triggerSpan = this.trigger.querySelector('span')!;
+    this.optionsContainer = this.element.querySelector('.custom-select-options')!;
+
+    // Toggle open
+    this.trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Close other dropdowns first
+      document.querySelectorAll('.custom-select').forEach(el => {
+        if (el !== this.element) el.classList.remove('open');
+      });
+      this.element.classList.toggle('open');
+    });
+
+    // Handle options click
+    this.optionsContainer.addEventListener('click', (e) => {
+      const option = (e.target as HTMLElement).closest('.custom-option') as HTMLElement;
+      if (option) {
+        const val = option.getAttribute('data-value') || '';
+        this.value = val;
+        this.element.classList.remove('open');
+        this.onChangeCallbacks.forEach(cb => cb(val));
+      }
+    });
+
+    // Close on click outside
+    document.addEventListener('click', () => {
+      this.element.classList.remove('open');
+    });
+
+    // Initial value
+    const selectedOption = this.optionsContainer.querySelector('.custom-option.selected') as HTMLElement;
+    if (selectedOption) {
+      this._value = selectedOption.getAttribute('data-value') || '';
+      this.triggerSpan.textContent = selectedOption.textContent;
+    }
+  }
+
+  get value(): string {
+    return this._value;
+  }
+
+  set value(val: string) {
+    this.setValue(val);
+  }
+
+  setValue(val: string) {
+    this._value = val;
+    let selectedText = '';
+    this.optionsContainer.querySelectorAll('.custom-option').forEach(opt => {
+      if (opt.getAttribute('data-value') === val) {
+        opt.classList.add('selected');
+        selectedText = opt.textContent || '';
+      } else {
+        opt.classList.remove('selected');
+      }
+    });
+    this.triggerSpan.textContent = selectedText || val;
+  }
+
+  addEventListener(event: 'change', callback: (e: any) => void) {
+    if (event === 'change') {
+      this.onChangeCallbacks.push((val) => {
+        callback({ target: { value: val } });
+      });
+    }
+  }
+
+  // Helper to set options dynamically (for override-account)
+  setOptions(options: { value: string, text: string }[]) {
+    this.optionsContainer.innerHTML = '';
+    options.forEach(opt => {
+      const div = document.createElement('div');
+      div.className = 'custom-option';
+      div.setAttribute('data-value', opt.value);
+      div.textContent = opt.text;
+      if (opt.value === this._value) {
+        div.classList.add('selected');
+        this.triggerSpan.textContent = opt.text;
+      }
+      this.optionsContainer.appendChild(div);
+    });
+    // If no option is selected, select the first one
+    if (!this.optionsContainer.querySelector('.custom-option.selected') && options.length > 0) {
+      this.setValue(options[0].value);
+    }
+  }
+}
+
 // UI Elements
 const navItems = document.querySelectorAll('.nav-item');
 const pages = document.querySelectorAll('.page');
@@ -159,7 +258,10 @@ const settingAutoLogin = document.getElementById('setting-auto-login') as HTMLIn
 const settingWifiChangeDetect = document.getElementById('setting-wifi-change-detect') as HTMLInputElement;
 const settingAutostart = document.getElementById('setting-autostart') as HTMLInputElement;
 const settingCheckInterval = document.getElementById('setting-check-interval') as HTMLInputElement;
-const settingLogLevel = document.getElementById('setting-log-level') as HTMLSelectElement;
+let settingLogLevel: CustomSelect;
+let overrideAccountSelect: CustomSelect;
+let overrideMethodSelect: CustomSelect;
+let settingUpdateChannel: CustomSelect;
 
 // Add Modal
 const addModal = document.getElementById('add-modal')!;
@@ -190,6 +292,12 @@ let connectivityTimer: number | null = null;
 
 // Initialize
 function init() {
+  // Instantiate Custom Selects
+  overrideAccountSelect = new CustomSelect('override-account');
+  overrideMethodSelect = new CustomSelect('override-method');
+  settingUpdateChannel = new CustomSelect('setting-update-channel');
+  settingLogLevel = new CustomSelect('setting-log-level');
+
   createIcons({ icons });
   settingAutoLogin.checked = autoLoginEnabled;
   settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
@@ -210,10 +318,9 @@ function init() {
     });
   }
 
-  // Initialize log level selector
-  if (settingLogLevel) {
-    settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
-  }
+  // Initialize selectors values
+  settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
+  settingUpdateChannel.value = localStorage.getItem('bjut_update_channel') || 'release';
   
   setupNavigation();
   setupEventListeners();
@@ -442,7 +549,6 @@ function setupEventListeners() {
   // Advanced Settings Events
   const settingMoreOptions = document.getElementById('setting-more-options') as HTMLInputElement;
   const dashboardOverrideOptions = document.getElementById('dashboard-override-options');
-  const overrideAccountSelect = document.getElementById('override-account') as HTMLSelectElement;
   
   if (settingMoreOptions && dashboardOverrideOptions) {
     const isMoreOptionsEnabled = localStorage.getItem('bjut_more_options') === 'true';
@@ -459,7 +565,7 @@ function setupEventListeners() {
 
   if (overrideAccountSelect) {
     overrideAccountSelect.addEventListener('change', (e) => {
-      if ((e.target as HTMLSelectElement).value === 'add') {
+      if (e.target.value === 'add') {
         overrideAccountSelect.value = 'auto'; // Reset
         addModal.classList.remove('hidden');
       }
@@ -468,9 +574,17 @@ function setupEventListeners() {
 
   if (settingLogLevel) {
     settingLogLevel.addEventListener('change', (e) => {
-      const level = (e.target as HTMLSelectElement).value;
+      const level = e.target.value;
       localStorage.setItem('bjut_log_level', level);
       log('设置', `日志详细等级已设置为 ${level.toUpperCase()}`);
+    });
+  }
+
+  if (settingUpdateChannel) {
+    settingUpdateChannel.addEventListener('change', (e) => {
+      const channel = e.target.value;
+      localStorage.setItem('bjut_update_channel', channel);
+      log('设置', `更新通道已设置为 ${channel === 'release' ? '正式版' : '预览版'}`);
     });
   }
 
@@ -495,7 +609,7 @@ function setupEventListeners() {
   const btnCheckUpdate = document.getElementById('btn-check-update');
   if (btnCheckUpdate) {
     btnCheckUpdate.addEventListener('click', () => {
-      const channel = (document.getElementById('setting-update-channel') as HTMLSelectElement).value;
+      const channel = settingUpdateChannel.value;
       customAlert(`正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...\n当前已经是最新版本！`);
       log('系统', `检查更新完毕 (${channel})`);
     });
@@ -930,21 +1044,15 @@ function renderAccounts() {
 
 function updateOverrideOptions() {
   const accounts = getAccounts();
-  const select = document.getElementById('override-account') as HTMLSelectElement;
-  if (!select) return;
-  select.innerHTML = '<option value="auto">自动</option>';
+  if (!overrideAccountSelect) return;
+  const opts = [{ value: 'auto', text: '自动' }];
   accounts.forEach((acc, i) => {
     if (!acc.isDisabled) {
-      const opt = document.createElement('option');
-      opt.value = i.toString();
-      opt.textContent = `账号${i + 1} (${acc.user})`;
-      select.appendChild(opt);
+      opts.push({ value: i.toString(), text: `账号${i + 1} (${acc.user})` });
     }
   });
-  const addOpt = document.createElement('option');
-  addOpt.value = 'add';
-  addOpt.textContent = '添加账号...';
-  select.appendChild(addOpt);
+  opts.push({ value: 'add', text: '添加账号...' });
+  overrideAccountSelect.setOptions(opts);
 }
 
 // Split Network Check Loops
@@ -1117,8 +1225,8 @@ async function manualLogin() {
   btnLogin.innerHTML = '<i data-lucide="loader"></i> 登录中...';
   createIcons({ icons });
   
-  let overrideAcc = (document.getElementById('override-account') as HTMLSelectElement)?.value || 'auto';
-  let overrideMethod = (document.getElementById('override-method') as HTMLSelectElement)?.value || 'auto';
+  let overrideAcc = overrideAccountSelect?.value || 'auto';
+  let overrideMethod = overrideMethodSelect?.value || 'auto';
   
   // map overrideMethod to LoginType if not auto
   let targetLoginType = currentLoginType;
