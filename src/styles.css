@@ -837,6 +837,10 @@ input:checked + .slider:before { transform: translateX(24px); }
 .form-group:has(.custom-select.open) {
   z-index: 2000 !important;
 }
+#dashboard-override-options {
+  position: relative;
+  z-index: 10;
+}
 #dashboard-override-options:has(.custom-select.open) {
   z-index: 2000 !important;
 }

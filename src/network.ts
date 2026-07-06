@@ -46,10 +46,10 @@ export async function detectLoginType(): Promise<LoginType> {
     { ip: '172.30.201.10', type: LoginType.Type3_172_30, url: 'http://172.30.201.10/' }
   ];
 
-  for (const target of ips) {
+  const checkTarget = async (target: typeof ips[0]): Promise<LoginType> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1500);
       const response = await fetch(target.url, {
         method: 'GET',
         signal: controller.signal,
@@ -59,12 +59,17 @@ export async function detectLoginType(): Promise<LoginType> {
       if (response.status !== 0) {
         return target.type;
       }
-    } catch (error) {
-      // Ignore and continue checking
+    } catch (e) {
+      clearTimeout(timeoutId);
     }
+    throw new Error('Not match');
+  };
+
+  try {
+    return await Promise.any(ips.map(checkTarget));
+  } catch (err) {
+    return LoginType.Unknown;
   }
-  
-  return LoginType.Unknown;
 }
 
 export async function loginToCampusNetwork(type: LoginType, user: string, pass: string): Promise<{ success: boolean, msg: string }> {

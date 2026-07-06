@@ -283,6 +283,7 @@ let currentLoginType = LoginType.Unknown;
 let autoLoginEnabled = localStorage.getItem('bjut_auto_login') === 'true';
 let checkInterval = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
 let isLoggingIn = false;
+let isChecking = false;
 
 // New state for split check loops
 let lastKnownIp = '';
@@ -585,16 +586,12 @@ function setupEventListeners() {
   const btnManualUpdate = document.getElementById('btn-manual-update');
   if (btnManualUpdate) {
     btnManualUpdate.addEventListener('click', async () => {
+      if (isChecking) return;
       const btnIcon = btnManualUpdate.querySelector('i');
-      if (btnIcon) btnIcon.style.animation = 'spin 1s linear infinite';
+      if (btnIcon) btnIcon.style.animation = 'spin 0.8s linear infinite';
       
       log('网络', '手动触发网络连通性检测...', 'info');
       await checkNetwork();
-      
-      const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
-      const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
-      secondsToNextCheck = document.hidden ? intervalBg : intervalFg;
-      updateCountdownUI();
       
       setTimeout(() => {
         if (btnIcon) btnIcon.style.animation = '';
@@ -1025,27 +1022,30 @@ function setupEventListeners() {
           const domItems = accountsList.querySelectorAll('.account-item');
           domItems.forEach((el, index) => {
             el.setAttribute('data-index', index.toString());
+            el.querySelectorAll('button[data-index]').forEach(b => b.setAttribute('data-index', index.toString()));
+            
             const badge = el.querySelector('.account-badge');
             if (badge) {
               badge.className = index === 0 ? 'account-badge text-primary font-bold' : 'account-badge text-muted';
               badge.textContent = index === 0 ? '默认' : '备用';
             }
-            const defaultBtn = el.querySelector('.action-default') as HTMLButtonElement;
-            if (defaultBtn) {
+            
+            el.querySelectorAll('.action-default').forEach(defaultBtn => {
+              const b = defaultBtn as HTMLButtonElement;
               if (index === 0) {
-                defaultBtn.style.color = 'var(--text-muted)';
-                defaultBtn.style.cursor = 'not-allowed';
-                defaultBtn.style.opacity = '0.5';
-                defaultBtn.title = '已置顶';
-                defaultBtn.disabled = true;
+                b.style.color = 'var(--text-muted)';
+                b.style.cursor = 'not-allowed';
+                b.style.opacity = '0.5';
+                b.title = '已置顶';
+                b.disabled = true;
               } else {
-                defaultBtn.style.color = '';
-                defaultBtn.style.cursor = '';
-                defaultBtn.style.opacity = '';
-                defaultBtn.title = '设为默认 (置顶)';
-                defaultBtn.disabled = false;
+                b.style.color = '';
+                b.style.cursor = '';
+                b.style.opacity = '';
+                b.title = '设为默认 (置顶)';
+                b.disabled = false;
               }
-            }
+            });
           });
           
           log('账号管理', '账号顺序已更新，最高优先级将作为默认账号');
@@ -1075,7 +1075,12 @@ function log(module: string, message: string, type: 'info' | 'error' | 'success'
   requestAnimationFrame(() => {
     const container = logsContent.parentElement;
     if (container) {
-      container.scrollTop = container.scrollHeight;
+      // If user is already near the bottom (tolerance of 80px), scroll to bottom.
+      // otherwise, keep scroll position to let user read earlier logs.
+      const isAtBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 80;
+      if (isAtBottom) {
+        container.scrollTop = container.scrollHeight;
+      }
     }
   });
 }
@@ -1183,14 +1188,10 @@ function startConnectivityCheckLoop() {
 
   const runCheck = async () => {
     await checkNetwork();
-    const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
-    const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
-    secondsToNextCheck = document.hidden ? intervalBg : intervalFg;
-    updateCountdownUI();
   };
 
   countdownInterval = setInterval(() => {
-    if (isLoggingIn) return;
+    if (isLoggingIn || isChecking) return;
     if (secondsToNextCheck > 0) {
       secondsToNextCheck--;
       updateCountdownUI();
@@ -1207,12 +1208,18 @@ function startConnectivityCheckLoop() {
 function updateCountdownUI() {
   const countdownText = document.getElementById('countdown-text');
   if (countdownText) {
-    countdownText.textContent = secondsToNextCheck.toString();
+    if (isChecking) {
+      countdownText.textContent = '检测中...';
+    } else {
+      countdownText.textContent = secondsToNextCheck.toString();
+    }
   }
 }
 
 async function checkNetwork() {
-  if (isLoggingIn) return;
+  if (isLoggingIn || isChecking) return;
+  isChecking = true;
+  updateCountdownUI();
 
   const isBg = document.hidden;
   log('网络', `[DEBUG] 开始检测网络连通性 (模式: ${isBg ? '后台' : '前台'})`, 'debug');
@@ -1237,32 +1244,42 @@ async function checkNetwork() {
     }
   }
 
-  const isInternetOk = await checkInternet();
-  log('网络', `[DEBUG] 互联网可用性检测结果: ${isInternetOk ? '连通 (Online)' : '断开/受限'}`, 'debug');
+  try {
+    const isInternetOk = await checkInternet();
+    log('网络', `[DEBUG] 互联网可用性检测结果: ${isInternetOk ? '连通 (Online)' : '断开/受限'}`, 'debug');
 
-  if (isInternetOk) {
-    updateNetworkStatus(NetworkState.Online);
-    await updateUserInfo();
-  } else {
-    const loginType = await detectLoginType();
-    log('网络', `[DEBUG] 检测到校园网环境判定: ${loginType !== LoginType.Unknown ? `需要登录认证 (${loginType})` : '非校园网/完全离线'}`, 'debug');
-    if (loginType !== LoginType.Unknown) {
-      updateNetworkStatus(NetworkState.BjutCampus, loginType);
-      currentLoginType = loginType;
-      
-      if (autoLoginEnabled && !isLoggingIn) {
-        log('网络', '检测到校园网，准备自动登录');
-        manualLogin();
-      }
+    if (isInternetOk) {
+      updateNetworkStatus(NetworkState.Online);
+      await updateUserInfo();
     } else {
-      updateNetworkStatus(NetworkState.Offline);
+      const loginType = await detectLoginType();
+      log('网络', `[DEBUG] 检测到校园网环境判定: ${loginType !== LoginType.Unknown ? `需要登录认证 (${loginType})` : '非校园网/完全离线'}`, 'debug');
+      if (loginType !== LoginType.Unknown) {
+        updateNetworkStatus(NetworkState.BjutCampus, loginType);
+        currentLoginType = loginType;
+        
+        if (autoLoginEnabled && !isLoggingIn) {
+          log('网络', '检测到校园网，准备自动登录');
+          manualLogin();
+        }
+      } else {
+        updateNetworkStatus(NetworkState.Offline);
+      }
     }
-  }
-
-  // Update last check timestamp on UI
-  const updateTimestamp = document.getElementById('update-timestamp');
-  if (updateTimestamp) {
-    updateTimestamp.textContent = new Date().toLocaleTimeString();
+  } catch (err) {
+    console.error('Check network error:', err);
+  } finally {
+    isChecking = false;
+    // Update last check timestamp on UI
+    const updateTimestamp = document.getElementById('update-timestamp');
+    if (updateTimestamp) {
+      updateTimestamp.textContent = new Date().toLocaleTimeString();
+    }
+    // Update countdown
+    const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
+    const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
+    secondsToNextCheck = document.hidden ? intervalBg : intervalFg;
+    updateCountdownUI();
   }
 }
 
