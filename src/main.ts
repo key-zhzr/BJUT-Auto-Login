@@ -9,16 +9,14 @@ if (navigator.userAgent.includes('Mac OS X')) {
 document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
   try { getCurrentWindow().minimize(); } catch(err) {}
 });
-let isWindowMaximized = false;
 document.getElementById('titlebar-maximize')?.addEventListener('click', async () => {
   try {
     const win = getCurrentWindow();
-    if (isWindowMaximized) {
+    const isMax = await win.isMaximized();
+    if (isMax) {
       await win.unmaximize();
-      isWindowMaximized = false;
     } else {
       await win.maximize();
-      isWindowMaximized = true;
     }
   } catch(err) {}
 });
@@ -292,6 +290,9 @@ let wifiChangeDetectEnabled = localStorage.getItem('bjut_wifi_change_detect') !=
 let connectivityTimer: number | null = null;
 let secondsToNextCheck = 0;
 let countdownInterval: number | null = null;
+let lastCheckedNetworkId = '';
+let nonCampusCount = 0;
+let isLoopSuspended = false;
 
 // Initialize
 function init() {
@@ -550,6 +551,30 @@ function setupEventListeners() {
   }
 
   // Advanced Settings Events
+  const settingMacosDock = document.getElementById('setting-macos-dock') as HTMLInputElement;
+  if (settingMacosDock) {
+    const dockEnabled = localStorage.getItem('bjut_macos_dock') !== 'false';
+    settingMacosDock.checked = dockEnabled;
+    if ((window as any).__TAURI__) {
+      import('@tauri-apps/api/core').then(({ invoke }) => {
+        invoke('set_dock_visible', { visible: dockEnabled }).catch(e => console.error(e));
+      });
+    }
+    settingMacosDock.addEventListener('change', async (e) => {
+      const enabled = (e.target as HTMLInputElement).checked;
+      localStorage.setItem('bjut_macos_dock', enabled.toString());
+      log('设置', `已${enabled ? '启用' : '关闭'}在程序坞显示图标`);
+      if ((window as any).__TAURI__) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('set_dock_visible', { visible: enabled });
+        } catch (err) {
+          console.error('Failed to toggle macOS dock icon:', err);
+        }
+      }
+    });
+  }
+
   const settingMoreOptions = document.getElementById('setting-more-options') as HTMLInputElement;
   const dashboardOverrideOptions = document.getElementById('dashboard-override-options');
   
@@ -1146,6 +1171,21 @@ function updateOverrideOptions() {
 }
 
 // Split Network Check Loops
+async function isAppInBackground(): Promise<boolean> {
+  if (!(window as any).__TAURI__) {
+    return document.hidden;
+  }
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const win = getCurrentWindow();
+    const isVisible = await win.isVisible();
+    const isMinimized = await win.isMinimized();
+    return !isVisible || isMinimized;
+  } catch (e) {
+    return document.hidden;
+  }
+}
+
 function startWifiChangeCheckLoop() {
   if (wifiChangeTimer) {
     clearTimeout(wifiChangeTimer);
@@ -1162,6 +1202,8 @@ function startWifiChangeCheckLoop() {
         if (currentIp) {
           if (lastKnownIp && currentIp !== lastKnownIp) {
             log('网络', `检测到局域网 IP 发生变更: ${lastKnownIp} -> ${currentIp}，重新检测网络环境...`);
+            isLoopSuspended = false;
+            nonCampusCount = 0;
             await checkNetwork();
           }
           lastKnownIp = currentIp;
@@ -1190,8 +1232,34 @@ function startConnectivityCheckLoop() {
     await checkNetwork();
   };
 
-  countdownInterval = setInterval(() => {
+  countdownInterval = setInterval(async () => {
     if (isLoggingIn || isChecking) return;
+
+    const isBg = await isAppInBackground();
+
+    // Auto-resume when coming back to foreground
+    if (!isBg && isLoopSuspended) {
+      log('网络', '检测到已返回前台，恢复连通性检测...', 'info');
+      isLoopSuspended = false;
+      nonCampusCount = 0;
+      runCheck();
+      return;
+    }
+
+    if (isLoopSuspended) {
+      updateCountdownUI();
+      return;
+    }
+
+    const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
+    const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
+    const maxInterval = isBg ? intervalBg : intervalFg;
+
+    if (secondsToNextCheck > maxInterval) {
+      secondsToNextCheck = maxInterval;
+      updateCountdownUI();
+    }
+
     if (secondsToNextCheck > 0) {
       secondsToNextCheck--;
       updateCountdownUI();
@@ -1210,6 +1278,8 @@ function updateCountdownUI() {
   if (countdownText) {
     if (isChecking) {
       countdownText.textContent = '检测中...';
+    } else if (isLoopSuspended) {
+      countdownText.textContent = '已休眠';
     } else {
       countdownText.textContent = secondsToNextCheck.toString();
     }
@@ -1219,9 +1289,14 @@ function updateCountdownUI() {
 async function checkNetwork() {
   if (isLoggingIn || isChecking) return;
   isChecking = true;
+
+  // Instantly reset the countdown timer so the UI keeps ticking without visual freeze
+  const isBg = await isAppInBackground();
+  const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
+  const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
+  secondsToNextCheck = isBg ? intervalBg : intervalFg;
   updateCountdownUI();
 
-  const isBg = document.hidden;
   log('网络', `[DEBUG] 开始检测网络连通性 (模式: ${isBg ? '后台' : '前台'})`, 'debug');
   
   // Update Network Info UI if More Options is enabled and app is in foreground
@@ -1266,6 +1341,29 @@ async function checkNetwork() {
         updateNetworkStatus(NetworkState.Offline);
       }
     }
+
+    // Power-saving suspension checks under same background Wi-Fi
+    if (isBg) {
+      if (currentNetworkState !== NetworkState.BjutCampus) {
+        if (lastKnownIp && lastKnownIp === lastCheckedNetworkId) {
+          nonCampusCount++;
+          log('网络', `[DEBUG] 后台检测为非校园网环境，当前连续次数: ${nonCampusCount}/5`, 'debug');
+        } else {
+          lastCheckedNetworkId = lastKnownIp;
+          nonCampusCount = 1;
+        }
+        if (nonCampusCount >= 5) {
+          isLoopSuspended = true;
+          log('网络', '同一Wi-Fi下连续5次判定为非校园网，自动休眠后台自动检测。网络环境变化或返回前台后自动恢复。', 'info');
+        }
+      } else {
+        nonCampusCount = 0;
+        isLoopSuspended = false;
+      }
+    } else {
+      nonCampusCount = 0;
+      isLoopSuspended = false;
+    }
   } catch (err) {
     console.error('Check network error:', err);
   } finally {
@@ -1275,10 +1373,6 @@ async function checkNetwork() {
     if (updateTimestamp) {
       updateTimestamp.textContent = new Date().toLocaleTimeString();
     }
-    // Update countdown
-    const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
-    const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
-    secondsToNextCheck = document.hidden ? intervalBg : intervalFg;
     updateCountdownUI();
   }
 }

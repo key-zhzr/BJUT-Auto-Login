@@ -333,6 +333,23 @@ fn exit_app(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::ActivationPolicy;
+        let policy = if visible {
+            ActivationPolicy::Regular
+        } else {
+            ActivationPolicy::Accessory
+        };
+        app.set_activation_policy(policy).map_err(|e| e.to_string())?;
+    }
+    let _ = app;
+    let _ = visible;
+    Ok(())
+}
+
+#[tauri::command]
 fn get_local_ip() -> String {
     let mut ip = String::new();
     
@@ -551,7 +568,7 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_autostart::Builder::default().build());
     }
 
-    builder
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             greet, 
             get_network_info, 
@@ -561,8 +578,24 @@ pub fn run() {
             start_keep_alive_service,
             stop_keep_alive_service,
             get_local_ip,
-            exit_app
+            exit_app,
+            set_dock_visible
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        {
+            use tauri::Manager;
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        }
+        let _ = app_handle;
+        let _ = event;
+    });
 }

@@ -20,9 +20,11 @@ class KeepAliveService : Service() {
         createNotificationChannel()
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("BJUT Auto Login")
-            .setContentText("Running in background to maintain connection...")
+            .setContentText("正在后台运行以保持网络连接...")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
         
         try {

@@ -850,3 +850,7 @@ input:checked + .slider:before { transform: translateX(24px); }
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+.is-macos .macos-only {
+  display: flex !important;
+}

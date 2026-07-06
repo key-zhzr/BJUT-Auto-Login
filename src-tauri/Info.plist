@@ -3,6 +3,8 @@
 <plist version="1.0">
 <dict>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>We need location permissions to access the current Wi-Fi SSID and BSSID for auto-login.</string>
+  <string>App需要您的位置信息来获取当前所连接 Wi-Fi 的 SSID 和 BSSID，以提供校园网自动登录服务。</string>
+  <key>NSLocationUsageDescription</key>
+  <string>App需要您的位置信息来获取当前所连接 Wi-Fi 的 SSID 和 BSSID，以提供校园网自动登录服务。</string>
 </dict>
 </plist>
