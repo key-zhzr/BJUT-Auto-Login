@@ -352,8 +352,12 @@ function init() {
       // Request foreground permissions
       if ((window as any).__TAURI__) {
         try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          await invoke('request_foreground_permissions');
+          if ((window as any).AndroidBridge) {
+            (window as any).AndroidBridge.requestForegroundPermissions();
+          } else {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('request_foreground_permissions');
+          }
           log('系统', '已申请前台网络定位相关权限');
         } catch (e) {
           console.error('Failed to request foreground permissions:', e);
@@ -378,23 +382,24 @@ function init() {
   } else {
     // Already accepted
     if ((window as any).__TAURI__) {
-      import('@tauri-apps/api/core').then(async ({ invoke }) => {
-        try {
-          await invoke('request_foreground_permissions');
-        } catch (e) {
-          console.error('Failed to request foreground permissions:', e);
-        }
-        
-        // Also check if keep alive service needs to run
-        if (autoLoginEnabled && navigator.userAgent.toLowerCase().includes('android')) {
+      if ((window as any).AndroidBridge) {
+        if (autoLoginEnabled) {
           try {
-            await invoke('start_keep_alive_service');
+            (window as any).AndroidBridge.startKeepAliveService();
             log('系统', '后台保活服务已启动');
           } catch (e) {
             console.error('Failed to start keep-alive service:', e);
           }
         }
-      });
+      } else {
+        import('@tauri-apps/api/core').then(async ({ invoke }) => {
+          try {
+            await invoke('request_foreground_permissions');
+          } catch (e) {
+            console.error('Failed to request foreground permissions:', e);
+          }
+        });
+      }
     }
     
     startWifiChangeCheckLoop();
@@ -459,25 +464,23 @@ function setupEventListeners() {
     log('设置', `自动登录已${autoLoginEnabled ? '开启' : '关闭'}`);
     
     if ((window as any).__TAURI__) {
-      const { invoke } = await import('@tauri-apps/api/core');
-      
       if (autoLoginEnabled) {
-        if (navigator.userAgent.toLowerCase().includes('android')) {
+        if ((window as any).AndroidBridge) {
           customAlert('【安卓后台保活提示】\n已开启后台自动登录！应用将请求“始终允许”后台定位权限与通知权限，并拉起后台保活服务，以保证断网自动重连稳定性。\n\n另外，建议您授权“忽略电池优化”。');
           
           try {
-            await invoke('request_background_permissions');
-            await invoke('request_battery_optimizations');
-            await invoke('start_keep_alive_service');
+            (window as any).AndroidBridge.requestBackgroundPermissions();
+            (window as any).AndroidBridge.requestBatteryOptimizations();
+            (window as any).AndroidBridge.startKeepAliveService();
             log('系统', '已开启后台保活服务，并申请后台权限');
           } catch (e) {
             console.error('Failed to request background services:', e);
           }
         }
       } else {
-        if (navigator.userAgent.toLowerCase().includes('android')) {
+        if ((window as any).AndroidBridge) {
           try {
-            await invoke('stop_keep_alive_service');
+            (window as any).AndroidBridge.stopKeepAliveService();
             log('系统', '已停止后台保活服务');
           } catch (e) {
             console.error('Failed to stop background service:', e);
