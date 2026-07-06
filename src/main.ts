@@ -146,6 +146,7 @@ const addAccountForm = document.getElementById('add-account-form') as HTMLFormEl
 const logsContent = document.getElementById('logs-content')!;
 const btnClearLogs = document.getElementById('btn-clear-logs')!;
 const settingAutoLogin = document.getElementById('setting-auto-login') as HTMLInputElement;
+const settingWifiChangeDetect = document.getElementById('setting-wifi-change-detect') as HTMLInputElement;
 const settingCheckInterval = document.getElementById('setting-check-interval') as HTMLInputElement;
 
 // Add Modal
@@ -167,13 +168,19 @@ let currentNetworkState = NetworkState.Offline;
 let currentLoginType = LoginType.Unknown;
 let autoLoginEnabled = localStorage.getItem('bjut_auto_login') === 'true';
 let checkInterval = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
-let checkTimer: number | null = null;
 let isLoggingIn = false;
+
+// New state for split check loops
+let lastKnownIp = '';
+let wifiChangeTimer: number | null = null;
+let wifiChangeDetectEnabled = localStorage.getItem('bjut_wifi_change_detect') !== 'false';
+let connectivityTimer: number | null = null;
 
 // Initialize
 function init() {
   createIcons({ icons });
   settingAutoLogin.checked = autoLoginEnabled;
+  settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
   settingCheckInterval.value = checkInterval.toString();
   
   setupNavigation();
@@ -210,7 +217,8 @@ function init() {
         }
       }
       
-      startNetworkCheckLoop();
+      startWifiChangeCheckLoop();
+      startConnectivityCheckLoop();
     });
     
     document.getElementById('btn-tos-disagree')!.addEventListener('click', async () => {
@@ -246,7 +254,8 @@ function init() {
       });
     }
     
-    startNetworkCheckLoop();
+    startWifiChangeCheckLoop();
+    startConnectivityCheckLoop();
   }
 }
 
@@ -341,9 +350,25 @@ function setupEventListeners() {
       checkInterval = val;
       localStorage.setItem('bjut_check_interval', checkInterval.toString());
       log('设置', `前台检测间隔设置为 ${val} 秒`);
-      startNetworkCheckLoop();
+      startConnectivityCheckLoop();
     }
   });
+
+  if (settingWifiChangeDetect) {
+    settingWifiChangeDetect.addEventListener('change', (e) => {
+      wifiChangeDetectEnabled = (e.target as HTMLInputElement).checked;
+      localStorage.setItem('bjut_wifi_change_detect', wifiChangeDetectEnabled.toString());
+      log('设置', `Wi-Fi 变更检测已${wifiChangeDetectEnabled ? '开启' : '关闭'}`);
+      if (wifiChangeDetectEnabled) {
+        startWifiChangeCheckLoop();
+      } else {
+        if (wifiChangeTimer) {
+          clearTimeout(wifiChangeTimer);
+          wifiChangeTimer = null;
+        }
+      }
+    });
+  }
 
   const settingCheckIntervalBg = document.getElementById('setting-check-interval-bg') as HTMLInputElement;
   if (settingCheckIntervalBg) {
@@ -355,6 +380,7 @@ function setupEventListeners() {
         checkIntervalBg = val;
         localStorage.setItem('bjut_check_interval_bg', checkIntervalBg.toString());
         log('设置', `后台检测间隔设置为 ${val} 秒`);
+        startConnectivityCheckLoop();
       }
     });
   }
@@ -832,18 +858,50 @@ function updateOverrideOptions() {
   select.appendChild(addOpt);
 }
 
-// Network Check Loop
-function startNetworkCheckLoop() {
-  if (checkTimer) clearTimeout(checkTimer);
-  
+// Split Network Check Loops
+function startWifiChangeCheckLoop() {
+  if (wifiChangeTimer) {
+    clearTimeout(wifiChangeTimer);
+    wifiChangeTimer = null;
+  }
+  if (!wifiChangeDetectEnabled) return;
+
+  const tick = async () => {
+    if ((window as any).__TAURI__) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const currentIp: string = await invoke('get_local_ip');
+        if (currentIp) {
+          if (lastKnownIp && currentIp !== lastKnownIp) {
+            log('网络', `检测到局域网 IP 发生变更: ${lastKnownIp} -> ${currentIp}，重新检测网络环境...`);
+            await checkNetwork();
+          }
+          lastKnownIp = currentIp;
+        }
+      } catch (e) {
+        console.warn('Failed in Wi-Fi change check:', e);
+      }
+    }
+    wifiChangeTimer = setTimeout(tick, 3000) as any;
+  };
+
+  tick();
+}
+
+function startConnectivityCheckLoop() {
+  if (connectivityTimer) {
+    clearTimeout(connectivityTimer);
+    connectivityTimer = null;
+  }
+
   const tick = async () => {
     await checkNetwork();
     const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
     const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
     const currentInterval = document.hidden ? intervalBg : intervalFg;
-    checkTimer = setTimeout(tick, currentInterval * 1000) as any;
+    connectivityTimer = setTimeout(tick, currentInterval * 1000) as any;
   };
-  
+
   tick();
 }
 

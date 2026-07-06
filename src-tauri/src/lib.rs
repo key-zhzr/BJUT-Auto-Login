@@ -122,12 +122,40 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                 }
             }
 
-            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-                if socket.connect("8.8.8.8:80").is_ok() {
-                    if let Ok(local_addr) = socket.local_addr() {
-                        ip = local_addr.ip().to_string();
+            let mut ipconfig_ips = Vec::new();
+            let mut ip_cmd = std::process::Command::new("ipconfig");
+            ip_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            if let Ok(output) = ip_cmd.output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if line.contains("IPv4") {
+                        if let Some(idx) = line.find(':') {
+                            let extracted_ip = line[idx + 1..].trim().to_string();
+                            if !extracted_ip.is_empty() {
+                                ipconfig_ips.push(extracted_ip);
+                            }
+                        }
                     }
                 }
+            }
+            
+            let mut best_ip = String::new();
+            for extracted_ip in &ipconfig_ips {
+                if extracted_ip.starts_with("10.") || extracted_ip.starts_with("172.") {
+                    best_ip = extracted_ip.clone();
+                    break;
+                }
+            }
+            if best_ip.is_empty() && !ipconfig_ips.is_empty() {
+                for extracted_ip in &ipconfig_ips {
+                    if !extracted_ip.starts_with("198.18.") && !extracted_ip.starts_with("127.") {
+                        best_ip = extracted_ip.clone();
+                        break;
+                    }
+                }
+            }
+            if !best_ip.is_empty() {
+                ip = best_ip;
             }
         }
 
@@ -299,6 +327,101 @@ fn stop_keep_alive_service(_app: tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn get_local_ip() -> String {
+    let mut ip = String::new();
+    
+    #[cfg(target_os = "windows")]
+    {
+        let mut ipconfig_ips = Vec::new();
+        let mut cmd = std::process::Command::new("ipconfig");
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        if let Ok(output) = cmd.output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if line.contains("IPv4") {
+                    if let Some(idx) = line.find(':') {
+                        let extracted_ip = line[idx + 1..].trim().to_string();
+                        if !extracted_ip.is_empty() {
+                            ipconfig_ips.push(extracted_ip);
+                        }
+                    }
+                }
+            }
+        }
+        
+        let mut best_ip = String::new();
+        for extracted_ip in &ipconfig_ips {
+            if extracted_ip.starts_with("10.") || extracted_ip.starts_with("172.") {
+                best_ip = extracted_ip.clone();
+                break;
+            }
+        }
+        if best_ip.is_empty() && !ipconfig_ips.is_empty() {
+            for extracted_ip in &ipconfig_ips {
+                if !extracted_ip.starts_with("198.18.") && !extracted_ip.starts_with("127.") {
+                    best_ip = extracted_ip.clone();
+                    break;
+                }
+            }
+        }
+        if !best_ip.is_empty() {
+            ip = best_ip;
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "android")]
+        {
+            if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
+                if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
+                    if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
+                        if let Ok(helper_class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
+                            if let Ok(helper) = env.new_object(&helper_class, "()V", &[]) {
+                                if let Ok(java_ip) = env.call_method(&helper, "getLocalIpAddress", "()Ljava/lang/String;", &[]) {
+                                    if let Ok(ip_obj) = java_ip.l() {
+                                        let ip_str: String = env.get_string(&jni::objects::JString::from(ip_obj)).unwrap().into();
+                                        ip = ip_str;
+                                    }
+                                }
+                            }
+                        }
+                        if env.exception_check().unwrap_or(false) { let _ = env.exception_clear(); }
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(output) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en0").output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let trimmed = stdout.trim();
+                if !trimmed.is_empty() {
+                    ip = trimmed.to_string();
+                } else if let Ok(output2) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en1").output() {
+                    ip = String::from_utf8_lossy(&output2.stdout).trim().to_string();
+                }
+            }
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
+        {
+            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                if socket.connect("8.8.8.8:80").is_ok() {
+                    if let Ok(local_addr) = socket.local_addr() {
+                        ip = local_addr.ip().to_string();
+                    }
+                }
+            }
+        }
+    }
+    
+    ip
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -395,7 +518,8 @@ pub fn run() {
             request_foreground_permissions,
             request_background_permissions,
             start_keep_alive_service,
-            stop_keep_alive_service
+            stop_keep_alive_service,
+            get_local_ip
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
