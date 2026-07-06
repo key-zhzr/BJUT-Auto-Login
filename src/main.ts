@@ -606,12 +606,74 @@ function setupEventListeners() {
     });
   }
 
+  function isVersionNewer(current: string, latest: string): boolean {
+    const cParts = current.split('.').map(Number);
+    const lParts = latest.split('.').map(Number);
+    for (let i = 0; i < Math.max(cParts.length, lParts.length); i++) {
+      const c = cParts[i] || 0;
+      const l = lParts[i] || 0;
+      if (l > c) return true;
+      if (c > l) return false;
+    }
+    return false;
+  }
+
   const btnCheckUpdate = document.getElementById('btn-check-update');
   if (btnCheckUpdate) {
-    btnCheckUpdate.addEventListener('click', () => {
+    btnCheckUpdate.addEventListener('click', async () => {
       const channel = settingUpdateChannel.value;
-      customAlert(`正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...\n当前已经是最新版本！`);
-      log('系统', `检查更新完毕 (${channel})`);
+      log('系统', `正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...`);
+      
+      const currentVersion = '0.1.2';
+      
+      try {
+        const response = await fetch('https://api.github.com/repos/key-zhzr/BJUT-Auto-Login/releases');
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const releases = await response.json();
+        if (!Array.isArray(releases) || releases.length === 0) {
+          customAlert('暂无更新版本发布');
+          log('系统', '检查更新完毕 (暂无发布版本)');
+          return;
+        }
+        
+        let targetReleases = releases;
+        if (channel === 'release') {
+          targetReleases = releases.filter(r => !r.prerelease);
+        }
+        
+        if (targetReleases.length === 0) {
+          customAlert('暂无符合当前通道的更新版本');
+          log('系统', '检查更新完毕 (当前通道暂无新版本)');
+          return;
+        }
+        
+        const latestRelease = targetReleases[0];
+        const latestTag = latestRelease.tag_name;
+        const cleanLatest = latestTag.replace(/^v/, '');
+        
+        if (isVersionNewer(currentVersion, cleanLatest)) {
+          const downloadUrl = latestRelease.html_url;
+          if (confirm(`检测到新版本: ${latestTag}\n\n更新说明:\n${latestRelease.body || '无'}\n\n是否前往浏览器下载更新？`)) {
+            if ((window as any).__TAURI__) {
+              const { openUrl } = await import('@tauri-apps/plugin-opener');
+              await openUrl(downloadUrl);
+            } else {
+              window.open(downloadUrl, '_blank');
+            }
+          }
+          log('系统', `发现新版本: ${latestTag}`, 'success');
+        } else {
+          customAlert(`当前已是最新版本 (v${currentVersion})！`);
+          log('系统', `检查更新完毕，当前版本 v${currentVersion} 已是最新`);
+        }
+      } catch (err) {
+        console.error('Update check failed:', err);
+        customAlert('检查更新失败，请检查网络连接！');
+        log('系统', `检查更新失败: ${String(err)}`, 'error');
+      }
     });
   }
 
