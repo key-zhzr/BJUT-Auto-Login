@@ -952,9 +952,9 @@ function startConnectivityCheckLoop() {
 async function checkNetwork() {
   if (isLoggingIn) return;
   
-  // Update Network Info UI if More Options is enabled
+  // Update Network Info UI if More Options is enabled and app is in foreground
   const settingMoreOptions = document.getElementById('setting-more-options') as HTMLInputElement;
-  if (settingMoreOptions && settingMoreOptions.checked) {
+  if (!document.hidden && settingMoreOptions && settingMoreOptions.checked) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       if ((window as any).__TAURI__) {

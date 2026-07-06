@@ -378,12 +378,18 @@ fn get_local_ip() -> String {
             if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
                 if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
                     if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                        if let Ok(helper_class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
-                            if let Ok(helper) = env.new_object(&helper_class, "()V", &[]) {
-                                if let Ok(java_ip) = env.call_method(&helper, "getLocalIpAddress", "()Ljava/lang/String;", &[]) {
-                                    if let Ok(ip_obj) = java_ip.l() {
-                                        let ip_str: String = env.get_string(&jni::objects::JString::from(ip_obj)).unwrap().into();
-                                        ip = ip_str;
+                        if let Ok(class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
+                            let method_call = env.call_static_method(
+                                class,
+                                "getLocalIpAddress",
+                                "()Ljava/lang/String;",
+                                &[],
+                            );
+                            if let Ok(jvalue) = method_call {
+                                if let Ok(jobject) = jvalue.l() {
+                                    let jstring: jni::objects::JString = jobject.into();
+                                    if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
+                                        ip = rust_str;
                                     }
                                 }
                             }
@@ -430,67 +436,26 @@ pub fn run() {
             // On desktop, it emits to frontend. On Android, it evaluates JS directly.
             let app_handle = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut was_connected = false;
+                let mut last_ip = String::new();
                 loop {
-                    let mut is_connected = false;
-
-                    #[cfg(target_os = "android")]
-                    {
-                        let info = get_network_info(app_handle.clone());
-                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
-                            let s = ssid_val.replace("\"", "");
-                            if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
-                                is_connected = true;
+                    let current_ip = get_local_ip();
+                    if !current_ip.is_empty() {
+                        if !last_ip.is_empty() && current_ip != last_ip {
+                            #[cfg(desktop)]
+                            {
+                                use tauri::Emitter;
+                                let _ = app_handle.emit("trigger-auto-login", ());
                             }
-                        }
-                    }
-
-                    #[cfg(target_os = "macos")]
-                    {
-                        let info = get_network_info(app_handle.clone());
-                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
-                            let s = ssid_val.replace("\"", "");
-                            if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
-                                is_connected = true;
-                            }
-                        }
-                        
-                        if !is_connected {
-                            if let Ok(output) = std::process::Command::new("ifconfig").output() {
-                                let stdout = String::from_utf8_lossy(&output.stdout);
-                                if stdout.contains("inet 10.") {
-                                    is_connected = true;
+                            #[cfg(target_os = "android")]
+                            {
+                                use tauri::Manager;
+                                if let Some(window) = app_handle.get_webview_window("main") {
+                                    let _ = window.eval("if (window.triggerAutoLogin) { window.triggerAutoLogin(); }");
                                 }
                             }
                         }
+                        last_ip = current_ip;
                     }
-
-                    #[cfg(target_os = "windows")]
-                    {
-                        let info = get_network_info(app_handle.clone());
-                        if let Some(ssid_val) = info.get("ssid").and_then(|s| s.as_str()) {
-                            let s = ssid_val.replace("\"", "");
-                            if s == "bjut_wifi" || s == "bjut_sushe" || s == "bjut-wifi" {
-                                is_connected = true;
-                            }
-                        }
-                    }
-
-                    if is_connected && !was_connected {
-                        #[cfg(desktop)]
-                        {
-                            use tauri::Emitter;
-                            let _ = app_handle.emit("trigger-auto-login", ());
-                        }
-                        #[cfg(target_os = "android")]
-                        {
-                            use tauri::Manager;
-                            if let Some(window) = app_handle.get_webview_window("main") {
-                                let _ = window.eval("if (window.triggerAutoLogin) { window.triggerAutoLogin(); }");
-                            }
-                        }
-                    }
-                    was_connected = is_connected;
 
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
