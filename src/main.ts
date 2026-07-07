@@ -4,6 +4,15 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 
 if (navigator.userAgent.includes('Mac OS X')) {
   document.body.classList.add('is-macos');
+  
+  // macOS WebLock workaround: hold a persistent shared WebLock to prevent WKWebView process suspension
+  if (navigator.locks && navigator.locks.request) {
+    navigator.locks.request('prevent-app-nap-lock', { mode: 'shared' }, () => {
+      return new Promise(() => {
+        // Never resolve, holding the lock permanently in the background
+      });
+    }).catch(() => {});
+  }
 }
 
 document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
