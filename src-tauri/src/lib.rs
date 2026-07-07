@@ -112,26 +112,20 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                 }
             }
 
-            // Get IP via UDP socket routing — no subprocess, no location prompt
-            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-                if socket.connect("10.21.221.98:80").is_ok() {
-                    if let Ok(local_addr) = socket.local_addr() {
-                        let ip_str = local_addr.ip().to_string();
-                        if !ip_str.starts_with("127.") {
-                            ip = ip_str;
-                        }
-                    }
-                }
-            }
-            if ip.is_empty() {
-                if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-                    if socket.connect("8.8.8.8:80").is_ok() {
-                        if let Ok(local_addr) = socket.local_addr() {
-                            let ip_str = local_addr.ip().to_string();
-                            if !ip_str.starts_with("127.") {
-                                ip = ip_str;
-                            }
-                        }
+            // Get IP via PowerShell physical adapter command (consistent with Wi-Fi check)
+            let mut ip_cmd = std::process::Command::new("powershell");
+            ip_cmd.args([
+                "-NoProfile",
+                "-Command",
+                "(Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Get-NetIPAddress -AddressFamily IPv4).IPAddress"
+            ]);
+            ip_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            if let Ok(output) = ip_cmd.output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let trimmed = stdout.trim();
+                if !trimmed.is_empty() {
+                    if let Some(first_line) = trimmed.lines().next() {
+                        ip = first_line.trim().to_string();
                     }
                 }
             }
@@ -333,25 +327,20 @@ fn get_local_ip() -> String {
     
     #[cfg(target_os = "windows")]
     {
-        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-            if socket.connect("8.8.8.8:80").is_ok() {
-                if let Ok(local_addr) = socket.local_addr() {
-                    let ip_str = local_addr.ip().to_string();
-                    if !ip_str.starts_with("127.") {
-                        ip = ip_str;
-                    }
-                }
-            }
-        }
-        if ip.is_empty() {
-            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-                if socket.connect("10.21.221.98:80").is_ok() {
-                    if let Ok(local_addr) = socket.local_addr() {
-                        let ip_str = local_addr.ip().to_string();
-                        if !ip_str.starts_with("127.") {
-                            ip = ip_str;
-                        }
-                    }
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args([
+            "-NoProfile",
+            "-Command",
+            "(Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Get-NetIPAddress -AddressFamily IPv4).IPAddress"
+        ]);
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        if let Ok(output) = cmd.output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let trimmed = stdout.trim();
+            if !trimmed.is_empty() {
+                if let Some(first_line) = trimmed.lines().next() {
+                    ip = first_line.trim().to_string();
                 }
             }
         }

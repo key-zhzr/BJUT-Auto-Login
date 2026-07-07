@@ -1418,11 +1418,15 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType) {
 }
 
 async function updateUserInfo() {
-  const info = await fetchUserInfo();
+  const info = await fetchUserInfo(lastKnownIp);
   if (info) {
     infoAccount.textContent = info.account;
     infoBalance.textContent = info.balance;
     infoFlow.textContent = info.flow;
+  } else {
+    infoAccount.textContent = '--';
+    infoBalance.textContent = '--';
+    infoFlow.textContent = '--';
   }
 }
 

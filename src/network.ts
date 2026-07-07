@@ -16,14 +16,15 @@ export enum LoginType {
 export async function checkInternet(): Promise<boolean> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1500);
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
     const response = await fetch('http://captive.apple.com/hotspot-detect.html', {
       method: 'GET',
       signal: controller.signal,
+      connectTimeout: 1500,
       headers: {
         'Cache-Control': 'no-cache'
       }
-    });
+    } as any);
     clearTimeout(timeoutId);
     
     if (response.ok) {
@@ -48,13 +49,14 @@ export async function detectLoginType(): Promise<LoginType> {
 
   const checkTarget = async (target: typeof ips[0]): Promise<LoginType> => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1500);
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
     try {
       const response = await fetch(target.url, {
         method: 'GET',
         signal: controller.signal,
+        connectTimeout: 1500,
         headers: { 'Cache-Control': 'no-cache' }
-      });
+      } as any);
       clearTimeout(timeoutId);
       if (response.status !== 0) {
         return target.type;
@@ -155,12 +157,22 @@ function parseDr1003Response(text: string): { success: boolean, msg: string } {
   }
 }
 
-export async function fetchUserInfo(): Promise<{ account: string, balance: string, flow: string } | null> {
+export async function fetchUserInfo(localIp?: string): Promise<{ account: string, balance: string, flow: string } | null> {
+  if (localIp && !localIp.startsWith('10.') && !localIp.startsWith('172.')) {
+    return null;
+  }
   try {
     const v = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
     const url = `http://172.30.201.2:801/eportal/portal/page/loadUserInfo?callback=726427262624&lang=6c7e3b7578&program_index=79225954737327212323222f212e2723&page_index=755e577b7c4e27212323222f212e2320&user_account=&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=262626262626262626262626&jsVersion=22384e&encrypt=1&v=${v}&lang=zh`;
     
-    const response = await fetch(url, { method: 'GET' });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
+    const response = await fetch(url, { 
+      method: 'GET',
+      signal: controller.signal,
+      connectTimeout: 1000,
+    } as any);
+    clearTimeout(timeoutId);
     const text = await response.text();
     const match = text.match(/dr100\d\((.*)\)/);
     
