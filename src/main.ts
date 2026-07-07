@@ -1209,7 +1209,9 @@ function startWifiChangeCheckLoop() {
         console.warn('Failed in Wi-Fi change check:', e);
       }
     }
-    wifiChangeTimer = setTimeout(tick, 3000) as any;
+    const isWindows = navigator.userAgent.toLowerCase().includes('windows');
+    const delay = isWindows ? 8000 : 3000;
+    wifiChangeTimer = setTimeout(tick, delay) as any;
   };
 
   tick();

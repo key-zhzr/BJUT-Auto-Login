@@ -98,13 +98,12 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 for line in stdout.lines() {
                     let trimmed = line.trim();
-                    // Match BSSID first (before SSID) to avoid SSID matching BSSID line
-                    if trimmed.starts_with("BSSID") {
+                    let upper = trimmed.to_uppercase();
+                    if upper.contains("BSSID") {
                         if let Some(idx) = trimmed.find(':') {
                             bssid = trimmed[idx + 1..].trim().to_string();
                         }
-                    } else if trimmed.starts_with("SSID") && !trimmed.starts_with("SSID ") {
-                        // Skip lines like "SSID 1" in profile listings
+                    } else if upper.contains("SSID") && !upper.contains("SSID ") {
                         if let Some(idx) = trimmed.find(':') {
                             ssid = trimmed[idx + 1..].trim().to_string();
                         }
@@ -116,6 +115,8 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
             let mut ip_cmd = std::process::Command::new("powershell");
             ip_cmd.args([
                 "-NoProfile",
+                "-NonInteractive",
+                "-NoLogo",
                 "-Command",
                 "(Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Get-NetIPAddress -AddressFamily IPv4).IPAddress"
             ]);
@@ -331,6 +332,8 @@ fn get_local_ip() -> String {
         let mut cmd = std::process::Command::new("powershell");
         cmd.args([
             "-NoProfile",
+            "-NonInteractive",
+            "-NoLogo",
             "-Command",
             "(Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Get-NetIPAddress -AddressFamily IPv4).IPAddress"
         ]);
