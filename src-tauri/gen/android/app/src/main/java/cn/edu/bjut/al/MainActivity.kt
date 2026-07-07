@@ -15,9 +15,6 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
-
-    // Auto-request foreground permissions on launch
-    requestForegroundPermissionsInternal()
   }
 
   override fun onWebViewCreate(webView: WebView) {

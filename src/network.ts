@@ -16,7 +16,7 @@ export enum LoginType {
 export async function checkInternet(): Promise<boolean> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
     const response = await fetch('http://captive.apple.com/hotspot-detect.html', {
       method: 'GET',
       signal: controller.signal,

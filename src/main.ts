@@ -11,13 +11,7 @@ document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
 });
 document.getElementById('titlebar-maximize')?.addEventListener('click', async () => {
   try {
-    const win = getCurrentWindow();
-    const isMax = await win.isMaximized();
-    if (isMax) {
-      await win.unmaximize();
-    } else {
-      await win.maximize();
-    }
+    await getCurrentWindow().toggleMaximize();
   } catch(err) {}
 });
 document.getElementById('titlebar-close')?.addEventListener('click', () => {
@@ -1301,13 +1295,13 @@ async function checkNetwork() {
   updateCountdownUI();
 
   log('网络', `[DEBUG] 开始检测网络连通性 (模式: ${isBg ? '后台' : '前台'})`, 'debug');
-  
-  // Update Network Info UI if More Options is enabled and app is in foreground
-  const settingMoreOptions = document.getElementById('setting-more-options') as HTMLInputElement;
-  if (!isBg && settingMoreOptions && settingMoreOptions.checked) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      if ((window as any).__TAURI__) {
+
+  // Run network info fetch and internet check in PARALLEL to cut total time
+  const networkInfoPromise = (async () => {
+    const settingMoreOptions = document.getElementById('setting-more-options') as HTMLInputElement;
+    if (!isBg && settingMoreOptions && settingMoreOptions.checked && (window as any).__TAURI__) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
         const netInfo: { ssid: string, bssid: string, ip: string } = await invoke('get_network_info');
         const moreSsid = document.getElementById('more-ssid');
         const moreBssid = document.getElementById('more-bssid');
@@ -1316,14 +1310,15 @@ async function checkNetwork() {
         if (moreBssid) moreBssid.textContent = netInfo.bssid || '--';
         if (moreIp) moreIp.textContent = netInfo.ip || '--';
         log('网络', `[DEBUG] 前台拉取详细 SSID 信息成功: SSID=${netInfo.ssid}, BSSID=${netInfo.bssid}, IP=${netInfo.ip}`, 'debug');
+      } catch (e) {
+        console.warn('Failed to get network info for UI:', e);
       }
-    } catch (e) {
-      console.warn('Failed to get network info for UI:', e);
     }
-  }
+  })();
 
   try {
-    const isInternetOk = await checkInternet();
+    // checkInternet runs concurrently with networkInfoPromise
+    const [isInternetOk] = await Promise.all([checkInternet(), networkInfoPromise]);
     log('网络', `[DEBUG] 互联网可用性检测结果: ${isInternetOk ? '连通 (Online)' : '断开/受限'}`, 'debug');
 
     if (isInternetOk) {

@@ -65,18 +65,6 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
-            static PROMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            if !PROMPTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                let _ = _app.run_on_main_thread(|| {
-                    unsafe {
-                        let manager = objc2_core_location::CLLocationManager::new();
-                        manager.requestWhenInUseAuthorization();
-                        manager.startUpdatingLocation();
-                        let _ = Box::leak(Box::new(manager));
-                    }
-                });
-            }
-            
             if let Ok(client) = corewlan::WiFiClient::shared() {
                 if let Some(interface) = client.interface() {
                     if let Some(s) = interface.ssid() {
@@ -102,60 +90,50 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
+            // Get SSID/BSSID via netsh wlan (doesn't trigger location prompts)
             let mut cmd = std::process::Command::new("netsh");
             cmd.args(["wlan", "show", "interfaces"]);
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
             if let Ok(output) = cmd.output() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 for line in stdout.lines() {
-                    let line = line.trim();
-                    let line_upper = line.to_uppercase();
-                    if line_upper.contains("BSSID") {
-                        if let Some(idx) = line.find(':') {
-                            bssid = line[idx + 1..].trim().to_string();
+                    let trimmed = line.trim();
+                    // Match BSSID first (before SSID) to avoid SSID matching BSSID line
+                    if trimmed.starts_with("BSSID") {
+                        if let Some(idx) = trimmed.find(':') {
+                            bssid = trimmed[idx + 1..].trim().to_string();
                         }
-                    } else if line_upper.contains("SSID") {
-                        if let Some(idx) = line.find(':') {
-                            ssid = line[idx + 1..].trim().to_string();
+                    } else if trimmed.starts_with("SSID") && !trimmed.starts_with("SSID ") {
+                        // Skip lines like "SSID 1" in profile listings
+                        if let Some(idx) = trimmed.find(':') {
+                            ssid = trimmed[idx + 1..].trim().to_string();
                         }
                     }
                 }
             }
 
-            let mut ipconfig_ips = Vec::new();
-            let mut ip_cmd = std::process::Command::new("ipconfig");
-            ip_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            if let Ok(output) = ip_cmd.output() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    if line.contains("IPv4") {
-                        if let Some(idx) = line.find(':') {
-                            let extracted_ip = line[idx + 1..].trim().to_string();
-                            if !extracted_ip.is_empty() {
-                                ipconfig_ips.push(extracted_ip);
-                            }
+            // Get IP via UDP socket routing — no subprocess, no location prompt
+            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                if socket.connect("10.21.221.98:80").is_ok() {
+                    if let Ok(local_addr) = socket.local_addr() {
+                        let ip_str = local_addr.ip().to_string();
+                        if !ip_str.starts_with("127.") {
+                            ip = ip_str;
                         }
                     }
                 }
             }
-            
-            let mut best_ip = String::new();
-            for extracted_ip in &ipconfig_ips {
-                if extracted_ip.starts_with("10.") || extracted_ip.starts_with("172.") {
-                    best_ip = extracted_ip.clone();
-                    break;
-                }
-            }
-            if best_ip.is_empty() && !ipconfig_ips.is_empty() {
-                for extracted_ip in &ipconfig_ips {
-                    if !extracted_ip.starts_with("198.18.") && !extracted_ip.starts_with("127.") {
-                        best_ip = extracted_ip.clone();
-                        break;
+            if ip.is_empty() {
+                if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                    if socket.connect("8.8.8.8:80").is_ok() {
+                        if let Ok(local_addr) = socket.local_addr() {
+                            let ip_str = local_addr.ip().to_string();
+                            if !ip_str.starts_with("127.") {
+                                ip = ip_str;
+                            }
+                        }
                     }
                 }
-            }
-            if !best_ip.is_empty() {
-                ip = best_ip;
             }
         }
 
