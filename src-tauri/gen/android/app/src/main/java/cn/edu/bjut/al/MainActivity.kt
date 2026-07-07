@@ -12,6 +12,8 @@ import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
+  private var mWebViewInstance: WebView? = null
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
@@ -19,8 +21,18 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    mWebViewInstance = webView
     // Register JavaScript interface so frontend can call Android native methods directly
     webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
+  }
+
+  override fun onPause() {
+    super.onPause()
+    // Force WebView and its JavaScript timers to stay active in the background
+    mWebViewInstance?.let {
+      it.onResume()
+      it.resumeTimers()
+    }
   }
 
   private fun requestForegroundPermissionsInternal() {
