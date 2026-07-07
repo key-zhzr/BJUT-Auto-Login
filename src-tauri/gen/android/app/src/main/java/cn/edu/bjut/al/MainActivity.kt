@@ -13,6 +13,26 @@ import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
   private var mWebViewInstance: WebView? = null
+  private val keepAliveHandler = android.os.Handler(android.os.Looper.getMainLooper())
+  private var isInBackground = false
+
+  private val keepAliveRunnable = object : Runnable {
+    override fun run() {
+      if (isInBackground) {
+        mWebViewInstance?.let {
+          // Force-resume WebView to counteract Chromium's internal re-throttling
+          it.onResume()
+          it.resumeTimers()
+          // Force JS execution to trigger network check even if all timers are frozen
+          it.evaluateJavascript(
+            "if(typeof window.__nativeKeepAlive==='function'){window.__nativeKeepAlive();}",
+            null
+          )
+        }
+      }
+      keepAliveHandler.postDelayed(this, 10000) // Repeat every 10 seconds
+    }
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -28,11 +48,31 @@ class MainActivity : TauriActivity() {
 
   override fun onPause() {
     super.onPause()
-    // Force WebView and its JavaScript timers to stay active in the background
+    isInBackground = true
+    // Immediately resume WebView after Tauri/Wry pauses it
     mWebViewInstance?.let {
       it.onResume()
       it.resumeTimers()
     }
+    // Start periodic keep-alive Handler
+    keepAliveHandler.removeCallbacks(keepAliveRunnable)
+    keepAliveHandler.postDelayed(keepAliveRunnable, 10000)
+  }
+
+  override fun onStop() {
+    super.onStop()
+    // onStop may re-pause the WebView; force resume again
+    mWebViewInstance?.let {
+      it.onResume()
+      it.resumeTimers()
+    }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    isInBackground = false
+    // Stop the periodic keep-alive when returning to foreground
+    keepAliveHandler.removeCallbacks(keepAliveRunnable)
   }
 
   private fun requestForegroundPermissionsInternal() {

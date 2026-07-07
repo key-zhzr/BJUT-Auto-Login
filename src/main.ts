@@ -1240,6 +1240,19 @@ function startWifiChangeCheckLoop() {
   tick();
 }
 
+// Native keep-alive hook for Android: called from Kotlin Handler every 10s
+// to counteract Chromium's internal background timer throttling.
+(window as any).__nativeKeepAlive = () => {
+  // Re-kick the Wi-Fi change detection loop if its timer died
+  if (wifiChangeDetectEnabled && !wifiChangeTimer) {
+    startWifiChangeCheckLoop();
+  }
+  // Re-kick the connectivity countdown if its interval died
+  if (!countdownInterval) {
+    startConnectivityCheckLoop();
+  }
+};
+
 function startConnectivityCheckLoop() {
   if (connectivityTimer) {
     clearTimeout(connectivityTimer);
