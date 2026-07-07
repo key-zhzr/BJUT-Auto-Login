@@ -103,7 +103,7 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                         if let Some(idx) = trimmed.find(':') {
                             bssid = trimmed[idx + 1..].trim().to_string();
                         }
-                    } else if upper.contains("SSID") && !upper.contains("SSID ") {
+                    } else if upper.contains("SSID") {
                         if let Some(idx) = trimmed.find(':') {
                             ssid = trimmed[idx + 1..].trim().to_string();
                         }
