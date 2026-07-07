@@ -751,7 +751,14 @@ function setupEventListeners() {
       };
       const encrypted = encrypt(JSON.stringify(config));
       try {
-        await navigator.clipboard.writeText(encrypted);
+        if ((window as any).AndroidBridge) {
+          (window as any).AndroidBridge.setClipboardText(encrypted);
+        } else if ((window as any).__TAURI__) {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('write_clipboard', { text: encrypted });
+        } else {
+          await navigator.clipboard.writeText(encrypted);
+        }
         customAlert('配置已加密并复制到剪贴板。');
       } catch (e) {
         customAlert('复制到剪贴板失败，请手动复制：\n' + encrypted);
@@ -762,7 +769,16 @@ function setupEventListeners() {
   if (btnImportConfig) {
     btnImportConfig.addEventListener('click', async () => {
       try {
-        const text = await navigator.clipboard.readText();
+        let text = '';
+        if ((window as any).AndroidBridge) {
+          text = (window as any).AndroidBridge.getClipboardText();
+        } else if ((window as any).__TAURI__) {
+          const { invoke } = await import('@tauri-apps/api/core');
+          text = await invoke('read_clipboard');
+        } else {
+          text = await navigator.clipboard.readText();
+        }
+
         if (!text) {
           customAlert('剪贴板为空');
           return;
@@ -1209,9 +1225,7 @@ function startWifiChangeCheckLoop() {
         console.warn('Failed in Wi-Fi change check:', e);
       }
     }
-    const isWindows = navigator.userAgent.toLowerCase().includes('windows');
-    const delay = isWindows ? 8000 : 3000;
-    wifiChangeTimer = setTimeout(tick, delay) as any;
+    wifiChangeTimer = setTimeout(tick, 3000) as any;
   };
 
   tick();

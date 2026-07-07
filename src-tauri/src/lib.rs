@@ -111,24 +111,40 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
                 }
             }
 
-            // Get IP via PowerShell physical adapter command (consistent with Wi-Fi check)
-            let mut ip_cmd = std::process::Command::new("powershell");
-            ip_cmd.args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-NoLogo",
-                "-Command",
-                "(Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Get-NetIPAddress -AddressFamily IPv4).IPAddress"
-            ]);
+            // Get IP via rust ipconfig (avoids location prompts and VM startup overhead)
+            let mut ipconfig_ips = Vec::new();
+            let mut ip_cmd = std::process::Command::new("ipconfig");
             ip_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
             if let Ok(output) = ip_cmd.output() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let trimmed = stdout.trim();
-                if !trimmed.is_empty() {
-                    if let Some(first_line) = trimmed.lines().next() {
-                        ip = first_line.trim().to_string();
+                for line in stdout.lines() {
+                    if line.contains("IPv4") {
+                        if let Some(idx) = line.find(':') {
+                            let extracted_ip = line[idx + 1..].trim().to_string();
+                            if !extracted_ip.is_empty() {
+                                ipconfig_ips.push(extracted_ip);
+                            }
+                        }
                     }
                 }
+            }
+            let mut best_ip = String::new();
+            for extracted_ip in &ipconfig_ips {
+                if extracted_ip.starts_with("10.") || extracted_ip.starts_with("172.") {
+                    best_ip = extracted_ip.clone();
+                    break;
+                }
+            }
+            if best_ip.is_empty() && !ipconfig_ips.is_empty() {
+                for extracted_ip in &ipconfig_ips {
+                    if !extracted_ip.starts_with("198.18.") && !extracted_ip.starts_with("127.") {
+                        best_ip = extracted_ip.clone();
+                        break;
+                    }
+                }
+            }
+            if !best_ip.is_empty() {
+                ip = best_ip;
             }
         }
 
@@ -329,23 +345,39 @@ fn get_local_ip() -> String {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let mut cmd = std::process::Command::new("powershell");
-        cmd.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-NoLogo",
-            "-Command",
-            "(Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Get-NetIPAddress -AddressFamily IPv4).IPAddress"
-        ]);
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        if let Ok(output) = cmd.output() {
+        let mut ipconfig_ips = Vec::new();
+        let mut ip_cmd = std::process::Command::new("ipconfig");
+        ip_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        if let Ok(output) = ip_cmd.output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let trimmed = stdout.trim();
-            if !trimmed.is_empty() {
-                if let Some(first_line) = trimmed.lines().next() {
-                    ip = first_line.trim().to_string();
+            for line in stdout.lines() {
+                if line.contains("IPv4") {
+                    if let Some(idx) = line.find(':') {
+                        let extracted_ip = line[idx + 1..].trim().to_string();
+                        if !extracted_ip.is_empty() {
+                            ipconfig_ips.push(extracted_ip);
+                        }
+                    }
                 }
             }
+        }
+        let mut best_ip = String::new();
+        for extracted_ip in &ipconfig_ips {
+            if extracted_ip.starts_with("10.") || extracted_ip.starts_with("172.") {
+                best_ip = extracted_ip.clone();
+                break;
+            }
+        }
+        if best_ip.is_empty() && !ipconfig_ips.is_empty() {
+            for extracted_ip in &ipconfig_ips {
+                if !extracted_ip.starts_with("198.18.") && !extracted_ip.starts_with("127.") {
+                    best_ip = extracted_ip.clone();
+                    break;
+                }
+            }
+        }
+        if !best_ip.is_empty() {
+            ip = best_ip;
         }
     }
 
@@ -404,6 +436,33 @@ fn get_local_ip() -> String {
     }
     
     ip
+}
+
+#[tauri::command]
+fn read_clipboard() -> Result<String, String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        clipboard.get_text().map_err(|e| e.to_string())
+    }
+    #[cfg(target_os = "android")]
+    {
+        Ok(String::new())
+    }
+}
+
+#[tauri::command]
+fn write_clipboard(text: String) -> Result<(), String> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        clipboard.set_text(text).map_err(|e| e.to_string())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = text;
+        Ok(())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -549,7 +608,9 @@ pub fn run() {
             stop_keep_alive_service,
             get_local_ip,
             exit_app,
-            set_dock_visible
+            set_dock_visible,
+            read_clipboard,
+            write_clipboard
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

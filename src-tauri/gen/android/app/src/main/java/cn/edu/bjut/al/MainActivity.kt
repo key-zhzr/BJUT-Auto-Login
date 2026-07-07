@@ -137,5 +137,38 @@ class MainActivity : TauriActivity() {
         activity.requestBatteryOptimizationsInternal()
       }
     }
+
+    @JavascriptInterface
+    fun getClipboardText(): String {
+      var text = ""
+      try {
+        val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        if (clipboard.hasPrimaryClip()) {
+            val clipData = clipboard.primaryClip
+            if (clipData != null && clipData.itemCount > 0) {
+                val itemText = clipData.getItemAt(0).text
+                if (itemText != null) {
+                    text = itemText.toString()
+                }
+            }
+        }
+      } catch (e: Exception) {
+        e.printStackTrace()
+      }
+      return text
+    }
+
+    @JavascriptInterface
+    fun setClipboardText(text: String) {
+      activity.runOnUiThread {
+        try {
+          val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+          val clip = android.content.ClipData.newPlainText("bjut_al_config", text)
+          clipboard.setPrimaryClip(clip)
+        } catch (e: Exception) {
+          e.printStackTrace()
+        }
+      }
+    }
   }
 }
