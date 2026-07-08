@@ -142,10 +142,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Add Cargo to Path
+        shell: python
+        run: |
+          import os
+          cargo_bin = os.path.expanduser("~/.cargo/bin")
+          if os.path.exists(cargo_bin):
+              with open(os.environ['GITHUB_PATH'], 'a') as f:
+                  f.write(cargo_bin + '\n')
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
 
       - name: Install NPM dependencies
         run: npm install
@@ -153,6 +168,7 @@ jobs:
       - name: Build Tauri Android App
         env:
           NDK_HOME: /Users/keyzhzr/Library/Android/sdk/ndk/27.0.12077973
+          ANDROID_HOME: /Users/keyzhzr/Library/Android/sdk
         run: npm run tauri android build -- --target aarch64 --apk
 
       - name: Prepare APKs for signing
@@ -218,10 +234,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Add Cargo to Path
+        shell: python
+        run: |
+          import os
+          cargo_bin = os.path.expanduser("~/.cargo/bin")
+          if os.path.exists(cargo_bin):
+              with open(os.environ['GITHUB_PATH'], 'a') as f:
+                  f.write(cargo_bin + '\n')
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
 
       - name: Install NPM dependencies
         run: npm install
@@ -229,6 +260,7 @@ jobs:
       - name: Build Tauri Android App
         env:
           NDK_HOME: C:\Users\keyzhzr\AppData\Local\Android\Sdk\ndk\27.0.12077973
+          ANDROID_HOME: C:\Users\keyzhzr\AppData\Local\Android\Sdk
         run: npm run tauri android build -- --target x86_64 --apk
 
       - name: Prepare APKs for signing
