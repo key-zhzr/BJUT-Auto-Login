@@ -147,31 +147,12 @@ jobs:
         with:
           node-version: 20
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Setup Java
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        if: ${{ !contains(runner.labels, 'self-hosted') }}
-        uses: android-actions/setup-android@v3
-        
-      - name: Setup NDK
-        if: ${{ !contains(runner.labels, 'self-hosted') }}
-        run: echo "y" | sudo /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
-
       - name: Install NPM dependencies
         run: npm install
 
       - name: Build Tauri Android App
         env:
-          NDK_HOME: ${{ contains(runner.labels, 'self-hosted') && '/Users/keyzhzr/Library/Android/sdk/ndk/27.0.12077973' || '/usr/local/lib/android/sdk/ndk/27.0.12077973' }}
+          NDK_HOME: /Users/keyzhzr/Library/Android/sdk/ndk/27.0.12077973
         run: npm run tauri android build -- --target aarch64 --apk
 
       - name: Prepare APKs for signing
@@ -190,7 +171,14 @@ jobs:
 
       - name: Get version
         id: package-version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        shell: python
+        run: |
+          import json
+          import os
+          with open('package.json') as f:
+              data = json.load(f)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"version={data['version']}\n")
 
       - name: Rename and Prepare Android Assets
         shell: python
@@ -235,31 +223,12 @@ jobs:
         with:
           node-version: 20
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-linux-android
-
-      - name: Setup Java
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        if: ${{ !contains(runner.labels, 'self-hosted') }}
-        uses: android-actions/setup-android@v3
-        
-      - name: Setup NDK
-        if: ${{ !contains(runner.labels, 'self-hosted') }}
-        run: echo "y" | sudo /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
-
       - name: Install NPM dependencies
         run: npm install
 
       - name: Build Tauri Android App
         env:
-          NDK_HOME: ${{ contains(runner.labels, 'self-hosted') && 'C:\Users\keyzhzr\AppData\Local\Android\Sdk\ndk\27.0.12077973' || '/usr/local/lib/android/sdk/ndk/27.0.12077973' }}
+          NDK_HOME: C:\Users\keyzhzr\AppData\Local\Android\Sdk\ndk\27.0.12077973
         run: npm run tauri android build -- --target x86_64 --apk
 
       - name: Prepare APKs for signing
@@ -278,7 +247,14 @@ jobs:
 
       - name: Get version
         id: package-version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        shell: python
+        run: |
+          import json
+          import os
+          with open('package.json') as f:
+              data = json.load(f)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"version={data['version']}\n")
 
       - name: Rename and Prepare Android Assets
         shell: python
