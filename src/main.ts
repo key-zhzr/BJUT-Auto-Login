@@ -854,7 +854,7 @@ function setupEventListeners() {
       const channel = settingUpdateChannel.value;
       log('系统', `正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...`);
       
-      const currentVersion = '0.1.2';
+      const currentVersion = '0.1.3';
       
       try {
         const response = await fetch('https://api.github.com/repos/key-zhzr/BJUT-Auto-Login/releases');
