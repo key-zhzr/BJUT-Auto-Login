@@ -56,6 +56,162 @@ function getAccounts(): any[] {
 }
 function saveAccounts(accs: any[]) {
   localStorage.setItem('bjut_accounts', encrypt(JSON.stringify(accs)));
+  syncConfigToRust();
+}
+
+function saveSetting(key: string, value: string) {
+  localStorage.setItem(key, value);
+  syncConfigToRust();
+}
+
+async function syncConfigToRust() {
+  if (!(window as any).__TAURI__) return;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const config = {
+      accounts: getAccounts(),
+      auto_login: localStorage.getItem('bjut_auto_login') === 'true',
+      check_interval: parseInt(localStorage.getItem('bjut_check_interval') || '15', 10),
+      check_interval_bg: parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10),
+      wifi_change_detect: localStorage.getItem('bjut_wifi_change_detect') !== 'false',
+      log_level: localStorage.getItem('bjut_log_level') || 'info',
+      whitelist: JSON.parse(localStorage.getItem('bjut_whitelist') || '[]'),
+      blacklist: JSON.parse(localStorage.getItem('bjut_blacklist') || '[]')
+    };
+    await invoke('sync_config', { config });
+  } catch (e) {
+    console.error('Failed to sync config to Rust:', e);
+  }
+}
+
+async function loadConfigFromRust() {
+  if (!(window as any).__TAURI__) return;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const config: any = await invoke('get_app_config');
+    if (!config) return;
+    
+    if (config.accounts && config.accounts.length > 0) {
+      localStorage.setItem('bjut_accounts', encrypt(JSON.stringify(config.accounts)));
+    }
+    localStorage.setItem('bjut_auto_login', config.auto_login.toString());
+    localStorage.setItem('bjut_check_interval', config.check_interval.toString());
+    localStorage.setItem('bjut_check_interval_bg', config.check_interval_bg.toString());
+    localStorage.setItem('bjut_wifi_change_detect', config.wifi_change_detect.toString());
+    localStorage.setItem('bjut_log_level', config.log_level);
+    localStorage.setItem('bjut_whitelist', JSON.stringify(config.whitelist || []));
+    localStorage.setItem('bjut_blacklist', JSON.stringify(config.blacklist || []));
+    
+    autoLoginEnabled = config.auto_login;
+    checkInterval = config.check_interval;
+    wifiChangeDetectEnabled = config.wifi_change_detect;
+    
+    settingAutoLogin.checked = autoLoginEnabled;
+    settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
+    settingCheckInterval.value = checkInterval.toString();
+    settingLogLevel.value = config.log_level;
+    
+    const settingCheckIntervalBg = document.getElementById('setting-check-interval-bg') as HTMLInputElement;
+    if (settingCheckIntervalBg) {
+      settingCheckIntervalBg.value = config.check_interval_bg.toString();
+    }
+    
+    renderAccounts();
+  } catch (e) {
+    console.error('Failed to load config from Rust:', e);
+  }
+}
+
+async function listenToRustEvents() {
+  if (!(window as any).__TAURI__) return;
+  try {
+    const { listen } = await import('@tauri-apps/api/event');
+    const { invoke } = await import('@tauri-apps/api/core');
+
+    listen('countdown-tick', (event: any) => {
+      const data = event.payload;
+      const countdownText = document.getElementById('countdown-text');
+      if (countdownText) {
+        if (data.status === 'checking') {
+          countdownText.textContent = '检测中...';
+          isChecking = true;
+        } else if (data.status === 'suspended') {
+          countdownText.textContent = '已休眠';
+          isChecking = false;
+        } else if (data.status === 'ticking') {
+          countdownText.textContent = data.seconds.toString();
+          isChecking = false;
+        }
+      }
+    });
+
+    listen('network-state-change', (event: any) => {
+      const data = event.payload;
+      let state = NetworkState.Offline;
+      if (data.state === 'Online') state = NetworkState.Online;
+      else if (data.state === 'BjutCampus') state = NetworkState.BjutCampus;
+      
+      currentNetworkState = state;
+      updateNetworkStatus(state);
+    });
+
+    listen('log-event', (event: any) => {
+      const data = event.payload;
+      renderLogEntry(data.module, data.message, data.type, data.time);
+    });
+
+    // Load initial logs
+    const initialLogs: any[] = await invoke('get_logs');
+    logsContent.innerHTML = '';
+    initialLogs.forEach(entry => {
+      renderLogEntry(entry.module, entry.message, entry.type, entry.time);
+    });
+
+    // Load initial countdown status
+    const cStatus: any = await invoke('get_countdown_status');
+    const countdownText = document.getElementById('countdown-text');
+    if (countdownText) {
+      if (cStatus.status === 'checking') countdownText.textContent = '检测中...';
+      else if (cStatus.status === 'suspended') countdownText.textContent = '已休眠';
+      else countdownText.textContent = cStatus.seconds.toString();
+    }
+
+    // Report visibility background status
+    const updateBgState = () => {
+      const isBg = document.hidden;
+      invoke('set_background_state', { isBg }).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', updateBgState);
+    updateBgState();
+  } catch (e) {
+    console.error('Failed to listen to Rust events:', e);
+  }
+}
+
+function renderLogEntry(module: string, message: string, type: 'info' | 'error' | 'success' | 'debug' = 'info', time?: string) {
+  const currentLevel = localStorage.getItem('bjut_log_level') || 'info';
+  if (currentLevel === 'error' && type !== 'error') {
+    return;
+  }
+  if (currentLevel === 'info' && type === 'debug') {
+    return;
+  }
+  
+  const timeStr = time || new Date().toLocaleTimeString();
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">[${timeStr}]</span><span class="log-${type}">[${module}] ${message}</span>`;
+  logsContent.appendChild(entry);
+  
+  requestAnimationFrame(() => {
+    const container = logsContent.parentElement;
+    if (container) {
+      const isAtBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 80;
+      if (isAtBottom) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+  });
 }
 
 function customAlert(text: string, title = '提示'): Promise<void> {
@@ -332,7 +488,6 @@ function init() {
   setupNavigation();
   setupEventListeners();
   renderAccounts();
-  log('系统', '应用启动');
 
   // Register triggerAutoLogin globally for eval call from Rust
   (window as any).triggerAutoLogin = () => {
@@ -365,10 +520,14 @@ function init() {
         } catch (e) {
           console.error('Failed to request foreground permissions:', e);
         }
+        await syncConfigToRust();
+        await listenToRustEvents();
+        log('系统', '应用启动');
+      } else {
+        startWifiChangeCheckLoop();
+        startConnectivityCheckLoop();
+        log('系统', '应用启动');
       }
-      
-      startWifiChangeCheckLoop();
-      startConnectivityCheckLoop();
     });
     
     document.getElementById('btn-tos-disagree')!.addEventListener('click', async () => {
@@ -389,7 +548,6 @@ function init() {
         if (autoLoginEnabled) {
           try {
             (window as any).AndroidBridge.startKeepAliveService();
-            log('系统', '后台保活服务已启动');
           } catch (e) {
             console.error('Failed to start keep-alive service:', e);
           }
@@ -403,10 +561,18 @@ function init() {
           }
         });
       }
+      loadConfigFromRust().then(() => {
+        listenToRustEvents();
+        log('系统', '应用启动');
+        if ((window as any).AndroidBridge && autoLoginEnabled) {
+          log('系统', '后台保活服务已启动');
+        }
+      });
+    } else {
+      startWifiChangeCheckLoop();
+      startConnectivityCheckLoop();
+      log('系统', '应用启动');
     }
-    
-    startWifiChangeCheckLoop();
-    startConnectivityCheckLoop();
   }
 }
 
@@ -459,11 +625,16 @@ function setupEventListeners() {
 
   btnClearLogs.addEventListener('click', () => {
     logsContent.innerHTML = '';
+    if ((window as any).__TAURI__) {
+      import('@tauri-apps/api/core').then(({ invoke }) => {
+        invoke('clear_all_logs').catch(e => console.error(e));
+      });
+    }
   });
 
   settingAutoLogin.addEventListener('change', async (e) => {
     autoLoginEnabled = (e.target as HTMLInputElement).checked;
-    localStorage.setItem('bjut_auto_login', autoLoginEnabled.toString());
+    saveSetting('bjut_auto_login', autoLoginEnabled.toString());
     log('设置', `自动登录已${autoLoginEnabled ? '开启' : '关闭'}`);
     
     if ((window as any).__TAURI__) {
@@ -497,7 +668,7 @@ function setupEventListeners() {
     const val = parseInt((e.target as HTMLInputElement).value, 10);
     if (val >= 5) {
       checkInterval = val;
-      localStorage.setItem('bjut_check_interval', checkInterval.toString());
+      saveSetting('bjut_check_interval', checkInterval.toString());
       log('设置', `前台检测间隔设置为 ${val} 秒`);
       startConnectivityCheckLoop();
     }
@@ -506,7 +677,7 @@ function setupEventListeners() {
   if (settingWifiChangeDetect) {
     settingWifiChangeDetect.addEventListener('change', (e) => {
       wifiChangeDetectEnabled = (e.target as HTMLInputElement).checked;
-      localStorage.setItem('bjut_wifi_change_detect', wifiChangeDetectEnabled.toString());
+      saveSetting('bjut_wifi_change_detect', wifiChangeDetectEnabled.toString());
       log('设置', `Wi-Fi 变更检测已${wifiChangeDetectEnabled ? '开启' : '关闭'}`);
       if (wifiChangeDetectEnabled) {
         startWifiChangeCheckLoop();
@@ -549,7 +720,7 @@ function setupEventListeners() {
       const val = parseInt((e.target as HTMLInputElement).value, 10);
       if (val >= 5) {
         checkIntervalBg = val;
-        localStorage.setItem('bjut_check_interval_bg', checkIntervalBg.toString());
+        saveSetting('bjut_check_interval_bg', checkIntervalBg.toString());
         log('设置', `后台检测间隔设置为 ${val} 秒`);
         startConnectivityCheckLoop();
       }
@@ -609,7 +780,7 @@ function setupEventListeners() {
   if (settingLogLevel) {
     settingLogLevel.addEventListener('change', (e) => {
       const level = e.target.value;
-      localStorage.setItem('bjut_log_level', level);
+      saveSetting('bjut_log_level', level);
       log('设置', `日志详细等级已设置为 ${level.toUpperCase()}`);
     });
   }
@@ -622,7 +793,16 @@ function setupEventListeners() {
       if (btnIcon) btnIcon.style.animation = 'spin 0.8s linear infinite';
       
       log('网络', '手动触发网络连通性检测...', 'info');
-      await checkNetwork();
+      if ((window as any).__TAURI__) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('trigger_manual_check');
+        } catch (err) {
+          console.error('Failed to trigger manual check in Rust:', err);
+        }
+      } else {
+        await checkNetwork();
+      }
       
       setTimeout(() => {
         if (btnIcon) btnIcon.style.animation = '';
@@ -802,7 +982,9 @@ function setupEventListeners() {
         }
         
         const config = JSON.parse(decrypted);
-        if (config.accounts) saveAccounts(config.accounts);
+        if (config.accounts) {
+          localStorage.setItem('bjut_accounts', encrypt(JSON.stringify(config.accounts)));
+        }
         if (config.autoLogin !== undefined && config.autoLogin !== null) localStorage.setItem('bjut_auto_login', config.autoLogin);
         if (config.checkInterval !== undefined && config.checkInterval !== null) localStorage.setItem('bjut_check_interval', config.checkInterval);
         if (config.checkIntervalBg !== undefined && config.checkIntervalBg !== null) localStorage.setItem('bjut_check_interval_bg', config.checkIntervalBg);
@@ -810,8 +992,12 @@ function setupEventListeners() {
         if (config.blacklist) localStorage.setItem('bjut_blacklist', config.blacklist);
         if (config.moreOptions !== undefined && config.moreOptions !== null) localStorage.setItem('bjut_more_options', config.moreOptions);
         
-        customAlert('导入成功，请刷新或重启应用以应用更改！');
-        setTimeout(() => location.reload(), 1500);
+        syncConfigToRust().then(() => {
+          customAlert('导入成功，请刷新以应用更改！');
+          setTimeout(() => location.reload(), 1500);
+        }).catch((err) => {
+          customAlert('导入同步失败：' + String(err));
+        });
       } catch (e) {
         customAlert('导入失败：' + String(e));
       }
@@ -1104,32 +1290,13 @@ function setupEventListeners() {
 
 // Logging
 function log(module: string, message: string, type: 'info' | 'error' | 'success' | 'debug' = 'info') {
-  const currentLevel = localStorage.getItem('bjut_log_level') || 'info';
-  
-  if (currentLevel === 'error' && type !== 'error') {
+  if ((window as any).__TAURI__) {
+    import('@tauri-apps/api/core').then(({ invoke }) => {
+      invoke('log_from_js', { module, message, logType: type }).catch(() => {});
+    });
     return;
   }
-  if (currentLevel === 'info' && type === 'debug') {
-    return;
-  }
-
-  const time = new Date().toLocaleTimeString();
-  const entry = document.createElement('div');
-  entry.className = 'log-entry';
-  entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-${type}">[${module}] ${message}</span>`;
-  logsContent.appendChild(entry);
-  
-  requestAnimationFrame(() => {
-    const container = logsContent.parentElement;
-    if (container) {
-      // If user is already near the bottom (tolerance of 80px), scroll to bottom.
-      // otherwise, keep scroll position to let user read earlier logs.
-      const isAtBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 80;
-      if (isAtBottom) {
-        container.scrollTop = container.scrollHeight;
-      }
-    }
-  });
+  renderLogEntry(module, message, type);
 }
 
 // Accounts
