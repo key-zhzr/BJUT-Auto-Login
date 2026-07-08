@@ -16,18 +16,24 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
+            os: macos
             args: '--target aarch64-apple-darwin'
           - platform: 'macos-latest'
+            os: macos
             args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
+            os: linux
             args: ''
           - platform: 'windows-latest'
+            os: windows
             args: '--target x86_64-pc-windows-msvc'
           - platform: 'windows-latest'
+            os: windows
             args: '--target aarch64-pc-windows-msvc'
           - platform: 'windows-latest'
+            os: windows
             args: '--target x86_64-pc-windows-msvc -c tauri.offline.conf.json'
-    runs-on: ${{ matrix.platform }}
+    runs-on: [self-hosted, '${{ matrix.os }}']
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -131,7 +137,7 @@ jobs:
           path: release-artifacts/*
 
   build-android-arm64:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -219,7 +225,7 @@ jobs:
           path: android-release/*.apk
 
   build-android-x86_64:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -308,7 +314,7 @@ jobs:
 
   publish-release:
     needs: [build-desktop, build-android-arm64, build-android-x86_64]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout repository
