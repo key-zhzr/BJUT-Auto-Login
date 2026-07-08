@@ -65,31 +65,15 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
-            let get_wifi_from_iface = |iface: &str| -> Option<(String, String)> {
-                if let Ok(output) = std::process::Command::new("ipconfig").arg("getsummary").arg(iface).output() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let mut s = String::new();
-                    let mut b = String::new();
-                    for line in stdout.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with("BSSID :") {
-                            b = trimmed["BSSID :".len()..].trim().to_string();
-                        } else if trimmed.starts_with("SSID :") {
-                            s = trimmed["SSID :".len()..].trim().to_string();
-                        }
+            if let Ok(client) = corewlan::WiFiClient::shared() {
+                if let Some(interface) = client.interface() {
+                    if let Some(s) = interface.ssid() {
+                        ssid = s;
                     }
-                    if !s.is_empty() {
-                        return Some((s, b));
+                    if let Some(b) = interface.bssid() {
+                        bssid = b;
                     }
                 }
-                None
-            };
-            if let Some((s, b)) = get_wifi_from_iface("en0") {
-                ssid = s;
-                bssid = b;
-            } else if let Some((s, b)) = get_wifi_from_iface("en1") {
-                ssid = s;
-                bssid = b;
             }
 
             if let Ok(output) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en0").output() {
@@ -839,6 +823,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
         let local_now = chrono::Local::now();
         let timestamp = local_now.format("%H:%M:%S").to_string();
 
+        rust_log(&app, &state, "网络", &format!("[DEBUG] {}拉取详细 SSID 信息成功: SSID={}, BSSID={}, IP={}", if is_bg { "后台" } else { "前台" }, current_ssid, current_bssid, current_ip), "debug");
+
         let make_payload = |state_str: &str| {
             serde_json::json!({
                 "state": state_str,
@@ -850,6 +836,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
         };
 
         let is_online = check_internet_rust().await;
+        rust_log(&app, &state, "网络", &format!("[DEBUG] 互联网可用性检测结果: {}", if is_online { "连通 (Online)" } else { "断开/受限" }), "debug");
+        
         if is_online {
             rust_log(&app, &state, "网络", "网络检测完毕: 互联网已连通 (Online)", "info");
             state.is_checking.store(false, Ordering::SeqCst);
@@ -863,6 +851,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
         }
 
         let login_type = detect_login_type_rust().await;
+        rust_log(&app, &state, "网络", &format!("[DEBUG] 检测到校园网环境判定: {}", if login_type != LoginType::Unknown { "需要登录认证" } else { "非校园网/完全离线" }), "debug");
+        
         match login_type {
             LoginType::Unknown => {
                 rust_log(&app, &state, "网络", "网络检测完毕: 离线或非校园网 (Offline)", "info");
@@ -1001,6 +991,8 @@ fn get_countdown_status(state: tauri::State<Arc<AppState>>) -> serde_json::Value
 
 #[tauri::command]
 fn trigger_manual_check(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) {
+    rust_log(&app, &state, "网络", "收到手动连通性检测请求，开始检测...", "info");
+    state.is_checking.store(false, Ordering::SeqCst);
     state.is_suspended.store(false, Ordering::SeqCst);
     state.non_campus_count.store(0, Ordering::SeqCst);
     let _ = trigger_network_check(app, state.inner().clone());

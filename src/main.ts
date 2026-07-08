@@ -838,24 +838,36 @@ function setupEventListeners() {
   if (btnManualUpdate) {
     btnManualUpdate.addEventListener('click', async () => {
       if (isChecking) return;
+      isChecking = true;
       const btnIcon = btnManualUpdate.querySelector('i');
       if (btnIcon) btnIcon.style.animation = 'spin 0.8s linear infinite';
       
       log('网络', '手动触发网络连通性检测...', 'info');
+      
+      const safetyTimeout = setTimeout(() => {
+        isChecking = false;
+        if (btnIcon) btnIcon.style.animation = '';
+      }, 10000);
+
       if ((window as any).__TAURI__) {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
           await invoke('trigger_manual_check');
         } catch (err) {
           console.error('Failed to trigger manual check in Rust:', err);
+          isChecking = false;
+          clearTimeout(safetyTimeout);
+          if (btnIcon) btnIcon.style.animation = '';
         }
       } else {
-        await checkNetwork();
+        try {
+          await checkNetwork();
+        } finally {
+          isChecking = false;
+          clearTimeout(safetyTimeout);
+          if (btnIcon) btnIcon.style.animation = '';
+        }
       }
-      
-      setTimeout(() => {
-        if (btnIcon) btnIcon.style.animation = '';
-      }, 500);
     });
   }
 
