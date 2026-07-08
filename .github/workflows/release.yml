@@ -33,7 +33,7 @@ jobs:
           - platform: 'windows-latest'
             os: windows
             args: '--target x86_64-pc-windows-msvc -c tauri.offline.conf.json'
-    runs-on: [self-hosted, '${{ matrix.os }}']
+    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -159,9 +159,11 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
+        if: ${{ !contains(runner.labels, 'self-hosted') }}
         uses: android-actions/setup-android@v3
         
       - name: Setup NDK
+        if: ${{ !contains(runner.labels, 'self-hosted') }}
         run: echo "y" | sudo /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
 
       - name: Install NPM dependencies
@@ -169,13 +171,11 @@ jobs:
 
       - name: Build Tauri Android App
         env:
-          NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
+          NDK_HOME: ${{ contains(runner.labels, 'self-hosted') && '/Users/keyzhzr/Library/Android/sdk/ndk/27.0.12077973' || '/usr/local/lib/android/sdk/ndk/27.0.12077973' }}
         run: npm run tauri android build -- --target aarch64 --apk
 
       - name: Prepare APKs for signing
-        run: |
-          mkdir -p apk-to-sign
-          find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
+        run: node -e "const fs = require('fs'); const path = require('path'); const out = 'apk-to-sign'; if (!fs.existsSync(out)) fs.mkdirSync(out); function walk(dir) { for (const f of fs.readdirSync(dir)) { const p = path.join(dir, f); if (fs.statSync(p).isDirectory()) walk(p); else if (f.endsWith('-unsigned.apk')) fs.copyFileSync(p, path.join(out, f)); } } walk('src-tauri/gen/android/app/build/outputs/apk');"
 
       - name: Sign Android Release
         uses: ilharp/sign-android-release@v1
@@ -225,7 +225,7 @@ jobs:
           path: android-release/*.apk
 
   build-android-x86_64:
-    runs-on: [self-hosted, macos]
+    runs-on: [self-hosted, windows]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -247,9 +247,11 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
+        if: ${{ !contains(runner.labels, 'self-hosted') }}
         uses: android-actions/setup-android@v3
         
       - name: Setup NDK
+        if: ${{ !contains(runner.labels, 'self-hosted') }}
         run: echo "y" | sudo /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
 
       - name: Install NPM dependencies
@@ -257,13 +259,11 @@ jobs:
 
       - name: Build Tauri Android App
         env:
-          NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
+          NDK_HOME: ${{ contains(runner.labels, 'self-hosted') && 'C:\Users\keyzhzr\AppData\Local\Android\Sdk\ndk\27.0.12077973' || '/usr/local/lib/android/sdk/ndk/27.0.12077973' }}
         run: npm run tauri android build -- --target x86_64 --apk
 
       - name: Prepare APKs for signing
-        run: |
-          mkdir -p apk-to-sign
-          find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
+        run: node -e "const fs = require('fs'); const path = require('path'); const out = 'apk-to-sign'; if (!fs.existsSync(out)) fs.mkdirSync(out); function walk(dir) { for (const f of fs.readdirSync(dir)) { const p = path.join(dir, f); if (fs.statSync(p).isDirectory()) walk(p); else if (f.endsWith('-unsigned.apk')) fs.copyFileSync(p, path.join(out, f)); } } walk('src-tauri/gen/android/app/build/outputs/apk');"
 
       - name: Sign Android Release
         uses: ilharp/sign-android-release@v1
@@ -314,7 +314,7 @@ jobs:
 
   publish-release:
     needs: [build-desktop, build-android-arm64, build-android-x86_64]
-    runs-on: [self-hosted, macos]
+    runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout repository
