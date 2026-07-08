@@ -65,25 +65,15 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let _ = _app.run_on_main_thread(move || {
-                let mut s = String::new();
-                let mut b = String::new();
-                if let Ok(client) = corewlan::WiFiClient::shared() {
-                    if let Some(interface) = client.interface() {
-                        if let Some(ssid_str) = interface.ssid() {
-                            s = ssid_str;
-                        }
-                        if let Some(bssid_str) = interface.bssid() {
-                            b = bssid_str;
-                        }
+            if let Ok(client) = corewlan::WiFiClient::shared() {
+                if let Some(interface) = client.interface() {
+                    if let Some(ssid_str) = interface.ssid() {
+                        ssid = ssid_str;
+                    }
+                    if let Some(bssid_str) = interface.bssid() {
+                        bssid = bssid_str;
                     }
                 }
-                let _ = tx.send((s, b));
-            });
-            if let Ok((s, b)) = rx.recv_timeout(std::time::Duration::from_millis(1000)) {
-                ssid = s;
-                bssid = b;
             }
 
             if let Ok(output) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en0").output() {
@@ -395,35 +385,27 @@ fn get_local_ip() -> String {
     {
         #[cfg(target_os = "android")]
         {
-            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-                if socket.connect("8.8.8.8:80").is_ok() {
-                    if let Ok(local_addr) = socket.local_addr() {
-                        ip = local_addr.ip().to_string();
-                    }
-                }
-            }
-            if ip.is_empty() {
-                if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
-                    if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
-                        if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                            if let Ok(class) = env.find_class("cn/edu/bjut/al/NetworkHelper") {
-                                let method_call = env.call_static_method(
-                                    class,
-                                    "getLocalIpAddress",
-                                    "()Ljava/lang/String;",
-                                    &[],
-                                );
-                                if let Ok(jvalue) = method_call {
-                                    if let Ok(jobject) = jvalue.l() {
-                                        let jstring: jni::objects::JString = jobject.into();
-                                        if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
-                                            ip = rust_str;
-                                        }
+            if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
+                if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
+                    if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
+                        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                        if let Ok(class) = tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.NetworkHelper".into()) {
+                            let method_call = env.call_static_method(
+                                class,
+                                "getLocalIpAddress",
+                                "()Ljava/lang/String;",
+                                &[],
+                            );
+                            if let Ok(jvalue) = method_call {
+                                if let Ok(jobject) = jvalue.l() {
+                                    let jstring: jni::objects::JString = jobject.into();
+                                    if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
+                                        ip = rust_str;
                                     }
                                 }
                             }
-                            if env.exception_check().unwrap_or(false) { let _ = env.exception_clear(); }
                         }
+                        if env.exception_check().unwrap_or(false) { let _ = env.exception_clear(); }
                     }
                 }
             }
@@ -1014,7 +996,11 @@ fn trigger_manual_check(app: tauri::AppHandle, state: tauri::State<Arc<AppState>
     state.is_checking.store(false, Ordering::SeqCst);
     state.is_suspended.store(false, Ordering::SeqCst);
     state.non_campus_count.store(0, Ordering::SeqCst);
-    let _ = trigger_network_check(app, state.inner().clone());
+    let app_clone = app.clone();
+    let state_clone = state.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        trigger_network_check(app_clone, state_clone).await;
+    });
 }
 
 #[tauri::command]

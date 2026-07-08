@@ -26,20 +26,30 @@ class NetworkHelper {
         fun getLocalIpAddress(): String {
             try {
                 val interfaces = NetworkInterface.getNetworkInterfaces()
+                var bestIp = ""
                 while (interfaces.hasMoreElements()) {
                     val iface = interfaces.nextElement()
                     if (iface.isLoopback || !iface.isUp) continue
+                    val ifaceName = iface.name.lowercase()
+                    if (ifaceName.contains("tun") || ifaceName.contains("tap")) continue
+                    
                     val addresses = iface.inetAddresses
                     while (addresses.hasMoreElements()) {
                         val addr = addresses.nextElement()
                         if (addr is Inet4Address) {
                             val ip = addr.hostAddress ?: ""
                             if (ip.isNotEmpty() && !ip.startsWith("127.") && !ip.startsWith("198.18.")) {
-                                return ip
+                                if (ifaceName.contains("wlan")) {
+                                    return ip
+                                }
+                                if (bestIp.isEmpty()) {
+                                    bestIp = ip
+                                }
                             }
                         }
                     }
                 }
+                return bestIp
             } catch (e: Exception) {}
             return ""
         }
