@@ -153,6 +153,16 @@ async function listenToRustEvents() {
       
       currentNetworkState = state;
       updateNetworkStatus(state);
+
+      const moreSsid = document.getElementById('more-ssid');
+      const moreBssid = document.getElementById('more-bssid');
+      const moreIp = document.getElementById('more-ip');
+      const updateTimestamp = document.getElementById('update-timestamp');
+
+      if (moreSsid) moreSsid.textContent = data.ssid || '--';
+      if (moreBssid) moreBssid.textContent = data.bssid || '--';
+      if (moreIp) moreIp.textContent = data.ip || '--';
+      if (updateTimestamp) updateTimestamp.textContent = data.timestamp || '--';
     });
 
     listen('log-event', (event: any) => {
@@ -166,6 +176,30 @@ async function listenToRustEvents() {
     initialLogs.forEach(entry => {
       renderLogEntry(entry.module, entry.message, entry.type, entry.time);
     });
+
+    // Load initial network state
+    try {
+      const currentState: any = await invoke('get_current_network_state');
+      if (currentState) {
+        let state = NetworkState.Offline;
+        if (currentState.state === 'Online') state = NetworkState.Online;
+        else if (currentState.state === 'BjutCampus') state = NetworkState.BjutCampus;
+        currentNetworkState = state;
+        updateNetworkStatus(state);
+
+        const moreSsid = document.getElementById('more-ssid');
+        const moreBssid = document.getElementById('more-bssid');
+        const moreIp = document.getElementById('more-ip');
+        const updateTimestamp = document.getElementById('update-timestamp');
+
+        if (moreSsid) moreSsid.textContent = currentState.ssid || '--';
+        if (moreBssid) moreBssid.textContent = currentState.bssid || '--';
+        if (moreIp) moreIp.textContent = currentState.ip || '--';
+        if (updateTimestamp) updateTimestamp.textContent = currentState.timestamp || '--';
+      }
+    } catch (err) {
+      console.error('Failed to get current network state from Rust:', err);
+    }
 
     // Load initial countdown status
     const cStatus: any = await invoke('get_countdown_status');

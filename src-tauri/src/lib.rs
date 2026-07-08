@@ -524,6 +524,7 @@ struct AppState {
     last_known_ip: Mutex<Option<String>>,
     non_campus_count: AtomicU32,
     is_in_background: AtomicBool,
+    last_network_state: Mutex<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -813,18 +814,48 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
         state.countdown.store(next_interval, Ordering::SeqCst);
         let _ = app.emit("countdown-tick", serde_json::json!({"status": "checking"}));
         rust_log(&app, &state, "网络", &format!("[DEBUG] 开始检测网络连通性 (模式: {})", if is_bg { "后台" } else { "前台" }), "debug");
+
+        // Fetch network info details
+        let net_info = get_network_info(app.clone());
+        let current_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let current_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let current_ip = net_info.get("ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let local_now = chrono::Local::now();
+        let timestamp = local_now.format("%H:%M:%S").to_string();
+
+        let make_payload = |state_str: &str| {
+            serde_json::json!({
+                "state": state_str,
+                "ssid": current_ssid.clone(),
+                "bssid": current_bssid.clone(),
+                "ip": current_ip.clone(),
+                "timestamp": timestamp.clone()
+            })
+        };
+
         let is_online = check_internet_rust().await;
         if is_online {
-            rust_log(&app, &state, "网络", "[DEBUG] 互联网可用性检测结果: 连通 (Online)", "debug");
+            rust_log(&app, &state, "网络", "网络检测完毕: 互联网已连通 (Online)", "info");
             state.is_checking.store(false, Ordering::SeqCst);
-            let _ = app.emit("network-state-change", serde_json::json!({"state": "Online"}));
+            let payload = make_payload("Online");
+            {
+                let mut last_state = state.last_network_state.lock().unwrap();
+                *last_state = payload.clone();
+            }
+            let _ = app.emit("network-state-change", payload);
             return;
         }
+
         let login_type = detect_login_type_rust().await;
         match login_type {
             LoginType::Unknown => {
-                rust_log(&app, &state, "网络", "检测结果: 离线 (Offline)", "error");
-                let _ = app.emit("network-state-change", serde_json::json!({"state": "Offline"}));
+                rust_log(&app, &state, "网络", "网络检测完毕: 离线或非校园网 (Offline)", "info");
+                let payload = make_payload("Offline");
+                {
+                    let mut last_state = state.last_network_state.lock().unwrap();
+                    *last_state = payload.clone();
+                }
+                let _ = app.emit("network-state-change", payload);
             }
             _ => {
                 rust_log(&app, &state, "网络", &format!("检测到校园网登录页面 (登录类型: {:?})", login_type), "info");
@@ -833,21 +864,17 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
                     cfg.auto_login
                 };
                 if auto_login_enabled {
-                    let mut current_ssid = String::new();
-                    let net_info = get_network_info(app.clone());
-                    if let Some(ssid_val) = net_info.get("ssid").and_then(|v| v.as_str()) {
-                        current_ssid = ssid_val.to_string();
-                    }
                     let (whitelist, blacklist) = {
                         let cfg = state.config.read().unwrap();
                         (cfg.whitelist.clone(), cfg.blacklist.clone())
                     };
                     let mut proceed = true;
                     if !current_ssid.is_empty() {
-                        if blacklist.contains(&current_ssid) {
+                        let net_key = format!("{}|{}", current_ssid, current_bssid);
+                        if blacklist.contains(&net_key) {
                             rust_log(&app, &state, "网络", &format!("当前 Wi-Fi ({}) 在黑名单中，跳过自动登录", current_ssid), "info");
                             proceed = false;
-                        } else if !whitelist.is_empty() && !whitelist.contains(&current_ssid) {
+                        } else if !whitelist.is_empty() && !whitelist.contains(&net_key) {
                             rust_log(&app, &state, "网络", &format!("当前 Wi-Fi ({}) 不在白名单中，跳过自动登录", current_ssid), "info");
                             proceed = false;
                         }
@@ -897,7 +924,12 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
                         state.is_suspended.store(true, Ordering::SeqCst);
                     }
                 }
-                let _ = app.emit("network-state-change", serde_json::json!({"state": "BjutCampus"}));
+                let payload = make_payload("BjutCampus");
+                {
+                    let mut last_state = state.last_network_state.lock().unwrap();
+                    *last_state = payload.clone();
+                }
+                let _ = app.emit("network-state-change", payload);
             }
         }
         state.is_checking.store(false, Ordering::SeqCst);
@@ -974,6 +1006,11 @@ fn set_background_state(state: tauri::State<Arc<AppState>>, is_bg: bool) {
     }
 }
 
+#[tauri::command]
+fn get_current_network_state(state: tauri::State<Arc<AppState>>) -> serde_json::Value {
+    state.last_network_state.lock().unwrap().clone()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -996,6 +1033,13 @@ pub fn run() {
                 last_known_ip: Mutex::new(None),
                 non_campus_count: AtomicU32::new(0),
                 is_in_background: AtomicBool::new(false),
+                last_network_state: Mutex::new(serde_json::json!({
+                    "state": "Offline",
+                    "ssid": "",
+                    "bssid": "",
+                    "ip": "",
+                    "timestamp": "--"
+                })),
             });
             _app.manage(app_state.clone());
 
@@ -1106,6 +1150,13 @@ pub fn run() {
                         let _ = loop_handle.emit("countdown-tick", serde_json::json!({"status": "checking"}));
                     }
                 }
+            });
+
+            let init_handle = app_handle.clone();
+            let init_state = state_clone.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                trigger_network_check(init_handle, init_state).await;
             });
 
             #[cfg(desktop)]
@@ -1228,7 +1279,8 @@ pub fn run() {
             get_countdown_status,
             trigger_manual_check,
             log_from_js,
-            set_background_state
+            set_background_state,
+            get_current_network_state
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

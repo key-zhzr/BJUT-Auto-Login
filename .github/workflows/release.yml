@@ -137,7 +137,7 @@ jobs:
           path: release-artifacts/*
 
   build-android-arm64:
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, macos]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -225,7 +225,7 @@ jobs:
           path: android-release/*.apk
 
   build-android-x86_64:
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, macos]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -314,7 +314,7 @@ jobs:
 
   publish-release:
     needs: [build-desktop, build-android-arm64, build-android-x86_64]
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, macos]
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout repository
