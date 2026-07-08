@@ -65,15 +65,31 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
-            if let Ok(client) = corewlan::WiFiClient::shared() {
-                if let Some(interface) = client.interface() {
-                    if let Some(s) = interface.ssid() {
-                        ssid = s;
+            let get_wifi_from_iface = |iface: &str| -> Option<(String, String)> {
+                if let Ok(output) = std::process::Command::new("ipconfig").arg("getsummary").arg(iface).output() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let mut s = String::new();
+                    let mut b = String::new();
+                    for line in stdout.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("BSSID :") {
+                            b = trimmed["BSSID :".len()..].trim().to_string();
+                        } else if trimmed.starts_with("SSID :") {
+                            s = trimmed["SSID :".len()..].trim().to_string();
+                        }
                     }
-                    if let Some(b) = interface.bssid() {
-                        bssid = b;
+                    if !s.is_empty() {
+                        return Some((s, b));
                     }
                 }
+                None
+            };
+            if let Some((s, b)) = get_wifi_from_iface("en0") {
+                ssid = s;
+                bssid = b;
+            } else if let Some((s, b)) = get_wifi_from_iface("en1") {
+                ssid = s;
+                bssid = b;
             }
 
             if let Ok(output) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en0").output() {
@@ -1097,28 +1113,31 @@ pub fn run() {
                             let cfg = loop_state.config.read().unwrap();
                             cfg.wifi_change_detect
                         };
-                        let (ip_changed, current_ip, last_ip) = {
-                            let current_ip = get_local_ip();
-                            let mut last_ip_lock = loop_state.last_known_ip.lock().unwrap();
-                            let last_ip = last_ip_lock.clone();
-                            let mut changed = false;
-                            if !current_ip.is_empty() {
-                                if let Some(ref l_ip) = last_ip {
-                                    if current_ip != *l_ip {
-                                        changed = true;
+                        if wifi_change_detect {
+                            let (ip_changed, current_ip, last_ip) = {
+                                let current_ip = get_local_ip();
+                                let mut last_ip_lock = loop_state.last_known_ip.lock().unwrap();
+                                let last_ip = last_ip_lock.clone();
+                                let mut changed = false;
+                                if !current_ip.is_empty() {
+                                    if let Some(ref l_ip) = last_ip {
+                                        if current_ip != *l_ip {
+                                            changed = true;
+                                        }
                                     }
+                                    *last_ip_lock = Some(current_ip.clone());
+                                } else if last_ip.is_some() {
+                                    *last_ip_lock = None;
                                 }
-                                *last_ip_lock = Some(current_ip.clone());
-                            } else if last_ip.is_some() {
-                                *last_ip_lock = None;
+                                (changed, current_ip, last_ip)
+                            };
+                            rust_log(&loop_handle, &loop_state, "网络", &format!("[DEBUG] 执行 Wi-Fi 变更检测。当前 IP: {} (上次 IP: {})", current_ip, last_ip.as_ref().map(|s| s.as_str()).unwrap_or("空")), "debug");
+                            if ip_changed {
+                                rust_log(&loop_handle, &loop_state, "网络", &format!("检测到局域网 IP 发生变更: {} -> {}，重新检测网络环境...", last_ip.unwrap_or_default(), current_ip), "info");
+                                loop_state.is_suspended.store(false, Ordering::SeqCst);
+                                loop_state.non_campus_count.store(0, Ordering::SeqCst);
+                                trigger_network_check(loop_handle.clone(), loop_state.clone()).await;
                             }
-                            (changed, current_ip, last_ip)
-                        };
-                        if wifi_change_detect && ip_changed {
-                            rust_log(&loop_handle, &loop_state, "网络", &format!("检测到局域网 IP 发生变更: {} -> {}，重新检测网络环境...", last_ip.unwrap_or_default(), current_ip), "info");
-                            loop_state.is_suspended.store(false, Ordering::SeqCst);
-                            loop_state.non_campus_count.store(0, Ordering::SeqCst);
-                            trigger_network_check(loop_handle.clone(), loop_state.clone()).await;
                         }
                     }
 

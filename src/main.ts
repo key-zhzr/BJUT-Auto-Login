@@ -145,7 +145,7 @@ async function listenToRustEvents() {
       }
     });
 
-    listen('network-state-change', (event: any) => {
+    listen('network-state-change', async (event: any) => {
       const data = event.payload;
       let state = NetworkState.Offline;
       if (data.state === 'Online') state = NetworkState.Online;
@@ -153,16 +153,24 @@ async function listenToRustEvents() {
       
       currentNetworkState = state;
       updateNetworkStatus(state);
+      isChecking = false;
 
-      const moreSsid = document.getElementById('more-ssid');
-      const moreBssid = document.getElementById('more-bssid');
-      const moreIp = document.getElementById('more-ip');
+      try {
+        const netInfo: any = await invoke('get_network_info');
+        const moreSsid = document.getElementById('more-ssid');
+        const moreBssid = document.getElementById('more-bssid');
+        const moreIp = document.getElementById('more-ip');
+        if (moreSsid) moreSsid.textContent = netInfo.ssid || '--';
+        if (moreBssid) moreBssid.textContent = netInfo.bssid || '--';
+        if (moreIp) moreIp.textContent = netInfo.ip || '--';
+      } catch (err) {
+        console.warn('Failed to query network info in event handler:', err);
+      }
+
       const updateTimestamp = document.getElementById('update-timestamp');
-
-      if (moreSsid) moreSsid.textContent = data.ssid || '--';
-      if (moreBssid) moreBssid.textContent = data.bssid || '--';
-      if (moreIp) moreIp.textContent = data.ip || '--';
-      if (updateTimestamp) updateTimestamp.textContent = data.timestamp || '--';
+      if (updateTimestamp) {
+        updateTimestamp.textContent = new Date().toLocaleTimeString();
+      }
     });
 
     listen('log-event', (event: any) => {
@@ -187,18 +195,25 @@ async function listenToRustEvents() {
         currentNetworkState = state;
         updateNetworkStatus(state);
 
-        const moreSsid = document.getElementById('more-ssid');
-        const moreBssid = document.getElementById('more-bssid');
-        const moreIp = document.getElementById('more-ip');
-        const updateTimestamp = document.getElementById('update-timestamp');
+        try {
+          const netInfo: any = await invoke('get_network_info');
+          const moreSsid = document.getElementById('more-ssid');
+          const moreBssid = document.getElementById('more-bssid');
+          const moreIp = document.getElementById('more-ip');
+          if (moreSsid) moreSsid.textContent = netInfo.ssid || '--';
+          if (moreBssid) moreBssid.textContent = netInfo.bssid || '--';
+          if (moreIp) moreIp.textContent = netInfo.ip || '--';
+        } catch (err) {
+          console.warn('Failed to query network info on start:', err);
+        }
 
-        if (moreSsid) moreSsid.textContent = currentState.ssid || '--';
-        if (moreBssid) moreBssid.textContent = currentState.bssid || '--';
-        if (moreIp) moreIp.textContent = currentState.ip || '--';
-        if (updateTimestamp) updateTimestamp.textContent = currentState.timestamp || '--';
+        const updateTimestamp = document.getElementById('update-timestamp');
+        if (updateTimestamp) {
+          updateTimestamp.textContent = new Date().toLocaleTimeString();
+        }
       }
     } catch (err) {
-      console.error('Failed to get current network state from Rust:', err);
+      console.error('Failed to get current network state from Rust on start:', err);
     }
 
     // Load initial countdown status
