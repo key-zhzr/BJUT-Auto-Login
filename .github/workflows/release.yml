@@ -16,22 +16,16 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            os: macos
             args: '--target aarch64-apple-darwin'
           - platform: 'macos-latest'
-            os: macos
             args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
-            os: linux
             args: ''
           - platform: 'windows-latest'
-            os: windows
             args: '--target x86_64-pc-windows-msvc'
           - platform: 'windows-latest'
-            os: windows
             args: '--target aarch64-pc-windows-msvc'
           - platform: 'windows-latest'
-            os: windows
             args: '--target x86_64-pc-windows-msvc -c tauri.offline.conf.json'
     runs-on: ${{ matrix.platform }}
     steps:
@@ -137,24 +131,20 @@ jobs:
           path: release-artifacts/*
 
   build-android-arm64:
-    runs-on: [self-hosted, macos]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Add Cargo to Path
-        shell: python
-        run: |
-          import os
-          cargo_bin = os.path.expanduser("~/.cargo/bin")
-          if os.path.exists(cargo_bin):
-              with open(os.environ['GITHUB_PATH'], 'a') as f:
-                  f.write(cargo_bin + '\n')
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
 
       - name: Setup Java
         uses: actions/setup-java@v3
@@ -162,17 +152,24 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        
+      - name: Setup NDK
+        run: echo "y" | sudo /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
+
       - name: Install NPM dependencies
         run: npm install
 
       - name: Build Tauri Android App
         env:
-          NDK_HOME: /Users/keyzhzr/Library/Android/sdk/ndk/27.0.12077973
-          ANDROID_HOME: /Users/keyzhzr/Library/Android/sdk
+          NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
         run: npm run tauri android build -- --target aarch64 --apk
 
       - name: Prepare APKs for signing
-        run: node -e "const fs = require('fs'); const path = require('path'); const out = 'apk-to-sign'; if (!fs.existsSync(out)) fs.mkdirSync(out); function walk(dir) { for (const f of fs.readdirSync(dir)) { const p = path.join(dir, f); if (fs.statSync(p).isDirectory()) walk(p); else if (f.endsWith('-unsigned.apk')) fs.copyFileSync(p, path.join(out, f)); } } walk('src-tauri/gen/android/app/build/outputs/apk');"
+        run: |
+          mkdir -p apk-to-sign
+          find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
 
       - name: Sign Android Release
         uses: ilharp/sign-android-release@v1
@@ -187,14 +184,7 @@ jobs:
 
       - name: Get version
         id: package-version
-        shell: python
-        run: |
-          import json
-          import os
-          with open('package.json') as f:
-              data = json.load(f)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"version={data['version']}\n")
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Rename and Prepare Android Assets
         shell: python
@@ -229,24 +219,20 @@ jobs:
           path: android-release/*.apk
 
   build-android-x86_64:
-    runs-on: [self-hosted, windows]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Add Cargo to Path
-        shell: python
-        run: |
-          import os
-          cargo_bin = os.path.expanduser("~/.cargo/bin")
-          if os.path.exists(cargo_bin):
-              with open(os.environ['GITHUB_PATH'], 'a') as f:
-                  f.write(cargo_bin + '\n')
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
 
       - name: Setup Java
         uses: actions/setup-java@v3
@@ -254,17 +240,24 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        
+      - name: Setup NDK
+        run: echo "y" | sudo /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
+
       - name: Install NPM dependencies
         run: npm install
 
       - name: Build Tauri Android App
         env:
-          NDK_HOME: C:\Users\keyzhzr\AppData\Local\Android\Sdk\ndk\27.0.12077973
-          ANDROID_HOME: C:\Users\keyzhzr\AppData\Local\Android\Sdk
+          NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
         run: npm run tauri android build -- --target x86_64 --apk
 
       - name: Prepare APKs for signing
-        run: node -e "const fs = require('fs'); const path = require('path'); const out = 'apk-to-sign'; if (!fs.existsSync(out)) fs.mkdirSync(out); function walk(dir) { for (const f of fs.readdirSync(dir)) { const p = path.join(dir, f); if (fs.statSync(p).isDirectory()) walk(p); else if (f.endsWith('-unsigned.apk')) fs.copyFileSync(p, path.join(out, f)); } } walk('src-tauri/gen/android/app/build/outputs/apk');"
+        run: |
+          mkdir -p apk-to-sign
+          find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
 
       - name: Sign Android Release
         uses: ilharp/sign-android-release@v1
@@ -279,14 +272,7 @@ jobs:
 
       - name: Get version
         id: package-version
-        shell: python
-        run: |
-          import json
-          import os
-          with open('package.json') as f:
-              data = json.load(f)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"version={data['version']}\n")
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Rename and Prepare Android Assets
         shell: python
