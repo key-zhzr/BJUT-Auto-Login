@@ -12,6 +12,9 @@ import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
+  private var appWebView: WebView? = null
+  private var resumedFromBackground = false
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
@@ -20,10 +23,23 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     UpdateHelper.resumePendingInstall(this)
+    if (resumedFromBackground) {
+      appWebView?.post {
+        appWebView?.evaluateJavascript("window.__showResumeMask?.()", null)
+      }
+      resumedFromBackground = false
+    }
+  }
+
+  override fun onPause() {
+    resumedFromBackground = true
+    super.onPause()
   }
 
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    appWebView = webView
+    webView.setBackgroundColor(android.graphics.Color.rgb(15, 23, 42))
     // Register JavaScript interface so frontend can call Android native methods directly
     webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
   }

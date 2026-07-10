@@ -2,7 +2,10 @@
     <!-- Base application theme. -->
     <style name="Theme.tauri_app" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Customize your theme here. -->
+        <item name="android:windowBackground">#0f172a</item>
         <item name="android:statusBarColor">#1a1f36</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">#0f172a</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>

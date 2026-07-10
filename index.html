@@ -10,6 +10,14 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   </head>
   <body>
+    <div id="app-loading-mask" class="app-loading-mask is-visible" role="status" aria-live="polite">
+      <div class="app-loading-card">
+        <div class="app-loading-logo"></div>
+        <div class="app-loading-spinner"></div>
+        <p id="app-loading-text">正在启动 BJUT-AL…</p>
+      </div>
+    </div>
+
     <!-- Custom Titlebar -->
     <div data-tauri-drag-region class="titlebar">
       <div class="titlebar-button" id="titlebar-minimize">

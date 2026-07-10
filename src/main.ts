@@ -19,6 +19,47 @@ const icons = {
   ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
 };
 
+let loadingMaskTimer: number | null = null;
+let appLaunchRevealed = false;
+let macosDockPolicyReady: Promise<void> = Promise.resolve();
+
+function setLoadingMaskVisible(visible: boolean, text = '正在启动 BJUT-AL…') {
+  const mask = document.getElementById('app-loading-mask');
+  const label = document.getElementById('app-loading-text');
+  if (!mask) return;
+  if (label) label.textContent = text;
+  mask.classList.toggle('is-visible', visible);
+  mask.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function showResumeMask() {
+  if (!appLaunchRevealed) return;
+  if (loadingMaskTimer !== null) window.clearTimeout(loadingMaskTimer);
+  setLoadingMaskVisible(true, '正在恢复网络状态…');
+  loadingMaskTimer = window.setTimeout(() => {
+    setLoadingMaskVisible(false);
+    loadingMaskTimer = null;
+  }, 260);
+}
+
+async function finishAppLaunch() {
+  if (appLaunchRevealed) return;
+  await macosDockPolicyReady;
+  await new Promise(resolve => window.setTimeout(resolve, 40));
+  appLaunchRevealed = true;
+  setLoadingMaskVisible(false);
+  if ((window as any).__TAURI__) {
+    await invoke('frontend_ready').catch(error => console.error('Failed to reveal main window:', error));
+  }
+}
+
+(window as any).__showResumeMask = showResumeMask;
+let documentWasHidden = document.hidden;
+document.addEventListener('visibilitychange', () => {
+  if (documentWasHidden && !document.hidden) showResumeMask();
+  documentWasHidden = document.hidden;
+});
+
 if (navigator.userAgent.includes('Mac OS X')) {
   document.body.classList.add('is-macos');
   
@@ -48,6 +89,54 @@ document.getElementById('titlebar-close')?.addEventListener('click', () => {
 // Credentials live only in memory in the WebView. Rust persists them in the OS credential store.
 let accountsCache: any[] = [];
 let configSyncQueue: Promise<void> = Promise.resolve();
+const LEGACY_ACCOUNTS_KEY = 'bjut_accounts';
+const LEGACY_XOR_KEY = 'bjut-al-secret-key-2026';
+
+function readLegacyAccounts(): any[] | null {
+  const raw = localStorage.getItem(LEGACY_ACCOUNTS_KEY);
+  if (raw === null) return null;
+  try {
+    const json = raw.trim().startsWith('[')
+      ? raw
+      : Array.from(atob(raw), (character, index) => String.fromCharCode(
+          character.charCodeAt(0) ^ LEGACY_XOR_KEY.charCodeAt(index % LEGACY_XOR_KEY.length),
+        )).join('');
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) return null;
+    return parsed
+      .map(account => ({
+        ...account,
+        user: account?.user ?? account?.username,
+        pass: account?.pass ?? account?.password,
+      }))
+      .filter(account => account && typeof account.user === 'string' && typeof account.pass === 'string')
+      .map((account, index) => ({
+        user: account.user,
+        pass: account.pass,
+        isDefault: account.isDefault ?? account.is_default ?? index === 0,
+        isDisabled: account.isDisabled ?? account.is_disabled ?? false,
+      }));
+  } catch (error) {
+    console.warn('Unable to decode legacy account storage:', error);
+    return null;
+  }
+}
+
+function mergeLegacyAccounts(current: any[], legacy: any[]): { accounts: any[], changed: boolean } {
+  if (current.length === 0 && legacy.length > 0) {
+    return { accounts: legacy.map(account => ({ ...account })), changed: true };
+  }
+  let changed = false;
+  const accounts = current.map(account => {
+    if (account.pass) return { ...account };
+    const legacyAccount = legacy.find(candidate => candidate.user === account.user && candidate.pass);
+    if (!legacyAccount) return { ...account };
+    changed = true;
+    return { ...account, pass: legacyAccount.pass };
+  });
+  return { accounts, changed };
+}
+
 function getAccounts(): any[] {
   return accountsCache;
 }
@@ -336,7 +425,11 @@ async function loadConfigFromRust() {
     const config: any = await invoke('get_app_config');
     if (!config) return;
 
-    accountsCache = config.accounts || [];
+    const legacyAccounts = readLegacyAccounts();
+    const merged = legacyAccounts === null
+      ? { accounts: config.accounts || [], changed: false }
+      : mergeLegacyAccounts(config.accounts || [], legacyAccounts);
+    accountsCache = merged.accounts;
     localStorage.setItem('bjut_auto_login', config.auto_login.toString());
     localStorage.setItem('bjut_check_interval', config.check_interval.toString());
     localStorage.setItem('bjut_check_interval_bg', config.check_interval_bg.toString());
@@ -357,6 +450,17 @@ async function loadConfigFromRust() {
     const settingCheckIntervalBg = document.getElementById('setting-check-interval-bg') as HTMLInputElement;
     if (settingCheckIntervalBg) {
       settingCheckIntervalBg.value = config.check_interval_bg.toString();
+    }
+
+    if (legacyAccounts !== null) {
+      try {
+        if (merged.changed) await syncConfigToRust();
+        localStorage.removeItem(LEGACY_ACCOUNTS_KEY);
+        if (merged.changed) log('配置', '旧版账号数据已迁移到系统安全存储', 'success');
+      } catch (error) {
+        // Keep the old value for a later retry. Never delete the only recoverable copy.
+        console.error('Failed to migrate legacy accounts:', error);
+      }
     }
     
     renderAccounts();
@@ -816,7 +920,7 @@ let countdownInterval: number | null = null;
 let isLoopSuspended = false;
 
 // Initialize
-function init() {
+async function init() {
   // Instantiate Custom Selects
   overrideAccountSelect = new CustomSelect('override-account');
   overrideMethodSelect = new CustomSelect('override-method');
@@ -921,19 +1025,23 @@ function init() {
           console.error('Failed to request foreground permissions:', e);
         });
       }
-      loadConfigFromRust().then(() => {
-        listenToRustEvents();
+      try {
+        await loadConfigFromRust();
+        await listenToRustEvents();
         log('系统', '应用启动');
         if ((window as any).AndroidBridge && autoLoginEnabled) {
           log('系统', '后台保活服务已启动');
         }
-      });
+      } catch (error) {
+        console.error('Failed to initialize persisted configuration:', error);
+      }
     } else {
       startWifiChangeCheckLoop();
       startConnectivityCheckLoop();
       log('系统', '应用启动');
     }
   }
+  await finishAppLaunch();
 }
 
 // Navigation
@@ -1124,15 +1232,19 @@ function setupEventListeners() {
   const settingMacosDock = document.getElementById('setting-macos-dock') as HTMLInputElement;
   if (settingMacosDock) {
     const dockEnabled = localStorage.getItem('bjut_macos_dock') !== 'false';
+    const isMacos = navigator.userAgent.includes('Mac OS X');
     settingMacosDock.checked = dockEnabled;
-    if ((window as any).__TAURI__) {
-      invoke('set_dock_visible', { visible: dockEnabled }).catch(e => console.error(e));
+    // Regular is already the default policy. Re-applying it while the hidden
+    // cold-start window is being created can make macOS deactivate the window.
+    if ((window as any).__TAURI__ && isMacos && !dockEnabled) {
+      macosDockPolicyReady = invoke<void>('set_dock_visible', { visible: false })
+        .catch(error => console.error('Failed to initialize macOS dock policy:', error));
     }
     settingMacosDock.addEventListener('change', async (e) => {
       const enabled = (e.target as HTMLInputElement).checked;
       localStorage.setItem('bjut_macos_dock', enabled.toString());
       log('设置', `已${enabled ? '启用' : '关闭'}在程序坞显示图标`);
-      if ((window as any).__TAURI__) {
+      if ((window as any).__TAURI__ && isMacos) {
         try {
           await invoke('set_dock_visible', { visible: enabled });
         } catch (err) {
@@ -2113,4 +2225,8 @@ async function checkNetworkSecurity(): Promise<boolean> {
 }
 
 // Start
-init();
+void init().catch(async error => {
+  console.error('Application initialization failed:', error);
+  await finishAppLaunch();
+  await customAlert(`应用初始化失败：${String(error)}`);
+});

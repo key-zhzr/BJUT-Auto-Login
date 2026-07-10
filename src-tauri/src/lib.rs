@@ -332,9 +332,37 @@ fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> 
             ActivationPolicy::Accessory
         };
         app.set_activation_policy(policy).map_err(|e| e.to_string())?;
+        if visible {
+            // Changing Accessory -> Regular is asynchronous in AppKit. Restore
+            // focus after the policy transition instead of during cold start.
+            let delayed_app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+                let main_thread_app = delayed_app.clone();
+                let _ = delayed_app.run_on_main_thread(move || {
+                    if let Some(window) = main_thread_app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                });
+            });
+        }
     }
     let _ = app;
     let _ = visible;
+    Ok(())
+}
+
+#[tauri::command]
+fn frontend_ready(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(window) = app.get_webview_window("main") {
+            window.show().map_err(|e| e.to_string())?;
+            window.set_focus().map_err(|e| e.to_string())?;
+        }
+    }
+    let _ = app;
     Ok(())
 }
 
@@ -473,11 +501,13 @@ use tauri::Manager;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct Account {
+    #[serde(alias = "username")]
     user: String,
+    #[serde(alias = "password")]
     pass: String,
-    #[serde(rename = "isDefault")]
+    #[serde(default, rename = "isDefault", alias = "is_default")]
     is_default: bool,
-    #[serde(rename = "isDisabled")]
+    #[serde(default, rename = "isDisabled", alias = "is_disabled")]
     is_disabled: Option<bool>,
 }
 
@@ -507,15 +537,15 @@ struct UpdateTarget {
 struct AppConfig {
     #[serde(default)]
     accounts: Vec<Account>,
-    #[serde(default = "default_auto_login")]
+    #[serde(default = "default_auto_login", alias = "autoLogin")]
     auto_login: bool,
-    #[serde(default = "default_check_interval")]
+    #[serde(default = "default_check_interval", alias = "checkInterval")]
     check_interval: i32,
-    #[serde(default = "default_check_interval_bg")]
+    #[serde(default = "default_check_interval_bg", alias = "checkIntervalBg")]
     check_interval_bg: i32,
-    #[serde(default = "default_wifi_change_detect")]
+    #[serde(default = "default_wifi_change_detect", alias = "wifiChangeDetect")]
     wifi_change_detect: bool,
-    #[serde(default = "default_log_level")]
+    #[serde(default = "default_log_level", alias = "logLevel")]
     log_level: String,
     #[serde(default)]
     whitelist: Vec<String>,
@@ -1150,6 +1180,26 @@ fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &st
     let _ = app.emit("log-event", entry);
 }
 
+fn merge_legacy_credentials(current: &mut AppConfig, legacy: &AppConfig) -> bool {
+    if current.accounts.is_empty() && !legacy.accounts.is_empty() {
+        current.accounts = legacy.accounts.clone();
+        return true;
+    }
+
+    let mut changed = false;
+    for account in &mut current.accounts {
+        if account.pass.is_empty() {
+            if let Some(legacy_account) = legacy.accounts.iter()
+                .find(|candidate| candidate.user == account.user && !candidate.pass.is_empty())
+            {
+                account.pass = legacy_account.pass.clone();
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 fn load_config(app: &tauri::AppHandle, state: &AppState) {
     let p = get_config_path(app);
     let disk_config = std::fs::read_to_string(p)
@@ -1157,8 +1207,25 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
         .and_then(|content| serde_json::from_str::<AppConfig>(&content).ok());
 
     match load_secure_config() {
-        Ok(Some(config)) => {
-            let _ = write_public_config(app, &config);
+        Ok(Some(mut config)) => {
+            let migrated = disk_config.as_ref()
+                .map(|legacy| merge_legacy_credentials(&mut config, legacy))
+                .unwrap_or(false);
+            let migration_persisted = if migrated {
+                if let Err(error) = save_secure_config(&config) {
+                    eprintln!("Unable to migrate legacy credentials into secure storage: {error}");
+                    false
+                } else {
+                    true
+                }
+            } else {
+                true
+            };
+            // Do not erase the legacy plaintext passwords until the secure copy
+            // has definitely been written; it may be the only recoverable copy.
+            if migration_persisted {
+                let _ = write_public_config(app, &config);
+            }
             *state.config.write().unwrap() = config;
         }
         Ok(None) => {
@@ -1172,7 +1239,14 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
                 *state.config.write().unwrap() = config;
             }
         }
-        Err(error) => eprintln!("Unable to read secure credentials: {error}"),
+        Err(error) => {
+            eprintln!("Unable to read secure credentials: {error}");
+            // Keep old installations usable even when the system credential store
+            // is temporarily unavailable. A later explicit save still has to pass.
+            if let Some(config) = disk_config {
+                *state.config.write().unwrap() = config;
+            }
+        }
     }
 }
 
@@ -1736,6 +1810,7 @@ pub fn run() {
             get_local_ip,
             exit_app,
             set_dock_visible,
+            frontend_ready,
             read_clipboard,
             write_clipboard,
             sync_config,
@@ -1809,5 +1884,35 @@ mod tests {
         let serialized = serde_json::to_string(&public_config(&config)).unwrap();
         assert!(!serialized.contains("secret"));
         assert_eq!(public_config(&config).accounts[0].pass, "");
+    }
+
+    #[test]
+    fn migrates_passwords_from_legacy_plaintext_config() {
+        let mut current: AppConfig = serde_json::from_str(r#"{
+            "accounts":[{"user":"20260001","pass":"","isDefault":true}]
+        }"#).unwrap();
+        let legacy: AppConfig = serde_json::from_str(r#"{
+            "accounts":[{"username":"20260001","password":"legacy-secret","is_default":true}],
+            "autoLogin":true,
+            "checkInterval":30
+        }"#).unwrap();
+
+        assert!(merge_legacy_credentials(&mut current, &legacy));
+        assert_eq!(current.accounts[0].pass, "legacy-secret");
+        assert!(legacy.auto_login);
+        assert_eq!(legacy.check_interval, 30);
+    }
+
+    #[test]
+    fn legacy_migration_never_overwrites_a_new_password() {
+        let mut current: AppConfig = serde_json::from_str(r#"{
+            "accounts":[{"user":"20260001","pass":"new-secret","isDefault":true}]
+        }"#).unwrap();
+        let legacy: AppConfig = serde_json::from_str(r#"{
+            "accounts":[{"user":"20260001","pass":"old-secret","isDefault":true}]
+        }"#).unwrap();
+
+        assert!(!merge_legacy_credentials(&mut current, &legacy));
+        assert_eq!(current.accounts[0].pass, "new-secret");
     }
 }
