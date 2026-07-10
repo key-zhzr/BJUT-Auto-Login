@@ -874,7 +874,8 @@ fn android_secure_config(value: Option<&str>) -> Result<Option<String>, String> 
     if result.is_null() {
         return Ok(None);
     }
-    let value = env.get_string(&JString::from(result)).map_err(|e| e.to_string())?;
+    let value_string = JString::from(result);
+    let value = env.get_string(&value_string).map_err(|e| e.to_string())?;
     let value: String = value.into();
     Ok((!value.is_empty()).then_some(value))
 }
