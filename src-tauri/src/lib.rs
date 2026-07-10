@@ -1009,7 +1009,11 @@ fn android_secure_config(value: Option<&str>) -> Result<Option<String>, String> 
         .map_err(|e| e.to_string())?;
     let mut env = vm.attach_current_thread_as_daemon().map_err(|e| e.to_string())?;
     let activity = unsafe { JObject::from_raw(context.context_jobject.cast()) };
-    let class = env.find_class("cn/edu/bjut/al/NetworkHelper").map_err(|e| e.to_string())?;
+    let class = tauri::wry::prelude::find_class(
+        &mut env,
+        &activity,
+        "cn.edu.bjut.al.NetworkHelper".into(),
+    ).map_err(|e| e.to_string())?;
 
     if let Some(value) = value {
         let value = env.new_string(value).map_err(|e| e.to_string())?;
@@ -1341,7 +1345,11 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
 
 #[tauri::command]
 fn sync_config(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>, config: AppConfig) -> Result<(), String> {
-    save_config(&app, &state, config)?;
+    if let Err(error) = save_config(&app, &state, config) {
+        rust_log(&app, &state, "配置", &format!("配置持久化失败: {error}"), "error");
+        return Err(error);
+    }
+    rust_log(&app, &state, "配置", "配置已写入安全存储", "debug");
     let is_bg = state.is_in_background.load(Ordering::SeqCst);
     let current_val = state.countdown.load(Ordering::SeqCst);
     let new_cfg = state.config.read().unwrap();

@@ -47,12 +47,22 @@ document.getElementById('titlebar-close')?.addEventListener('click', () => {
 
 // Credentials live only in memory in the WebView. Rust persists them in the OS credential store.
 let accountsCache: any[] = [];
+let configSyncQueue: Promise<void> = Promise.resolve();
 function getAccounts(): any[] {
   return accountsCache;
 }
-function saveAccounts(accs: any[]) {
+function saveAccounts(accs: any[]): Promise<void> {
   accountsCache = accs;
-  syncConfigToRust();
+  return syncConfigToRust();
+}
+
+function saveAccountsInBackground(accs: any[]) {
+  void saveAccounts(accs).catch(async error => {
+    console.error('Failed to persist accounts:', error);
+    await loadConfigFromRust();
+    renderAccounts();
+    await customAlert(`账号保存失败，已恢复上次保存的内容：${String(error)}`);
+  });
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -293,26 +303,31 @@ async function showUpdateDialog(
 
 function saveSetting(key: string, value: string) {
   localStorage.setItem(key, value);
-  syncConfigToRust();
+  void syncConfigToRust().catch(error => {
+    console.error(`Failed to persist setting ${key}:`, error);
+    void customAlert(`设置保存失败：${String(error)}`);
+  });
 }
 
-async function syncConfigToRust() {
-  if (!(window as any).__TAURI__) return;
-  try {
-    const config = {
-      accounts: getAccounts(),
-      auto_login: localStorage.getItem('bjut_auto_login') === 'true',
-      check_interval: parseInt(localStorage.getItem('bjut_check_interval') || '15', 10),
-      check_interval_bg: parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10),
-      wifi_change_detect: localStorage.getItem('bjut_wifi_change_detect') !== 'false',
-      log_level: localStorage.getItem('bjut_log_level') || 'info',
-      whitelist: JSON.parse(localStorage.getItem('bjut_whitelist') || '[]'),
-      blacklist: JSON.parse(localStorage.getItem('bjut_blacklist') || '[]')
-    };
-    await invoke('sync_config', { config });
-  } catch (e) {
-    console.error('Failed to sync config to Rust:', e);
-  }
+function syncConfigToRust(): Promise<void> {
+  if (!(window as any).__TAURI__) return Promise.resolve();
+  // Capture an immutable snapshot now. Serializing writes prevents an older,
+  // slower IPC call from overwriting a newer account edit.
+  const config = {
+    accounts: getAccounts().map(account => ({ ...account })),
+    auto_login: localStorage.getItem('bjut_auto_login') === 'true',
+    check_interval: parseInt(localStorage.getItem('bjut_check_interval') || '15', 10),
+    check_interval_bg: parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10),
+    wifi_change_detect: localStorage.getItem('bjut_wifi_change_detect') !== 'false',
+    log_level: localStorage.getItem('bjut_log_level') || 'info',
+    whitelist: JSON.parse(localStorage.getItem('bjut_whitelist') || '[]'),
+    blacklist: JSON.parse(localStorage.getItem('bjut_blacklist') || '[]')
+  };
+  const operation = configSyncQueue
+    .catch(() => {})
+    .then(() => invoke<void>('sync_config', { config }));
+  configSyncQueue = operation;
+  return operation;
 }
 
 async function loadConfigFromRust() {
@@ -948,23 +963,36 @@ function setupEventListeners() {
     addAccountForm.reset();
   });
 
-  addAccountForm.addEventListener('submit', (e) => {
+  addAccountForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const user = (document.getElementById('acc-username') as HTMLInputElement).value.trim();
     const pass = (document.getElementById('acc-password') as HTMLInputElement).value;
     
     if (user && pass) {
-      const accounts = getAccounts();
-      if (accounts.find((a:any) => a.user === user)) {
+      const previousAccounts = getAccounts();
+      if (previousAccounts.find((a:any) => a.user === user)) {
         customAlert('该账号已存在');
         return;
       }
-      accounts.push({ user, pass, isDefault: accounts.length === 0 });
-      saveAccounts(accounts);
-      renderAccounts();
-      addAccountForm.reset();
-      addModal.classList.add('hidden');
-      log('账号管理', `已添加账号: ${user}`);
+      const nextAccounts = [
+        ...previousAccounts.map(account => ({ ...account })),
+        { user, pass, isDefault: previousAccounts.length === 0 },
+      ];
+      const submitButton = addAccountForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (submitButton) submitButton.disabled = true;
+      try {
+        await saveAccounts(nextAccounts);
+        renderAccounts();
+        addAccountForm.reset();
+        addModal.classList.add('hidden');
+        log('账号管理', `已添加账号: ${user}`);
+      } catch (error) {
+        accountsCache = previousAccounts;
+        renderAccounts();
+        await customAlert(`添加账号失败，未保存任何更改：${String(error)}`);
+      } finally {
+        if (submitButton) submitButton.disabled = false;
+      }
     }
   });
 
@@ -1389,24 +1417,39 @@ function setupEventListeners() {
     editModal.classList.add('hidden');
   });
 
-  editAccountForm.addEventListener('submit', (e) => {
+  editAccountForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const index = parseInt(editAccIndex.value, 10);
     const user = editAccUsername.value.trim();
     const pass = editAccPassword.value;
 
     if (user && pass && !isNaN(index)) {
-      const accounts = getAccounts();
-      if (accounts.findIndex((a:any, i) => a.user === user && i !== index) !== -1) {
+      const previousAccounts = getAccounts();
+      if (!previousAccounts[index]) {
+        await customAlert('要修改的账号不存在，请刷新后重试。');
+        return;
+      }
+      if (previousAccounts.findIndex((a:any, i) => a.user === user && i !== index) !== -1) {
         customAlert('该账号名已存在');
         return;
       }
-      accounts[index].user = user;
-      accounts[index].pass = pass;
-      saveAccounts(accounts);
-      renderAccounts();
-      editModal.classList.add('hidden');
-      log('账号管理', `已修改账号: ${user}`);
+      const nextAccounts = previousAccounts.map((account, accountIndex) => accountIndex === index
+        ? { ...account, user, pass }
+        : { ...account });
+      const submitButton = editAccountForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (submitButton) submitButton.disabled = true;
+      try {
+        await saveAccounts(nextAccounts);
+        renderAccounts();
+        editModal.classList.add('hidden');
+        log('账号管理', `已修改并保存账号: ${user}`);
+      } catch (error) {
+        accountsCache = previousAccounts;
+        renderAccounts();
+        await customAlert(`修改账号失败，未保存任何更改：${String(error)}`);
+      } finally {
+        if (submitButton) submitButton.disabled = false;
+      }
     }
   });
 
@@ -1423,7 +1466,7 @@ function setupEventListeners() {
         if (index !== -1) {
           const accounts = getAccounts();
           accounts[index].isDisabled = !accounts[index].isDisabled;
-          saveAccounts(accounts);
+          saveAccountsInBackground(accounts);
           if (accounts[index].isDisabled) {
             parent.classList.add('disabled');
             log('账号管理', `已禁用账号: ${accounts[index].user}`);
@@ -1480,7 +1523,7 @@ function setupEventListeners() {
       const account = accounts.splice(index, 1)[0];
       accounts.unshift(account);
       accounts.forEach((a:any, i:any) => a.isDefault = (i === 0));
-      saveAccounts(accounts);
+      saveAccountsInBackground(accounts);
       
       // Move DOM element to top
       const itemToMove = accountsList.children[index] as HTMLElement;
@@ -1566,7 +1609,7 @@ function setupEventListeners() {
         if (accounts.length > 0 && !accounts.find((a:any) => a.isDefault)) {
           accounts[0].isDefault = true;
         }
-        saveAccounts(accounts);
+        saveAccountsInBackground(accounts);
         renderAccounts();
         deleteModal.classList.add('hidden');
       }
@@ -1614,7 +1657,7 @@ function setupEventListeners() {
           const accItem = accounts.splice(oldIndex, 1)[0];
           accounts.splice(newIndex, 0, accItem);
           accounts.forEach((a:any, i:number) => a.isDefault = (i === 0));
-          saveAccounts(accounts);
+          saveAccountsInBackground(accounts);
           
           // Update DOM in-place
           const domItems = accountsList.querySelectorAll('.account-item');
