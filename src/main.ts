@@ -1,6 +1,20 @@
-import { createIcons, icons } from 'lucide';
+import {
+  Activity, AlertCircle, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  ClipboardCopy, ClipboardPaste, Clock, createIcons, Edit2, Eye, FileText, GripVertical,
+  LayoutDashboard, Loader, LogIn, Minus, Plus, RefreshCw, Settings, ShieldAlert,
+  ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
+} from 'lucide';
 import Sortable from 'sortablejs';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+
+const icons = {
+  Activity, AlertCircle, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  ClipboardCopy, ClipboardPaste, Clock, Edit2, Eye, FileText, GripVertical,
+  LayoutDashboard, Loader, LogIn, Minus, Plus, RefreshCw, Settings, ShieldAlert,
+  ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
+};
 
 if (navigator.userAgent.includes('Mac OS X')) {
   document.body.classList.add('is-macos');
@@ -28,35 +42,58 @@ document.getElementById('titlebar-close')?.addEventListener('click', () => {
 });
 
 
-const ENCRYPT_KEY = 'bjut-al-secret-key-2026';
-function encrypt(text: string): string {
-  let res = '';
-  for(let i=0; i<text.length; i++) res += String.fromCharCode(text.charCodeAt(i) ^ ENCRYPT_KEY.charCodeAt(i % ENCRYPT_KEY.length));
-  return btoa(res);
-}
-function decrypt(base64: string): string {
-  let res = '';
-  try {
-    const text = atob(base64);
-    for(let i=0; i<text.length; i++) res += String.fromCharCode(text.charCodeAt(i) ^ ENCRYPT_KEY.charCodeAt(i % ENCRYPT_KEY.length));
-  } catch(e) {}
-  return res;
-}
+// Credentials live only in memory in the WebView. Rust persists them in the OS credential store.
+let accountsCache: any[] = [];
 function getAccounts(): any[] {
-  try {
-    const raw = localStorage.getItem('bjut_accounts');
-    if (!raw) return [];
-    if (raw.startsWith('[')) {
-      const parsed = JSON.parse(raw);
-      saveAccounts(parsed);
-      return parsed;
-    }
-    return JSON.parse(decrypt(raw));
-  } catch(e) { return []; }
+  return accountsCache;
 }
 function saveAccounts(accs: any[]) {
-  localStorage.setItem('bjut_accounts', encrypt(JSON.stringify(accs)));
+  accountsCache = accs;
   syncConfigToRust();
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), char => char.charCodeAt(0));
+}
+
+async function deriveExportKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptExport(data: unknown, passphrase: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveExportKey(passphrase, salt);
+  const plaintext = new TextEncoder().encode(JSON.stringify(data));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+  return JSON.stringify({ version: 2, salt: bytesToBase64(salt), iv: bytesToBase64(iv), ciphertext: bytesToBase64(new Uint8Array(ciphertext)) });
+}
+
+async function decryptExport(value: string, passphrase: string): Promise<any> {
+  const envelope = JSON.parse(value);
+  if (envelope.version !== 2 || !envelope.salt || !envelope.iv || !envelope.ciphertext) {
+    throw new Error('不是受支持的加密配置格式');
+  }
+  const key = await deriveExportKey(passphrase, base64ToBytes(envelope.salt));
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64ToBytes(envelope.iv) },
+    key,
+    base64ToBytes(envelope.ciphertext)
+  );
+  return JSON.parse(new TextDecoder().decode(plaintext));
 }
 
 function saveSetting(key: string, value: string) {
@@ -67,7 +104,6 @@ function saveSetting(key: string, value: string) {
 async function syncConfigToRust() {
   if (!(window as any).__TAURI__) return;
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
     const config = {
       accounts: getAccounts(),
       auto_login: localStorage.getItem('bjut_auto_login') === 'true',
@@ -87,13 +123,10 @@ async function syncConfigToRust() {
 async function loadConfigFromRust() {
   if (!(window as any).__TAURI__) return;
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
     const config: any = await invoke('get_app_config');
     if (!config) return;
-    
-    if (config.accounts && config.accounts.length > 0) {
-      localStorage.setItem('bjut_accounts', encrypt(JSON.stringify(config.accounts)));
-    }
+
+    accountsCache = config.accounts || [];
     localStorage.setItem('bjut_auto_login', config.auto_login.toString());
     localStorage.setItem('bjut_check_interval', config.check_interval.toString());
     localStorage.setItem('bjut_check_interval_bg', config.check_interval_bg.toString());
@@ -125,9 +158,6 @@ async function loadConfigFromRust() {
 async function listenToRustEvents() {
   if (!(window as any).__TAURI__) return;
   try {
-    const { listen } = await import('@tauri-apps/api/event');
-    const { invoke } = await import('@tauri-apps/api/core');
-
     listen('countdown-tick', (event: any) => {
       const data = event.payload;
       const countdownText = document.getElementById('countdown-text');
@@ -150,10 +180,17 @@ async function listenToRustEvents() {
       let state = NetworkState.Offline;
       if (data.state === 'Online') state = NetworkState.Online;
       else if (data.state === 'BjutCampus') state = NetworkState.BjutCampus;
+      const loginType = data.loginType === 'Type1_221_98' ? LoginType.Type1_221_98
+        : data.loginType === 'Type2_251_3' ? LoginType.Type2_251_3
+        : data.loginType === 'Type3_172_30' ? LoginType.Type3_172_30
+        : LoginType.Unknown;
       
       currentNetworkState = state;
-      updateNetworkStatus(state);
+      updateNetworkStatus(state, loginType);
       isChecking = false;
+      if (state === NetworkState.Online) {
+        updateUserInfo().catch(() => {});
+      }
 
       try {
         const netInfo: any = await invoke('get_network_info');
@@ -192,8 +229,15 @@ async function listenToRustEvents() {
         let state = NetworkState.Offline;
         if (currentState.state === 'Online') state = NetworkState.Online;
         else if (currentState.state === 'BjutCampus') state = NetworkState.BjutCampus;
+        const loginType = currentState.loginType === 'Type1_221_98' ? LoginType.Type1_221_98
+          : currentState.loginType === 'Type2_251_3' ? LoginType.Type2_251_3
+          : currentState.loginType === 'Type3_172_30' ? LoginType.Type3_172_30
+          : LoginType.Unknown;
         currentNetworkState = state;
-        updateNetworkStatus(state);
+        updateNetworkStatus(state, loginType);
+        if (state === NetworkState.Online) {
+          updateUserInfo().catch(() => {});
+        }
 
         try {
           const netInfo: any = await invoke('get_network_info');
@@ -345,7 +389,18 @@ function showListManageModal(title: string, list: string[], onSave: (list: strin
   createIcons({ icons });
 }
 
-import { checkInternet, detectLoginType, loginToCampusNetwork, fetchUserInfo, LoginType, NetworkState } from './network';
+enum NetworkState {
+  Online,
+  BjutCampus,
+  Offline
+}
+
+enum LoginType {
+  Type1_221_98,
+  Type2_251_3,
+  Type3_172_30,
+  Unknown
+}
 
 class CustomSelect {
   element: HTMLElement;
@@ -485,7 +540,6 @@ const editAccPassword = document.getElementById('edit-acc-password') as HTMLInpu
 // State
 
 let currentNetworkState = NetworkState.Offline;
-let currentLoginType = LoginType.Unknown;
 let autoLoginEnabled = localStorage.getItem('bjut_auto_login') === 'true';
 let checkInterval = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
 let isLoggingIn = false;
@@ -498,8 +552,6 @@ let wifiChangeDetectEnabled = localStorage.getItem('bjut_wifi_change_detect') !=
 let connectivityTimer: number | null = null;
 let secondsToNextCheck = 0;
 let countdownInterval: number | null = null;
-let lastCheckedNetworkId = '';
-let nonCampusCount = 0;
 let isLoopSuspended = false;
 
 // Initialize
@@ -562,13 +614,15 @@ function init() {
           if ((window as any).AndroidBridge) {
             (window as any).AndroidBridge.requestForegroundPermissions();
           } else {
-            const { invoke } = await import('@tauri-apps/api/core');
             await invoke('request_foreground_permissions');
           }
           log('系统', '已申请前台网络定位相关权限');
         } catch (e) {
           console.error('Failed to request foreground permissions:', e);
         }
+        // Load the secure backend configuration before the first sync so accepting the
+        // terms cannot overwrite an existing account set with the empty WebView cache.
+        await loadConfigFromRust();
         await syncConfigToRust();
         await listenToRustEvents();
         log('系统', '应用启动');
@@ -602,12 +656,8 @@ function init() {
           }
         }
       } else {
-        import('@tauri-apps/api/core').then(async ({ invoke }) => {
-          try {
-            await invoke('request_foreground_permissions');
-          } catch (e) {
-            console.error('Failed to request foreground permissions:', e);
-          }
+        invoke('request_foreground_permissions').catch(e => {
+          console.error('Failed to request foreground permissions:', e);
         });
       }
       loadConfigFromRust().then(() => {
@@ -675,9 +725,7 @@ function setupEventListeners() {
   btnClearLogs.addEventListener('click', () => {
     logsContent.innerHTML = '';
     if ((window as any).__TAURI__) {
-      import('@tauri-apps/api/core').then(({ invoke }) => {
-        invoke('clear_all_logs').catch(e => console.error(e));
-      });
+      invoke('clear_all_logs').catch(e => console.error(e));
     }
   });
 
@@ -782,9 +830,7 @@ function setupEventListeners() {
     const dockEnabled = localStorage.getItem('bjut_macos_dock') !== 'false';
     settingMacosDock.checked = dockEnabled;
     if ((window as any).__TAURI__) {
-      import('@tauri-apps/api/core').then(({ invoke }) => {
-        invoke('set_dock_visible', { visible: dockEnabled }).catch(e => console.error(e));
-      });
+      invoke('set_dock_visible', { visible: dockEnabled }).catch(e => console.error(e));
     }
     settingMacosDock.addEventListener('change', async (e) => {
       const enabled = (e.target as HTMLInputElement).checked;
@@ -792,7 +838,6 @@ function setupEventListeners() {
       log('设置', `已${enabled ? '启用' : '关闭'}在程序坞显示图标`);
       if ((window as any).__TAURI__) {
         try {
-          const { invoke } = await import('@tauri-apps/api/core');
           await invoke('set_dock_visible', { visible: enabled });
         } catch (err) {
           console.error('Failed to toggle macOS dock icon:', err);
@@ -851,7 +896,6 @@ function setupEventListeners() {
 
       if ((window as any).__TAURI__) {
         try {
-          const { invoke } = await import('@tauri-apps/api/core');
           await invoke('trigger_manual_check');
         } catch (err) {
           console.error('Failed to trigger manual check in Rust:', err);
@@ -885,7 +929,6 @@ function setupEventListeners() {
       if (confirm('确定要退出应用吗？这将彻底关闭后台网络自动登录服务。')) {
         if ((window as any).__TAURI__) {
           try {
-            const { invoke } = await import('@tauri-apps/api/core');
             await invoke('exit_app');
           } catch (e) {
             console.error('Failed to exit app:', e);
@@ -972,7 +1015,7 @@ function setupEventListeners() {
   if (btnManageWhitelist) {
     btnManageWhitelist.addEventListener('click', () => {
       const w = JSON.parse(localStorage.getItem('bjut_whitelist') || '[]');
-      showListManageModal('信任的 WiFi (白名单)', w, (newList) => localStorage.setItem('bjut_whitelist', JSON.stringify(newList)));
+      showListManageModal('信任的 WiFi (白名单)', w, (newList) => saveSetting('bjut_whitelist', JSON.stringify(newList)));
     });
   }
 
@@ -980,7 +1023,7 @@ function setupEventListeners() {
   if (btnManageBlacklist) {
     btnManageBlacklist.addEventListener('click', () => {
       const b = JSON.parse(localStorage.getItem('bjut_blacklist') || '[]');
-      showListManageModal('拒绝的 WiFi (黑名单)', b, (newList) => localStorage.setItem('bjut_blacklist', JSON.stringify(newList)));
+      showListManageModal('拒绝的 WiFi (黑名单)', b, (newList) => saveSetting('bjut_blacklist', JSON.stringify(newList)));
     });
   }
 
@@ -999,17 +1042,18 @@ function setupEventListeners() {
         blacklist: localStorage.getItem('bjut_blacklist'),
         moreOptions: localStorage.getItem('bjut_more_options')
       };
-      const encrypted = encrypt(JSON.stringify(config));
+      const passphrase = window.prompt('为导出的配置设置密码（请妥善保管）：');
+      if (!passphrase) return;
+      const encrypted = await encryptExport(config, passphrase);
       try {
         if ((window as any).AndroidBridge) {
           (window as any).AndroidBridge.setClipboardText(encrypted);
         } else if ((window as any).__TAURI__) {
-          const { invoke } = await import('@tauri-apps/api/core');
           await invoke('write_clipboard', { text: encrypted });
         } else {
           await navigator.clipboard.writeText(encrypted);
         }
-        customAlert('配置已加密并复制到剪贴板。');
+        customAlert('配置已使用你设置的密码加密并复制到剪贴板。');
       } catch (e) {
         customAlert('复制到剪贴板失败，请手动复制：\n' + encrypted);
       }
@@ -1023,7 +1067,6 @@ function setupEventListeners() {
         if ((window as any).AndroidBridge) {
           text = (window as any).AndroidBridge.getClipboardText();
         } else if ((window as any).__TAURI__) {
-          const { invoke } = await import('@tauri-apps/api/core');
           text = await invoke('read_clipboard');
         } else {
           text = await navigator.clipboard.readText();
@@ -1036,15 +1079,11 @@ function setupEventListeners() {
         const confirmResult = await customConfirm('导入配置将覆盖当前设置和账号，是否继续？');
         if (!confirmResult) return;
         
-        const decrypted = decrypt(text.trim());
-        if (!decrypted) {
-          customAlert('无效的配置数据或解密失败');
-          return;
-        }
-        
-        const config = JSON.parse(decrypted);
+        const passphrase = window.prompt('输入导出该配置时设置的密码：');
+        if (!passphrase) return;
+        const config = await decryptExport(text.trim(), passphrase);
         if (config.accounts) {
-          localStorage.setItem('bjut_accounts', encrypt(JSON.stringify(config.accounts)));
+          accountsCache = config.accounts;
         }
         if (config.autoLogin !== undefined && config.autoLogin !== null) localStorage.setItem('bjut_auto_login', config.autoLogin);
         if (config.checkInterval !== undefined && config.checkInterval !== null) localStorage.setItem('bjut_check_interval', config.checkInterval);
@@ -1352,9 +1391,7 @@ function setupEventListeners() {
 // Logging
 function log(module: string, message: string, type: 'info' | 'error' | 'success' | 'debug' = 'info') {
   if ((window as any).__TAURI__) {
-    import('@tauri-apps/api/core').then(({ invoke }) => {
-      invoke('log_from_js', { module, message, logType: type }).catch(() => {});
-    });
+    invoke('log_from_js', { module, message, logType: type }).catch(() => {});
     return;
   }
   renderLogEntry(module, message, type);
@@ -1426,7 +1463,6 @@ async function isAppInBackground(): Promise<boolean> {
     return document.hidden;
   }
   try {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const win = getCurrentWindow();
     const isVisible = await win.isVisible();
     const isMinimized = await win.isMinimized();
@@ -1437,6 +1473,7 @@ async function isAppInBackground(): Promise<boolean> {
 }
 
 function startWifiChangeCheckLoop() {
+  if ((window as any).__TAURI__) return;
   if (wifiChangeTimer) {
     clearTimeout(wifiChangeTimer);
     wifiChangeTimer = null;
@@ -1446,14 +1483,12 @@ function startWifiChangeCheckLoop() {
   const tick = async () => {
     if ((window as any).__TAURI__) {
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
         const currentIp: string = await invoke('get_local_ip');
         log('网络', `[DEBUG] 执行 Wi-Fi 变更检测。当前 IP: ${currentIp || '未分配'} (上次 IP: ${lastKnownIp || '空'})`, 'debug');
         if (currentIp) {
           if (lastKnownIp && currentIp !== lastKnownIp) {
             log('网络', `检测到局域网 IP 发生变更: ${lastKnownIp} -> ${currentIp}，重新检测网络环境...`);
             isLoopSuspended = false;
-            nonCampusCount = 0;
             await checkNetwork();
           }
           lastKnownIp = currentIp;
@@ -1471,6 +1506,7 @@ function startWifiChangeCheckLoop() {
 // Native keep-alive hook for Android: called from Kotlin Handler every 10s
 // to counteract Chromium's internal background timer throttling.
 (window as any).__nativeKeepAlive = () => {
+  if ((window as any).__TAURI__) return;
   // Re-kick the Wi-Fi change detection loop if its timer died
   if (wifiChangeDetectEnabled && !wifiChangeTimer) {
     startWifiChangeCheckLoop();
@@ -1482,6 +1518,7 @@ function startWifiChangeCheckLoop() {
 };
 
 function startConnectivityCheckLoop() {
+  if ((window as any).__TAURI__) return;
   if (connectivityTimer) {
     clearTimeout(connectivityTimer);
     connectivityTimer = null;
@@ -1504,7 +1541,6 @@ function startConnectivityCheckLoop() {
     if (!isBg && isLoopSuspended) {
       log('网络', '检测到已返回前台，恢复连通性检测...', 'info');
       isLoopSuspended = false;
-      nonCampusCount = 0;
       runCheck();
       return;
     }
@@ -1550,106 +1586,12 @@ function updateCountdownUI() {
 }
 
 async function checkNetwork() {
-  if (isLoggingIn || isChecking) return;
-  isChecking = true;
-
-  // Instantly reset the countdown timer so the UI keeps ticking without visual freeze
-  const isBg = await isAppInBackground();
-  const intervalFg = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
-  const intervalBg = parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10);
-  secondsToNextCheck = isBg ? intervalBg : intervalFg;
-  updateCountdownUI();
-
-  log('网络', `[DEBUG] 开始检测网络连通性 (模式: ${isBg ? '后台' : '前台'})`, 'debug');
-
-  // Run network info fetch and internet check in PARALLEL to cut total time
-  const networkInfoPromise = (async () => {
-    const settingMoreOptions = document.getElementById('setting-more-options') as HTMLInputElement;
-    if (!isBg && settingMoreOptions && settingMoreOptions.checked && (window as any).__TAURI__) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const netInfo: { ssid: string, bssid: string, ip: string } = await invoke('get_network_info');
-        const moreSsid = document.getElementById('more-ssid');
-        const moreBssid = document.getElementById('more-bssid');
-        const moreIp = document.getElementById('more-ip');
-        if (moreSsid) moreSsid.textContent = netInfo.ssid || '--';
-        if (moreBssid) moreBssid.textContent = netInfo.bssid || '--';
-        if (moreIp) moreIp.textContent = netInfo.ip || '--';
-        log('网络', `[DEBUG] 前台拉取详细 SSID 信息成功: SSID=${netInfo.ssid}, BSSID=${netInfo.bssid}, IP=${netInfo.ip}`, 'debug');
-      } catch (e) {
-        console.warn('Failed to get network info for UI:', e);
-      }
-    }
-  })();
-
+  if (!(window as any).__TAURI__) return;
   try {
-    // checkInternet runs concurrently with networkInfoPromise
-    const [isInternetOk] = await Promise.all([checkInternet(), networkInfoPromise]);
-    log('网络', `[DEBUG] 互联网可用性检测结果: ${isInternetOk ? '连通 (Online)' : '断开/受限'}`, 'debug');
-
-    if (isInternetOk) {
-      updateNetworkStatus(NetworkState.Online);
-      await updateUserInfo();
-    } else {
-      const loginType = await detectLoginType();
-      log('网络', `[DEBUG] 检测到校园网环境判定: ${loginType !== LoginType.Unknown ? `需要登录认证 (${loginType})` : '非校园网/完全离线'}`, 'debug');
-      if (loginType !== LoginType.Unknown) {
-        updateNetworkStatus(NetworkState.BjutCampus, loginType);
-        currentLoginType = loginType;
-        
-        if (autoLoginEnabled && !isLoggingIn) {
-          log('网络', '检测到校园网，准备自动登录');
-          manualLogin();
-        }
-      } else {
-        updateNetworkStatus(NetworkState.Offline);
-      }
-    }
-
-    // Power-saving suspension checks under same background Wi-Fi
-    if (isBg) {
-      if (currentNetworkState !== NetworkState.BjutCampus) {
-        if (lastKnownIp && lastKnownIp === lastCheckedNetworkId) {
-          nonCampusCount++;
-          log('网络', `[DEBUG] 后台检测为非校园网环境，当前连续次数: ${nonCampusCount}/5`, 'debug');
-        } else {
-          lastCheckedNetworkId = lastKnownIp;
-          nonCampusCount = 1;
-        }
-        if (nonCampusCount >= 5) {
-          isLoopSuspended = true;
-          log('网络', '同一Wi-Fi下连续5次判定为非校园网，自动休眠后台自动检测。网络环境变化或返回前台后自动恢复。', 'info');
-        }
-      } else {
-        nonCampusCount = 0;
-        isLoopSuspended = false;
-      }
-    } else {
-      nonCampusCount = 0;
-      isLoopSuspended = false;
-    }
-  } catch (err) {
-    console.error('Check network error:', err);
-  } finally {
-    isChecking = false;
-    // Update last check timestamp on UI
-    const updateTimestamp = document.getElementById('update-timestamp');
-    if (updateTimestamp) {
-      updateTimestamp.textContent = new Date().toLocaleTimeString();
-    }
-    updateCountdownUI();
+    await invoke('trigger_manual_check');
+  } catch (error) {
+    console.error('Failed to request native network check:', error);
   }
-}
-
-// Listen to Rust background trigger
-import { listen } from '@tauri-apps/api/event';
-if ((window as any).__TAURI__) {
-  listen('trigger-auto-login', () => {
-    log('系统', '收到系统底层网络连通事件触发');
-    if (autoLoginEnabled && !isLoggingIn) {
-      manualLogin();
-    }
-  });
 }
 
 function updateNetworkStatus(state: NetworkState, type?: LoginType) {
@@ -1684,7 +1626,7 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType) {
 }
 
 async function updateUserInfo() {
-  const info = await fetchUserInfo(lastKnownIp);
+  const info: { account: string, balance: string, flow: string } | null = await invoke('get_user_info', { localIp: lastKnownIp || null });
   if (info) {
     infoAccount.textContent = info.account;
     infoBalance.textContent = info.balance;
@@ -1702,8 +1644,7 @@ async function manualLogin() {
     return;
   }
   
-  const accounts = getAccounts();
-  if (accounts.length === 0) {
+  if (getAccounts().length === 0) {
     customAlert('请先在账号管理中添加账号');
     return;
   }
@@ -1729,41 +1670,29 @@ async function manualLogin() {
   let overrideAcc = overrideAccountSelect?.value || 'auto';
   let overrideMethod = overrideMethodSelect?.value || 'auto';
   
-  // map overrideMethod to LoginType if not auto
-  let targetLoginType = currentLoginType;
-  if (overrideMethod === 'bjut-wifi') targetLoginType = LoginType.Type1_221_98; // assuming
-  else if (overrideMethod === 'bjut_sushe') targetLoginType = LoginType.Type2_251_3;
-  else if (overrideMethod === 'wired') targetLoginType = LoginType.Type3_172_30;
-
-  let success = false;
-  let targetAccounts = accounts.filter(a => !a.isDisabled);
-  if (overrideAcc !== 'auto' && overrideAcc !== 'add') {
-    const idx = parseInt(overrideAcc, 10);
-    if (accounts[idx]) targetAccounts = [accounts[idx]];
-  }
-
-  for (let acc of targetAccounts) {
-    log('登录', `尝试使用账号 ${acc.user} 登录...`);
-    const result = await loginToCampusNetwork(targetLoginType, acc.user, acc.pass);
-    if (result.success) {
-      log('登录', '登录成功！', 'success');
-      success = true;
-      break;
-    } else {
-      log('登录', `登录失败: ${result.msg}`, 'error');
+  const accountIndex = overrideAcc !== 'auto' && overrideAcc !== 'add' ? parseInt(overrideAcc, 10) : null;
+  try {
+    const result: { success: boolean, message: string } = await invoke('manual_login', {
+      accountIndex: Number.isNaN(accountIndex) ? null : accountIndex,
+      loginTypeOverride: overrideMethod === 'auto' ? null : overrideMethod
+    });
+    if (!result.success) {
+      log('登录', `登录失败: ${result.message}`, 'error');
+      btnLogin.disabled = false;
+      btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
+      return;
     }
-  }
-
-  if (success) {
     btnLogin.innerHTML = '<i data-lucide="check"></i> 已连接';
     updateNetworkStatus(NetworkState.Online);
     setTimeout(updateUserInfo, 2000);
-  } else {
+  } catch (error) {
+    log('登录', `登录请求失败: ${String(error)}`, 'error');
     btnLogin.disabled = false;
     btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
+  } finally {
+    createIcons({ icons });
+    isLoggingIn = false;
   }
-  createIcons({ icons });
-  isLoggingIn = false;
 }
 
 let campusSubnets: Set<string> | null = null;
@@ -1784,7 +1713,6 @@ async function loadSubnets() {
 }
 
 async function checkNetworkSecurity(): Promise<boolean> {
-  const { invoke } = await import('@tauri-apps/api/core');
   if (!(window as any).__TAURI__) return true; 
 
   try {

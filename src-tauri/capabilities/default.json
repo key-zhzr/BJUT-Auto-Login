@@ -14,23 +14,6 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "opener:default",
-    {
-      "identifier": "http:default",
-      "allow": [
-        {
-          "url": "http://**"
-        },
-        {
-          "url": "https://**"
-        },
-        {
-          "url": "http://*/*"
-        },
-        {
-          "url": "http://*:*/**"
-        }
-      ]
-    },
     "notification:default",
     "autostart:default"
   ]

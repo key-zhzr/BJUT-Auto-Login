@@ -2,11 +2,42 @@ package cn.edu.bjut.al
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import java.net.NetworkInterface
 import java.net.Inet4Address
 
 class NetworkHelper {
     companion object {
+        private const val SECURE_PREFS = "bjut_al_secure_config"
+        private const val SECURE_CONFIG_KEY = "config"
+
+        private fun securePreferences(context: Context) = EncryptedSharedPreferences.create(
+            context,
+            SECURE_PREFS,
+            MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+
+        @JvmStatic
+        fun getSecureConfig(context: Context): String {
+            return try {
+                securePreferences(context.applicationContext).getString(SECURE_CONFIG_KEY, "") ?: ""
+            } catch (e: Exception) {
+                ""
+            }
+        }
+
+        @JvmStatic
+        fun setSecureConfig(context: Context, value: String): Boolean {
+            return try {
+                securePreferences(context.applicationContext).edit().putString(SECURE_CONFIG_KEY, value).commit()
+            } catch (e: Exception) {
+                false
+            }
+        }
+
         @JvmStatic
         fun getNetworkInfo(context: Context): String {
             try {

@@ -23,7 +23,6 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["time", "rt-multi-thread"] }
-tauri-plugin-http = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -38,3 +37,4 @@ jni = "0.21.1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = "3.4.0"
+keyring = "3"

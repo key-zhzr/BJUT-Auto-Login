@@ -481,6 +481,19 @@ struct Account {
     is_disabled: Option<bool>,
 }
 
+#[derive(serde::Serialize)]
+struct ManualLoginResult {
+    success: bool,
+    message: String,
+}
+
+#[derive(serde::Serialize)]
+struct UserInfo {
+    account: String,
+    balance: String,
+    flow: String,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct AppConfig {
     #[serde(default)]
@@ -534,6 +547,17 @@ enum LoginType {
     Type2, // 10.21.251.3 (drcom)
     Type3, // lgn.bjut.edu.cn
     Unknown,
+}
+
+impl LoginType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Type1 => "Type1_221_98",
+            Self::Type2 => "Type2_251_3",
+            Self::Type3 => "Type3_172_30",
+            Self::Unknown => "Unknown",
+        }
+    }
 }
 
 fn url_encode(input: &str) -> String {
@@ -713,6 +737,61 @@ async fn login_to_campus_network_rust(
     }
 }
 
+async fn fetch_user_info_rust(local_ip: Option<&str>) -> Option<UserInfo> {
+    if let Some(ip) = local_ip {
+        if !ip.starts_with("10.") && !ip.starts_with("172.") {
+            return None;
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(1500))
+        .build()
+        .ok()?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let url = format!(
+        "http://172.30.201.2:801/eportal/portal/page/loadUserInfo?callback=726427262624&lang=6c7e3b7578&program_index=79225954737327212323222f212e2723&page_index=755e577b7c4e27212323222f212e2320&user_account=&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=262626262626262626262626&jsVersion=22384e&encrypt=1&v={:04}&lang=zh",
+        nanos % 9000 + 1000
+    );
+    let text = client.get(url).send().await.ok()?.text().await.ok()?;
+    let start = text.find('(')?;
+    let end = text.rfind(')')?;
+    let data: serde_json::Value = serde_json::from_str(&text[start + 1..end]).ok()?;
+    let info = data.get("user_info")?;
+    let package_name = info.get("package_group_name").and_then(|v| v.as_str()).unwrap_or("");
+    let total_flow = if package_name.contains("Test") {
+        None
+    } else if package_name.contains("10元") {
+        Some(60.0)
+    } else if package_name.contains("20元") {
+        Some(120.0)
+    } else if package_name.contains("30元") {
+        Some(180.0)
+    } else if package_name.contains("60元") {
+        Some(400.0)
+    } else {
+        Some(30.0)
+    };
+    let used_raw = info.get("use_flow").and_then(|v| v.as_str()).unwrap_or("0GB");
+    let mut used = used_raw
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .collect::<String>()
+        .parse::<f64>()
+        .unwrap_or(0.0);
+    if used_raw.contains("MB") {
+        used /= 1024.0;
+    }
+    Some(UserInfo {
+        account: info.get("account").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        balance: info.get("balance").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        flow: total_flow.map(|total| format!("{:.2} GB", total - used)).unwrap_or_else(|| "无限".to_string()),
+    })
+}
+
 fn show_native_notification(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     app.notification()
@@ -735,6 +814,87 @@ fn get_log_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     let _ = std::fs::create_dir_all(&p);
     p.push("app.log");
     p
+}
+
+fn public_config(config: &AppConfig) -> AppConfig {
+    let mut public = config.clone();
+    for account in &mut public.accounts {
+        account.pass.clear();
+    }
+    public
+}
+
+#[cfg(not(target_os = "android"))]
+fn load_secure_config() -> Result<Option<AppConfig>, String> {
+    let entry = keyring::Entry::new("cn.edu.bjut.al", "app-config").map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(serialized) => serde_json::from_str(&serialized).map(Some).map_err(|e| e.to_string()),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn save_secure_config(config: &AppConfig) -> Result<(), String> {
+    let entry = keyring::Entry::new("cn.edu.bjut.al", "app-config").map_err(|e| e.to_string())?;
+    let serialized = serde_json::to_string(config).map_err(|e| e.to_string())?;
+    entry.set_password(&serialized).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "android")]
+fn android_secure_config(value: Option<&str>) -> Result<Option<String>, String> {
+    use jni::objects::{JObject, JString, JValue};
+
+    let context = tauri::tao::platform::android::prelude::main_android_context()
+        .ok_or_else(|| "Android context is unavailable".to_string())?;
+    let vm = unsafe { jni::JavaVM::from_raw(context.java_vm.cast()) }
+        .map_err(|e| e.to_string())?;
+    let mut env = vm.attach_current_thread_as_daemon().map_err(|e| e.to_string())?;
+    let activity = unsafe { JObject::from_raw(context.context_jobject.cast()) };
+    let class = env.find_class("cn/edu/bjut/al/NetworkHelper").map_err(|e| e.to_string())?;
+
+    if let Some(value) = value {
+        let value = env.new_string(value).map_err(|e| e.to_string())?;
+        let value_object = JObject::from(value);
+        let saved = env.call_static_method(
+            class,
+            "setSecureConfig",
+            "(Landroid/content/Context;Ljava/lang/String;)Z",
+            &[JValue::Object(&activity), JValue::Object(&value_object)],
+        ).map_err(|e| e.to_string())?.z().map_err(|e| e.to_string())?;
+        return if saved { Ok(None) } else { Err("Android Keystore refused the configuration".to_string()) };
+    }
+
+    let result = env.call_static_method(
+        class,
+        "getSecureConfig",
+        "(Landroid/content/Context;)Ljava/lang/String;",
+        &[JValue::Object(&activity)],
+    ).map_err(|e| e.to_string())?.l().map_err(|e| e.to_string())?;
+    if result.is_null() {
+        return Ok(None);
+    }
+    let value = env.get_string(&JString::from(result)).map_err(|e| e.to_string())?;
+    let value: String = value.into();
+    Ok((!value.is_empty()).then_some(value))
+}
+
+#[cfg(target_os = "android")]
+fn load_secure_config() -> Result<Option<AppConfig>, String> {
+    android_secure_config(None)?
+        .map(|serialized| serde_json::from_str(&serialized).map_err(|e| e.to_string()))
+        .transpose()
+}
+
+#[cfg(target_os = "android")]
+fn save_secure_config(config: &AppConfig) -> Result<(), String> {
+    let serialized = serde_json::to_string(config).map_err(|e| e.to_string())?;
+    android_secure_config(Some(&serialized)).map(|_| ())
+}
+
+fn write_public_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(&public_config(config)).map_err(|e| e.to_string())?;
+    std::fs::write(get_config_path(app), content).map_err(|e| e.to_string())
 }
 
 fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &str, log_type: &str) {
@@ -780,25 +940,38 @@ fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &st
 
 fn load_config(app: &tauri::AppHandle, state: &AppState) {
     let p = get_config_path(app);
-    if p.exists() {
-        if let Ok(content) = std::fs::read_to_string(p) {
-            if let Ok(cfg) = serde_json::from_str::<AppConfig>(&content) {
-                let mut state_cfg = state.config.write().unwrap();
-                *state_cfg = cfg;
+    let disk_config = std::fs::read_to_string(p)
+        .ok()
+        .and_then(|content| serde_json::from_str::<AppConfig>(&content).ok());
+
+    match load_secure_config() {
+        Ok(Some(config)) => {
+            let _ = write_public_config(app, &config);
+            *state.config.write().unwrap() = config;
+        }
+        Ok(None) => {
+            if let Some(config) = disk_config {
+                // Migrate legacy plaintext configurations once the system credential store is available.
+                if config.accounts.iter().any(|account| !account.pass.is_empty()) {
+                    if let Err(error) = save_secure_config(&config).and_then(|_| write_public_config(app, &config)) {
+                        eprintln!("Unable to migrate credentials to secure storage: {error}");
+                    }
+                }
+                *state.config.write().unwrap() = config;
             }
         }
+        Err(error) => eprintln!("Unable to read secure credentials: {error}"),
     }
 }
 
-fn save_config(app: &tauri::AppHandle, state: &AppState, new_cfg: AppConfig) {
+fn save_config(app: &tauri::AppHandle, state: &AppState, new_cfg: AppConfig) -> Result<(), String> {
+    save_secure_config(&new_cfg)?;
+    write_public_config(app, &new_cfg)?;
     {
         let mut state_cfg = state.config.write().unwrap();
         *state_cfg = new_cfg.clone();
     }
-    let p = get_config_path(app);
-    if let Ok(content) = serde_json::to_string_pretty(&new_cfg) {
-        let _ = std::fs::write(p, content);
-    }
+    Ok(())
 }
 
 async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
@@ -826,9 +999,10 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
 
         rust_log(&app, &state, "网络", &format!("[DEBUG] {}拉取详细 SSID 信息成功: SSID={}, BSSID={}, IP={}", if is_bg { "后台" } else { "前台" }, current_ssid, current_bssid, current_ip), "debug");
 
-        let make_payload = |state_str: &str| {
+        let make_payload = |state_str: &str, login_type: Option<&LoginType>| {
             serde_json::json!({
                 "state": state_str,
+                "loginType": login_type.map(LoginType::as_str),
                 "ssid": current_ssid.clone(),
                 "bssid": current_bssid.clone(),
                 "ip": current_ip.clone(),
@@ -842,7 +1016,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
         if is_online {
             rust_log(&app, &state, "网络", "网络检测完毕: 互联网已连通 (Online)", "info");
             state.is_checking.store(false, Ordering::SeqCst);
-            let payload = make_payload("Online");
+            let payload = make_payload("Online", None);
             {
                 let mut last_state = state.last_network_state.lock().unwrap();
                 *last_state = payload.clone();
@@ -857,7 +1031,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
         match login_type {
             LoginType::Unknown => {
                 rust_log(&app, &state, "网络", "网络检测完毕: 离线或非校园网 (Offline)", "info");
-                let payload = make_payload("Offline");
+                let payload = make_payload("Offline", None);
                 {
                     let mut last_state = state.last_network_state.lock().unwrap();
                     *last_state = payload.clone();
@@ -866,6 +1040,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
             }
             _ => {
                 rust_log(&app, &state, "网络", &format!("检测到校园网登录页面 (登录类型: {:?})", login_type), "info");
+                let mut login_succeeded = false;
                 let auto_login_enabled = {
                     let cfg = state.config.read().unwrap();
                     cfg.auto_login
@@ -905,6 +1080,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
                                         rust_log(&app, &state, "网络", &format!("登录成功: {}", msg), "success");
                                         let _ = show_native_notification(&app, "自动登录成功", &format!("账号: {}", acc.user));
                                         success = true;
+                                        login_succeeded = true;
                                         break;
                                     }
                                     Ok((false, msg)) => {
@@ -931,7 +1107,11 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
                         state.is_suspended.store(true, Ordering::SeqCst);
                     }
                 }
-                let payload = make_payload("BjutCampus");
+                let payload = if login_succeeded {
+                    make_payload("Online", None)
+                } else {
+                    make_payload("BjutCampus", Some(&login_type))
+                };
                 {
                     let mut last_state = state.last_network_state.lock().unwrap();
                     *last_state = payload.clone();
@@ -944,8 +1124,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
 }
 
 #[tauri::command]
-fn sync_config(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>, config: AppConfig) {
-    save_config(&app, &state, config);
+fn sync_config(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>, config: AppConfig) -> Result<(), String> {
+    save_config(&app, &state, config)?;
     let is_bg = state.is_in_background.load(Ordering::SeqCst);
     let current_val = state.countdown.load(Ordering::SeqCst);
     let new_cfg = state.config.read().unwrap();
@@ -953,6 +1133,7 @@ fn sync_config(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>, config
     if current_val > new_interval {
         state.countdown.store(new_interval, Ordering::SeqCst);
     }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1001,6 +1182,66 @@ fn trigger_manual_check(app: tauri::AppHandle, state: tauri::State<Arc<AppState>
     tauri::async_runtime::spawn(async move {
         trigger_network_check(app_clone, state_clone).await;
     });
+}
+
+#[tauri::command]
+async fn manual_login(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    account_index: Option<usize>,
+    login_type_override: Option<String>,
+) -> Result<ManualLoginResult, String> {
+    let detected_type = detect_login_type_rust().await;
+    let login_type = match login_type_override.as_deref() {
+        Some("bjut-wifi") => LoginType::Type1,
+        Some("bjut_sushe") => LoginType::Type2,
+        Some("wired") => LoginType::Type3,
+        _ => detected_type,
+    };
+    if login_type == LoginType::Unknown {
+        return Ok(ManualLoginResult { success: false, message: "未检测到校园网登录页面".to_string() });
+    }
+
+    let configured_accounts = state.config.read().unwrap().accounts.clone();
+    let accounts: Vec<Account> = match account_index {
+        Some(index) => configured_accounts.get(index).cloned().into_iter().collect(),
+        None => configured_accounts,
+    }.into_iter().filter(|account| !account.is_disabled.unwrap_or(false)).collect();
+    if accounts.is_empty() {
+        return Ok(ManualLoginResult { success: false, message: "未配置可用账号".to_string() });
+    }
+
+    for account in accounts {
+        if account.pass.is_empty() {
+            rust_log(&app, &state, "登录", &format!("账号 {} 缺少已保存的密码", account.user), "error");
+            continue;
+        }
+        rust_log(&app, &state, "登录", &format!("尝试使用账号 {} 登录...", account.user), "info");
+        match login_to_campus_network_rust(login_type.clone(), &account.user, &account.pass).await {
+            Ok((true, message)) => {
+                rust_log(&app, &state, "登录", &format!("登录成功: {message}"), "success");
+                let net_info = get_network_info(app.clone());
+                let payload = serde_json::json!({
+                    "state": "Online",
+                    "ssid": net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or(""),
+                    "bssid": net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or(""),
+                    "ip": net_info.get("ip").and_then(|v| v.as_str()).unwrap_or(""),
+                    "timestamp": chrono::Local::now().format("%H:%M:%S").to_string()
+                });
+                *state.last_network_state.lock().unwrap() = payload.clone();
+                let _ = app.emit("network-state-change", payload);
+                return Ok(ManualLoginResult { success: true, message });
+            }
+            Ok((false, message)) => rust_log(&app, &state, "登录", &format!("登录失败: {message}"), "error"),
+            Err(error) => rust_log(&app, &state, "登录", &format!("请求出错: {error}"), "error"),
+        }
+    }
+    Ok(ManualLoginResult { success: false, message: "所有可用账号均未能登录".to_string() })
+}
+
+#[tauri::command]
+async fn get_user_info(local_ip: Option<String>) -> Option<UserInfo> {
+    fetch_user_info_rust(local_ip.as_deref()).await
 }
 
 #[tauri::command]
@@ -1266,7 +1507,6 @@ pub fn run() {
     #[allow(unused_mut)]
     let mut builder = builder
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init());
 
     #[cfg(desktop)]
@@ -1294,6 +1534,8 @@ pub fn run() {
             clear_all_logs,
             get_countdown_status,
             trigger_manual_check,
+            manual_login,
+            get_user_info,
             log_from_js,
             set_background_state,
             get_current_network_state
@@ -1315,4 +1557,44 @@ pub fn run() {
         let _ = app_handle;
         let _ = event;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodes_portal_query_values() {
+        assert_eq!(url_encode("a b@北工大"), "a%20b%40%E5%8C%97%E5%B7%A5%E5%A4%A7");
+    }
+
+    #[test]
+    fn parses_success_and_failure_portal_responses() {
+        assert_eq!(parse_dr_response("dr1003({\"result\":1})"), (true, "Portal协议认证成功！".to_string()));
+        assert_eq!(parse_dr_response("dr1002({\"result\":0,\"msga\":\"密码错误\"})"), (false, "密码错误".to_string()));
+        assert_eq!(parse_dr_response("not json"), (false, "解析响应数据失败".to_string()));
+    }
+
+    #[test]
+    fn extracts_v6ip_from_both_html_quote_styles() {
+        assert_eq!(find_v6ip("<input name=\"v6ip\" value=\"2001:db8::1\">"), "2001:db8::1");
+        assert_eq!(find_v6ip("<input name='v6ip' value='2001:db8::2'>"), "2001:db8::2");
+    }
+
+    #[test]
+    fn public_config_never_contains_passwords() {
+        let config = AppConfig {
+            accounts: vec![Account { user: "20260001".to_string(), pass: "secret".to_string(), is_default: true, is_disabled: None }],
+            auto_login: true,
+            check_interval: 15,
+            check_interval_bg: 60,
+            wifi_change_detect: true,
+            log_level: "info".to_string(),
+            whitelist: vec![],
+            blacklist: vec![],
+        };
+        let serialized = serde_json::to_string(&public_config(&config)).unwrap();
+        assert!(!serialized.contains("secret"));
+        assert_eq!(public_config(&config).accounts[0].pass, "");
+    }
 }
