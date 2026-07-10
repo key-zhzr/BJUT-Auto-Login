@@ -343,6 +343,45 @@ function customConfirm(text: string, title = '确认'): Promise<boolean> {
     modal.classList.remove('hidden');
   });
 }
+
+function customPasswordPrompt(text: string, title = '配置密码'): Promise<string | null> {
+  return new Promise(resolve => {
+    const modal = document.getElementById('password-prompt-modal');
+    const form = document.getElementById('password-prompt-form') as HTMLFormElement | null;
+    const input = document.getElementById('password-prompt-input') as HTMLInputElement | null;
+    const cancelButton = document.getElementById('btn-password-prompt-cancel');
+    if (!modal || !form || !input || !cancelButton) {
+      resolve(null);
+      return;
+    }
+
+    document.getElementById('password-prompt-title')!.textContent = title;
+    document.getElementById('password-prompt-text')!.textContent = text;
+    input.value = '';
+
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      form.removeEventListener('submit', onSubmit);
+      cancelButton.removeEventListener('click', onCancel);
+    };
+    const onSubmit = (event: Event) => {
+      event.preventDefault();
+      const value = input.value;
+      if (!value) return;
+      cleanup();
+      resolve(value);
+    };
+    const onCancel = () => {
+      cleanup();
+      resolve(null);
+    };
+
+    form.addEventListener('submit', onSubmit);
+    cancelButton.addEventListener('click', onCancel);
+    modal.classList.remove('hidden');
+    requestAnimationFrame(() => input.focus());
+  });
+}
 function showListManageModal(title: string, list: string[], onSave: (list: string[]) => void) {
   const modal = document.getElementById('list-manage-modal');
   if (!modal) { alert(list.join('\n')); return; }
@@ -1033,21 +1072,22 @@ function setupEventListeners() {
   
   if (btnExportConfig) {
     btnExportConfig.addEventListener('click', async () => {
-      const config = {
-        accounts: getAccounts(),
-        autoLogin: localStorage.getItem('bjut_auto_login'),
-        checkInterval: localStorage.getItem('bjut_check_interval'),
-        checkIntervalBg: localStorage.getItem('bjut_check_interval_bg'),
-        whitelist: localStorage.getItem('bjut_whitelist'),
-        blacklist: localStorage.getItem('bjut_blacklist'),
-        moreOptions: localStorage.getItem('bjut_more_options')
-      };
-      const passphrase = window.prompt('为导出的配置设置密码（请妥善保管）：');
-      if (!passphrase) return;
-      const encrypted = await encryptExport(config, passphrase);
       try {
+        const passphrase = await customPasswordPrompt('为导出的配置设置密码，请妥善保管。', '导出配置');
+        if (!passphrase) return;
+        const config = {
+          accounts: getAccounts(),
+          autoLogin: localStorage.getItem('bjut_auto_login'),
+          checkInterval: localStorage.getItem('bjut_check_interval'),
+          checkIntervalBg: localStorage.getItem('bjut_check_interval_bg'),
+          whitelist: localStorage.getItem('bjut_whitelist'),
+          blacklist: localStorage.getItem('bjut_blacklist'),
+          moreOptions: localStorage.getItem('bjut_more_options')
+        };
+        const encrypted = await encryptExport(config, passphrase);
         if ((window as any).AndroidBridge) {
-          (window as any).AndroidBridge.setClipboardText(encrypted);
+          const copied = (window as any).AndroidBridge.setClipboardText(encrypted);
+          if (copied === false) throw new Error('Android 剪贴板写入失败');
         } else if ((window as any).__TAURI__) {
           await invoke('write_clipboard', { text: encrypted });
         } else {
@@ -1055,7 +1095,8 @@ function setupEventListeners() {
         }
         customAlert('配置已使用你设置的密码加密并复制到剪贴板。');
       } catch (e) {
-        customAlert('复制到剪贴板失败，请手动复制：\n' + encrypted);
+        console.error('Export config failed:', e);
+        customAlert('导出失败：' + String(e));
       }
     });
   }
@@ -1079,7 +1120,7 @@ function setupEventListeners() {
         const confirmResult = await customConfirm('导入配置将覆盖当前设置和账号，是否继续？');
         if (!confirmResult) return;
         
-        const passphrase = window.prompt('输入导出该配置时设置的密码：');
+        const passphrase = await customPasswordPrompt('输入导出该配置时设置的密码。', '导入配置');
         if (!passphrase) return;
         const config = await decryptExport(text.trim(), passphrase);
         if (config.accounts) {

@@ -159,15 +159,26 @@ class MainActivity : TauriActivity() {
     }
 
     @JavascriptInterface
-    fun setClipboardText(text: String) {
+    fun setClipboardText(text: String): Boolean {
+      val completed = java.util.concurrent.CountDownLatch(1)
+      var success = false
       activity.runOnUiThread {
         try {
           val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
           val clip = android.content.ClipData.newPlainText("bjut_al_config", text)
           clipboard.setPrimaryClip(clip)
+          success = true
         } catch (e: Exception) {
           e.printStackTrace()
+        } finally {
+          completed.countDown()
         }
+      }
+      return try {
+        completed.await(2, java.util.concurrent.TimeUnit.SECONDS) && success
+      } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        false
       }
     }
   }

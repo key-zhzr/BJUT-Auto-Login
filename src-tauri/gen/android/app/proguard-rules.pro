@@ -31,3 +31,5 @@
 -keep class cn.edu.bjut.al.KeepAliveService {
     public *;
 }
+-dontwarn javax.annotation.Nullable
+-dontwarn javax.annotation.concurrent.GuardedBy
