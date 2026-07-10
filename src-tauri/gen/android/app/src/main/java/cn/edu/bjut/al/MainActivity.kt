@@ -17,6 +17,11 @@ class MainActivity : TauriActivity() {
     super.onCreate(savedInstanceState)
   }
 
+  override fun onResume() {
+    super.onResume()
+    UpdateHelper.resumePendingInstall(this)
+  }
+
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     // Register JavaScript interface so frontend can call Android native methods directly

@@ -246,9 +246,13 @@
 
         <!-- Logs -->
         <section id="logs" class="page">
-          <header class="page-header" style="display: flex; align-items: center;">
+          <header class="page-header logs-header">
             <h1 style="margin: 0;">运行日志</h1>
-            <button id="btn-clear-logs" class="btn btn-sm" style="margin-left: auto; color: #ff4d4f; border: 1px solid #ff4d4f; background: transparent;">清空日志</button>
+            <div class="logs-actions">
+              <button id="btn-copy-logs" class="btn btn-secondary btn-sm"><i data-lucide="copy"></i> 复制日志</button>
+              <button id="btn-scroll-logs" class="btn btn-secondary btn-sm"><i data-lucide="arrow-down-to-line"></i> 滚动到底部</button>
+              <button id="btn-clear-logs" class="btn btn-sm btn-log-danger">清空日志</button>
+            </div>
           </header>
           
           <div class="logs-container glass-card">
@@ -475,6 +479,23 @@
             <button type="submit" class="btn btn-primary">确定</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Update Modal -->
+    <div id="update-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card update-modal-content">
+        <h3 id="update-modal-title">发现新版本</h3>
+        <div id="update-modal-meta" class="update-meta"></div>
+        <div id="update-release-notes" class="markdown-body"></div>
+        <div id="update-progress-wrap" class="update-progress-wrap hidden">
+          <div class="update-progress-track"><div id="update-progress-bar" class="update-progress-bar"></div></div>
+          <div id="update-progress-text" class="update-progress-text">准备下载…</div>
+        </div>
+        <div class="modal-actions" id="update-modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-update-cancel">稍后</button>
+          <button type="button" class="btn btn-primary" id="btn-update-confirm">下载并安装</button>
+        </div>
       </div>
     </div>
 

@@ -15,7 +15,9 @@
     "@tauri-apps/plugin-autostart": "~2",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
+    "dompurify": "^3.4.11",
     "lucide": "^1.22.0",
+    "marked": "^18.0.6",
     "sortablejs": "^1.15.7"
   },
   "devDependencies": {

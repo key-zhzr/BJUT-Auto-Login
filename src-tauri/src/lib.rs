@@ -494,6 +494,15 @@ struct UserInfo {
     flow: String,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateTarget {
+    platform: String,
+    arch: String,
+    format: String,
+    current_version: String,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct AppConfig {
     #[serde(default)]
@@ -792,6 +801,155 @@ async fn fetch_user_info_rust(local_ip: Option<&str>) -> Option<UserInfo> {
     })
 }
 
+#[tauri::command]
+fn get_update_target(app: tauri::AppHandle) -> UpdateTarget {
+    let platform = if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "ios") {
+        "ios"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    let raw_arch = std::env::consts::ARCH;
+    let arch = if platform == "android" && raw_arch == "x86_64" {
+        "x86_64"
+    } else if raw_arch == "aarch64" {
+        "arm64"
+    } else {
+        "x64"
+    };
+    let format = match platform {
+        "android" => "apk",
+        "ios" => "unsupported",
+        "windows" => "exe",
+        "macos" => "dmg",
+        _ if std::env::var_os("APPIMAGE").is_some() => "AppImage",
+        _ => "deb",
+    };
+    UpdateTarget {
+        platform: platform.to_string(),
+        arch: arch.to_string(),
+        format: format.to_string(),
+        current_version: app.package_info().version.to_string(),
+    }
+}
+
+#[cfg(target_os = "android")]
+fn launch_update_installer(_app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
+    use jni::objects::{JObject, JValue};
+
+    let context = tauri::tao::platform::android::prelude::main_android_context()
+        .ok_or_else(|| "Android context is unavailable".to_string())?;
+    let vm = unsafe { jni::JavaVM::from_raw(context.java_vm.cast()) }.map_err(|e| e.to_string())?;
+    let mut env = vm.attach_current_thread_as_daemon().map_err(|e| e.to_string())?;
+    let activity = unsafe { JObject::from_raw(context.context_jobject.cast()) };
+    let class = tauri::wry::prelude::find_class(
+        &mut env,
+        &activity,
+        "cn.edu.bjut.al.UpdateHelper".into(),
+    ).map_err(|e| e.to_string())?;
+    let path_string = env.new_string(path.to_string_lossy().as_ref()).map_err(|e| e.to_string())?;
+    let path_object = JObject::from(path_string);
+    let launched = env.call_static_method(
+        class,
+        "installApk",
+        "(Landroid/content/Context;Ljava/lang/String;)Z",
+        &[JValue::Object(&activity), JValue::Object(&path_object)],
+    ).map_err(|e| e.to_string())?.z().map_err(|e| e.to_string())?;
+    if launched {
+        Ok(())
+    } else {
+        Err("无法启动 APK 安装器，请允许此应用安装未知来源应用后重试".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn launch_update_installer(app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new(path).spawn().map_err(|e| e.to_string())?;
+    app.exit(0);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn launch_update_installer(_app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("open").arg(path).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn launch_update_installer(_app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("xdg-open").arg(path).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "ios")]
+fn launch_update_installer(_app: &tauri::AppHandle, _path: &std::path::Path) -> Result<(), String> {
+    Err("iOS 版本不支持应用内安装，请使用快捷指令更新".to_string())
+}
+
+#[tauri::command]
+async fn download_and_install_update(
+    app: tauri::AppHandle,
+    url: String,
+    file_name: String,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+
+    let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("github.com")
+        || !parsed.path().starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
+    {
+        return Err("拒绝下载非官方 GitHub Release 资产".to_string());
+    }
+    let safe_name = std::path::Path::new(&file_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "无效的更新文件名".to_string())?;
+    if safe_name != file_name {
+        return Err("无效的更新文件名".to_string());
+    }
+
+    let mut update_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    update_dir.push("updates");
+    std::fs::create_dir_all(&update_dir).map_err(|e| e.to_string())?;
+    let target_path = update_dir.join(safe_name);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client.get(parsed).send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("更新下载失败: HTTP {}", response.status()));
+    }
+    let total = response.content_length();
+    let mut received = 0u64;
+    let mut file = std::fs::File::create(&target_path).map_err(|e| e.to_string())?;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+        received += chunk.len() as u64;
+        let percent = total.map(|size| ((received as f64 / size as f64) * 100.0).min(100.0));
+        let _ = app.emit("update-progress", serde_json::json!({
+            "status": "downloading",
+            "received": received,
+            "total": total,
+            "percent": percent
+        }));
+    }
+    file.flush().map_err(|e| e.to_string())?;
+    let _ = app.emit("update-progress", serde_json::json!({"status": "installing", "percent": 100.0}));
+    launch_update_installer(&app, &target_path)
+}
+
 fn show_native_notification(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     app.notification()
@@ -898,6 +1056,55 @@ fn write_public_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(),
     std::fs::write(get_config_path(app), content).map_err(|e| e.to_string())
 }
 
+const LOG_SESSION_MARKER: &str = "=== SESSION START ===";
+const MAX_LOG_SESSIONS: usize = 5;
+const MAX_LOG_ENTRIES: usize = 2000;
+
+fn parse_log_line(line: &str) -> Option<LogEntry> {
+    let idx1 = line.find(']')?;
+    line.strip_prefix('[')?;
+    let time = line[1..idx1].to_string();
+    let rest = &line[idx1 + 1..];
+    let idx2 = rest.find('[')?;
+    let idx3 = rest[idx2..].find(']')? + idx2;
+    let log_type = rest[idx2 + 1..idx3].to_string();
+    let rest2 = &rest[idx3 + 1..];
+    let idx4 = rest2.find('[')?;
+    let idx5 = rest2[idx4..].find(']')? + idx4;
+    Some(LogEntry {
+        time,
+        module: rest2[idx4 + 1..idx5].to_string(),
+        message: rest2[idx5 + 1..].trim().to_string(),
+        log_type,
+    })
+}
+
+fn initialize_log_history(app: &tauri::AppHandle, state: &AppState) {
+    let path = get_log_path(app);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing_lines: Vec<&str> = existing.lines().collect();
+    let session_starts: Vec<usize> = existing_lines.iter().enumerate()
+        .filter_map(|(index, line)| line.contains(LOG_SESSION_MARKER).then_some(index))
+        .collect();
+    let keep_from = if session_starts.len() >= MAX_LOG_SESSIONS {
+        session_starts[session_starts.len() - (MAX_LOG_SESSIONS - 1)]
+    } else {
+        0
+    };
+    let mut lines: Vec<String> = existing_lines[keep_from..].iter().map(|line| (*line).to_string()).collect();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    lines.push(format!("[{}] [info] [系统] {} {}", now, LOG_SESSION_MARKER, now));
+    if lines.len() > MAX_LOG_ENTRIES {
+        lines.drain(..lines.len() - MAX_LOG_ENTRIES);
+    }
+    let serialized = format!("{}\n", lines.join("\n"));
+    let _ = std::fs::write(path, serialized);
+
+    let mut memory = state.logs.lock().unwrap();
+    memory.clear();
+    memory.extend(lines.iter().filter_map(|line| parse_log_line(line)));
+}
+
 fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &str, log_type: &str) {
     let current_level = {
         let cfg = state.config.read().unwrap();
@@ -910,7 +1117,7 @@ fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &st
         return;
     }
     let local_now = chrono::Local::now();
-    let time_str = local_now.format("%H:%M:%S").to_string();
+    let time_str = local_now.format("%Y-%m-%d %H:%M:%S").to_string();
     let entry = LogEntry {
         time: time_str,
         module: module.to_string(),
@@ -920,7 +1127,7 @@ fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &st
     {
         let mut logs = state.logs.lock().unwrap();
         logs.push(entry.clone());
-        if logs.len() > 500 {
+        if logs.len() > MAX_LOG_ENTRIES {
             logs.remove(0);
         }
     }
@@ -975,7 +1182,7 @@ fn save_config(app: &tauri::AppHandle, state: &AppState, new_cfg: AppConfig) -> 
     Ok(())
 }
 
-async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
+async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full_details: bool) {
     if state.is_checking.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -990,15 +1197,23 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>) {
         let _ = app.emit("countdown-tick", serde_json::json!({"status": "checking"}));
         rust_log(&app, &state, "网络", &format!("[DEBUG] 开始检测网络连通性 (模式: {})", if is_bg { "后台" } else { "前台" }), "debug");
 
-        // Fetch network info details
-        let net_info = get_network_info(app.clone());
+        // Background interval checks reuse the last details and avoid location-protected APIs.
+        let net_info = if full_details {
+            get_network_info(app.clone())
+        } else {
+            state.last_network_state.lock().unwrap().clone()
+        };
         let current_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let current_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let current_ip = net_info.get("ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let local_now = chrono::Local::now();
-        let timestamp = local_now.format("%H:%M:%S").to_string();
+        let timestamp = local_now.format("%Y-%m-%d %H:%M:%S").to_string();
 
-        rust_log(&app, &state, "网络", &format!("[DEBUG] {}拉取详细 SSID 信息成功: SSID={}, BSSID={}, IP={}", if is_bg { "后台" } else { "前台" }, current_ssid, current_bssid, current_ip), "debug");
+        if full_details {
+            rust_log(&app, &state, "网络", &format!("[DEBUG] 完整检测网络详情: SSID={}, BSSID={}, IP={}", current_ssid, current_bssid, current_ip), "debug");
+        } else {
+            rust_log(&app, &state, "网络", "[DEBUG] 后台间隔检测仅检查连通性，复用上次网络详情", "debug");
+        }
 
         let make_payload = |state_str: &str, login_type: Option<&LoginType>| {
             serde_json::json!({
@@ -1148,6 +1363,11 @@ fn get_logs(state: tauri::State<Arc<AppState>>) -> Vec<LogEntry> {
 }
 
 #[tauri::command]
+fn get_log_text(app: tauri::AppHandle) -> String {
+    std::fs::read_to_string(get_log_path(&app)).unwrap_or_default()
+}
+
+#[tauri::command]
 fn clear_all_logs(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) {
     state.logs.lock().unwrap().clear();
     let p = get_log_path(&app);
@@ -1181,7 +1401,7 @@ fn trigger_manual_check(app: tauri::AppHandle, state: tauri::State<Arc<AppState>
     let app_clone = app.clone();
     let state_clone = state.inner().clone();
     tauri::async_runtime::spawn(async move {
-        trigger_network_check(app_clone, state_clone).await;
+        trigger_network_check(app_clone, state_clone, true).await;
     });
 }
 
@@ -1227,7 +1447,7 @@ async fn manual_login(
                     "ssid": net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or(""),
                     "bssid": net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or(""),
                     "ip": net_info.get("ip").and_then(|v| v.as_str()).unwrap_or(""),
-                    "timestamp": chrono::Local::now().format("%H:%M:%S").to_string()
+                    "timestamp": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
                 });
                 *state.last_network_state.lock().unwrap() = payload.clone();
                 let _ = app.emit("network-state-change", payload);
@@ -1304,34 +1524,7 @@ pub fn run() {
             // Load config on startup
             load_config(&app_handle, &state_clone);
             
-            // Attempt to load log history on startup
-            let log_path = get_log_path(&app_handle);
-            if log_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&log_path) {
-                    let mut mem_logs = state_clone.logs.lock().unwrap();
-                    for line in content.lines().rev().take(500) {
-                        if line.starts_with('[') {
-                            if let Some(idx1) = line.find(']') {
-                                let time = line[1..idx1].to_string();
-                                let rest = &line[idx1 + 1..];
-                                if let Some(idx2) = rest.find('[') {
-                                    if let Some(idx3) = rest.find(']') {
-                                        let log_type = rest[idx2 + 1..idx3].to_string();
-                                        let rest2 = &rest[idx3 + 1..];
-                                        if let Some(idx4) = rest2.find('[') {
-                                            if let Some(idx5) = rest2.find(']') {
-                                                let module = rest2[idx4 + 1..idx5].to_string();
-                                                let message = rest2[idx5 + 1..].trim().to_string();
-                                                mem_logs.insert(0, LogEntry { time, module, message, log_type });
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            initialize_log_history(&app_handle, &state_clone);
 
             // Start background loop task in Rust
             let loop_handle = app_handle.clone();
@@ -1375,7 +1568,7 @@ pub fn run() {
                                 rust_log(&loop_handle, &loop_state, "网络", &format!("检测到局域网 IP 发生变更: {} -> {}，重新检测网络环境...", last_ip.unwrap_or_default(), current_ip), "info");
                                 loop_state.is_suspended.store(false, Ordering::SeqCst);
                                 loop_state.non_campus_count.store(0, Ordering::SeqCst);
-                                trigger_network_check(loop_handle.clone(), loop_state.clone()).await;
+                                trigger_network_check(loop_handle.clone(), loop_state.clone(), true).await;
                             }
                         }
                     }
@@ -1386,7 +1579,7 @@ pub fn run() {
                             rust_log(&loop_handle, &loop_state, "网络", "检测到已返回前台，恢复连通性检测...", "info");
                             loop_state.is_suspended.store(false, Ordering::SeqCst);
                             loop_state.non_campus_count.store(0, Ordering::SeqCst);
-                            trigger_network_check(loop_handle.clone(), loop_state.clone()).await;
+                            trigger_network_check(loop_handle.clone(), loop_state.clone(), true).await;
                             continue;
                         }
                         if is_susp {
@@ -1397,7 +1590,7 @@ pub fn run() {
                         let current_countdown = val - 1;
                         if current_countdown <= 0 {
                             rust_log(&loop_handle, &loop_state, "网络", "[DEBUG] 倒计时归零，触发自动网络连通性检测", "debug");
-                            trigger_network_check(loop_handle.clone(), loop_state.clone()).await;
+                            trigger_network_check(loop_handle.clone(), loop_state.clone(), !is_bg).await;
                         } else {
                             let _ = loop_handle.emit("countdown-tick", serde_json::json!({
                                 "status": "ticking",
@@ -1414,7 +1607,7 @@ pub fn run() {
             let init_state = state_clone.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                trigger_network_check(init_handle, init_state).await;
+                trigger_network_check(init_handle, init_state, true).await;
             });
 
             #[cfg(desktop)]
@@ -1432,10 +1625,18 @@ pub fn run() {
                 // Prevent window close, hide instead to keep in system tray
                 if let Some(window) = _app.get_webview_window("main") {
                     let window_clone = window.clone();
+                    let window_state = state_clone.clone();
                     window.on_window_event(move |event| {
-                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                            api.prevent_close();
-                            let _ = window_clone.hide();
+                        match event {
+                            tauri::WindowEvent::Focused(focused) => {
+                                window_state.is_in_background.store(!focused, Ordering::SeqCst);
+                            }
+                            tauri::WindowEvent::CloseRequested { api, .. } => {
+                                api.prevent_close();
+                                window_state.is_in_background.store(true, Ordering::SeqCst);
+                                let _ = window_clone.hide();
+                            }
+                            _ => {}
                         }
                     });
                 }
@@ -1532,11 +1733,14 @@ pub fn run() {
             sync_config,
             get_app_config,
             get_logs,
+            get_log_text,
             clear_all_logs,
             get_countdown_status,
             trigger_manual_check,
             manual_login,
             get_user_info,
+            get_update_target,
+            download_and_install_update,
             log_from_js,
             set_background_state,
             get_current_network_state

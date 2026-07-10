@@ -1,6 +1,6 @@
 import {
-  Activity, AlertCircle, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ClipboardCopy, ClipboardPaste, Clock, createIcons, Edit2, Eye, FileText, GripVertical,
+  Activity, AlertCircle, ArrowDownToLine, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, Edit2, Eye, FileText, GripVertical,
   LayoutDashboard, Loader, LogIn, Minus, Plus, RefreshCw, Settings, ShieldAlert,
   ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
 } from 'lucide';
@@ -8,10 +8,13 @@ import Sortable from 'sortablejs';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 const icons = {
-  Activity, AlertCircle, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ClipboardCopy, ClipboardPaste, Clock, Edit2, Eye, FileText, GripVertical,
+  Activity, AlertCircle, ArrowDownToLine, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  ClipboardCopy, ClipboardPaste, Clock, Copy, Edit2, Eye, FileText, GripVertical,
   LayoutDashboard, Loader, LogIn, Minus, Plus, RefreshCw, Settings, ShieldAlert,
   ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
 };
@@ -96,6 +99,198 @@ async function decryptExport(value: string, passphrase: string): Promise<any> {
   return JSON.parse(new TextDecoder().decode(plaintext));
 }
 
+async function writeTextToClipboard(text: string): Promise<void> {
+  if ((window as any).AndroidBridge) {
+    const copied = (window as any).AndroidBridge.setClipboardText(text);
+    if (copied === false) throw new Error('Android 剪贴板写入失败');
+  } else if ((window as any).__TAURI__) {
+    await invoke('write_clipboard', { text });
+  } else {
+    await navigator.clipboard.writeText(text);
+  }
+}
+
+async function readTextFromClipboard(): Promise<string> {
+  if ((window as any).AndroidBridge) {
+    return (window as any).AndroidBridge.getClipboardText();
+  }
+  if ((window as any).__TAURI__) {
+    return invoke<string>('read_clipboard');
+  }
+  return navigator.clipboard.readText();
+}
+
+interface GitHubReleaseAsset {
+  name: string;
+  browser_download_url: string;
+  size: number;
+}
+
+interface GitHubRelease {
+  tag_name: string;
+  name: string | null;
+  body: string | null;
+  html_url: string;
+  prerelease: boolean;
+  draft: boolean;
+  assets: GitHubReleaseAsset[];
+}
+
+interface UpdateTarget {
+  platform: 'android' | 'ios' | 'windows' | 'macos' | 'linux';
+  arch: string;
+  format: string;
+  currentVersion: string;
+}
+
+interface UpdateProgress {
+  status: 'downloading' | 'installing';
+  received?: number;
+  total?: number;
+  percent?: number | null;
+}
+
+function isVersionNewer(current: string, latest: string): boolean {
+  const parseVersion = (value: string) => {
+    const withoutBuild = value.replace(/^v/i, '').split('+', 1)[0];
+    const [core, prerelease = ''] = withoutBuild.split('-', 2);
+    return {
+      core: core.split('.').map(part => Number.parseInt(part, 10) || 0),
+      prerelease: prerelease ? prerelease.split('.') : [],
+    };
+  };
+  const currentVersion = parseVersion(current);
+  const latestVersion = parseVersion(latest);
+  for (let index = 0; index < Math.max(currentVersion.core.length, latestVersion.core.length); index += 1) {
+    const currentPart = currentVersion.core[index] || 0;
+    const latestPart = latestVersion.core[index] || 0;
+    if (latestPart > currentPart) return true;
+    if (currentPart > latestPart) return false;
+  }
+  if (currentVersion.prerelease.length === 0) return false;
+  if (latestVersion.prerelease.length === 0) return true;
+  for (let index = 0; index < Math.max(currentVersion.prerelease.length, latestVersion.prerelease.length); index += 1) {
+    const currentPart = currentVersion.prerelease[index];
+    const latestPart = latestVersion.prerelease[index];
+    if (currentPart === undefined) return true;
+    if (latestPart === undefined) return false;
+    if (currentPart === latestPart) continue;
+    const currentNumber = /^\d+$/.test(currentPart) ? Number(currentPart) : null;
+    const latestNumber = /^\d+$/.test(latestPart) ? Number(latestPart) : null;
+    if (currentNumber !== null && latestNumber !== null) return latestNumber > currentNumber;
+    if (currentNumber !== null) return false;
+    if (latestNumber !== null) return true;
+    return latestPart.localeCompare(currentPart) > 0;
+  }
+  return false;
+}
+
+function selectUpdateAsset(assets: GitHubReleaseAsset[], target: UpdateTarget): GitHubReleaseAsset | undefined {
+  const expectedSuffix = (() => {
+    switch (target.platform) {
+      case 'android': return `_Android_${target.arch}.apk`;
+      case 'windows': return `_Windows_${target.arch}.exe`;
+      case 'macos': return `_macOS_${target.arch}.dmg`;
+      case 'linux': return `_Linux_${target.arch}.${target.format}`;
+      default: return '';
+    }
+  })().toLowerCase();
+  if (!expectedSuffix) return undefined;
+  return assets.find(asset => asset.name.toLowerCase().endsWith(expectedSuffix));
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '未知大小';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+async function renderReleaseNotes(markdown: string): Promise<string> {
+  const rendered = await marked.parse(markdown || '本次发布未提供更新说明。', { gfm: true, breaks: true });
+  return DOMPurify.sanitize(rendered, { USE_PROFILES: { html: true } });
+}
+
+function updateUpdateProgress(data: UpdateProgress) {
+  const progressWrap = document.getElementById('update-progress-wrap');
+  const progressBar = document.getElementById('update-progress-bar') as HTMLElement | null;
+  const progressText = document.getElementById('update-progress-text');
+  if (!progressWrap || !progressBar || !progressText) return;
+
+  progressWrap.classList.remove('hidden');
+  if (data.status === 'installing') {
+    progressBar.style.width = '100%';
+    progressText.textContent = '下载完成，正在启动系统安装程序…';
+    return;
+  }
+  const percent = typeof data.percent === 'number' ? Math.max(0, Math.min(100, data.percent)) : null;
+  progressBar.style.width = percent === null ? '35%' : `${percent}%`;
+  const received = formatBytes(data.received || 0);
+  const total = data.total ? ` / ${formatBytes(data.total)}` : '';
+  progressText.textContent = `正在下载 ${received}${total}${percent === null ? '' : `（${percent.toFixed(0)}%）`}`;
+}
+
+async function showUpdateDialog(
+  release: GitHubRelease,
+  target: UpdateTarget,
+  asset: GitHubReleaseAsset,
+): Promise<boolean> {
+  const modal = document.getElementById('update-modal');
+  const notes = document.getElementById('update-release-notes');
+  const cancelButton = document.getElementById('btn-update-cancel');
+  const confirmButton = document.getElementById('btn-update-confirm') as HTMLButtonElement | null;
+  const actions = document.getElementById('update-modal-actions');
+  const progressWrap = document.getElementById('update-progress-wrap');
+  const progressBar = document.getElementById('update-progress-bar') as HTMLElement | null;
+  const progressText = document.getElementById('update-progress-text');
+  if (!modal || !notes || !cancelButton || !confirmButton || !actions || !progressWrap || !progressBar || !progressText) {
+    throw new Error('更新窗口初始化失败');
+  }
+
+  document.getElementById('update-modal-title')!.textContent = `发现新版本 ${release.tag_name}`;
+  document.getElementById('update-modal-meta')!.textContent =
+    `当前 v${target.currentVersion} · ${target.platform}/${target.arch} · ${asset.name} · ${formatBytes(asset.size)}`;
+  notes.innerHTML = await renderReleaseNotes(release.body || '');
+  notes.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => {
+    anchor.addEventListener('click', event => {
+      event.preventDefault();
+      const href = anchor.href;
+      if (href.startsWith('https://')) openUrl(href).catch(() => {});
+    });
+  });
+  actions.style.display = 'flex';
+  confirmButton.disabled = false;
+  progressWrap.classList.add('hidden');
+  progressBar.style.width = '0';
+  progressText.textContent = '准备下载…';
+  modal.classList.remove('hidden');
+
+  return new Promise(resolve => {
+    const cleanup = () => {
+      cancelButton.removeEventListener('click', onCancel);
+      confirmButton.removeEventListener('click', onConfirm);
+    };
+    const onCancel = () => {
+      cleanup();
+      modal.classList.add('hidden');
+      resolve(false);
+    };
+    const onConfirm = () => {
+      cleanup();
+      actions.style.display = 'none';
+      progressWrap.classList.remove('hidden');
+      resolve(true);
+    };
+    cancelButton.addEventListener('click', onCancel);
+    confirmButton.addEventListener('click', onConfirm);
+  });
+}
+
 function saveSetting(key: string, value: string) {
   localStorage.setItem(key, value);
   syncConfigToRust();
@@ -175,7 +370,7 @@ async function listenToRustEvents() {
       }
     });
 
-    listen('network-state-change', async (event: any) => {
+    listen('network-state-change', (event: any) => {
       const data = event.payload;
       let state = NetworkState.Offline;
       if (data.state === 'Online') state = NetworkState.Online;
@@ -192,27 +387,27 @@ async function listenToRustEvents() {
         updateUserInfo().catch(() => {});
       }
 
-      try {
-        const netInfo: any = await invoke('get_network_info');
-        const moreSsid = document.getElementById('more-ssid');
-        const moreBssid = document.getElementById('more-bssid');
-        const moreIp = document.getElementById('more-ip');
-        if (moreSsid) moreSsid.textContent = netInfo.ssid || '--';
-        if (moreBssid) moreBssid.textContent = netInfo.bssid || '--';
-        if (moreIp) moreIp.textContent = netInfo.ip || '--';
-      } catch (err) {
-        console.warn('Failed to query network info in event handler:', err);
-      }
+      const moreSsid = document.getElementById('more-ssid');
+      const moreBssid = document.getElementById('more-bssid');
+      const moreIp = document.getElementById('more-ip');
+      if (moreSsid) moreSsid.textContent = data.ssid || '--';
+      if (moreBssid) moreBssid.textContent = data.bssid || '--';
+      if (moreIp) moreIp.textContent = data.ip || '--';
+      if (data.ip) lastKnownIp = data.ip;
 
       const updateTimestamp = document.getElementById('update-timestamp');
       if (updateTimestamp) {
-        updateTimestamp.textContent = new Date().toLocaleTimeString();
+        updateTimestamp.textContent = data.timestamp || new Date().toLocaleString();
       }
     });
 
     listen('log-event', (event: any) => {
       const data = event.payload;
       renderLogEntry(data.module, data.message, data.type, data.time);
+    });
+
+    listen<UpdateProgress>('update-progress', event => {
+      updateUpdateProgress(event.payload);
     });
 
     // Load initial logs
@@ -239,21 +434,17 @@ async function listenToRustEvents() {
           updateUserInfo().catch(() => {});
         }
 
-        try {
-          const netInfo: any = await invoke('get_network_info');
-          const moreSsid = document.getElementById('more-ssid');
-          const moreBssid = document.getElementById('more-bssid');
-          const moreIp = document.getElementById('more-ip');
-          if (moreSsid) moreSsid.textContent = netInfo.ssid || '--';
-          if (moreBssid) moreBssid.textContent = netInfo.bssid || '--';
-          if (moreIp) moreIp.textContent = netInfo.ip || '--';
-        } catch (err) {
-          console.warn('Failed to query network info on start:', err);
-        }
+        const moreSsid = document.getElementById('more-ssid');
+        const moreBssid = document.getElementById('more-bssid');
+        const moreIp = document.getElementById('more-ip');
+        if (moreSsid) moreSsid.textContent = currentState.ssid || '--';
+        if (moreBssid) moreBssid.textContent = currentState.bssid || '--';
+        if (moreIp) moreIp.textContent = currentState.ip || '--';
+        if (currentState.ip) lastKnownIp = currentState.ip;
 
         const updateTimestamp = document.getElementById('update-timestamp');
         if (updateTimestamp) {
-          updateTimestamp.textContent = new Date().toLocaleTimeString();
+          updateTimestamp.textContent = currentState.timestamp || new Date().toLocaleString();
         }
       }
     } catch (err) {
@@ -271,14 +462,23 @@ async function listenToRustEvents() {
 
     // Report visibility background status
     const updateBgState = () => {
-      const isBg = document.hidden;
+      const isAndroid = navigator.userAgent.toLowerCase().includes('android');
+      const isBg = document.hidden || (!isAndroid && !document.hasFocus());
       invoke('set_background_state', { isBg }).catch(() => {});
     };
     document.addEventListener('visibilitychange', updateBgState);
+    window.addEventListener('focus', updateBgState);
+    window.addEventListener('blur', updateBgState);
     updateBgState();
   } catch (e) {
     console.error('Failed to listen to Rust events:', e);
   }
+}
+
+function getLogsScroller(): HTMLElement | null {
+  const container = logsContent.parentElement;
+  if (container && getComputedStyle(container).overflowY !== 'visible') return container;
+  return document.querySelector<HTMLElement>('main');
 }
 
 function renderLogEntry(module: string, message: string, type: 'info' | 'error' | 'success' | 'debug' = 'info', time?: string) {
@@ -290,19 +490,24 @@ function renderLogEntry(module: string, message: string, type: 'info' | 'error' 
     return;
   }
   
-  const timeStr = time || new Date().toLocaleTimeString();
+  const logsPageActive = logsContent.closest('.page')?.classList.contains('active') ?? false;
+  const scroller = getLogsScroller();
+  const wasAtBottom = !scroller || scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 80;
+  const timeStr = time || new Date().toLocaleString();
   const entry = document.createElement('div');
-  entry.className = 'log-entry';
-  entry.innerHTML = `<span class="log-time">[${timeStr}]</span><span class="log-${type}">[${module}] ${message}</span>`;
+  entry.className = message.includes('=== SESSION START ===') ? 'log-entry log-session-divider' : 'log-entry';
+  const timeElement = document.createElement('span');
+  timeElement.className = 'log-time';
+  timeElement.textContent = `[${timeStr}]`;
+  const messageElement = document.createElement('span');
+  messageElement.className = `log-${type}`;
+  messageElement.textContent = `[${module}] ${message.replace('=== SESSION START ===', '启动会话')}`;
+  entry.append(timeElement, messageElement);
   logsContent.appendChild(entry);
   
   requestAnimationFrame(() => {
-    const container = logsContent.parentElement;
-    if (container) {
-      const isAtBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 80;
-      if (isAtBottom) {
-        container.scrollTop = container.scrollHeight;
-      }
+    if (logsPageActive && scroller && wasAtBottom) {
+      scroller.scrollTop = scroller.scrollHeight;
     }
   });
 }
@@ -554,6 +759,8 @@ const accountsList = document.getElementById('accounts-list')!;
 const addAccountForm = document.getElementById('add-account-form') as HTMLFormElement;
 const logsContent = document.getElementById('logs-content')!;
 const btnClearLogs = document.getElementById('btn-clear-logs')!;
+const btnCopyLogs = document.getElementById('btn-copy-logs')!;
+const btnScrollLogs = document.getElementById('btn-scroll-logs')!;
 const settingAutoLogin = document.getElementById('setting-auto-login') as HTMLInputElement;
 const settingWifiChangeDetect = document.getElementById('setting-wifi-change-detect') as HTMLInputElement;
 const settingAutostart = document.getElementById('setting-autostart') as HTMLInputElement;
@@ -768,6 +975,28 @@ function setupEventListeners() {
     }
   });
 
+  btnCopyLogs.addEventListener('click', async () => {
+    try {
+      const text = (window as any).__TAURI__
+        ? await invoke<string>('get_log_text')
+        : logsContent.textContent || '';
+      if (!text.trim()) {
+        await customAlert('当前没有可复制的日志。');
+        return;
+      }
+      await writeTextToClipboard(text);
+      await customAlert('最近几次启动的日志已复制到剪贴板。');
+    } catch (error) {
+      await customAlert(`复制日志失败：${String(error)}`);
+    }
+  });
+
+  btnScrollLogs.addEventListener('click', () => {
+    const scroller = getLogsScroller();
+    if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+    else logsContent.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  });
+
   settingAutoLogin.addEventListener('change', async (e) => {
     autoLoginEnabled = (e.target as HTMLInputElement).checked;
     saveSetting('bjut_auto_login', autoLoginEnabled.toString());
@@ -965,7 +1194,7 @@ function setupEventListeners() {
   const btnQuitApp = document.getElementById('btn-quit-app');
   if (btnQuitApp) {
     btnQuitApp.addEventListener('click', async () => {
-      if (confirm('确定要退出应用吗？这将彻底关闭后台网络自动登录服务。')) {
+      if (await customConfirm('确定要退出应用吗？这将彻底关闭后台网络自动登录服务。')) {
         if ((window as any).__TAURI__) {
           try {
             await invoke('exit_app');
@@ -979,73 +1208,82 @@ function setupEventListeners() {
     });
   }
 
-  function isVersionNewer(current: string, latest: string): boolean {
-    const cParts = current.split('.').map(Number);
-    const lParts = latest.split('.').map(Number);
-    for (let i = 0; i < Math.max(cParts.length, lParts.length); i++) {
-      const c = cParts[i] || 0;
-      const l = lParts[i] || 0;
-      if (l > c) return true;
-      if (c > l) return false;
-    }
-    return false;
-  }
-
-  const btnCheckUpdate = document.getElementById('btn-check-update');
+  const btnCheckUpdate = document.getElementById('btn-check-update') as HTMLButtonElement | null;
   if (btnCheckUpdate) {
     btnCheckUpdate.addEventListener('click', async () => {
       const channel = settingUpdateChannel.value;
       log('系统', `正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...`);
-      
-      const currentVersion = '0.1.3';
-      
+      btnCheckUpdate.disabled = true;
+      const originalText = btnCheckUpdate.textContent || '检查更新';
+      btnCheckUpdate.textContent = '检查中…';
+
       try {
-        const response = await fetch('https://api.github.com/repos/key-zhzr/BJUT-Auto-Login/releases');
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+        if (!(window as any).__TAURI__) {
+          throw new Error('仅应用内支持自动更新');
         }
-        
-        const releases = await response.json();
+        const target = await invoke<UpdateTarget>('get_update_target');
+        const response = await fetch('https://api.github.com/repos/key-zhzr/BJUT-Auto-Login/releases?per_page=10', {
+          headers: { Accept: 'application/vnd.github+json' },
+        });
+        if (!response.ok) {
+          throw new Error(`GitHub API 返回 HTTP ${response.status}`);
+        }
+
+        const releases = await response.json() as GitHubRelease[];
         if (!Array.isArray(releases) || releases.length === 0) {
-          customAlert('暂无更新版本发布');
+          await customAlert('暂无更新版本发布');
           log('系统', '检查更新完毕 (暂无发布版本)');
           return;
         }
-        
-        let targetReleases = releases;
-        if (channel === 'release') {
-          targetReleases = releases.filter(r => !r.prerelease);
-        }
-        
+
+        const targetReleases = releases.filter(release => !release.draft && (channel !== 'release' || !release.prerelease));
         if (targetReleases.length === 0) {
-          customAlert('暂无符合当前通道的更新版本');
+          await customAlert('暂无符合当前通道的更新版本');
           log('系统', '检查更新完毕 (当前通道暂无新版本)');
           return;
         }
-        
+
         const latestRelease = targetReleases[0];
-        const latestTag = latestRelease.tag_name;
-        const cleanLatest = latestTag.replace(/^v/, '');
-        
-        if (isVersionNewer(currentVersion, cleanLatest)) {
-          const downloadUrl = latestRelease.html_url;
-          if (confirm(`检测到新版本: ${latestTag}\n\n更新说明:\n${latestRelease.body || '无'}\n\n是否前往浏览器下载更新？`)) {
-            if ((window as any).__TAURI__) {
-              const { openUrl } = await import('@tauri-apps/plugin-opener');
-              await openUrl(downloadUrl);
-            } else {
-              window.open(downloadUrl, '_blank');
-            }
-          }
-          log('系统', `发现新版本: ${latestTag}`, 'success');
-        } else {
-          customAlert(`当前已是最新版本 (v${currentVersion})！`);
-          log('系统', `检查更新完毕，当前版本 v${currentVersion} 已是最新`);
+        if (!isVersionNewer(target.currentVersion, latestRelease.tag_name)) {
+          await customAlert(`当前已是最新版本 (v${target.currentVersion})！`);
+          log('系统', `检查更新完毕，当前版本 v${target.currentVersion} 已是最新`);
+          return;
+        }
+
+        const asset = selectUpdateAsset(latestRelease.assets, target);
+        if (!asset) {
+          log('系统', `版本 ${latestRelease.tag_name} 未提供 ${target.platform}/${target.arch}/${target.format} 安装包`, 'error');
+          await customAlert(
+            `发现 ${latestRelease.tag_name}，但该版本没有适用于当前设备（${target.platform}/${target.arch}/${target.format}）的安装包。`,
+            '没有匹配的安装包',
+          );
+          return;
+        }
+
+        log('系统', `发现新版本: ${latestRelease.tag_name}，匹配安装包 ${asset.name}`, 'success');
+        const confirmed = await showUpdateDialog(latestRelease, target, asset);
+        if (!confirmed) return;
+
+        try {
+          await invoke('download_and_install_update', {
+            url: asset.browser_download_url,
+            fileName: asset.name,
+          });
+          const progressText = document.getElementById('update-progress-text');
+          if (progressText) progressText.textContent = '系统安装程序已启动，请按系统提示完成安装。';
+          log('系统', `更新包 ${asset.name} 已下载，系统安装程序已启动`, 'success');
+          window.setTimeout(() => document.getElementById('update-modal')?.classList.add('hidden'), 2500);
+        } catch (error) {
+          document.getElementById('update-modal')?.classList.add('hidden');
+          throw error;
         }
       } catch (err) {
         console.error('Update check failed:', err);
-        customAlert('检查更新失败，请检查网络连接！');
+        await customAlert(`检查或安装更新失败：${String(err)}`);
         log('系统', `检查更新失败: ${String(err)}`, 'error');
+      } finally {
+        btnCheckUpdate.disabled = false;
+        btnCheckUpdate.textContent = originalText;
       }
     });
   }
@@ -1085,14 +1323,7 @@ function setupEventListeners() {
           moreOptions: localStorage.getItem('bjut_more_options')
         };
         const encrypted = await encryptExport(config, passphrase);
-        if ((window as any).AndroidBridge) {
-          const copied = (window as any).AndroidBridge.setClipboardText(encrypted);
-          if (copied === false) throw new Error('Android 剪贴板写入失败');
-        } else if ((window as any).__TAURI__) {
-          await invoke('write_clipboard', { text: encrypted });
-        } else {
-          await navigator.clipboard.writeText(encrypted);
-        }
+        await writeTextToClipboard(encrypted);
         customAlert('配置已使用你设置的密码加密并复制到剪贴板。');
       } catch (e) {
         console.error('Export config failed:', e);
@@ -1104,14 +1335,7 @@ function setupEventListeners() {
   if (btnImportConfig) {
     btnImportConfig.addEventListener('click', async () => {
       try {
-        let text = '';
-        if ((window as any).AndroidBridge) {
-          text = (window as any).AndroidBridge.getClipboardText();
-        } else if ((window as any).__TAURI__) {
-          text = await invoke('read_clipboard');
-        } else {
-          text = await navigator.clipboard.readText();
-        }
+        const text = await readTextFromClipboard();
 
         if (!text) {
           customAlert('剪贴板为空');

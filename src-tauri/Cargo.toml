@@ -25,8 +25,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["time", "rt-multi-thread"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+futures-util = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 corewlan = "0.2.1"
