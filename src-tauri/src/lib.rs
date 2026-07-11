@@ -69,6 +69,15 @@ fn get_network_info(
         #[cfg(target_os = "macos")]
         {
             if _include_wifi_details.unwrap_or(true) {
+                if let Some(state) = _app.try_state::<Arc<AppState>>() {
+                    rust_log(
+                        &_app,
+                        &state,
+                        "隐私",
+                        "[DEBUG] macOS 正在读取 SSID/BSSID；此操作可能显示系统位置使用指示",
+                        "debug",
+                    );
+                }
                 if let Ok(client) = corewlan::WiFiClient::shared() {
                     if let Some(interface) = client.interface() {
                         if let Some(ssid_str) = interface.ssid() {
@@ -810,6 +819,18 @@ fn profile_auto_login_enabled(
         LoginType::Unknown => return legacy_default,
     };
     profile.auto_login_types.get(key).copied().unwrap_or(legacy_default)
+}
+
+fn app_is_in_background(app: &tauri::AppHandle, state: &AppState) -> bool {
+    let reported_background = state.is_in_background.load(Ordering::SeqCst);
+    #[cfg(desktop)]
+    if let Some(window) = app.get_webview_window("main") {
+        let visible = window.is_visible().unwrap_or(false);
+        let focused = window.is_focused().unwrap_or(false);
+        let minimized = window.is_minimized().unwrap_or(false);
+        return reported_background || !visible || !focused || minimized;
+    }
+    reported_background
 }
 
 fn url_encode(input: &str) -> String {
@@ -1887,7 +1908,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         state.pending_full_check.store(false, Ordering::SeqCst);
     }
     tauri::async_runtime::spawn(async move {
-        let is_bg = state.is_in_background.load(Ordering::SeqCst);
+        let is_bg = app_is_in_background(&app, &state);
+        state.is_in_background.store(is_bg, Ordering::SeqCst);
         let (interval_fg, interval_bg) = {
             let cfg = state.config.read().unwrap();
             (cfg.check_interval, cfg.check_interval_bg)
@@ -1897,28 +1919,20 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         let _ = app.emit("countdown-tick", serde_json::json!({"status": "checking"}));
         rust_log(&app, &state, "网络", &format!("[DEBUG] 开始检测网络连通性 (模式: {})", if is_bg { "后台" } else { "前台" }), "debug");
 
+        // Connectivity-only checks reuse the last details and avoid location-protected APIs.
         #[cfg(target_os = "macos")]
-        if full_details && is_bg {
-            rust_log(&app, &state, "隐私", "macOS 后台检测已跳过 SSID/BSSID，仅更新 IP 与连通性", "debug");
+        if is_bg && !full_details {
+            rust_log(&app, &state, "隐私", "macOS 后台普通检测已跳过 SSID/BSSID，仅检查网络连通性", "debug");
         }
-
-        // Background interval checks reuse the last details and avoid location-protected APIs.
-        let mut net_info = if full_details {
-            get_network_info(app.clone(), Some(!is_bg))
+        #[cfg(target_os = "macos")]
+        if is_bg && full_details {
+            rust_log(&app, &state, "隐私", "macOS 后台完整检测已触发，将读取 SSID/BSSID", "debug");
+        }
+        let net_info = if full_details {
+            get_network_info(app.clone(), Some(true))
         } else {
             state.last_network_state.lock().unwrap().clone()
         };
-        #[cfg(target_os = "macos")]
-        if full_details && is_bg {
-            let previous = state.last_network_state.lock().unwrap().clone();
-            if let Some(object) = net_info.as_object_mut() {
-                for key in ["ssid", "bssid"] {
-                    if let Some(value) = previous.get(key) {
-                        object.insert(key.to_string(), value.clone());
-                    }
-                }
-            }
-        }
         let current_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let current_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let current_ip = net_info.get("ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -2609,17 +2623,26 @@ fn notify_network_change(
 ) {
     state.is_suspended.store(false, Ordering::SeqCst);
     state.non_campus_count.store(0, Ordering::SeqCst);
+    let is_bg = app_is_in_background(&app, &state);
     rust_log(
         &app,
         &state,
         "网络",
-        &format!("收到{}网络变化事件，立即执行完整检测", source.unwrap_or_else(|| "系统".to_string())),
+        &format!(
+            "收到{}网络变化事件，{}",
+            source.unwrap_or_else(|| "系统".to_string()),
+            if is_bg {
+                "当前处于后台，先仅检测连通性；IP 变化后再完整检测"
+            } else {
+                "立即执行完整检测"
+            }
+        ),
         "info",
     );
     let app_clone = app.clone();
     let state_clone = state.inner().clone();
     tauri::async_runtime::spawn(async move {
-        trigger_network_check(app_clone, state_clone, true).await;
+        trigger_network_check(app_clone, state_clone, !is_bg).await;
     });
 }
 
@@ -2903,7 +2926,8 @@ pub fn run() {
             let init_state = state_clone.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                trigger_network_check(init_handle, init_state, true).await;
+                let full_details = !app_is_in_background(&init_handle, &init_state);
+                trigger_network_check(init_handle, init_state, full_details).await;
             });
 
             #[cfg(desktop)]
