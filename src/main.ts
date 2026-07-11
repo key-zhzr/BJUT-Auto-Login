@@ -89,8 +89,10 @@ document.getElementById('titlebar-close')?.addEventListener('click', () => {
 // Credentials live only in memory in the WebView. Rust persists them in the OS credential store.
 let accountsCache: any[] = [];
 let configSyncQueue: Promise<void> = Promise.resolve();
+let missingPasswordWarningShown = false;
 const LEGACY_ACCOUNTS_KEY = 'bjut_accounts';
 const LEGACY_XOR_KEY = 'bjut-al-secret-key-2026';
+const LEGACY_MIGRATION_PENDING_KEY = 'bjut_accounts_migration_pending';
 
 function readLegacyAccounts(): any[] | null {
   const raw = localStorage.getItem(LEGACY_ACCOUNTS_KEY);
@@ -123,18 +125,78 @@ function readLegacyAccounts(): any[] | null {
 }
 
 function mergeLegacyAccounts(current: any[], legacy: any[]): { accounts: any[], changed: boolean } {
-  if (current.length === 0 && legacy.length > 0) {
-    return { accounts: legacy.map(account => ({ ...account })), changed: true };
-  }
   let changed = false;
-  const accounts = current.map(account => {
-    if (account.pass) return { ...account };
-    const legacyAccount = legacy.find(candidate => candidate.user === account.user && candidate.pass);
-    if (!legacyAccount) return { ...account };
-    changed = true;
-    return { ...account, pass: legacyAccount.pass };
+  const accounts = current.map(account => ({ ...account }));
+  legacy.forEach(legacyAccount => {
+    const currentAccount = accounts.find(account => account.user === legacyAccount.user);
+    if (!currentAccount) {
+      accounts.push({
+        ...legacyAccount,
+        isDefault: accounts.some(account => account.isDefault) ? false : legacyAccount.isDefault,
+      });
+      changed = true;
+    } else if (!currentAccount.pass && legacyAccount.pass) {
+      currentAccount.pass = legacyAccount.pass;
+      changed = true;
+    }
   });
+  if (accounts.length > 0 && !accounts.some(account => account.isDefault)) {
+    accounts[0].isDefault = true;
+    changed = true;
+  }
   return { accounts, changed };
+}
+
+function secureStorageContainsLegacyCredentials(current: any[], legacy: any[]): boolean {
+  const legacyWithPasswords = legacy.filter(account => account.pass);
+  return legacyWithPasswords.length > 0 && legacyWithPasswords.every(legacyAccount =>
+    current.some(account => account.user === legacyAccount.user && account.pass === legacyAccount.pass),
+  );
+}
+
+function hasLegacyCredentialConflict(current: any[], legacy: any[]): boolean {
+  return legacy.some(legacyAccount => {
+    if (!legacyAccount.pass) return false;
+    const currentAccount = current.find(account => account.user === legacyAccount.user);
+    return Boolean(currentAccount?.pass) && currentAccount.pass !== legacyAccount.pass;
+  });
+}
+
+async function credentialSnapshotFingerprint(accounts: any[]): Promise<string> {
+  const snapshot = accounts.map(account => ({
+    user: String(account.user ?? ''),
+    pass: String(account.pass ?? ''),
+  }));
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify(snapshot)),
+  );
+  return bytesToBase64(new Uint8Array(digest));
+}
+
+function warnAboutMissingPasswords(storageStatus = 'missing') {
+  const missingPasswordUsers = accountsCache
+    .filter(account => !account.pass)
+    .map(account => account.user);
+  if (missingPasswordUsers.length === 0 || missingPasswordWarningShown) return;
+
+  missingPasswordWarningShown = true;
+  const storageUnavailable = storageStatus === 'error';
+  log(
+    '配置',
+    storageUnavailable
+      ? `安全存储暂时不可读，以下账号的密码未载入: ${missingPasswordUsers.join(', ')}`
+      : `以下账号缺少可恢复的密码: ${missingPasswordUsers.join(', ')}`,
+    'error',
+  );
+  window.setTimeout(() => {
+    void customAlert(
+      storageUnavailable
+        ? `系统安全存储暂时不可读，因此以下账号的密码没有载入：\n${missingPasswordUsers.join('\n')}\n\n应用已阻止空密码覆盖原数据。请解锁系统凭据库或重启应用后重试；若仍无法恢复，再重新输入密码。`
+        : `以下账号的旧密码副本已经不存在，无法自动恢复：\n${missingPasswordUsers.join('\n')}\n\n请逐个编辑账号并重新输入密码。`,
+      storageUnavailable ? '暂时无法读取密码' : '需要重新输入密码',
+    );
+  }, 300);
 }
 
 function getAccounts(): any[] {
@@ -414,7 +476,17 @@ function syncConfigToRust(): Promise<void> {
   };
   const operation = configSyncQueue
     .catch(() => {})
-    .then(() => invoke<void>('sync_config', { config }));
+    .then(async () => {
+      await invoke<void>('sync_config', { config });
+      // While a recoverable legacy copy exists, record exactly what the
+      // backend accepted. The next cold start must return this snapshot before
+      // the legacy copy is deleted. Later account edits update the fingerprint,
+      // so deleted/renamed accounts are not resurrected by the old data.
+      if (localStorage.getItem(LEGACY_ACCOUNTS_KEY) !== null) {
+        const fingerprint = await credentialSnapshotFingerprint(config.accounts);
+        localStorage.setItem(LEGACY_MIGRATION_PENDING_KEY, fingerprint);
+      }
+    });
   configSyncQueue = operation;
   return operation;
 }
@@ -422,14 +494,32 @@ function syncConfigToRust(): Promise<void> {
 async function loadConfigFromRust() {
   if (!(window as any).__TAURI__) return;
   try {
-    const config: any = await invoke('get_app_config');
+    const [config, credentialStorageStatus]: [any, string] = await Promise.all([
+      invoke<any>('get_app_config'),
+      invoke<string>('get_credential_storage_status'),
+    ]);
     if (!config) return;
 
+    const backendAccounts = config.accounts || [];
     const legacyAccounts = readLegacyAccounts();
-    const merged = legacyAccounts === null
-      ? { accounts: config.accounts || [], changed: false }
-      : mergeLegacyAccounts(config.accounts || [], legacyAccounts);
-    accountsCache = merged.accounts;
+    const legacyConflict = legacyAccounts !== null
+      && hasLegacyCredentialConflict(backendAccounts, legacyAccounts);
+    const pendingFingerprint = localStorage.getItem(LEGACY_MIGRATION_PENDING_KEY);
+    const migrationWasPending = pendingFingerprint !== null;
+    const backendFingerprint = migrationWasPending && credentialStorageStatus === 'available'
+      ? await credentialSnapshotFingerprint(backendAccounts)
+      : null;
+    const migrationConfirmed = legacyAccounts !== null
+      && migrationWasPending
+      && credentialStorageStatus === 'available'
+      && (pendingFingerprint === 'true'
+        ? secureStorageContainsLegacyCredentials(backendAccounts, legacyAccounts)
+        : backendFingerprint === pendingFingerprint);
+    const backendIsAuthoritative = migrationWasPending && credentialStorageStatus === 'available';
+    const merged = legacyAccounts === null || backendIsAuthoritative
+      ? { accounts: backendAccounts, changed: false }
+      : mergeLegacyAccounts(backendAccounts, legacyAccounts);
+    accountsCache = backendIsAuthoritative ? backendAccounts : merged.accounts;
     localStorage.setItem('bjut_auto_login', config.auto_login.toString());
     localStorage.setItem('bjut_check_interval', config.check_interval.toString());
     localStorage.setItem('bjut_check_interval_bg', config.check_interval_bg.toString());
@@ -454,9 +544,41 @@ async function loadConfigFromRust() {
 
     if (legacyAccounts !== null) {
       try {
-        if (merged.changed) await syncConfigToRust();
-        localStorage.removeItem(LEGACY_ACCOUNTS_KEY);
-        if (merged.changed) log('配置', '旧版账号数据已迁移到系统安全存储', 'success');
+        if (legacyAccounts.length === 0) {
+          localStorage.removeItem(LEGACY_ACCOUNTS_KEY);
+          localStorage.removeItem(LEGACY_MIGRATION_PENDING_KEY);
+        } else if (migrationConfirmed) {
+          localStorage.removeItem(LEGACY_ACCOUNTS_KEY);
+          localStorage.removeItem(LEGACY_MIGRATION_PENDING_KEY);
+          log('配置', '旧版账号迁移已在重启后验证，旧副本已清理', 'success');
+        } else if (backendIsAuthoritative) {
+          // Do not merge stale legacy accounts over a usable secure backend.
+          // A mismatch is kept for explicit recovery instead of silently
+          // undoing a password change, rename, or deletion.
+          log('配置', '安全存储内容与待确认迁移快照不一致，已保留旧副本但不会自动覆盖当前账号', 'error');
+        } else if (legacyConflict && credentialStorageStatus === 'available') {
+          if (merged.changed) {
+            await syncConfigToRust();
+            localStorage.removeItem(LEGACY_MIGRATION_PENDING_KEY);
+          }
+          log('配置', '旧版与安全存储中的密码存在冲突，已保留旧副本且不会自动覆盖当前密码', 'error');
+        } else {
+          if (merged.changed) {
+            await syncConfigToRust();
+          } else if (credentialStorageStatus === 'available') {
+            localStorage.setItem(
+              LEGACY_MIGRATION_PENDING_KEY,
+              await credentialSnapshotFingerprint(accountsCache),
+            );
+          }
+          log(
+            '配置',
+            merged.changed
+              ? '旧版账号已写入安全存储，将在下次启动验证后清理旧副本'
+              : '仍在等待安全存储完成旧版账号迁移验证',
+            'info',
+          );
+        }
       } catch (error) {
         // Keep the old value for a later retry. Never delete the only recoverable copy.
         console.error('Failed to migrate legacy accounts:', error);
@@ -464,6 +586,7 @@ async function loadConfigFromRust() {
     }
     
     renderAccounts();
+    warnAboutMissingPasswords(credentialStorageStatus);
   } catch (e) {
     console.error('Failed to load config from Rust:', e);
   }
@@ -722,10 +845,16 @@ function showListManageModal(title: string, list: string[], onSave: (list: strin
       div.style.justifyContent = 'space-between';
       div.style.padding = '0.5rem';
       div.style.borderBottom = '1px solid var(--card-border)';
-      div.innerHTML = `
-        <span style="word-break: break-all;">${item}</span>
-        <button class="btn-icon danger" style="padding: 0 0.5rem;" data-idx="${index}"><i data-lucide="trash-2"></i></button>
-      `;
+      const label = document.createElement('span');
+      label.style.wordBreak = 'break-all';
+      label.textContent = item;
+      const removeButton = document.createElement('button');
+      removeButton.className = 'btn-icon danger';
+      removeButton.style.padding = '0 0.5rem';
+      removeButton.dataset.idx = index.toString();
+      removeButton.setAttribute('aria-label', '删除');
+      removeButton.innerHTML = '<i data-lucide="trash-2"></i>';
+      div.append(label, removeButton);
       content.appendChild(div);
     });
   }
@@ -950,6 +1079,14 @@ async function init() {
   // Initialize selectors values
   settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
   settingUpdateChannel.value = localStorage.getItem('bjut_update_channel') || 'release';
+  if ((window as any).__TAURI__) {
+    void invoke<UpdateTarget>('get_update_target')
+      .then(target => {
+        const versionLabel = document.getElementById('app-version');
+        if (versionLabel) versionLabel.textContent = `v${target.currentVersion}`;
+      })
+      .catch(error => console.warn('Failed to query application version:', error));
+  }
   
   setupNavigation();
   setupEventListeners();
@@ -988,7 +1125,6 @@ async function init() {
         // Load the secure backend configuration before the first sync so accepting the
         // terms cannot overwrite an existing account set with the empty WebView cache.
         await loadConfigFromRust();
-        await syncConfigToRust();
         await listenToRustEvents();
         log('系统', '应用启动');
       } else {
@@ -1836,9 +1972,9 @@ function renderAccounts() {
     item.innerHTML = `
       <div class="account-left">
         <div class="drag-handle"><i data-lucide="grip-vertical"></i></div>
-        <div class="account-avatar">${avatarText}</div>
+        <div class="account-avatar"></div>
         <div class="account-user">
-          <h4>${acc.user}</h4>
+          <h4></h4>
           <span class="account-badge ${acc.isDefault ? 'text-primary font-bold' : 'text-muted'}">${acc.isDefault ? '默认' : '备用'}</span>
         </div>
         <div class="account-mobile-actions">
@@ -1848,8 +1984,8 @@ function renderAccounts() {
       </div>
       <div class="account-right">
         <div class="account-password">
-          <span class="password-text" data-password="${acc.pass}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted); display: inline-block; width: 7.5em; text-align: left;">*************</span>
-          <button class="btn-icon action-toggle-password hide-password" style="padding: 0.2rem;" title="显示/隐藏密码"><i data-lucide="eye"></i></button>
+          <span class="password-text${acc.pass ? '' : ' password-missing'}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted); display: inline-block; width: 7.5em; text-align: left;"></span>
+          <button class="btn-icon action-toggle-password hide-password" style="padding: 0.2rem;" title="显示/隐藏密码"${acc.pass ? '' : ' disabled'}><i data-lucide="eye"></i></button>
         </div>
         <div class="account-desktop-actions">
           <button class="btn-icon action-edit" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
@@ -1858,6 +1994,11 @@ function renderAccounts() {
         <button class="btn-icon danger action-delete" data-index="${index}" title="删除"><i data-lucide="trash-2"></i></button>
       </div>
     `;
+    item.querySelector('.account-avatar')!.textContent = avatarText;
+    item.querySelector('.account-user h4')!.textContent = acc.user;
+    const passwordText = item.querySelector('.password-text') as HTMLElement;
+    passwordText.dataset.password = acc.pass;
+    passwordText.textContent = acc.pass ? '*************' : '未保存密码';
     accountsList.appendChild(item);
   });
   createIcons({ icons });
@@ -2115,32 +2256,18 @@ async function manualLogin() {
   }
 }
 
-let campusSubnets: Set<string> | null = null;
-async function loadSubnets() {
-  if (!campusSubnets) {
-    try {
-      const res = await fetch('/src/assets/subnets.json');
-      if (res.ok) {
-        const data = await res.json();
-        campusSubnets = new Set(data);
-      } else {
-        campusSubnets = new Set();
-      }
-    } catch (e) {
-      campusSubnets = new Set();
-    }
-  }
-}
-
 async function checkNetworkSecurity(): Promise<boolean> {
   if (!(window as any).__TAURI__) return true; 
 
   try {
     const netInfo: { ssid: string, bssid: string, ip: string } = await invoke('get_network_info');
-    if (!netInfo || (!netInfo.ssid && !netInfo.ip)) return true;
+    if (!netInfo || (!netInfo.ssid && !netInfo.ip)) {
+      log('安全', '无法获取当前网络身份，已阻止发送账号密码', 'error');
+      return false;
+    }
     
-    await loadSubnets();
-    const isBjutWifi = netInfo.ssid.includes('bjut-wifi') || netInfo.ssid.includes('bjut_sushe');
+    const normalizedSsid = netInfo.ssid.trim().toLowerCase().replaceAll('_', '-');
+    const isBjutWifi = normalizedSsid === 'bjut-wifi' || normalizedSsid === 'bjut-sushe';
     let isSafe = false;
     
     // Check vlan
@@ -2220,7 +2347,8 @@ async function checkNetworkSecurity(): Promise<boolean> {
     });
   } catch (e) {
     console.error('Security check error', e);
-    return true; // Fail open if native not implemented yet
+    log('安全', '网络安全检查失败，已阻止发送账号密码', 'error');
+    return false;
   }
 }
 

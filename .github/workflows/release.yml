@@ -56,6 +56,11 @@ jobs:
         shell: bash
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: test "${GITHUB_REF_NAME}" = "v${{ steps.get_version.outputs.version }}"
+
       - name: Build Tauri App
         env:
           APPLE_SIGNING_IDENTITY: "-"
@@ -354,6 +359,7 @@ jobs:
           tag_name: v${{ steps.get_version.outputs.version }}
           name: 'BJUT-Auto-Login v${{ steps.get_version.outputs.version }}'
           draft: true
+          prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
           files: release-files/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

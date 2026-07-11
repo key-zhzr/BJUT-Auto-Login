@@ -499,7 +499,7 @@ use std::sync::atomic::{AtomicI32, AtomicBool, AtomicU32, Ordering};
 use tauri::Emitter;
 use tauri::Manager;
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 struct Account {
     #[serde(alias = "username")]
     user: String,
@@ -533,7 +533,7 @@ struct UpdateTarget {
     current_version: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 struct AppConfig {
     #[serde(default)]
     accounts: Vec<Account>,
@@ -570,9 +570,11 @@ struct LogEntry {
 
 struct AppState {
     config: RwLock<AppConfig>,
+    credential_storage_status: Mutex<String>,
     logs: Mutex<Vec<LogEntry>>,
     countdown: AtomicI32,
     is_checking: AtomicBool,
+    pending_full_check: AtomicBool,
     is_suspended: AtomicBool,
     last_known_ip: Mutex<Option<String>>,
     non_campus_count: AtomicU32,
@@ -596,6 +598,60 @@ impl LoginType {
             Self::Type3 => "Type3_172_30",
             Self::Unknown => "Unknown",
         }
+    }
+}
+
+fn is_campus_local_ip(ip: &str) -> bool {
+    let octets: Vec<u8> = ip.split('.')
+        .map(str::parse::<u8>)
+        .collect::<Result<_, _>>()
+        .unwrap_or_default();
+    if octets.len() != 4 {
+        return false;
+    }
+    match (octets[0], octets[1]) {
+        (10, 17..=27) | (10, 121) | (10, 126) | (10, 226) | (172, 17..=27) => true,
+        _ => false,
+    }
+}
+
+fn is_known_campus_ssid(ssid: &str) -> bool {
+    let normalized = ssid.trim().to_ascii_lowercase().replace('_', "-");
+    normalized == "bjut-wifi" || normalized == "bjut-sushe"
+}
+
+fn automatic_login_network_allowed(
+    login_type: &LoginType,
+    ssid: &str,
+    bssid: &str,
+    ip: &str,
+    whitelist: &[String],
+    blacklist: &[String],
+) -> Result<(), String> {
+    let normalized_ssid = ssid.trim();
+    let net_key = format!("{}|{}", normalized_ssid, bssid);
+    if blacklist.contains(&net_key) {
+        return Err(format!("当前网络 ({normalized_ssid}) 在黑名单中"));
+    }
+    if whitelist.contains(&net_key) {
+        return Ok(());
+    }
+    if !is_campus_local_ip(ip) {
+        return Err("本地 IP 不属于已知校园网网段".to_string());
+    }
+
+    match login_type {
+        LoginType::Type1 | LoginType::Type2 if is_known_campus_ssid(normalized_ssid) => Ok(()),
+        LoginType::Type3
+            if normalized_ssid.is_empty()
+                || normalized_ssid.eq_ignore_ascii_case("unknown")
+                || normalized_ssid.eq_ignore_ascii_case("<unknown ssid>")
+                || is_known_campus_ssid(normalized_ssid) => Ok(()),
+        LoginType::Type1 | LoginType::Type2 => {
+            Err("无线网络名称未经识别，且未加入白名单".to_string())
+        }
+        LoginType::Type3 => Err("当前无线网络未经识别，且未加入白名单".to_string()),
+        LoginType::Unknown => Err("未识别到校园网认证协议".to_string()),
     }
 }
 
@@ -714,7 +770,7 @@ async fn login_to_campus_network_rust(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(redact_request_error)?;
     match login_type {
         LoginType::Type1 => {
             let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
@@ -725,8 +781,8 @@ async fn login_to_campus_network_rust(
                 "http://10.21.221.98:801/eportal/portal/login?callback=dr1003&login_method=1&user_account={}&user_password={}&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=000000000000&wlan_ac_ip=&wlan_ac_name=&jsVersion=4.2.1&terminal_type=1&lang=zh-cn&v={}",
                 user_encoded, pass_encoded, v
             );
-            let res = client.get(&url).send().await.map_err(|e| e.to_string())?;
-            let text = res.text().await.map_err(|e| e.to_string())?;
+            let res = client.get(&url).send().await.map_err(redact_request_error)?;
+            let text = res.text().await.map_err(redact_request_error)?;
             Ok(parse_dr_response(&text))
         }
         LoginType::Type2 => {
@@ -738,8 +794,8 @@ async fn login_to_campus_network_rust(
                 "http://10.21.251.3/drcom/login?callback=dr1002&DDDDD={}&upass={}&0MKKey=123456&R1=0&R2=&R3=0&R6=0&para=00&v6ip=&terminal_type=1&lang=zh-cn&jsVersion=4.1&v={}",
                 user_encoded, pass_encoded, v
             );
-            let res = client.get(&url).send().await.map_err(|e| e.to_string())?;
-            let text = res.text().await.map_err(|e| e.to_string())?;
+            let res = client.get(&url).send().await.map_err(redact_request_error)?;
+            let text = res.text().await.map_err(redact_request_error)?;
             Ok(parse_dr_response(&text))
         }
         LoginType::Type3 => {
@@ -752,8 +808,8 @@ async fn login_to_campus_network_rust(
                 .form(&params1)
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
-            let html = res1.text().await.map_err(|e| e.to_string())?;
+                .map_err(redact_request_error)?;
+            let html = res1.text().await.map_err(redact_request_error)?;
             let v6ip = find_v6ip(&html);
             let mut params2 = std::collections::HashMap::new();
             params2.insert("DDDDD", user);
@@ -764,8 +820,8 @@ async fn login_to_campus_network_rust(
                 .form(&params2)
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
-            let final_html = res2.text().await.map_err(|e| e.to_string())?;
+                .map_err(redact_request_error)?;
+            let final_html = res2.text().await.map_err(redact_request_error)?;
             if final_html.contains("DispQianFei") || final_html.contains("Msg=") {
                 Ok((false, "登录失败，请检查账号密码或余额".to_string()))
             } else {
@@ -774,6 +830,13 @@ async fn login_to_campus_network_rust(
         }
         _ => Err("未设定的登录类型".to_string()),
     }
+}
+
+fn redact_request_error(error: reqwest::Error) -> String {
+    // Type 1/2 have to use the campus portal's GET protocol, which places
+    // credentials in the query string. reqwest errors may otherwise include
+    // that full URL and leak the password into app.log.
+    error.without_url().to_string()
 }
 
 async fn fetch_user_info_rust(local_ip: Option<&str>) -> Option<UserInfo> {
@@ -1013,7 +1076,20 @@ fn public_config(config: &AppConfig) -> AppConfig {
 }
 
 #[cfg(not(target_os = "android"))]
+fn ensure_persistent_credential_backend() -> Result<(), String> {
+    use keyring::credential::CredentialPersistence;
+
+    match keyring::default::default_credential_builder().persistence() {
+        CredentialPersistence::UntilDelete => Ok(()),
+        _ => Err(
+            "系统凭据库后端不是持久存储，已拒绝读写以避免重启后丢失密码".to_string()
+        ),
+    }
+}
+
+#[cfg(not(target_os = "android"))]
 fn load_secure_config() -> Result<Option<AppConfig>, String> {
+    ensure_persistent_credential_backend()?;
     let entry = keyring::Entry::new("cn.edu.bjut.al", "app-config").map_err(|e| e.to_string())?;
     match entry.get_password() {
         Ok(serialized) => serde_json::from_str(&serialized).map(Some).map_err(|e| e.to_string()),
@@ -1024,9 +1100,19 @@ fn load_secure_config() -> Result<Option<AppConfig>, String> {
 
 #[cfg(not(target_os = "android"))]
 fn save_secure_config(config: &AppConfig) -> Result<(), String> {
+    ensure_persistent_credential_backend()?;
     let entry = keyring::Entry::new("cn.edu.bjut.al", "app-config").map_err(|e| e.to_string())?;
     let serialized = serde_json::to_string(config).map_err(|e| e.to_string())?;
     entry.set_password(&serialized).map_err(|e| e.to_string())
+}
+
+fn save_secure_config_verified(config: &AppConfig) -> Result<(), String> {
+    save_secure_config(config)?;
+    match load_secure_config()? {
+        Some(persisted) if persisted == *config => Ok(()),
+        Some(_) => Err("安全存储回读内容与待保存配置不一致".to_string()),
+        None => Err("安全存储写入后未能回读配置".to_string()),
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -1053,7 +1139,14 @@ fn android_secure_config(value: Option<&str>) -> Result<Option<String>, String> 
             "setSecureConfig",
             "(Landroid/content/Context;Ljava/lang/String;)Z",
             &[JValue::Object(&activity), JValue::Object(&value_object)],
-        ).map_err(|e| e.to_string())?.z().map_err(|e| e.to_string())?;
+        );
+        let saved = match saved {
+            Ok(value) => value.z().map_err(|e| e.to_string())?,
+            Err(error) => {
+                let _ = env.exception_clear();
+                return Err(format!("Android secure storage write failed: {error}"));
+            }
+        };
         return if saved { Ok(None) } else { Err("Android Keystore refused the configuration".to_string()) };
     }
 
@@ -1062,7 +1155,14 @@ fn android_secure_config(value: Option<&str>) -> Result<Option<String>, String> 
         "getSecureConfig",
         "(Landroid/content/Context;)Ljava/lang/String;",
         &[JValue::Object(&activity)],
-    ).map_err(|e| e.to_string())?.l().map_err(|e| e.to_string())?;
+    );
+    let result = match result {
+        Ok(value) => value.l().map_err(|e| e.to_string())?,
+        Err(error) => {
+            let _ = env.exception_clear();
+            return Err(format!("Android secure storage read failed: {error}"));
+        }
+    };
     if result.is_null() {
         return Ok(None);
     }
@@ -1181,20 +1281,44 @@ fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &st
 }
 
 fn merge_legacy_credentials(current: &mut AppConfig, legacy: &AppConfig) -> bool {
-    if current.accounts.is_empty() && !legacy.accounts.is_empty() {
-        current.accounts = legacy.accounts.clone();
-        return true;
-    }
-
     let mut changed = false;
-    for account in &mut current.accounts {
-        if account.pass.is_empty() {
-            if let Some(legacy_account) = legacy.accounts.iter()
-                .find(|candidate| candidate.user == account.user && !candidate.pass.is_empty())
-            {
+    for legacy_account in &legacy.accounts {
+        if let Some(index) = current.accounts.iter()
+            .position(|account| account.user == legacy_account.user)
+        {
+            let account = &mut current.accounts[index];
+            if account.pass.is_empty() && !legacy_account.pass.is_empty() {
                 account.pass = legacy_account.pass.clone();
                 changed = true;
             }
+        } else {
+            let mut appended = legacy_account.clone();
+            if current.accounts.iter().any(|account| account.is_default) {
+                appended.is_default = false;
+            }
+            current.accounts.push(appended);
+            changed = true;
+        }
+    }
+
+    if !current.accounts.is_empty() && !current.accounts.iter().any(|account| account.is_default) {
+        current.accounts[0].is_default = true;
+        changed = true;
+    }
+    changed
+}
+
+fn fill_missing_passwords(target: &mut AppConfig, existing: &AppConfig) -> bool {
+    let mut changed = false;
+    for account in &mut target.accounts {
+        if !account.pass.is_empty() {
+            continue;
+        }
+        if let Some(saved) = existing.accounts.iter()
+            .find(|candidate| candidate.user == account.user && !candidate.pass.is_empty())
+        {
+            account.pass = saved.pass.clone();
+            changed = true;
         }
     }
     changed
@@ -1212,7 +1336,7 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
                 .map(|legacy| merge_legacy_credentials(&mut config, legacy))
                 .unwrap_or(false);
             let migration_persisted = if migrated {
-                if let Err(error) = save_secure_config(&config) {
+                if let Err(error) = save_secure_config_verified(&config) {
                     eprintln!("Unable to migrate legacy credentials into secure storage: {error}");
                     false
                 } else {
@@ -1223,24 +1347,40 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
             };
             // Do not erase the legacy plaintext passwords until the secure copy
             // has definitely been written; it may be the only recoverable copy.
-            if migration_persisted {
+            if migration_persisted && !migrated {
                 let _ = write_public_config(app, &config);
             }
+            *state.credential_storage_status.lock().unwrap() = if migration_persisted {
+                "available".to_string()
+            } else {
+                "error".to_string()
+            };
             *state.config.write().unwrap() = config;
         }
         Ok(None) => {
             if let Some(config) = disk_config {
                 // Migrate legacy plaintext configurations once the system credential store is available.
+                let mut status = "missing";
                 if config.accounts.iter().any(|account| !account.pass.is_empty()) {
-                    if let Err(error) = save_secure_config(&config).and_then(|_| write_public_config(app, &config)) {
+                    if let Err(error) = save_secure_config_verified(&config) {
                         eprintln!("Unable to migrate credentials to secure storage: {error}");
+                        status = "error";
+                    } else {
+                        // Keep the legacy file for one complete restart. The
+                        // Ok(Some) branch removes its passwords only after the
+                        // system credential store returns the same data later.
+                        status = "available";
                     }
                 }
+                *state.credential_storage_status.lock().unwrap() = status.to_string();
                 *state.config.write().unwrap() = config;
+            } else {
+                *state.credential_storage_status.lock().unwrap() = "missing".to_string();
             }
         }
         Err(error) => {
             eprintln!("Unable to read secure credentials: {error}");
+            *state.credential_storage_status.lock().unwrap() = "error".to_string();
             // Keep old installations usable even when the system credential store
             // is temporarily unavailable. A later explicit save still has to pass.
             if let Some(config) = disk_config {
@@ -1250,8 +1390,30 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
-fn save_config(app: &tauri::AppHandle, state: &AppState, new_cfg: AppConfig) -> Result<(), String> {
-    save_secure_config(&new_cfg)?;
+fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig) -> Result<(), String> {
+    {
+        let state_cfg = state.config.read().unwrap();
+        fill_missing_passwords(&mut new_cfg, &state_cfg);
+    }
+    let storage_was_unreadable = {
+        let status = state.credential_storage_status.lock().unwrap();
+        status.as_str() == "error" || status.as_str() == "unknown"
+    };
+    if storage_was_unreadable && new_cfg.accounts.iter().any(|account| account.pass.is_empty()) {
+        match load_secure_config() {
+            Ok(Some(saved)) => {
+                fill_missing_passwords(&mut new_cfg, &saved);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Err(format!(
+                    "安全存储暂时不可读，已阻止空密码覆盖原数据: {error}"
+                ));
+            }
+        }
+    }
+    save_secure_config_verified(&new_cfg)?;
+    *state.credential_storage_status.lock().unwrap() = "available".to_string();
     write_public_config(app, &new_cfg)?;
     {
         let mut state_cfg = state.config.write().unwrap();
@@ -1262,7 +1424,13 @@ fn save_config(app: &tauri::AppHandle, state: &AppState, new_cfg: AppConfig) -> 
 
 async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full_details: bool) {
     if state.is_checking.swap(true, Ordering::SeqCst) {
+        if full_details {
+            state.pending_full_check.store(true, Ordering::SeqCst);
+        }
         return;
+    }
+    if full_details {
+        state.pending_full_check.store(false, Ordering::SeqCst);
     }
     tauri::async_runtime::spawn(async move {
         let is_bg = state.is_in_background.load(Ordering::SeqCst);
@@ -1310,6 +1478,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         if is_online {
             rust_log(&app, &state, "网络", "网络检测完毕: 互联网已连通 (Online)", "info");
             state.is_checking.store(false, Ordering::SeqCst);
+            state.non_campus_count.store(0, Ordering::SeqCst);
             let payload = make_payload("Online", None);
             {
                 let mut last_state = state.last_network_state.lock().unwrap();
@@ -1324,6 +1493,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         
         match login_type {
             LoginType::Unknown => {
+                state.non_campus_count.store(0, Ordering::SeqCst);
                 rust_log(&app, &state, "网络", "网络检测完毕: 离线或非校园网 (Offline)", "info");
                 let payload = make_payload("Offline", None);
                 {
@@ -1344,27 +1514,36 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                         let cfg = state.config.read().unwrap();
                         (cfg.whitelist.clone(), cfg.blacklist.clone())
                     };
-                    let mut proceed = true;
-                    if !current_ssid.is_empty() {
-                        let net_key = format!("{}|{}", current_ssid, current_bssid);
-                        if blacklist.contains(&net_key) {
-                            rust_log(&app, &state, "网络", &format!("当前 Wi-Fi ({}) 在黑名单中，跳过自动登录", current_ssid), "info");
-                            proceed = false;
-                        } else if !whitelist.is_empty() && !whitelist.contains(&net_key) {
-                            rust_log(&app, &state, "网络", &format!("当前 Wi-Fi ({}) 不在白名单中，跳过自动登录", current_ssid), "info");
-                            proceed = false;
+                    let proceed = match automatic_login_network_allowed(
+                        &login_type,
+                        &current_ssid,
+                        &current_bssid,
+                        &current_ip,
+                        &whitelist,
+                        &blacklist,
+                    ) {
+                        Ok(()) => true,
+                        Err(reason) => {
+                            rust_log(
+                                &app,
+                                &state,
+                                "安全",
+                                &format!("自动登录已阻止: {reason}"),
+                                "error",
+                            );
+                            false
                         }
-                    }
+                    };
                     if proceed {
                         let accounts = {
                             let cfg = state.config.read().unwrap();
                             cfg.accounts.clone()
                         };
                         let active_accounts: Vec<Account> = accounts.into_iter()
-                            .filter(|acc| !acc.is_disabled.unwrap_or(false))
+                            .filter(|acc| !acc.is_disabled.unwrap_or(false) && !acc.pass.is_empty())
                             .collect();
                         if active_accounts.is_empty() {
-                            rust_log(&app, &state, "网络", "未配置有效账号，跳过自动登录", "error");
+                            rust_log(&app, &state, "网络", "未配置带已保存密码的有效账号，跳过自动登录", "error");
                         } else {
                             let mut success = false;
                             for acc in active_accounts {
@@ -1393,13 +1572,17 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 } else {
                     rust_log(&app, &state, "网络", "自动登录未开启，忽略重连", "info");
                 }
-                if is_bg {
+                if login_succeeded {
+                    state.non_campus_count.store(0, Ordering::SeqCst);
+                } else if is_bg {
                     let count = state.non_campus_count.fetch_add(1, Ordering::SeqCst) + 1;
                     rust_log(&app, &state, "网络", &format!("[DEBUG] 后台检测为非校园网环境，当前连续次数: {}/5", count), "debug");
                     if count >= 5 {
                         rust_log(&app, &state, "网络", "后台连续5次检测到校园网登录页面（或自动登录失败），进入自动休眠模式以省电。返回前台时将自动恢复。", "info");
                         state.is_suspended.store(true, Ordering::SeqCst);
                     }
+                } else {
+                    state.non_campus_count.store(0, Ordering::SeqCst);
                 }
                 let payload = if login_succeeded {
                     make_payload("Online", None)
@@ -1440,6 +1623,11 @@ fn get_app_config(state: tauri::State<Arc<AppState>>) -> AppConfig {
 }
 
 #[tauri::command]
+fn get_credential_storage_status(state: tauri::State<Arc<AppState>>) -> String {
+    state.credential_storage_status.lock().unwrap().clone()
+}
+
+#[tauri::command]
 fn get_logs(state: tauri::State<Arc<AppState>>) -> Vec<LogEntry> {
     state.logs.lock().unwrap().clone()
 }
@@ -1477,7 +1665,6 @@ fn get_countdown_status(state: tauri::State<Arc<AppState>>) -> serde_json::Value
 #[tauri::command]
 fn trigger_manual_check(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) {
     rust_log(&app, &state, "网络", "收到手动连通性检测请求，开始检测...", "info");
-    state.is_checking.store(false, Ordering::SeqCst);
     state.is_suspended.store(false, Ordering::SeqCst);
     state.non_campus_count.store(0, Ordering::SeqCst);
     let app_clone = app.clone();
@@ -1583,9 +1770,11 @@ pub fn run() {
                     whitelist: Vec::new(),
                     blacklist: Vec::new(),
                 }),
+                credential_storage_status: Mutex::new("unknown".to_string()),
                 logs: Mutex::new(Vec::new()),
                 countdown: AtomicI32::new(15),
                 is_checking: AtomicBool::new(false),
+                pending_full_check: AtomicBool::new(false),
                 is_suspended: AtomicBool::new(false),
                 last_known_ip: Mutex::new(None),
                 non_campus_count: AtomicU32::new(0),
@@ -1619,6 +1808,12 @@ pub fn run() {
                     let is_susp = loop_state.is_suspended.load(Ordering::SeqCst);
                     let is_chk = loop_state.is_checking.load(Ordering::SeqCst);
 
+                    if !is_chk && loop_state.pending_full_check.swap(false, Ordering::SeqCst) {
+                        rust_log(&loop_handle, &loop_state, "网络", "执行等待中的完整网络检测", "debug");
+                        trigger_network_check(loop_handle.clone(), loop_state.clone(), true).await;
+                        continue;
+                    }
+
                     // 1. Wi-Fi Change Check Loop (every 3 seconds)
                     wifi_check_counter += 1;
                     if wifi_check_counter >= 3 {
@@ -1651,6 +1846,7 @@ pub fn run() {
                                 loop_state.is_suspended.store(false, Ordering::SeqCst);
                                 loop_state.non_campus_count.store(0, Ordering::SeqCst);
                                 trigger_network_check(loop_handle.clone(), loop_state.clone(), true).await;
+                                continue;
                             }
                         }
                     }
@@ -1815,6 +2011,7 @@ pub fn run() {
             write_clipboard,
             sync_config,
             get_app_config,
+            get_credential_storage_status,
             get_logs,
             get_log_text,
             clear_all_logs,
@@ -1914,5 +2111,112 @@ mod tests {
 
         assert!(!merge_legacy_credentials(&mut current, &legacy));
         assert_eq!(current.accounts[0].pass, "new-secret");
+    }
+
+    #[test]
+    fn legacy_migration_keeps_current_values_and_adds_missing_accounts() {
+        let mut current: AppConfig = serde_json::from_str(r#"{
+            "accounts":[{"user":"a","pass":"new-a","isDefault":true}]
+        }"#).unwrap();
+        let legacy: AppConfig = serde_json::from_str(r#"{
+            "accounts":[
+                {"user":"a","pass":"old-a","isDefault":true},
+                {"user":"b","pass":"old-b","isDefault":true}
+            ]
+        }"#).unwrap();
+
+        assert!(merge_legacy_credentials(&mut current, &legacy));
+        assert_eq!(current.accounts.len(), 2);
+        assert_eq!(current.accounts[0].pass, "new-a");
+        assert_eq!(current.accounts[1].user, "b");
+        assert_eq!(current.accounts[1].pass, "old-b");
+        assert!(!current.accounts[1].is_default);
+    }
+
+    #[test]
+    fn blank_password_updates_reuse_existing_secrets() {
+        let existing: AppConfig = serde_json::from_str(r#"{
+            "accounts":[{"user":"a","pass":"saved-secret","isDefault":true}]
+        }"#).unwrap();
+        let mut update: AppConfig = serde_json::from_str(r#"{
+            "accounts":[{"user":"a","pass":"","isDefault":true}]
+        }"#).unwrap();
+
+        assert!(fill_missing_passwords(&mut update, &existing));
+        assert_eq!(update.accounts[0].pass, "saved-secret");
+    }
+
+    #[test]
+    fn partial_password_repair_keeps_other_unrecoverable_accounts_editable() {
+        let existing: AppConfig = serde_json::from_str(r#"{
+            "accounts":[
+                {"user":"a","pass":"","isDefault":true},
+                {"user":"b","pass":"","isDefault":false}
+            ]
+        }"#).unwrap();
+        let mut update = existing.clone();
+        update.accounts[0].pass = "re-entered-secret".to_string();
+
+        assert!(!fill_missing_passwords(&mut update, &existing));
+        assert_eq!(update.accounts[0].pass, "re-entered-secret");
+        assert!(update.accounts[1].pass.is_empty());
+    }
+
+    #[test]
+    fn request_errors_never_include_credential_urls() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime.block_on(async {
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(100))
+                .build()
+                .unwrap()
+                .get("http://127.0.0.1:0/login?user=student&password=top-secret")
+                .send()
+                .await
+                .unwrap_err()
+        });
+
+        let message = redact_request_error(error);
+        assert!(!message.contains("student"));
+        assert!(!message.contains("top-secret"));
+        assert!(!message.contains("password="));
+    }
+
+    #[test]
+    fn automatic_login_requires_a_recognized_or_explicitly_trusted_network() {
+        let whitelist = vec!["custom-campus|aa:bb".to_string()];
+        assert!(!is_known_campus_ssid("evil-bjut-wifi"));
+        assert!(automatic_login_network_allowed(
+            &LoginType::Type1,
+            "bjut_wifi",
+            "11:22",
+            "10.21.2.3",
+            &[],
+            &[],
+        ).is_ok());
+        assert!(automatic_login_network_allowed(
+            &LoginType::Type1,
+            "evil-ap",
+            "11:22",
+            "10.21.2.3",
+            &[],
+            &[],
+        ).is_err());
+        assert!(automatic_login_network_allowed(
+            &LoginType::Type2,
+            "custom-campus",
+            "aa:bb",
+            "10.21.2.3",
+            &whitelist,
+            &[],
+        ).is_ok());
+        assert!(automatic_login_network_allowed(
+            &LoginType::Type3,
+            "",
+            "",
+            "192.168.1.5",
+            &[],
+            &[],
+        ).is_err());
     }
 }

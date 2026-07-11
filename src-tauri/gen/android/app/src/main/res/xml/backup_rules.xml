@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="sharedpref" path="bjut_al_secure_config.xml" />
+    <exclude domain="sharedpref" path="bjut_al_secure_config_v2.xml" />
+</full-backup-content>
