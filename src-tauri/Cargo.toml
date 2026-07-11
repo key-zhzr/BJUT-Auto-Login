@@ -31,8 +31,7 @@ futures-util = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 corewlan = "0.2.1"
-objc2-core-location = "0.3.2"
-keyring = { version = "3", features = ["apple-native"] }
+aes-gcm = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }

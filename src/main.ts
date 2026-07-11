@@ -196,7 +196,7 @@ function warnAboutMissingPasswords(storageStatus = 'missing') {
   window.setTimeout(() => {
     void customAlert(
       storageUnavailable
-        ? `系统安全存储暂时不可读，因此以下账号的密码没有载入：\n${missingPasswordUsers.join('\n')}\n\n应用已阻止空密码覆盖原数据。请解锁系统凭据库或重启应用后重试；若仍无法恢复，再重新输入密码。`
+        ? `安全凭据存储暂时不可读，因此以下账号的密码没有载入：\n${missingPasswordUsers.join('\n')}\n\n应用已阻止空密码覆盖原数据。请检查应用数据目录权限或重启应用后重试；若仍无法恢复，再重新输入密码。`
         : `以下账号的旧密码副本已经不存在，无法自动恢复：\n${missingPasswordUsers.join('\n')}\n\n请逐个编辑账号并重新输入密码。`,
       storageUnavailable ? '暂时无法读取密码' : '需要重新输入密码',
     );
@@ -362,6 +362,7 @@ interface NetworkProfile {
   login_type: string;
   account_order: string[];
   auto_login: boolean | null;
+  auto_login_types: Record<string, boolean>;
   check_interval: number | null;
   check_interval_bg: number | null;
 }
@@ -1037,15 +1038,50 @@ class CustomSelect {
     this.trigger = this.element.querySelector('.custom-select-trigger')!;
     this.triggerSpan = this.trigger.querySelector('span')!;
     this.optionsContainer = this.element.querySelector('.custom-select-options')!;
+    this.trigger.setAttribute('role', 'combobox');
+    this.trigger.setAttribute('aria-haspopup', 'listbox');
+    this.trigger.setAttribute('aria-expanded', 'false');
+    const accessibleLabel = this.element.getAttribute('aria-label');
+    if (accessibleLabel) this.trigger.setAttribute('aria-label', accessibleLabel);
+    this.optionsContainer.setAttribute('role', 'listbox');
+    this.optionsContainer.querySelectorAll<HTMLElement>('.custom-option').forEach(option => {
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', String(option.classList.contains('selected')));
+    });
 
     // Toggle open
     this.trigger.addEventListener('click', (e) => {
       e.stopPropagation();
       // Close other dropdowns first
       document.querySelectorAll('.custom-select').forEach(el => {
-        if (el !== this.element) el.classList.remove('open');
+        if (el !== this.element) {
+          el.classList.remove('open');
+          el.querySelector('.custom-select-trigger')?.setAttribute('aria-expanded', 'false');
+        }
       });
       this.element.classList.toggle('open');
+      this.trigger.setAttribute('aria-expanded', String(this.element.classList.contains('open')));
+    });
+
+    this.trigger.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        this.element.classList.remove('open');
+        this.trigger.setAttribute('aria-expanded', 'false');
+        return;
+      }
+      if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault();
+      if (!this.element.classList.contains('open')) {
+        this.trigger.click();
+        return;
+      }
+      const options = Array.from(this.optionsContainer.querySelectorAll<HTMLElement>('.custom-option'));
+      const selectedIndex = Math.max(0, options.findIndex(option => option.classList.contains('selected')));
+      const nextIndex = event.key === 'ArrowUp'
+        ? (selectedIndex - 1 + options.length) % options.length
+        : (selectedIndex + 1) % options.length;
+      if (event.key === 'Enter' || event.key === ' ') options[selectedIndex]?.click();
+      else options[nextIndex]?.click();
     });
 
     // Handle options click
@@ -1055,6 +1091,7 @@ class CustomSelect {
         const val = option.getAttribute('data-value') || '';
         this.value = val;
         this.element.classList.remove('open');
+        this.trigger.setAttribute('aria-expanded', 'false');
         this.onChangeCallbacks.forEach(cb => cb(val));
       }
     });
@@ -1062,6 +1099,7 @@ class CustomSelect {
     // Close on click outside
     document.addEventListener('click', () => {
       this.element.classList.remove('open');
+      this.trigger.setAttribute('aria-expanded', 'false');
     });
 
     // Initial value
@@ -1086,9 +1124,11 @@ class CustomSelect {
     this.optionsContainer.querySelectorAll('.custom-option').forEach(opt => {
       if (opt.getAttribute('data-value') === val) {
         opt.classList.add('selected');
+        opt.setAttribute('aria-selected', 'true');
         selectedText = opt.textContent || '';
       } else {
         opt.classList.remove('selected');
+        opt.setAttribute('aria-selected', 'false');
       }
     });
     this.triggerSpan.textContent = selectedText || val;
@@ -1108,10 +1148,13 @@ class CustomSelect {
     options.forEach(opt => {
       const div = document.createElement('div');
       div.className = 'custom-option';
+      div.setAttribute('role', 'option');
+      div.setAttribute('aria-selected', 'false');
       div.setAttribute('data-value', opt.value);
       div.textContent = opt.text;
       if (opt.value === this._value) {
         div.classList.add('selected');
+        div.setAttribute('aria-selected', 'true');
         this.triggerSpan.textContent = opt.text;
       }
       this.optionsContainer.appendChild(div);
@@ -1145,8 +1188,6 @@ const btnResetAllHealth = document.getElementById('btn-reset-all-health') as HTM
 const accountHealthList = document.getElementById('account-health-list')!;
 const diagnosticSteps = document.getElementById('diagnostic-steps')!;
 const logSearch = document.getElementById('log-search') as HTMLInputElement;
-const logSessionFilter = document.getElementById('log-session-filter') as HTMLSelectElement;
-const logLevelFilter = document.getElementById('log-level-filter') as HTMLSelectElement;
 const logFilterCount = document.getElementById('log-filter-count')!;
 const btnDiagnosticBundle = document.getElementById('btn-diagnostic-bundle') as HTMLButtonElement;
 const networkProfilesList = document.getElementById('network-profiles-list')!;
@@ -1166,6 +1207,10 @@ let settingLogLevel: CustomSelect;
 let overrideAccountSelect: CustomSelect;
 let overrideMethodSelect: CustomSelect;
 let settingUpdateChannel: CustomSelect;
+let logSessionFilter: CustomSelect;
+let logLevelFilter: CustomSelect;
+let networkProfileProtocolSelect: CustomSelect;
+let networkProfileAccountSelect: CustomSelect;
 
 // Add Modal
 const addModal = document.getElementById('add-modal')!;
@@ -1210,6 +1255,10 @@ async function init() {
   overrideMethodSelect = new CustomSelect('override-method');
   settingUpdateChannel = new CustomSelect('setting-update-channel');
   settingLogLevel = new CustomSelect('setting-log-level');
+  logSessionFilter = new CustomSelect('log-session-filter');
+  logLevelFilter = new CustomSelect('log-level-filter');
+  networkProfileProtocolSelect = new CustomSelect('network-profile-protocol');
+  networkProfileAccountSelect = new CustomSelect('network-profile-account');
 
   createIcons({ icons });
   settingAutoLogin.checked = autoLoginEnabled;
@@ -1270,12 +1319,12 @@ async function init() {
       // Request foreground permissions
       if ((window as any).__TAURI__) {
         try {
-          if ((window as any).AndroidBridge) {
+          if (isAndroid && (window as any).AndroidBridge) {
             (window as any).AndroidBridge.requestForegroundPermissions();
-          } else {
+          } else if (isAndroid) {
             await invoke('request_foreground_permissions');
           }
-          log('系统', '已申请前台网络定位相关权限');
+          if (isAndroid) log('系统', '已申请前台网络定位相关权限');
         } catch (e) {
           console.error('Failed to request foreground permissions:', e);
         }
@@ -1305,7 +1354,7 @@ async function init() {
   } else {
     // Already accepted
     if ((window as any).__TAURI__) {
-      if ((window as any).AndroidBridge) {
+      if (isAndroid && (window as any).AndroidBridge) {
         if (autoLoginEnabled) {
           try {
             (window as any).AndroidBridge.startKeepAliveService();
@@ -1313,7 +1362,7 @@ async function init() {
             console.error('Failed to start keep-alive service:', e);
           }
         }
-      } else {
+      } else if (isAndroid) {
         invoke('request_foreground_permissions').catch(e => {
           console.error('Failed to request foreground permissions:', e);
         });
@@ -1533,7 +1582,14 @@ function renderNetworkProfiles() {
     const details = document.createElement('small');
     const account = profile.account_order[0] || '沿用全局账号顺序';
     const network = profile.ssid || '校园有线';
-    details.textContent = `${network} · ${profile.login_type === 'auto' ? '自动协议' : profile.login_type} · ${account}`;
+    const typePolicy = profile.auto_login_types || {};
+    const legacyAutoLogin = profile.auto_login !== false;
+    const enabledTypes = [
+      (typePolicy.type1 ?? legacyAutoLogin) ? '教学' : '',
+      (typePolicy.type2 ?? legacyAutoLogin) ? '宿舍' : '',
+      (typePolicy.type3 ?? legacyAutoLogin) ? '有线' : '',
+    ].filter(Boolean).join('/');
+    details.textContent = `${network} · ${profile.login_type === 'auto' ? '自动协议' : profile.login_type} · 自动登录 ${enabledTypes || '全关'} · ${account}`;
     info.append(title, details);
     const actions = document.createElement('div');
     actions.className = 'network-profile-actions';
@@ -1562,19 +1618,19 @@ function openNetworkProfileModal(index = -1) {
   (document.getElementById('network-profile-ssid') as HTMLInputElement).value = profile?.ssid
     || (document.getElementById('more-ssid')?.textContent?.replace(/^--$/, '') ?? '');
   (document.getElementById('network-profile-bssid') as HTMLInputElement).value = profile?.bssid || '';
-  (document.getElementById('network-profile-protocol') as HTMLSelectElement).value = profile?.login_type || 'auto';
+  networkProfileProtocolSelect.value = profile?.login_type || 'auto';
   (document.getElementById('network-profile-interval') as HTMLInputElement).value = profile?.check_interval?.toString() || '';
   (document.getElementById('network-profile-interval-bg') as HTMLInputElement).value = profile?.check_interval_bg?.toString() || '';
-  (document.getElementById('network-profile-auto-login') as HTMLInputElement).checked = profile?.auto_login !== false;
-  const accountSelect = document.getElementById('network-profile-account') as HTMLSelectElement;
-  accountSelect.innerHTML = '<option value="">沿用全局顺序</option>';
-  getAccounts().filter(account => !account.isDisabled).forEach(account => {
-    const option = document.createElement('option');
-    option.value = account.user;
-    option.textContent = account.user;
-    accountSelect.appendChild(option);
-  });
-  accountSelect.value = profile?.account_order[0] || '';
+  const legacyAutoLogin = profile?.auto_login !== false;
+  const typePolicy = profile?.auto_login_types || {};
+  (document.getElementById('network-profile-auto-type1') as HTMLInputElement).checked = typePolicy.type1 ?? legacyAutoLogin;
+  (document.getElementById('network-profile-auto-type2') as HTMLInputElement).checked = typePolicy.type2 ?? legacyAutoLogin;
+  (document.getElementById('network-profile-auto-type3') as HTMLInputElement).checked = typePolicy.type3 ?? legacyAutoLogin;
+  networkProfileAccountSelect.setOptions([
+    { value: '', text: '沿用全局顺序' },
+    ...getAccounts().filter(account => !account.isDisabled).map(account => ({ value: account.user, text: account.user })),
+  ]);
+  networkProfileAccountSelect.value = profile?.account_order[0] || '';
   document.getElementById('network-profile-modal-title')!.textContent = profile ? '编辑网络档案' : '添加网络档案';
   networkProfileModal.classList.remove('hidden');
 }
@@ -1637,13 +1693,13 @@ async function readPermissionHealth(): Promise<PermissionHealthItem[]> {
     const storage = await invoke<CredentialStorageHealth>('get_credential_storage_health');
     items.push({
       id: 'credentialStorage',
-      label: '系统安全存储',
+      label: '安全凭据存储',
       granted: storage.status === 'available' || storage.status === 'missing',
       required: true,
       detail: storage.backend,
     });
   } catch {
-    items.push({ id: 'credentialStorage', label: '系统安全存储', granted: false, required: true });
+    items.push({ id: 'credentialStorage', label: '安全凭据存储', granted: false, required: true });
   }
   return items;
 }
@@ -1786,18 +1842,24 @@ function setupEventListeners() {
   networkProfileForm.addEventListener('submit', async event => {
     event.preventDefault();
     const index = parseInt((document.getElementById('network-profile-index') as HTMLInputElement).value, 10);
-    const selectedAccount = (document.getElementById('network-profile-account') as HTMLSelectElement).value;
+    const selectedAccount = networkProfileAccountSelect.value;
     const intervalValue = (document.getElementById('network-profile-interval') as HTMLInputElement).value;
     const intervalBgValue = (document.getElementById('network-profile-interval-bg') as HTMLInputElement).value;
+    const autoLoginTypes = {
+      type1: (document.getElementById('network-profile-auto-type1') as HTMLInputElement).checked,
+      type2: (document.getElementById('network-profile-auto-type2') as HTMLInputElement).checked,
+      type3: (document.getElementById('network-profile-auto-type3') as HTMLInputElement).checked,
+    };
     const profile: NetworkProfile = {
       id: index >= 0 ? networkProfilesCache[index].id : `profile-${Date.now()}`,
       name: (document.getElementById('network-profile-name') as HTMLInputElement).value.trim(),
       enabled: index >= 0 ? networkProfilesCache[index].enabled : true,
       ssid: (document.getElementById('network-profile-ssid') as HTMLInputElement).value.trim(),
       bssid: (document.getElementById('network-profile-bssid') as HTMLInputElement).value.trim(),
-      login_type: (document.getElementById('network-profile-protocol') as HTMLSelectElement).value,
+      login_type: networkProfileProtocolSelect.value,
       account_order: selectedAccount ? [selectedAccount] : [],
-      auto_login: (document.getElementById('network-profile-auto-login') as HTMLInputElement).checked,
+      auto_login: Object.values(autoLoginTypes).some(Boolean),
+      auto_login_types: autoLoginTypes,
       check_interval: intervalValue ? Math.max(5, parseInt(intervalValue, 10)) : null,
       check_interval_bg: intervalBgValue ? Math.max(5, parseInt(intervalBgValue, 10)) : null,
     };
@@ -1897,9 +1959,9 @@ function setupEventListeners() {
     }
   });
 
-  [logSearch, logSessionFilter, logLevelFilter].forEach(element => {
-    element.addEventListener(element === logSearch ? 'input' : 'change', renderFilteredLogs);
-  });
+  logSearch.addEventListener('input', renderFilteredLogs);
+  logSessionFilter.addEventListener('change', renderFilteredLogs);
+  logLevelFilter.addEventListener('change', renderFilteredLogs);
 
   btnDiagnosticBundle.addEventListener('click', async () => {
     if (!(window as any).__TAURI__) return;
@@ -2550,7 +2612,13 @@ function setupEventListeners() {
 
   // Drag and Drop using SortableJS
 
-  let lastDragPoint: { clientX: number; clientY: number } | null = null;
+  let lastFallbackRect: DOMRect | null = null;
+  let fallbackCaptureFrame: number | null = null;
+  const captureFallbackRect = () => {
+    const fallback = document.querySelector<HTMLElement>('.dragging-fallback');
+    if (fallback) lastFallbackRect = fallback.getBoundingClientRect();
+    fallbackCaptureFrame = requestAnimationFrame(captureFallbackRect);
+  };
   Sortable.create(accountsList, {
     handle: '.drag-handle',
     animation: 300,
@@ -2559,12 +2627,14 @@ function setupEventListeners() {
     forceFallback: true,
     fallbackClass: 'dragging-fallback',
     fallbackOnBody: true,
-    onMove: (_evt, originalEvent) => {
-      const pointer = originalEvent as MouseEvent | TouchEvent | undefined;
-      const point = pointer && 'touches' in pointer
-        ? (pointer.touches[0] || pointer.changedTouches[0])
-        : pointer;
-      if (point) lastDragPoint = { clientX: point.clientX, clientY: point.clientY };
+    onStart: () => {
+      lastFallbackRect = null;
+      if (fallbackCaptureFrame !== null) cancelAnimationFrame(fallbackCaptureFrame);
+      fallbackCaptureFrame = requestAnimationFrame(captureFallbackRect);
+    },
+    onMove: () => {
+      const fallback = document.querySelector<HTMLElement>('.dragging-fallback');
+      if (fallback) lastFallbackRect = fallback.getBoundingClientRect();
       return true;
     },
     onEnd: (evt) => {
@@ -2573,24 +2643,34 @@ function setupEventListeners() {
       // Animate the released card from the pointer/fallback position back to
       // Sortable's final slot. WAAPI keeps the movement on the compositor and
       // does not get cut off by the account text ellipsis container.
+      if (fallbackCaptureFrame !== null) cancelAnimationFrame(fallbackCaptureFrame);
+      fallbackCaptureFrame = null;
+      const activeFallback = document.querySelector<HTMLElement>('.dragging-fallback');
+      const releaseRect = activeFallback?.getBoundingClientRect() || lastFallbackRect;
+      lastFallbackRect = null;
+      item.getAnimations().forEach(animation => animation.cancel());
+      item.style.transition = 'none';
+      item.style.transform = '';
       const finalRect = item.getBoundingClientRect();
-      const fallback = document.querySelector<HTMLElement>('.dragging-fallback');
-      const fallbackRect = fallback && fallback !== item ? fallback.getBoundingClientRect() : null;
-      let fromX = fallbackRect ? fallbackRect.left - finalRect.left : 0;
-      let fromY = fallbackRect ? fallbackRect.top - finalRect.top : 0;
-      if (!fallbackRect && lastDragPoint) {
-        fromX = lastDragPoint.clientX - (finalRect.left + finalRect.width / 2);
-        fromY = lastDragPoint.clientY - (finalRect.top + finalRect.height / 2);
+      if (releaseRect) {
+        const fromX = releaseRect.left - finalRect.left;
+        const fromY = releaseRect.top - finalRect.top;
+        requestAnimationFrame(() => {
+          const animation = item.animate([
+            { transform: `translate3d(${fromX}px, ${fromY}px, 0) scale(1.018)`, boxShadow: '0 12px 28px rgba(0,0,0,0.32)' },
+            { transform: 'translate3d(0, -2px, 0) scale(1.006)', offset: 0.78, boxShadow: '0 5px 14px rgba(0,0,0,0.18)' },
+            { transform: 'translate3d(0, 0, 0) scale(1)', boxShadow: '0 0 0 rgba(0,0,0,0)' },
+          ], {
+            duration: 360,
+            easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          });
+          void animation.finished
+            .catch(() => undefined)
+            .finally(() => item.style.removeProperty('transition'));
+        });
+      } else {
+        item.style.removeProperty('transition');
       }
-      lastDragPoint = null;
-      item.animate([
-        { transform: `translate3d(${fromX}px, ${fromY}px, 0) scale(1.025)`, boxShadow: '0 12px 28px rgba(0,0,0,0.32)' },
-        { transform: 'translate3d(0, -3px, 0) scale(1.008)', offset: 0.72, boxShadow: '0 5px 14px rgba(0,0,0,0.18)' },
-        { transform: 'translate3d(0, 0, 0) scale(1)', boxShadow: '0 0 0 rgba(0,0,0,0)' },
-      ], {
-        duration: 420,
-        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-      });
 
       if (oldIndex !== undefined && newIndex !== undefined && oldIndex !== newIndex) {
         // Update metadata after Sortable has committed the new DOM order.

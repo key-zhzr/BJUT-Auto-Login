@@ -373,6 +373,12 @@ main {
   display: block;
 }
 
+#accounts.page.active,
+.accounts-container,
+.accounts-list {
+  overflow: visible;
+}
+
 .account-item {
   display: flex;
   justify-content: space-between;
@@ -414,14 +420,16 @@ main {
 
 .account-left {
   flex: 1;
-  overflow: hidden;
+  min-width: 0;
+  overflow: visible;
 }
 
 .account-user {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  min-width: 0;
+  overflow: visible;
 }
 
 .account-user h4 {
@@ -741,6 +749,7 @@ input:checked + .slider:before { transform: translateX(24px); }
 .diagnostic-empty { color: var(--text-muted); text-align: center; padding: 1rem; font-size: 0.85rem; }
 
 .log-filters {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto auto auto;
   align-items: center;
@@ -749,10 +758,12 @@ input:checked + .slider:before { transform: translateX(24px); }
   margin-bottom: 0.75rem;
 }
 
+.log-filters:has(.custom-select.open) {
+  z-index: 2000;
+}
+
 .log-filters input,
-.log-filters select,
-.profile-form-grid input,
-.profile-form-grid select {
+.profile-form-grid input {
   min-width: 0;
   width: 100%;
   border: 1px solid var(--card-border);
@@ -775,6 +786,16 @@ input:checked + .slider:before { transform: translateX(24px); }
 .network-profile-modal-content { max-width: 620px; max-height: 88dvh; overflow-y: auto; }
 .profile-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; }
 .profile-checkbox { display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted); }
+.profile-auto-login-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  margin-top: 0.35rem;
+  padding: 0.75rem;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+}
+.profile-auto-login-types legend { padding: 0 0.35rem; color: var(--text-muted); font-size: 0.82rem; }
 
 .permission-health-summary {
   margin-top: 1rem;
@@ -938,18 +959,29 @@ input:checked + .slider:before { transform: translateX(24px); }
   .nav-brand h2 { display: none; }
 }
 
-/* Android WebView: avoid continuously compositing large blurred layers. */
+/* Android WebView: retain blur on key surfaces with a small radius and keep
+   scrolling/dense lists opaque so the GPU does not recomposite every card. */
+body.is-android .glass-card {
+  -webkit-backdrop-filter: blur(2px) !important;
+  backdrop-filter: blur(2px) !important;
+  background: rgba(30, 41, 59, 0.9);
+}
 body.is-android nav,
-body.is-android .glass-card,
-body.is-android .dragging-fallback,
-body.is-android .modal-overlay {
+body.is-android .modal-overlay,
+body.is-android .custom-select-options,
+body.is-android .dragging-fallback {
+  -webkit-backdrop-filter: blur(6px) !important;
+  backdrop-filter: blur(6px) !important;
+}
+body.is-android .account-item,
+body.is-android .logs-container,
+body.is-android .diagnostic-step,
+body.is-android .permission-health-row {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
-
-body.is-android .glass-card { background: rgba(30, 41, 59, 0.94); }
 body.is-android .page { animation-duration: 0.16s; }
-body.is-android main { transform: translateZ(0); contain: layout; }
+body.is-android main { contain: layout style; }
 body.is-android .logs-content { contain: layout paint; }
 
 @media (hover: none) and (pointer: coarse) {
@@ -1190,6 +1222,10 @@ body.is-android .logs-content { contain: layout paint; }
   user-select: none;
   font-size: 0.9rem;
 }
+
+.custom-select.form-select { display: block; width: 100%; }
+.custom-select.form-select .custom-select-trigger { min-height: 42px; padding: 0.65rem 0.75rem; background: rgba(15, 23, 42, 0.75); }
+.custom-select.compact-select { min-width: 128px; }
 
 .custom-select.open {
   z-index: 1001;

@@ -277,7 +277,7 @@
             <section class="diagnostic-panel glass-card">
               <div class="diagnostic-panel-header">
                 <div>
-                  <h3>系统安全存储</h3>
+                  <h3>安全凭据存储</h3>
                   <p id="credential-health-backend">正在读取后端状态…</p>
                 </div>
                 <span id="credential-health-badge" class="health-badge neutral">读取中</span>
@@ -330,17 +330,23 @@
           </header>
           <div class="log-filters glass-card">
             <input id="log-search" type="search" placeholder="搜索时间、模块或内容" autocomplete="off">
-            <select id="log-session-filter" aria-label="启动会话">
-              <option value="all">全部启动</option>
-              <option value="current">本次启动</option>
-            </select>
-            <select id="log-level-filter" aria-label="日志级别">
-              <option value="all">全部级别</option>
-              <option value="error">错误</option>
-              <option value="success">成功</option>
-              <option value="info">信息</option>
-              <option value="debug">调试</option>
-            </select>
+            <div class="custom-select compact-select" id="log-session-filter" aria-label="启动会话">
+              <div class="custom-select-trigger" tabindex="0"><span>全部启动</span><i data-lucide="chevron-down"></i></div>
+              <div class="custom-select-options">
+                <div class="custom-option selected" data-value="all">全部启动</div>
+                <div class="custom-option" data-value="current">本次启动</div>
+              </div>
+            </div>
+            <div class="custom-select compact-select" id="log-level-filter" aria-label="日志级别">
+              <div class="custom-select-trigger" tabindex="0"><span>全部级别</span><i data-lucide="chevron-down"></i></div>
+              <div class="custom-select-options">
+                <div class="custom-option selected" data-value="all">全部级别</div>
+                <div class="custom-option" data-value="error">错误</div>
+                <div class="custom-option" data-value="success">成功</div>
+                <div class="custom-option" data-value="info">信息</div>
+                <div class="custom-option" data-value="debug">调试</div>
+              </div>
+            </div>
             <span id="log-filter-count">0 条</span>
           </div>
           
@@ -577,16 +583,22 @@
             </div>
             <div class="form-group">
               <label for="network-profile-protocol">登录协议</label>
-              <select id="network-profile-protocol">
-                <option value="auto">自动检测</option>
-                <option value="bjut-wifi">教学区无线</option>
-                <option value="bjut-sushe">宿舍无线</option>
-                <option value="wired">校园有线</option>
-              </select>
+              <div class="custom-select form-select" id="network-profile-protocol" aria-label="登录协议">
+                <div class="custom-select-trigger" tabindex="0"><span>自动检测</span><i data-lucide="chevron-down"></i></div>
+                <div class="custom-select-options">
+                  <div class="custom-option selected" data-value="auto">自动检测</div>
+                  <div class="custom-option" data-value="bjut-wifi">教学区无线</div>
+                  <div class="custom-option" data-value="bjut-sushe">宿舍无线</div>
+                  <div class="custom-option" data-value="wired">校园有线</div>
+                </div>
+              </div>
             </div>
             <div class="form-group">
               <label for="network-profile-account">首选账号</label>
-              <select id="network-profile-account"><option value="">沿用全局顺序</option></select>
+              <div class="custom-select form-select" id="network-profile-account" aria-label="首选账号">
+                <div class="custom-select-trigger" tabindex="0"><span>沿用全局顺序</span><i data-lucide="chevron-down"></i></div>
+                <div class="custom-select-options"><div class="custom-option selected" data-value="">沿用全局顺序</div></div>
+              </div>
             </div>
             <div class="form-group">
               <label for="network-profile-interval">前台间隔（秒）</label>
@@ -597,7 +609,12 @@
               <input id="network-profile-interval-bg" type="number" min="5" placeholder="沿用全局">
             </div>
           </div>
-          <label class="profile-checkbox"><input id="network-profile-auto-login" type="checkbox" checked> 在该网络启用自动登录</label>
+          <fieldset class="profile-auto-login-types">
+            <legend>按认证类型启用自动登录</legend>
+            <label class="profile-checkbox"><input id="network-profile-auto-type1" type="checkbox" checked> 教学区无线</label>
+            <label class="profile-checkbox"><input id="network-profile-auto-type2" type="checkbox" checked> 宿舍无线</label>
+            <label class="profile-checkbox"><input id="network-profile-auto-type3" type="checkbox" checked> 校园有线</label>
+          </fieldset>
           <div class="modal-actions">
             <button type="button" class="btn btn-secondary" id="btn-cancel-network-profile">取消</button>
             <button type="submit" class="btn btn-primary">保存档案</button>
@@ -613,8 +630,8 @@
           <p>欢迎使用 BJUT Auto Login（北京工业大学校园网自动登录助手）。在您使用本应用前，请仔细阅读并同意以下条款：</p>
           <p style="margin-top: 0.5rem; font-weight: bold; color: var(--text-primary);">1. 权限申请与数据使用说明：</p>
           <p>• <strong>网络与 Wi-Fi 信息 (SSID/BSSID)：</strong>应用需要读取当前连接的 Wi-Fi 名称以识别您是否连接到了北京工业大学的校园网，并触发自动登录逻辑。</p>
-          <p>• <strong>定位权限：</strong>根据操作系统安全策略（Android 与 macOS），获取当前连接的 Wi-Fi SSID 和 BSSID 必须拥有定位权限。我们声明<strong>绝对不会</strong>收集、上传或跟踪您的任何实际地理位置信息。</p>
-          <p>• <strong>本地存储：</strong>您添加的校园网账号和密码将仅保存在设备的系统安全存储中，<strong>绝对不会</strong>发送到任何第三方服务器。</p>
+          <p>• <strong>定位权限：</strong>根据操作系统安全策略（Android 与 macOS），前台获取当前连接的 Wi-Fi SSID 和 BSSID 可能需要定位权限；macOS 后台检测不会读取 Wi-Fi 标识。我们声明<strong>绝对不会</strong>收集、上传或跟踪您的任何实际地理位置信息。</p>
+          <p>• <strong>本地存储：</strong>您添加的校园网账号和密码将仅保存在设备的安全凭据存储中，<strong>绝对不会</strong>发送到任何第三方服务器。</p>
           <p style="margin-top: 0.5rem; font-weight: bold; color: var(--text-primary);">2. 后台自动登录与电池忽略权限：</p>
           <p>• 为实现断网自动重连，Android 端会使用前台常驻服务。您可选择授予后台定位权限以及“忽略电池优化”权限以保持连接稳定性。</p>
           <p style="margin-top: 0.5rem; font-weight: bold; color: var(--text-primary);">3. 免责声明：</p>

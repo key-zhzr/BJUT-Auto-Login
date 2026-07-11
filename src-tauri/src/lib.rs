@@ -5,7 +5,10 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
+fn get_network_info(
+    _app: tauri::AppHandle,
+    _include_wifi_details: Option<bool>,
+) -> serde_json::Value {
     #[cfg(target_os = "android")]
     {
         let mut result = serde_json::json!({"ssid": "", "bssid": "", "ip": ""});
@@ -65,13 +68,15 @@ fn get_network_info(_app: tauri::AppHandle) -> serde_json::Value {
 
         #[cfg(target_os = "macos")]
         {
-            if let Ok(client) = corewlan::WiFiClient::shared() {
-                if let Some(interface) = client.interface() {
-                    if let Some(ssid_str) = interface.ssid() {
-                        ssid = ssid_str;
-                    }
-                    if let Some(bssid_str) = interface.bssid() {
-                        bssid = bssid_str;
+            if _include_wifi_details.unwrap_or(true) {
+                if let Ok(client) = corewlan::WiFiClient::shared() {
+                    if let Some(interface) = client.interface() {
+                        if let Some(ssid_str) = interface.ssid() {
+                            ssid = ssid_str;
+                        }
+                        if let Some(bssid_str) = interface.bssid() {
+                            bssid = bssid_str;
+                        }
                     }
                 }
             }
@@ -229,20 +234,6 @@ fn request_foreground_permissions(_app: tauri::AppHandle) {
                     }
                 }
             }
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        static PROMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !PROMPTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            let _ = _app.run_on_main_thread(|| {
-                unsafe {
-                    let manager = objc2_core_location::CLLocationManager::new();
-                    manager.requestWhenInUseAuthorization();
-                    manager.startUpdatingLocation();
-                    let _ = Box::leak(Box::new(manager));
-                }
-            });
         }
     }
 }
@@ -614,6 +605,8 @@ struct NetworkProfile {
     #[serde(default)]
     auto_login: Option<bool>,
     #[serde(default)]
+    auto_login_types: HashMap<String, bool>,
+    #[serde(default)]
     check_interval: Option<i32>,
     #[serde(default)]
     check_interval_bg: Option<i32>,
@@ -803,6 +796,22 @@ fn accounts_for_profile(accounts: Vec<Account>, profile: Option<&NetworkProfile>
         .collect()
 }
 
+fn profile_auto_login_enabled(
+    profile: Option<&NetworkProfile>,
+    login_type: &LoginType,
+    global_default: bool,
+) -> bool {
+    let Some(profile) = profile else { return global_default; };
+    let legacy_default = profile.auto_login.unwrap_or(global_default);
+    let key = match login_type {
+        LoginType::Type1 => "type1",
+        LoginType::Type2 => "type2",
+        LoginType::Type3 => "type3",
+        LoginType::Unknown => return legacy_default,
+    };
+    profile.auto_login_types.get(key).copied().unwrap_or(legacy_default)
+}
+
 fn url_encode(input: &str) -> String {
     let mut output = String::new();
     for b in input.as_bytes() {
@@ -864,25 +873,41 @@ fn parse_dr_response(text: &str) -> (bool, String) {
 }
 
 async fn check_internet_rust() -> bool {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(1500))
-        .build();
-    if let Ok(c) = client {
-        if let Ok(res) = c.get("http://captive.apple.com/hotspot-detect.html")
-            .header("Cache-Control", "no-cache")
-            .send()
-            .await
-        {
-            if res.status().is_success() {
-                if let Ok(text) = res.text().await {
-                    if text.contains("Success") {
-                        return true;
-                    }
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(1800))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+    let targets = [
+        ("https://connectivitycheck.gstatic.com/generate_204", 0u8),
+        ("https://cp.cloudflare.com/generate_204", 0u8),
+        ("http://captive.apple.com/hotspot-detect.html", 1u8),
+        ("http://www.msftconnecttest.com/connecttest.txt", 2u8),
+    ];
+    let checks = targets.into_iter().map(|(url, validation)| {
+        let client = client.clone();
+        async move {
+            let response = client.get(url)
+                .header("Cache-Control", "no-cache, no-store")
+                .send()
+                .await
+                .ok()?;
+            match validation {
+                0 => Some(response.status() == reqwest::StatusCode::NO_CONTENT),
+                1 if response.status().is_success() => {
+                    Some(response.text().await.ok()?.contains("Success"))
                 }
+                2 if response.status().is_success() => {
+                    Some(response.text().await.ok()?.trim() == "Microsoft Connect Test")
+                }
+                _ => Some(false),
             }
         }
-    }
-    false
+    });
+    futures_util::future::join_all(checks).await.into_iter().flatten().any(|online| online)
 }
 
 async fn detect_login_type_rust() -> LoginType {
@@ -896,18 +921,19 @@ async fn detect_login_type_rust() -> LoginType {
         .timeout(std::time::Duration::from_millis(1500))
         .build()
         .unwrap_or_default();
-    for &(url, ref ltype) in &ips {
-        if let Ok(res) = client.get(url)
-            .header("Cache-Control", "no-cache")
-            .send()
-            .await
-        {
-            if res.status().as_u16() != 0 {
-                return ltype.clone();
-            }
+    let probes = ips.into_iter().map(|(url, ltype)| {
+        let client = client.clone();
+        async move {
+            client.get(url)
+                .header("Cache-Control", "no-cache")
+                .send()
+                .await
+                .ok()
+                .map(|_| ltype)
         }
-    }
-    LoginType::Unknown
+    });
+    futures_util::future::join_all(probes).await.into_iter().flatten().next()
+        .unwrap_or(LoginType::Unknown)
 }
 
 async fn login_to_campus_network_rust(
@@ -1415,7 +1441,7 @@ fn public_config(config: &AppConfig) -> AppConfig {
     public
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn ensure_persistent_credential_backend() -> Result<(), String> {
     use keyring::credential::CredentialPersistence;
 
@@ -1427,8 +1453,8 @@ fn ensure_persistent_credential_backend() -> Result<(), String> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
-fn load_secure_config() -> Result<Option<AppConfig>, String> {
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn load_secure_config(_app: &tauri::AppHandle) -> Result<Option<AppConfig>, String> {
     ensure_persistent_credential_backend()?;
     let entry = keyring::Entry::new("cn.edu.bjut.al", "app-config").map_err(|e| e.to_string())?;
     match entry.get_password() {
@@ -1438,17 +1464,101 @@ fn load_secure_config() -> Result<Option<AppConfig>, String> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
-fn save_secure_config(config: &AppConfig) -> Result<(), String> {
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn save_secure_config(_app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
     ensure_persistent_credential_backend()?;
     let entry = keyring::Entry::new("cn.edu.bjut.al", "app-config").map_err(|e| e.to_string())?;
     let serialized = serde_json::to_string(config).map_err(|e| e.to_string())?;
     entry.set_password(&serialized).map_err(|e| e.to_string())
 }
 
-fn save_secure_config_verified(config: &AppConfig) -> Result<(), String> {
-    save_secure_config(config)?;
-    match load_secure_config()? {
+#[cfg(target_os = "macos")]
+fn macos_credential_paths(app: &tauri::AppHandle) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| error.to_string())?;
+    Ok((directory.join("credentials.key"), directory.join("credentials.enc")))
+}
+
+#[cfg(target_os = "macos")]
+fn load_or_create_macos_credential_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
+    use aes_gcm::aead::{rand_core::RngCore, OsRng};
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let (key_path, _) = macos_credential_paths(app)?;
+    if let Ok(bytes) = std::fs::read(&key_path) {
+        return bytes.try_into().map_err(|_| "macOS 本地凭据密钥长度无效".to_string());
+    }
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&key_path)
+        .map_err(|error| error.to_string())?;
+    file.write_all(&key).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    Ok(key)
+}
+
+#[cfg(target_os = "macos")]
+fn load_secure_config(app: &tauri::AppHandle) -> Result<Option<AppConfig>, String> {
+    use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+
+    let (_, encrypted_path) = macos_credential_paths(app)?;
+    let payload = match std::fs::read(encrypted_path) {
+        Ok(payload) => payload,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if payload.len() < 13 || payload[0] != 1 {
+        return Err("macOS 本地凭据文件格式无效".to_string());
+    }
+    let key = load_or_create_macos_credential_key(app)?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&payload[1..13]), &payload[13..])
+        .map_err(|_| "macOS 本地凭据文件认证失败".to_string())?;
+    serde_json::from_slice(&plaintext).map(Some).map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn save_secure_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
+    use aes_gcm::{aead::{Aead, OsRng, rand_core::RngCore}, Aes256Gcm, KeyInit, Nonce};
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let key = load_or_create_macos_credential_key(app)?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
+    let mut nonce = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce);
+    let serialized = serde_json::to_vec(config).map_err(|error| error.to_string())?;
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), serialized.as_ref())
+        .map_err(|_| "macOS 本地凭据加密失败".to_string())?;
+    let (_, encrypted_path) = macos_credential_paths(app)?;
+    let temporary_path = encrypted_path.with_extension("enc.tmp");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&temporary_path)
+        .map_err(|error| error.to_string())?;
+    file.write_all(&[1]).and_then(|_| file.write_all(&nonce)).and_then(|_| file.write_all(&ciphertext))
+        .map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    std::fs::rename(temporary_path, encrypted_path).map_err(|error| error.to_string())
+}
+
+fn save_secure_config_verified(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
+    save_secure_config(app, config)?;
+    match load_secure_config(app)? {
         Some(persisted) if persisted == *config => Ok(()),
         Some(_) => Err("安全存储回读内容与待保存配置不一致".to_string()),
         None => Err("安全存储写入后未能回读配置".to_string()),
@@ -1513,14 +1623,14 @@ fn android_secure_config(value: Option<&str>) -> Result<Option<String>, String> 
 }
 
 #[cfg(target_os = "android")]
-fn load_secure_config() -> Result<Option<AppConfig>, String> {
+fn load_secure_config(_app: &tauri::AppHandle) -> Result<Option<AppConfig>, String> {
     android_secure_config(None)?
         .map(|serialized| serde_json::from_str(&serialized).map_err(|e| e.to_string()))
         .transpose()
 }
 
 #[cfg(target_os = "android")]
-fn save_secure_config(config: &AppConfig) -> Result<(), String> {
+fn save_secure_config(_app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
     let serialized = serde_json::to_string(config).map_err(|e| e.to_string())?;
     android_secure_config(Some(&serialized)).map(|_| ())
 }
@@ -1670,13 +1780,13 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
         .ok()
         .and_then(|content| serde_json::from_str::<AppConfig>(&content).ok());
 
-    match load_secure_config() {
+    match load_secure_config(app) {
         Ok(Some(mut config)) => {
             let migrated = disk_config.as_ref()
                 .map(|legacy| merge_legacy_credentials(&mut config, legacy))
                 .unwrap_or(false);
             let migration_persisted = if migrated {
-                if let Err(error) = save_secure_config_verified(&config) {
+                if let Err(error) = save_secure_config_verified(app, &config) {
                     eprintln!("Unable to migrate legacy credentials into secure storage: {error}");
                     false
                 } else {
@@ -1702,7 +1812,7 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
                 // Migrate legacy plaintext configurations once the system credential store is available.
                 let mut status = "missing";
                 if config.accounts.iter().any(|account| !account.pass.is_empty()) {
-                    if let Err(error) = save_secure_config_verified(&config) {
+                    if let Err(error) = save_secure_config_verified(app, &config) {
                         eprintln!("Unable to migrate credentials to secure storage: {error}");
                         status = "error";
                     } else {
@@ -1741,7 +1851,7 @@ fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig)
         status.as_str() == "error" || status.as_str() == "unknown"
     };
     if storage_was_unreadable && new_cfg.accounts.iter().any(|account| account.pass.is_empty()) {
-        match load_secure_config() {
+        match load_secure_config(app) {
             Ok(Some(saved)) => {
                 fill_missing_passwords(&mut new_cfg, &saved);
             }
@@ -1753,7 +1863,7 @@ fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig)
             }
         }
     }
-    save_secure_config_verified(&new_cfg)?;
+    save_secure_config_verified(app, &new_cfg)?;
     *state.credential_storage_status.lock().unwrap() = "available".to_string();
     write_public_config(app, &new_cfg)?;
     {
@@ -1787,12 +1897,28 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         let _ = app.emit("countdown-tick", serde_json::json!({"status": "checking"}));
         rust_log(&app, &state, "网络", &format!("[DEBUG] 开始检测网络连通性 (模式: {})", if is_bg { "后台" } else { "前台" }), "debug");
 
+        #[cfg(target_os = "macos")]
+        if full_details && is_bg {
+            rust_log(&app, &state, "隐私", "macOS 后台检测已跳过 SSID/BSSID，仅更新 IP 与连通性", "debug");
+        }
+
         // Background interval checks reuse the last details and avoid location-protected APIs.
-        let net_info = if full_details {
-            get_network_info(app.clone())
+        let mut net_info = if full_details {
+            get_network_info(app.clone(), Some(!is_bg))
         } else {
             state.last_network_state.lock().unwrap().clone()
         };
+        #[cfg(target_os = "macos")]
+        if full_details && is_bg {
+            let previous = state.last_network_state.lock().unwrap().clone();
+            if let Some(object) = net_info.as_object_mut() {
+                for key in ["ssid", "bssid"] {
+                    if let Some(value) = previous.get(key) {
+                        object.insert(key.to_string(), value.clone());
+                    }
+                }
+            }
+        }
         let current_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let current_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let current_ip = net_info.get("ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1885,7 +2011,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                     > chrono::Utc::now().timestamp();
                 let auto_login_enabled = {
                     let cfg = state.config.read().unwrap();
-                    profile.as_ref().and_then(|item| item.auto_login).unwrap_or(cfg.auto_login)
+                    profile_auto_login_enabled(profile.as_ref(), &login_type, cfg.auto_login)
                 };
                 if auto_login_enabled && !auto_login_paused {
                     let (whitelist, blacklist) = {
@@ -2026,13 +2152,13 @@ fn credential_backend_name() -> &'static str {
     if cfg!(target_os = "android") {
         "Android Keystore (AES-GCM)"
     } else if cfg!(target_os = "macos") {
-        "macOS Keychain"
+        "macOS 本地加密文件 (AES-GCM)"
     } else if cfg!(target_os = "windows") {
         "Windows Credential Manager"
     } else if cfg!(target_os = "linux") {
         "Linux Secret Service"
     } else {
-        "系统安全存储"
+        "安全凭据存储"
     }
 }
 
@@ -2046,11 +2172,11 @@ fn get_credential_storage_health(state: tauri::State<Arc<AppState>>) -> Credenti
         .collect();
     let saved_accounts = config.accounts.len().saturating_sub(missing_password_accounts.len());
     let message = match status.as_str() {
-        "available" if missing_password_accounts.is_empty() => "系统安全存储工作正常，所有账号均已保存密码",
-        "available" => "系统安全存储可用，但部分账号仍需补录密码",
-        "missing" => "系统安全存储可用，当前尚未保存凭据",
-        "error" => "系统安全存储暂时不可读；应用已阻止空密码覆盖",
-        _ => "系统安全存储状态尚未完成初始化",
+        "available" if missing_password_accounts.is_empty() => "安全凭据存储工作正常，所有账号均已保存密码",
+        "available" => "安全凭据存储可用，但部分账号仍需补录密码",
+        "missing" => "安全凭据存储可用，当前尚未保存凭据",
+        "error" => "安全凭据存储暂时不可读；应用已阻止空密码覆盖",
+        _ => "安全凭据存储状态尚未完成初始化",
     }.to_string();
     CredentialStorageHealth {
         status,
@@ -2108,7 +2234,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
 
     let mut steps = Vec::new();
     let identity_started = std::time::Instant::now();
-    let network = get_network_info(app);
+    let network = get_network_info(app, Some(true));
     let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
     let mut ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
     if ip.is_empty() {
@@ -2175,7 +2301,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         "互联网连通性",
         internet_started,
         if online { "success" } else { "warning" },
-        if online { "互联网访问正常，无需校园网认证".to_string() } else { "暂时无法访问互联网，继续检测认证网关".to_string() },
+        if online { "多个独立探测目标中至少一个验证成功，互联网访问正常".to_string() } else { "多个独立目标均未验证成功，继续检测认证网关".to_string() },
     ));
 
     let portal_started = std::time::Instant::now();
@@ -2384,7 +2510,7 @@ async fn manual_login(
             Ok((true, message)) => {
                 record_account_success(&app, &state, &account.user);
                 rust_log(&app, &state, "登录", &format!("登录成功: {message}"), "success");
-                let net_info = get_network_info(app.clone());
+                let net_info = get_network_info(app.clone(), Some(true));
                 let payload = serde_json::json!({
                     "state": "Online",
                     "ssid": net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or(""),
@@ -2583,7 +2709,7 @@ fn refresh_tray_menu(app: &tauri::AppHandle, state: &AppState) {
 
 #[cfg(desktop)]
 async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
-    let network = get_network_info(app.clone());
+    let network = get_network_info(app.clone(), Some(true));
     let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
     let bssid = network.get("bssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
     let ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
@@ -3207,6 +3333,22 @@ mod tests {
         let ordered = accounts_for_profile(config.accounts, Some(&profile));
         assert_eq!(ordered.len(), 1);
         assert_eq!(ordered[0].user, "second");
+    }
+
+    #[test]
+    fn network_profile_controls_auto_login_per_authentication_type() {
+        let config: AppConfig = serde_json::from_str(r#"{
+            "network_profiles": [{
+                "id":"mixed","name":"自动识别","ssid":"bjut_wifi","enabled":true,
+                "auto_login":false,
+                "auto_login_types":{"type1":true,"type2":false,"type3":true}
+            }]
+        }"#).unwrap();
+        let profile = &config.network_profiles[0];
+        assert!(profile_auto_login_enabled(Some(profile), &LoginType::Type1, false));
+        assert!(!profile_auto_login_enabled(Some(profile), &LoginType::Type2, true));
+        assert!(profile_auto_login_enabled(Some(profile), &LoginType::Type3, false));
+        assert!(!profile_auto_login_enabled(Some(profile), &LoginType::Unknown, true));
     }
 
     #[test]
