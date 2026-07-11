@@ -19,6 +19,10 @@ const icons = {
   ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
 };
 
+if (navigator.userAgent.toLowerCase().includes('android')) {
+  document.body.classList.add('is-android');
+}
+
 let loadingMaskTimer: number | null = null;
 let appLaunchRevealed = false;
 let macosDockPolicyReady: Promise<void> = Promise.resolve();
@@ -367,6 +371,14 @@ interface AppLogEntry {
   module: string;
   message: string;
   type: 'info' | 'error' | 'success' | 'debug';
+}
+
+interface PermissionHealthItem {
+  id: string;
+  label: string;
+  granted: boolean;
+  required: boolean;
+  detail?: string;
 }
 
 function isVersionNewer(current: string, latest: string): boolean {
@@ -745,7 +757,8 @@ async function listenToRustEvents() {
       message: entry.message,
       type: entry.type,
     }));
-    renderFilteredLogs();
+    logsDirty = true;
+    logFilterCount.textContent = `${logEntriesCache.length} 条`;
 
     // Load initial network state
     try {
@@ -822,7 +835,12 @@ function renderLogEntry(module: string, message: string, type: 'info' | 'error' 
 
   logEntriesCache.push({ time: time || new Date().toLocaleString(), module, message, type });
   if (logEntriesCache.length > 5000) logEntriesCache.splice(0, logEntriesCache.length - 5000);
-  renderFilteredLogs();
+  logsDirty = true;
+  if (logsContent.closest('.page')?.classList.contains('active')) {
+    renderFilteredLogs();
+  } else {
+    logFilterCount.textContent = `${logEntriesCache.length} 条`;
+  }
 }
 
 function renderFilteredLogs() {
@@ -858,6 +876,7 @@ function renderFilteredLogs() {
     logsContent.appendChild(entry);
   });
   if (logFilterCount) logFilterCount.textContent = `${visible.length} / ${logEntriesCache.length} 条`;
+  logsDirty = false;
   requestAnimationFrame(() => {
     if (logsPageActive && scroller && wasAtBottom) {
       scroller.scrollTop = scroller.scrollHeight;
@@ -1136,6 +1155,9 @@ const networkProfileForm = document.getElementById('network-profile-form') as HT
 const settingUsageAlerts = document.getElementById('setting-usage-alerts') as HTMLInputElement;
 const settingBalanceThreshold = document.getElementById('setting-balance-threshold') as HTMLInputElement;
 const settingFlowThreshold = document.getElementById('setting-flow-threshold') as HTMLInputElement;
+const permissionHealthList = document.getElementById('permission-health-list')!;
+const permissionHealthSummary = document.getElementById('permission-health-summary')!;
+const btnRefreshPermissions = document.getElementById('btn-refresh-permissions') as HTMLButtonElement;
 const settingAutoLogin = document.getElementById('setting-auto-login') as HTMLInputElement;
 const settingWifiChangeDetect = document.getElementById('setting-wifi-change-detect') as HTMLInputElement;
 const settingAutostart = document.getElementById('setting-autostart') as HTMLInputElement;
@@ -1169,6 +1191,7 @@ let accountHealthCache = new Map<string, AccountHealth>();
 let lastDiagnosticReport: DiagnosticReport | null = null;
 let networkProfilesCache: NetworkProfile[] = [];
 let logEntriesCache: AppLogEntry[] = [];
+let logsDirty = true;
 let networkEventDebounce: number | null = null;
 
 // New state for split check loops
@@ -1575,6 +1598,101 @@ function setupEventDrivenNetworkDetection() {
   const connection = (navigator as any).connection;
   connection?.addEventListener?.('change', () => notify('系统连接属性'));
   (window as any).__nativeNetworkChanged = (source = 'Android NetworkCallback') => notify(source);
+  (window as any).__nativeNotificationAction = async (action: 'check' | 'pause' | 'resume') => {
+    if (!(window as any).__TAURI__) return;
+    if (action === 'check') {
+      await invoke('notify_network_change', { source: 'Android 常驻通知' });
+    } else {
+      await invoke('set_auto_login_pause', { minutes: action === 'pause' ? 60 : 0 });
+    }
+  };
+  const pausedUntil = Number((window as any).AndroidBridge?.getAutoLoginPausedUntil?.() || 0);
+  if (pausedUntil > Date.now()) {
+    const remainingMinutes = Math.max(1, Math.ceil((pausedUntil - Date.now()) / 60000));
+    void invoke('set_auto_login_pause', { minutes: remainingMinutes });
+  }
+}
+
+async function readPermissionHealth(): Promise<PermissionHealthItem[]> {
+  const androidBridge = (window as any).AndroidBridge;
+  if (androidBridge?.getPermissionHealth) {
+    const raw = androidBridge.getPermissionHealth();
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  }
+  const items: PermissionHealthItem[] = [];
+  try {
+    const notification = await import('@tauri-apps/plugin-notification');
+    items.push({
+      id: 'notifications',
+      label: '系统通知',
+      granted: await notification.isPermissionGranted(),
+      required: false,
+      detail: '用于登录结果和用量提醒',
+    });
+  } catch {
+    items.push({ id: 'notifications', label: '系统通知', granted: false, required: false });
+  }
+  try {
+    const storage = await invoke<CredentialStorageHealth>('get_credential_storage_health');
+    items.push({
+      id: 'credentialStorage',
+      label: '系统安全存储',
+      granted: storage.status === 'available' || storage.status === 'missing',
+      required: true,
+      detail: storage.backend,
+    });
+  } catch {
+    items.push({ id: 'credentialStorage', label: '系统安全存储', granted: false, required: true });
+  }
+  return items;
+}
+
+async function refreshPermissionHealth() {
+  btnRefreshPermissions.disabled = true;
+  permissionHealthSummary.textContent = '正在检查系统权限…';
+  try {
+    const items = await readPermissionHealth();
+    permissionHealthList.innerHTML = '';
+    const missingRequired = items.filter(item => item.required && !item.granted).length;
+    const missingOptional = items.filter(item => !item.required && !item.granted).length;
+    permissionHealthSummary.className = `permission-health-summary ${missingRequired ? 'error' : missingOptional ? 'warning' : 'success'}`;
+    permissionHealthSummary.textContent = missingRequired
+      ? `${missingRequired} 项必要权限需要处理`
+      : missingOptional
+        ? `必要权限正常，${missingOptional} 项增强权限未开启`
+        : '所有权限状态正常';
+    items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'permission-health-row';
+      const info = document.createElement('div');
+      const title = document.createElement('strong');
+      title.textContent = item.label;
+      const detail = document.createElement('small');
+      detail.textContent = item.detail || (item.required ? '应用核心功能需要此权限' : '可选增强权限');
+      info.append(title, detail);
+      const actions = document.createElement('div');
+      actions.className = 'permission-health-actions';
+      const badge = document.createElement('span');
+      badge.className = `health-badge ${item.granted ? 'success' : item.required ? 'error' : 'warning'}`;
+      badge.textContent = item.granted ? '正常' : item.required ? '缺失' : '未开启';
+      actions.appendChild(badge);
+      if (!item.granted && item.id !== 'credentialStorage') {
+        const button = document.createElement('button');
+        button.className = 'btn btn-secondary btn-sm action-permission-settings';
+        button.dataset.permission = item.id;
+        button.textContent = '处理';
+        actions.appendChild(button);
+      }
+      row.append(info, actions);
+      permissionHealthList.appendChild(row);
+    });
+  } catch (error) {
+    permissionHealthSummary.className = 'permission-health-summary error';
+    permissionHealthSummary.textContent = `权限检查失败：${String(error)}`;
+  } finally {
+    btnRefreshPermissions.disabled = false;
+  }
 }
 
 // Navigation
@@ -1590,6 +1708,8 @@ function setupNavigation() {
       if (target === 'diagnostics') {
         void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
       }
+      if (target === 'logs' && logsDirty) renderFilteredLogs();
+      if (target === 'settings') void refreshPermissionHealth();
     });
   });
 }
@@ -1597,6 +1717,31 @@ function setupNavigation() {
 // Event Listeners
 function setupEventListeners() {
   btnLogin.addEventListener('click', manualLogin);
+
+  btnRefreshPermissions.addEventListener('click', () => void refreshPermissionHealth());
+  permissionHealthList.addEventListener('click', async event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.action-permission-settings');
+    const permission = button?.dataset.permission;
+    if (!permission) return;
+    const androidBridge = (window as any).AndroidBridge;
+    if (androidBridge?.openPermissionSettings) {
+      androidBridge.openPermissionSettings(permission);
+      return;
+    }
+    if (permission === 'notifications') {
+      try {
+        const notification = await import('@tauri-apps/plugin-notification');
+        await notification.requestPermission();
+      } finally {
+        await refreshPermissionHealth();
+      }
+    }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && document.getElementById('settings')?.classList.contains('active')) {
+      window.setTimeout(() => void refreshPermissionHealth(), 250);
+    }
+  });
 
   btnRunDiagnostics.addEventListener('click', () => void runDiagnostics());
   btnCopyDiagnostics.addEventListener('click', async () => {
@@ -2058,6 +2203,12 @@ function setupEventListeners() {
           );
           return;
         }
+        const signedManifest = latestRelease.assets.find(item => item.name === 'latest.json');
+        if (target.platform !== 'android' && !signedManifest) {
+          log('系统', `版本 ${latestRelease.tag_name} 缺少 Tauri 签名更新清单`, 'error');
+          await customAlert('该版本没有签名更新清单，应用已拒绝自动安装。请从 Releases 页面手动下载。', '无法验证更新签名');
+          return;
+        }
 
         log('系统', `发现新版本: ${latestRelease.tag_name}，匹配安装包 ${asset.name}`, 'success');
         const confirmed = await showUpdateDialog(latestRelease, target, asset);
@@ -2065,7 +2216,9 @@ function setupEventListeners() {
 
         try {
           await invoke('download_and_install_update', {
-            url: asset.browser_download_url,
+            url: target.platform === 'android'
+              ? asset.browser_download_url
+              : signedManifest!.browser_download_url,
             fileName: asset.name,
           });
           const progressText = document.getElementById('update-progress-text');
@@ -2397,6 +2550,7 @@ function setupEventListeners() {
 
   // Drag and Drop using SortableJS
 
+  let lastDragPoint: { clientX: number; clientY: number } | null = null;
   Sortable.create(accountsList, {
     handle: '.drag-handle',
     animation: 300,
@@ -2405,33 +2559,42 @@ function setupEventListeners() {
     forceFallback: true,
     fallbackClass: 'dragging-fallback',
     fallbackOnBody: true,
+    onMove: (_evt, originalEvent) => {
+      const pointer = originalEvent as MouseEvent | TouchEvent | undefined;
+      const point = pointer && 'touches' in pointer
+        ? (pointer.touches[0] || pointer.changedTouches[0])
+        : pointer;
+      if (point) lastDragPoint = { clientX: point.clientX, clientY: point.clientY };
+      return true;
+    },
     onEnd: (evt) => {
       const { oldIndex, newIndex, item } = evt;
-      
-      // Custom drop animation for the dropped item
-      item.style.transition = 'none';
-      item.style.transform = 'scale(1.05) translateY(-5px)';
-      item.style.boxShadow = '0 10px 25px rgba(0,0,0,0.2)';
-      item.style.zIndex = '100';
-      
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          item.style.transition = 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease';
-          item.style.transform = 'scale(1) translateY(0)';
-          item.style.boxShadow = '';
-          
-          setTimeout(() => {
-            item.style.transition = '';
-            item.style.transform = '';
-            item.style.zIndex = '';
-          }, 300);
-        });
+
+      // Animate the released card from the pointer/fallback position back to
+      // Sortable's final slot. WAAPI keeps the movement on the compositor and
+      // does not get cut off by the account text ellipsis container.
+      const finalRect = item.getBoundingClientRect();
+      const fallback = document.querySelector<HTMLElement>('.dragging-fallback');
+      const fallbackRect = fallback && fallback !== item ? fallback.getBoundingClientRect() : null;
+      let fromX = fallbackRect ? fallbackRect.left - finalRect.left : 0;
+      let fromY = fallbackRect ? fallbackRect.top - finalRect.top : 0;
+      if (!fallbackRect && lastDragPoint) {
+        fromX = lastDragPoint.clientX - (finalRect.left + finalRect.width / 2);
+        fromY = lastDragPoint.clientY - (finalRect.top + finalRect.height / 2);
+      }
+      lastDragPoint = null;
+      item.animate([
+        { transform: `translate3d(${fromX}px, ${fromY}px, 0) scale(1.025)`, boxShadow: '0 12px 28px rgba(0,0,0,0.32)' },
+        { transform: 'translate3d(0, -3px, 0) scale(1.008)', offset: 0.72, boxShadow: '0 5px 14px rgba(0,0,0,0.18)' },
+        { transform: 'translate3d(0, 0, 0) scale(1)', boxShadow: '0 0 0 rgba(0,0,0,0)' },
+      ], {
+        duration: 420,
+        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
       });
 
       if (oldIndex !== undefined && newIndex !== undefined && oldIndex !== newIndex) {
-        // Wait for all Sortable slide animations to completely finish before updating DOM texts
-        // so we don't interrupt the transform transitions of sibling elements.
-        setTimeout(() => {
+        // Update metadata after Sortable has committed the new DOM order.
+        requestAnimationFrame(() => {
           const accounts = getAccounts();
           const accItem = accounts.splice(oldIndex, 1)[0];
           accounts.splice(newIndex, 0, accItem);
@@ -2469,7 +2632,7 @@ function setupEventListeners() {
           });
           
           log('账号管理', '账号顺序已更新，最高优先级将作为默认账号');
-        }, 310);
+        });
       }
     }
   });

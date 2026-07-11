@@ -64,6 +64,8 @@ jobs:
       - name: Build Tauri App
         env:
           APPLE_SIGNING_IDENTITY: "-"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- ${{ matrix.args }}
 
       - name: Rename and Prepare Assets
@@ -100,6 +102,17 @@ jobs:
                       print("Found macOS DMG: {} -> {}".format(file_path, dest))
                       shutil.copy2(file_path, dest)
                       copied = True
+                  elif platform == "macos-latest" and file.endswith(".app.tar.gz"):
+                      arch = "arm64" if "aarch64" in args else "x64"
+                      dest = "release-artifacts/BJUT-Auto-Login_{}_macOS_{}.tar.gz".format(version, arch)
+                      print("Found macOS updater bundle: {} -> {}".format(file_path, dest))
+                      shutil.copy2(file_path, dest)
+                      copied = True
+                  elif platform == "macos-latest" and file.endswith(".app.tar.gz.sig"):
+                      arch = "arm64" if "aarch64" in args else "x64"
+                      dest = "release-artifacts/BJUT-Auto-Login_{}_macOS_{}.tar.gz.sig".format(version, arch)
+                      shutil.copy2(file_path, dest)
+                      copied = True
                       
                   # Windows
                   elif platform == "windows-latest" and file.endswith(".exe") and "bundle" in file_path:
@@ -107,6 +120,11 @@ jobs:
                       suffix = "_Offline" if "tauri.offline.conf.json" in args else ""
                       dest = "release-artifacts/BJUT-Auto-Login_{}_Windows_{}{}.exe".format(version, arch, suffix)
                       print("Found Windows EXE: {} -> {}".format(file_path, dest))
+                      shutil.copy2(file_path, dest)
+                      copied = True
+                  elif platform == "windows-latest" and file.endswith(".exe.sig") and "bundle" in file_path and "tauri.offline.conf.json" not in args:
+                      arch = "arm64" if "aarch64" in args else "x64"
+                      dest = "release-artifacts/BJUT-Auto-Login_{}_Windows_{}.exe.sig".format(version, arch)
                       shutil.copy2(file_path, dest)
                       copied = True
                       
@@ -120,6 +138,10 @@ jobs:
                       elif file.endswith(".AppImage"):
                           dest = "release-artifacts/BJUT-Auto-Login_{}_Linux_x64.AppImage".format(version)
                           print("Found Linux AppImage: {} -> {}".format(file_path, dest))
+                          shutil.copy2(file_path, dest)
+                          copied = True
+                      elif file.endswith(".AppImage.sig"):
+                          dest = "release-artifacts/BJUT-Auto-Login_{}_Linux_x64.AppImage.sig".format(version)
                           shutil.copy2(file_path, dest)
                           copied = True
           
@@ -352,6 +374,48 @@ jobs:
           print("Successfully flattened {} files.".format(file_count))
           if file_count == 0:
               raise Exception("No release files were found to upload!")
+
+      - name: Generate signed updater manifest
+        shell: python
+        env:
+          VERSION: ${{ steps.get_version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          version = os.environ["VERSION"]
+          repository = os.environ["REPOSITORY"]
+          base = "https://github.com/{}/releases/download/v{}".format(repository, version)
+          release_dir = "release-files"
+          targets = {
+              "darwin-aarch64": "BJUT-Auto-Login_{}_macOS_arm64.tar.gz".format(version),
+              "darwin-x86_64": "BJUT-Auto-Login_{}_macOS_x64.tar.gz".format(version),
+              "windows-aarch64": "BJUT-Auto-Login_{}_Windows_arm64.exe".format(version),
+              "windows-x86_64": "BJUT-Auto-Login_{}_Windows_x64.exe".format(version),
+              "linux-x86_64": "BJUT-Auto-Login_{}_Linux_x64.AppImage".format(version),
+          }
+          platforms = {}
+          for target, filename in targets.items():
+              artifact = os.path.join(release_dir, filename)
+              signature = artifact + ".sig"
+              if not os.path.isfile(artifact) or not os.path.isfile(signature):
+                  raise SystemExit("Missing updater artifact or signature for {}: {}".format(target, filename))
+              with open(signature, "r", encoding="utf-8") as handle:
+                  signature_text = handle.read().strip()
+              platforms[target] = {
+                  "url": "{}/{}".format(base, filename),
+                  "signature": signature_text,
+              }
+          manifest = {
+              "version": version,
+              "notes": "完整更新说明请查看本 GitHub Release。",
+              "pub_date": datetime.now(timezone.utc).isoformat(),
+              "platforms": platforms,
+          }
+          with open(os.path.join(release_dir, "latest.json"), "w", encoding="utf-8") as handle:
+              json.dump(manifest, handle, ensure_ascii=False, indent=2)
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2

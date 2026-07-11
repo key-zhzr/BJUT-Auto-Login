@@ -1108,30 +1108,12 @@ fn launch_update_installer(_app: &tauri::AppHandle, path: &std::path::Path) -> R
     }
 }
 
-#[cfg(target_os = "windows")]
-fn launch_update_installer(app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
-    std::process::Command::new(path).spawn().map_err(|e| e.to_string())?;
-    app.exit(0);
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn launch_update_installer(_app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
-    std::process::Command::new("open").arg(path).spawn().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn launch_update_installer(_app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
-    std::process::Command::new("xdg-open").arg(path).spawn().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 #[cfg(target_os = "ios")]
 fn launch_update_installer(_app: &tauri::AppHandle, _path: &std::path::Path) -> Result<(), String> {
     Err("iOS 版本不支持应用内安装，请使用快捷指令更新".to_string())
 }
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
 #[tauri::command]
 async fn download_and_install_update(
     app: tauri::AppHandle,
@@ -1189,6 +1171,61 @@ async fn download_and_install_update(
     file.flush().map_err(|e| e.to_string())?;
     let _ = app.emit("update-progress", serde_json::json!({"status": "installing", "percent": 100.0}));
     launch_update_installer(&app, &target_path)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn download_and_install_update(
+    app: tauri::AppHandle,
+    url: String,
+    _file_name: String,
+) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let endpoint = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
+    if endpoint.scheme() != "https"
+        || endpoint.host_str() != Some("github.com")
+        || !endpoint.path().starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
+        || !endpoint.path().ends_with("/latest.json")
+    {
+        return Err("拒绝使用非官方签名更新清单".to_string());
+    }
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|error| error.to_string())?
+        .build()
+        .map_err(|error| error.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "签名更新清单未提供适用于当前设备的新版本".to_string())?;
+    let mut received = 0u64;
+    update
+        .download_and_install(
+            |chunk_length, content_length| {
+                received += chunk_length as u64;
+                let percent = content_length.map(|total| {
+                    ((received as f64 / total as f64) * 100.0).min(100.0)
+                });
+                let _ = app.emit("update-progress", serde_json::json!({
+                    "status": "downloading",
+                    "received": received,
+                    "total": content_length,
+                    "percent": percent,
+                }));
+            },
+            || {
+                let _ = app.emit("update-progress", serde_json::json!({
+                    "status": "installing",
+                    "percent": 100.0,
+                }));
+            },
+        )
+        .await
+        .map_err(|error| format!("更新签名验证或安装失败：{error}"))?;
+    app.restart();
 }
 
 fn show_native_notification(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
@@ -2884,7 +2921,9 @@ pub fn run() {
 
     #[cfg(desktop)]
     {
-        builder = builder.plugin(tauri_plugin_autostart::Builder::default().build());
+        builder = builder
+            .plugin(tauri_plugin_autostart::Builder::default().build())
+            .plugin(tauri_plugin_updater::Builder::new().build());
     }
 
     let app = builder

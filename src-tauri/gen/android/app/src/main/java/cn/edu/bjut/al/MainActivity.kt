@@ -3,37 +3,49 @@ package cn.edu.bjut.al
 import android.os.Bundle
 import android.content.Context
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.os.Build
 import android.net.Uri
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
+import android.os.PowerManager
 import android.provider.Settings
-import android.net.wifi.WifiManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import androidx.core.content.ContextCompat
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
   private var resumedFromBackground = false
-  private var connectivityManager: ConnectivityManager? = null
-  private var networkCallback: ConnectivityManager.NetworkCallback? = null
-  private var lastNetworkEventAt = 0L
-  private var lastNetworkSignature = ""
+  private val serviceEventReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      val action = intent?.getStringExtra(KeepAliveService.EXTRA_COMMAND) ?: return
+      val script = when (action) {
+        KeepAliveService.COMMAND_NETWORK_CHANGED -> "window.__nativeNetworkChanged?.('Android NetworkCallback')"
+        KeepAliveService.COMMAND_CHECK -> "window.__nativeNotificationAction?.('check')"
+        KeepAliveService.COMMAND_PAUSE -> "window.__nativeNotificationAction?.('pause')"
+        KeepAliveService.COMMAND_RESUME -> "window.__nativeNotificationAction?.('resume')"
+        else -> null
+      } ?: return
+      appWebView?.post { appWebView?.evaluateJavascript(script, null) }
+    }
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
-    registerNetworkCallback()
+    ContextCompat.registerReceiver(
+      this,
+      serviceEventReceiver,
+      IntentFilter(KeepAliveService.ACTION_SERVICE_EVENT),
+      ContextCompat.RECEIVER_NOT_EXPORTED
+    )
   }
 
   override fun onDestroy() {
-    networkCallback?.let { callback ->
-      try { connectivityManager?.unregisterNetworkCallback(callback) } catch (_: Exception) {}
-    }
-    networkCallback = null
+    try { unregisterReceiver(serviceEventReceiver) } catch (_: Exception) {}
     super.onDestroy()
   }
 
@@ -59,48 +71,6 @@ class MainActivity : TauriActivity() {
     webView.setBackgroundColor(android.graphics.Color.rgb(15, 23, 42))
     // Register JavaScript interface so frontend can call Android native methods directly
     webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
-  }
-
-  @Synchronized
-  private fun notifyNetworkChanged(signature: String) {
-    val now = android.os.SystemClock.elapsedRealtime()
-    if (signature == lastNetworkSignature || now - lastNetworkEventAt < 800) return
-    lastNetworkSignature = signature
-    lastNetworkEventAt = now
-    appWebView?.post {
-      appWebView?.evaluateJavascript(
-        "window.__nativeNetworkChanged?.('Android NetworkCallback')",
-        null
-      )
-    }
-  }
-
-  private fun registerNetworkCallback() {
-    try {
-      val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-      connectivityManager = manager
-      val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = notifyNetworkChanged("available:${network.hashCode()}")
-        override fun onLost(network: Network) = notifyNetworkChanged("lost:${network.hashCode()}")
-        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-          val signature = "cap:${network.hashCode()}:" +
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) + ":" +
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) + ":" +
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) + ":" +
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)
-          notifyNetworkChanged(signature)
-        }
-      }
-      networkCallback = callback
-      manager.registerNetworkCallback(
-        NetworkRequest.Builder()
-          .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-          .build(),
-        callback
-      )
-    } catch (error: Exception) {
-      error.printStackTrace()
-    }
   }
 
   private fun requestForegroundPermissionsInternal() {
@@ -176,6 +146,41 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  private fun permissionHealthJson(): String {
+    fun granted(permission: String): Boolean =
+      ContextCompat.checkSelfPermission(this, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val notifications = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || granted(android.Manifest.permission.POST_NOTIFICATIONS)
+    val nearbyWifi = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || granted(android.Manifest.permission.NEARBY_WIFI_DEVICES)
+    val foregroundLocation = granted(android.Manifest.permission.ACCESS_FINE_LOCATION) || granted(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+    val backgroundLocation = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || granted(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+    val battery = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+      (getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
+    val installPackages = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()
+    return JSONArray()
+      .put(JSONObject().put("id", "notifications").put("label", "通知权限").put("granted", notifications).put("required", true))
+      .put(JSONObject().put("id", "nearbyWifi").put("label", "附近 Wi-Fi 设备").put("granted", nearbyWifi).put("required", true))
+      .put(JSONObject().put("id", "foregroundLocation").put("label", "前台位置权限").put("granted", foregroundLocation).put("required", true))
+      .put(JSONObject().put("id", "backgroundLocation").put("label", "后台位置权限").put("granted", backgroundLocation).put("required", false))
+      .put(JSONObject().put("id", "batteryOptimization").put("label", "忽略电池优化").put("granted", battery).put("required", false))
+      .put(JSONObject().put("id", "installPackages").put("label", "安装应用更新").put("granted", installPackages).put("required", true))
+      .toString()
+  }
+
+  private fun openPermissionSettingsInternal(kind: String) {
+    when (kind) {
+      "notifications" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+      } else startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+      "batteryOptimization" -> requestBatteryOptimizationsInternal()
+      "installPackages" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+      }
+      "backgroundLocation" -> requestBackgroundPermissionsInternal()
+      "nearbyWifi", "foregroundLocation" -> requestForegroundPermissionsInternal()
+      else -> startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+    }
+  }
+
   /**
    * JavaScript bridge exposed to the WebView as window.AndroidBridge
    * All methods annotated with @JavascriptInterface are callable from JS.
@@ -216,6 +221,19 @@ class MainActivity : TauriActivity() {
       activity.runOnUiThread {
         activity.requestBatteryOptimizationsInternal()
       }
+    }
+
+    @JavascriptInterface
+    fun getPermissionHealth(): String = activity.permissionHealthJson()
+
+    @JavascriptInterface
+    fun getAutoLoginPausedUntil(): Long = activity
+      .getSharedPreferences("service_state", Context.MODE_PRIVATE)
+      .getLong("paused_until", 0L)
+
+    @JavascriptInterface
+    fun openPermissionSettings(kind: String) {
+      activity.runOnUiThread { activity.openPermissionSettingsInternal(kind) }
     }
 
     @JavascriptInterface

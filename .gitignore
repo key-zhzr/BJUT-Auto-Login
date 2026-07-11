@@ -27,3 +27,4 @@ dist-ssr
 *.png
 *.jpg
 *.dmg
+src-tauri/.keys/
