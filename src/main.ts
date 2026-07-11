@@ -349,6 +349,26 @@ interface DiagnosticReport {
   steps: DiagnosticStep[];
 }
 
+interface NetworkProfile {
+  id: string;
+  name: string;
+  enabled: boolean;
+  ssid: string;
+  bssid: string;
+  login_type: string;
+  account_order: string[];
+  auto_login: boolean | null;
+  check_interval: number | null;
+  check_interval_bg: number | null;
+}
+
+interface AppLogEntry {
+  time: string;
+  module: string;
+  message: string;
+  type: 'info' | 'error' | 'success' | 'debug';
+}
+
 function isVersionNewer(current: string, latest: string): boolean {
   const parseVersion = (value: string) => {
     const withoutBuild = value.replace(/^v/i, '').split('+', 1)[0];
@@ -500,6 +520,8 @@ function saveSetting(key: string, value: string) {
 
 function syncConfigToRust(): Promise<void> {
   if (!(window as any).__TAURI__) return Promise.resolve();
+  const balanceThreshold = parseFloat(localStorage.getItem('bjut_balance_alert_threshold') || '10');
+  const flowThreshold = parseFloat(localStorage.getItem('bjut_flow_alert_threshold') || '5');
   // Capture an immutable snapshot now. Serializing writes prevents an older,
   // slower IPC call from overwriting a newer account edit.
   const config = {
@@ -510,7 +532,11 @@ function syncConfigToRust(): Promise<void> {
     wifi_change_detect: localStorage.getItem('bjut_wifi_change_detect') !== 'false',
     log_level: localStorage.getItem('bjut_log_level') || 'info',
     whitelist: JSON.parse(localStorage.getItem('bjut_whitelist') || '[]'),
-    blacklist: JSON.parse(localStorage.getItem('bjut_blacklist') || '[]')
+    blacklist: JSON.parse(localStorage.getItem('bjut_blacklist') || '[]'),
+    network_profiles: networkProfilesCache.map(profile => ({ ...profile, account_order: [...profile.account_order] })),
+    usage_alerts: localStorage.getItem('bjut_usage_alerts') !== 'false',
+    balance_alert_threshold: Number.isFinite(balanceThreshold) ? balanceThreshold : 10,
+    flow_alert_threshold: Number.isFinite(flowThreshold) ? flowThreshold : 5,
   };
   const operation = configSyncQueue
     .catch(() => {})
@@ -565,6 +591,10 @@ async function loadConfigFromRust() {
     localStorage.setItem('bjut_log_level', config.log_level);
     localStorage.setItem('bjut_whitelist', JSON.stringify(config.whitelist || []));
     localStorage.setItem('bjut_blacklist', JSON.stringify(config.blacklist || []));
+    networkProfilesCache = (config.network_profiles || []).map((profile: NetworkProfile) => ({ ...profile }));
+    localStorage.setItem('bjut_usage_alerts', String(config.usage_alerts !== false));
+    localStorage.setItem('bjut_balance_alert_threshold', String(config.balance_alert_threshold ?? 10));
+    localStorage.setItem('bjut_flow_alert_threshold', String(config.flow_alert_threshold ?? 5));
     
     autoLoginEnabled = config.auto_login;
     checkInterval = config.check_interval;
@@ -574,6 +604,10 @@ async function loadConfigFromRust() {
     settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
     settingCheckInterval.value = checkInterval.toString();
     settingLogLevel.value = config.log_level;
+    settingUsageAlerts.checked = config.usage_alerts !== false;
+    settingBalanceThreshold.value = String(config.balance_alert_threshold ?? 10);
+    settingFlowThreshold.value = String(config.flow_alert_threshold ?? 5);
+    renderNetworkProfiles();
     
     const settingCheckIntervalBg = document.getElementById('setting-check-interval-bg') as HTMLInputElement;
     if (settingCheckIntervalBg) {
@@ -695,12 +729,23 @@ async function listenToRustEvents() {
       setAccountHealth(event.payload);
     });
 
+    listen<{ index: number }>('preferred-account-change', event => {
+      accountsCache = accountsCache.map((account, index) => ({
+        ...account,
+        isDefault: index === event.payload.index,
+      }));
+      renderAccounts();
+    });
+
     // Load initial logs
     const initialLogs: any[] = await invoke('get_logs');
-    logsContent.innerHTML = '';
-    initialLogs.forEach(entry => {
-      renderLogEntry(entry.module, entry.message, entry.type, entry.time);
-    });
+    logEntriesCache = initialLogs.map(entry => ({
+      time: entry.time,
+      module: entry.module,
+      message: entry.message,
+      type: entry.type,
+    }));
+    renderFilteredLogs();
 
     // Load initial network state
     try {
@@ -774,22 +819,45 @@ function renderLogEntry(module: string, message: string, type: 'info' | 'error' 
   if (currentLevel === 'info' && type === 'debug') {
     return;
   }
-  
+
+  logEntriesCache.push({ time: time || new Date().toLocaleString(), module, message, type });
+  if (logEntriesCache.length > 5000) logEntriesCache.splice(0, logEntriesCache.length - 5000);
+  renderFilteredLogs();
+}
+
+function renderFilteredLogs() {
   const logsPageActive = logsContent.closest('.page')?.classList.contains('active') ?? false;
   const scroller = getLogsScroller();
   const wasAtBottom = !scroller || scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 80;
-  const timeStr = time || new Date().toLocaleString();
-  const entry = document.createElement('div');
-  entry.className = message.includes('=== SESSION START ===') ? 'log-entry log-session-divider' : 'log-entry';
-  const timeElement = document.createElement('span');
-  timeElement.className = 'log-time';
-  timeElement.textContent = `[${timeStr}]`;
-  const messageElement = document.createElement('span');
-  messageElement.className = `log-${type}`;
-  messageElement.textContent = `[${module}] ${message.replace('=== SESSION START ===', '启动会话')}`;
-  entry.append(timeElement, messageElement);
-  logsContent.appendChild(entry);
-  
+  const query = logSearch?.value.trim().toLocaleLowerCase() || '';
+  const level = logLevelFilter?.value || 'all';
+  let lastSessionStart = -1;
+  for (let index = logEntriesCache.length - 1; index >= 0; index -= 1) {
+    if (logEntriesCache[index].message.includes('=== SESSION START ===')) {
+      lastSessionStart = index;
+      break;
+    }
+  }
+  const sessionStart = logSessionFilter?.value === 'current' && lastSessionStart >= 0 ? lastSessionStart : 0;
+  const visible = logEntriesCache.slice(sessionStart).filter(entry => {
+    if (level !== 'all' && entry.type !== level) return false;
+    if (!query) return true;
+    return `${entry.time} ${entry.module} ${entry.message}`.toLocaleLowerCase().includes(query);
+  });
+  logsContent.innerHTML = '';
+  visible.forEach(item => {
+    const entry = document.createElement('div');
+    entry.className = item.message.includes('=== SESSION START ===') ? 'log-entry log-session-divider' : 'log-entry';
+    const timeElement = document.createElement('span');
+    timeElement.className = 'log-time';
+    timeElement.textContent = `[${item.time}]`;
+    const messageElement = document.createElement('span');
+    messageElement.className = `log-${item.type}`;
+    messageElement.textContent = `[${item.module}] ${item.message.replace('=== SESSION START ===', '启动会话')}`;
+    entry.append(timeElement, messageElement);
+    logsContent.appendChild(entry);
+  });
+  if (logFilterCount) logFilterCount.textContent = `${visible.length} / ${logEntriesCache.length} 条`;
   requestAnimationFrame(() => {
     if (logsPageActive && scroller && wasAtBottom) {
       scroller.scrollTop = scroller.scrollHeight;
@@ -1057,6 +1125,17 @@ const btnCopyDiagnostics = document.getElementById('btn-copy-diagnostics') as HT
 const btnResetAllHealth = document.getElementById('btn-reset-all-health') as HTMLButtonElement;
 const accountHealthList = document.getElementById('account-health-list')!;
 const diagnosticSteps = document.getElementById('diagnostic-steps')!;
+const logSearch = document.getElementById('log-search') as HTMLInputElement;
+const logSessionFilter = document.getElementById('log-session-filter') as HTMLSelectElement;
+const logLevelFilter = document.getElementById('log-level-filter') as HTMLSelectElement;
+const logFilterCount = document.getElementById('log-filter-count')!;
+const btnDiagnosticBundle = document.getElementById('btn-diagnostic-bundle') as HTMLButtonElement;
+const networkProfilesList = document.getElementById('network-profiles-list')!;
+const networkProfileModal = document.getElementById('network-profile-modal')!;
+const networkProfileForm = document.getElementById('network-profile-form') as HTMLFormElement;
+const settingUsageAlerts = document.getElementById('setting-usage-alerts') as HTMLInputElement;
+const settingBalanceThreshold = document.getElementById('setting-balance-threshold') as HTMLInputElement;
+const settingFlowThreshold = document.getElementById('setting-flow-threshold') as HTMLInputElement;
 const settingAutoLogin = document.getElementById('setting-auto-login') as HTMLInputElement;
 const settingWifiChangeDetect = document.getElementById('setting-wifi-change-detect') as HTMLInputElement;
 const settingAutostart = document.getElementById('setting-autostart') as HTMLInputElement;
@@ -1088,6 +1167,9 @@ let isLoggingIn = false;
 let isChecking = false;
 let accountHealthCache = new Map<string, AccountHealth>();
 let lastDiagnosticReport: DiagnosticReport | null = null;
+let networkProfilesCache: NetworkProfile[] = [];
+let logEntriesCache: AppLogEntry[] = [];
+let networkEventDebounce: number | null = null;
 
 // New state for split check loops
 let lastKnownIp = '';
@@ -1140,7 +1222,9 @@ async function init() {
   
   setupNavigation();
   setupEventListeners();
+  setupEventDrivenNetworkDetection();
   renderAccounts();
+  renderNetworkProfiles();
 
   // Register triggerAutoLogin globally for eval call from Rust
   (window as any).triggerAutoLogin = () => {
@@ -1370,12 +1454,15 @@ function renderDiagnosticReport(report: DiagnosticReport) {
 }
 
 function diagnosticReportText(report: DiagnosticReport): string {
+  const maskedIp = report.ip
+    ? report.ip.split('.').map((part, index) => index < 2 ? part : '*').join('.')
+    : '--';
   const lines = [
     'BJUT-AL 网络诊断报告',
     `时间：${formatHealthTime(report.createdAt)}`,
     `结论：${report.summary}`,
     `SSID：${report.ssid || '--'}`,
-    `IP：${report.ip || '--'}`,
+    `IP：${maskedIp}`,
     '',
   ];
   report.steps.forEach(step => lines.push(`[${step.status}] ${step.label}（${step.durationMs} ms）：${step.message}`));
@@ -1402,6 +1489,92 @@ async function runDiagnostics() {
     btnRunDiagnostics.disabled = false;
     btnRunDiagnostics.textContent = '开始诊断';
   }
+}
+
+function renderNetworkProfiles() {
+  networkProfilesList.innerHTML = '';
+  if (networkProfilesCache.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'diagnostic-empty';
+    empty.textContent = '暂无网络档案，将使用全局设置';
+    networkProfilesList.appendChild(empty);
+    return;
+  }
+  networkProfilesCache.forEach((profile, index) => {
+    const row = document.createElement('div');
+    row.className = `network-profile-row${profile.enabled ? '' : ' disabled'}`;
+    const info = document.createElement('div');
+    info.className = 'network-profile-info';
+    const title = document.createElement('strong');
+    title.textContent = profile.name;
+    const details = document.createElement('small');
+    const account = profile.account_order[0] || '沿用全局账号顺序';
+    const network = profile.ssid || '校园有线';
+    details.textContent = `${network} · ${profile.login_type === 'auto' ? '自动协议' : profile.login_type} · ${account}`;
+    info.append(title, details);
+    const actions = document.createElement('div');
+    actions.className = 'network-profile-actions';
+    const toggle = document.createElement('button');
+    toggle.className = 'btn btn-secondary btn-sm action-toggle-profile';
+    toggle.dataset.index = String(index);
+    toggle.textContent = profile.enabled ? '停用' : '启用';
+    const edit = document.createElement('button');
+    edit.className = 'btn btn-secondary btn-sm action-edit-profile';
+    edit.dataset.index = String(index);
+    edit.textContent = '编辑';
+    const remove = document.createElement('button');
+    remove.className = 'btn btn-log-danger btn-sm action-delete-profile';
+    remove.dataset.index = String(index);
+    remove.textContent = '删除';
+    actions.append(toggle, edit, remove);
+    row.append(info, actions);
+    networkProfilesList.appendChild(row);
+  });
+}
+
+function openNetworkProfileModal(index = -1) {
+  const profile = index >= 0 ? networkProfilesCache[index] : null;
+  (document.getElementById('network-profile-index') as HTMLInputElement).value = String(index);
+  (document.getElementById('network-profile-name') as HTMLInputElement).value = profile?.name || '';
+  (document.getElementById('network-profile-ssid') as HTMLInputElement).value = profile?.ssid
+    || (document.getElementById('more-ssid')?.textContent?.replace(/^--$/, '') ?? '');
+  (document.getElementById('network-profile-bssid') as HTMLInputElement).value = profile?.bssid || '';
+  (document.getElementById('network-profile-protocol') as HTMLSelectElement).value = profile?.login_type || 'auto';
+  (document.getElementById('network-profile-interval') as HTMLInputElement).value = profile?.check_interval?.toString() || '';
+  (document.getElementById('network-profile-interval-bg') as HTMLInputElement).value = profile?.check_interval_bg?.toString() || '';
+  (document.getElementById('network-profile-auto-login') as HTMLInputElement).checked = profile?.auto_login !== false;
+  const accountSelect = document.getElementById('network-profile-account') as HTMLSelectElement;
+  accountSelect.innerHTML = '<option value="">沿用全局顺序</option>';
+  getAccounts().filter(account => !account.isDisabled).forEach(account => {
+    const option = document.createElement('option');
+    option.value = account.user;
+    option.textContent = account.user;
+    accountSelect.appendChild(option);
+  });
+  accountSelect.value = profile?.account_order[0] || '';
+  document.getElementById('network-profile-modal-title')!.textContent = profile ? '编辑网络档案' : '添加网络档案';
+  networkProfileModal.classList.remove('hidden');
+}
+
+async function persistNetworkProfiles() {
+  renderNetworkProfiles();
+  await syncConfigToRust();
+}
+
+function setupEventDrivenNetworkDetection() {
+  const notify = (source: string) => {
+    if (!(window as any).__TAURI__) return;
+    if (networkEventDebounce !== null) window.clearTimeout(networkEventDebounce);
+    networkEventDebounce = window.setTimeout(() => {
+      networkEventDebounce = null;
+      void invoke('notify_network_change', { source });
+    }, 500);
+  };
+  window.addEventListener('online', () => notify('浏览器 online'));
+  window.addEventListener('offline', () => notify('浏览器 offline'));
+  const connection = (navigator as any).connection;
+  connection?.addEventListener?.('change', () => notify('系统连接属性'));
+  (window as any).__nativeNetworkChanged = (source = 'Android NetworkCallback') => notify(source);
 }
 
 // Navigation
@@ -1459,6 +1632,74 @@ function setupEventListeners() {
       button.disabled = false;
     }
   });
+
+  document.getElementById('btn-add-network-profile')!.addEventListener('click', () => openNetworkProfileModal());
+  document.getElementById('btn-cancel-network-profile')!.addEventListener('click', () => {
+    networkProfileModal.classList.add('hidden');
+    networkProfileForm.reset();
+  });
+  networkProfileForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const index = parseInt((document.getElementById('network-profile-index') as HTMLInputElement).value, 10);
+    const selectedAccount = (document.getElementById('network-profile-account') as HTMLSelectElement).value;
+    const intervalValue = (document.getElementById('network-profile-interval') as HTMLInputElement).value;
+    const intervalBgValue = (document.getElementById('network-profile-interval-bg') as HTMLInputElement).value;
+    const profile: NetworkProfile = {
+      id: index >= 0 ? networkProfilesCache[index].id : `profile-${Date.now()}`,
+      name: (document.getElementById('network-profile-name') as HTMLInputElement).value.trim(),
+      enabled: index >= 0 ? networkProfilesCache[index].enabled : true,
+      ssid: (document.getElementById('network-profile-ssid') as HTMLInputElement).value.trim(),
+      bssid: (document.getElementById('network-profile-bssid') as HTMLInputElement).value.trim(),
+      login_type: (document.getElementById('network-profile-protocol') as HTMLSelectElement).value,
+      account_order: selectedAccount ? [selectedAccount] : [],
+      auto_login: (document.getElementById('network-profile-auto-login') as HTMLInputElement).checked,
+      check_interval: intervalValue ? Math.max(5, parseInt(intervalValue, 10)) : null,
+      check_interval_bg: intervalBgValue ? Math.max(5, parseInt(intervalBgValue, 10)) : null,
+    };
+    if (!profile.name || (!profile.ssid && profile.login_type !== 'wired')) {
+      await customAlert('请输入档案名称；SSID 留空时应选择“校园有线”协议。');
+      return;
+    }
+    if (index >= 0) networkProfilesCache[index] = profile;
+    else networkProfilesCache.push(profile);
+    try {
+      await persistNetworkProfiles();
+      networkProfileModal.classList.add('hidden');
+      networkProfileForm.reset();
+      log('网络档案', `已保存档案：${profile.name}`);
+    } catch (error) {
+      await customAlert(`保存网络档案失败：${String(error)}`);
+    }
+  });
+  networkProfilesList.addEventListener('click', async event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-index]');
+    if (!button) return;
+    const index = parseInt(button.dataset.index || '-1', 10);
+    if (index < 0 || index >= networkProfilesCache.length) return;
+    if (button.classList.contains('action-edit-profile')) {
+      openNetworkProfileModal(index);
+      return;
+    }
+    if (button.classList.contains('action-toggle-profile')) {
+      networkProfilesCache[index].enabled = !networkProfilesCache[index].enabled;
+    } else if (button.classList.contains('action-delete-profile')) {
+      if (!await customConfirm(`确定删除网络档案“${networkProfilesCache[index].name}”吗？`)) return;
+      networkProfilesCache.splice(index, 1);
+    }
+    await persistNetworkProfiles().catch(error => customAlert(`保存失败：${String(error)}`));
+  });
+
+  settingUsageAlerts.addEventListener('change', () => saveSetting('bjut_usage_alerts', String(settingUsageAlerts.checked)));
+  settingBalanceThreshold.addEventListener('change', () => {
+    const value = Math.max(0, parseFloat(settingBalanceThreshold.value) || 0);
+    settingBalanceThreshold.value = String(value);
+    saveSetting('bjut_balance_alert_threshold', String(value));
+  });
+  settingFlowThreshold.addEventListener('change', () => {
+    const value = Math.max(0, parseFloat(settingFlowThreshold.value) || 0);
+    settingFlowThreshold.value = String(value);
+    saveSetting('bjut_flow_alert_threshold', String(value));
+  });
   
   // Add modal toggle
   btnShowAdd.addEventListener('click', () => {
@@ -1503,9 +1744,29 @@ function setupEventListeners() {
   });
 
   btnClearLogs.addEventListener('click', () => {
+    logEntriesCache = [];
     logsContent.innerHTML = '';
+    renderFilteredLogs();
     if ((window as any).__TAURI__) {
       invoke('clear_all_logs').catch(e => console.error(e));
+    }
+  });
+
+  [logSearch, logSessionFilter, logLevelFilter].forEach(element => {
+    element.addEventListener(element === logSearch ? 'input' : 'change', renderFilteredLogs);
+  });
+
+  btnDiagnosticBundle.addEventListener('click', async () => {
+    if (!(window as any).__TAURI__) return;
+    btnDiagnosticBundle.disabled = true;
+    try {
+      const bundle = await invoke<string>('create_diagnostic_bundle');
+      await writeTextToClipboard(bundle);
+      await customAlert('脱敏诊断包已复制到剪贴板。账号、密码、本地 IP 与 BSSID 不会包含在诊断包中。');
+    } catch (error) {
+      await customAlert(`生成诊断包失败：${String(error)}`);
+    } finally {
+      btnDiagnosticBundle.disabled = false;
     }
   });
 
@@ -1858,7 +2119,11 @@ function setupEventListeners() {
           checkIntervalBg: localStorage.getItem('bjut_check_interval_bg'),
           whitelist: localStorage.getItem('bjut_whitelist'),
           blacklist: localStorage.getItem('bjut_blacklist'),
-          moreOptions: localStorage.getItem('bjut_more_options')
+          moreOptions: localStorage.getItem('bjut_more_options'),
+          networkProfiles: networkProfilesCache,
+          usageAlerts: localStorage.getItem('bjut_usage_alerts'),
+          balanceAlertThreshold: localStorage.getItem('bjut_balance_alert_threshold'),
+          flowAlertThreshold: localStorage.getItem('bjut_flow_alert_threshold'),
         };
         const encrypted = await encryptExport(config, passphrase);
         await writeTextToClipboard(encrypted);
@@ -1894,6 +2159,10 @@ function setupEventListeners() {
         if (config.whitelist) localStorage.setItem('bjut_whitelist', config.whitelist);
         if (config.blacklist) localStorage.setItem('bjut_blacklist', config.blacklist);
         if (config.moreOptions !== undefined && config.moreOptions !== null) localStorage.setItem('bjut_more_options', config.moreOptions);
+        if (Array.isArray(config.networkProfiles)) networkProfilesCache = config.networkProfiles;
+        if (config.usageAlerts !== undefined && config.usageAlerts !== null) localStorage.setItem('bjut_usage_alerts', config.usageAlerts);
+        if (config.balanceAlertThreshold !== undefined && config.balanceAlertThreshold !== null) localStorage.setItem('bjut_balance_alert_threshold', config.balanceAlertThreshold);
+        if (config.flowAlertThreshold !== undefined && config.flowAlertThreshold !== null) localStorage.setItem('bjut_flow_alert_threshold', config.flowAlertThreshold);
         
         syncConfigToRust().then(() => {
           customAlert('导入成功，请刷新以应用更改！');

@@ -598,6 +598,28 @@ struct DiagnosticReport {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+struct NetworkProfile {
+    id: String,
+    name: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    ssid: String,
+    #[serde(default)]
+    bssid: String,
+    #[serde(default = "default_profile_login_type")]
+    login_type: String,
+    #[serde(default)]
+    account_order: Vec<String>,
+    #[serde(default)]
+    auto_login: Option<bool>,
+    #[serde(default)]
+    check_interval: Option<i32>,
+    #[serde(default)]
+    check_interval_bg: Option<i32>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 struct AppConfig {
     #[serde(default)]
     accounts: Vec<Account>,
@@ -615,6 +637,14 @@ struct AppConfig {
     whitelist: Vec<String>,
     #[serde(default)]
     blacklist: Vec<String>,
+    #[serde(default)]
+    network_profiles: Vec<NetworkProfile>,
+    #[serde(default = "default_usage_alerts")]
+    usage_alerts: bool,
+    #[serde(default = "default_balance_alert_threshold")]
+    balance_alert_threshold: f64,
+    #[serde(default = "default_flow_alert_threshold")]
+    flow_alert_threshold: f64,
 }
 
 fn default_auto_login() -> bool { false }
@@ -622,6 +652,11 @@ fn default_check_interval() -> i32 { 15 }
 fn default_check_interval_bg() -> i32 { 60 }
 fn default_wifi_change_detect() -> bool { true }
 fn default_log_level() -> String { "info".to_string() }
+fn default_true() -> bool { true }
+fn default_profile_login_type() -> String { "auto".to_string() }
+fn default_usage_alerts() -> bool { true }
+fn default_balance_alert_threshold() -> f64 { 10.0 }
+fn default_flow_alert_threshold() -> f64 { 5.0 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct LogEntry {
@@ -645,6 +680,8 @@ struct AppState {
     non_campus_count: AtomicU32,
     is_in_background: AtomicBool,
     last_network_state: Mutex<serde_json::Value>,
+    auto_login_paused_until: std::sync::atomic::AtomicI64,
+    usage_alert_history: Mutex<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -718,6 +755,52 @@ fn automatic_login_network_allowed(
         LoginType::Type3 => Err("当前无线网络未经识别，且未加入白名单".to_string()),
         LoginType::Unknown => Err("未识别到校园网认证协议".to_string()),
     }
+}
+
+fn login_type_from_profile(value: &str) -> Option<LoginType> {
+    match value {
+        "bjut-wifi" | "type1" => Some(LoginType::Type1),
+        "bjut-sushe" | "bjut_sushe" | "type2" => Some(LoginType::Type2),
+        "wired" | "type3" => Some(LoginType::Type3),
+        _ => None,
+    }
+}
+
+fn matching_network_profile(
+    config: &AppConfig,
+    ssid: &str,
+    bssid: &str,
+    detected_type: &LoginType,
+) -> Option<NetworkProfile> {
+    config.network_profiles.iter().find(|profile| {
+        if !profile.enabled {
+            return false;
+        }
+        let ssid_matches = if profile.ssid.trim().is_empty() {
+            *detected_type == LoginType::Type3
+                && (ssid.trim().is_empty()
+                    || ssid.eq_ignore_ascii_case("unknown")
+                    || ssid.eq_ignore_ascii_case("<unknown ssid>"))
+        } else {
+            profile.ssid.trim().eq_ignore_ascii_case(ssid.trim())
+        };
+        let bssid_matches = profile.bssid.trim().is_empty()
+            || profile.bssid.trim().eq_ignore_ascii_case(bssid.trim());
+        ssid_matches && bssid_matches
+    }).cloned()
+}
+
+fn accounts_for_profile(accounts: Vec<Account>, profile: Option<&NetworkProfile>) -> Vec<Account> {
+    let active: Vec<Account> = accounts.into_iter()
+        .filter(|account| !account.is_disabled.unwrap_or(false) && !account.pass.is_empty())
+        .collect();
+    let Some(profile) = profile else { return active; };
+    if profile.account_order.is_empty() {
+        return active;
+    }
+    profile.account_order.iter()
+        .filter_map(|user| active.iter().find(|account| account.user == *user).cloned())
+        .collect()
 }
 
 fn url_encode(input: &str) -> String {
@@ -1641,6 +1724,8 @@ fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig)
         *state_cfg = new_cfg.clone();
     }
     reconcile_account_health_after_config_save(app, state, &previous_cfg, &new_cfg);
+    #[cfg(desktop)]
+    refresh_tray_menu(app, state);
     Ok(())
 }
 
@@ -1674,6 +1759,16 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         let current_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let current_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let current_ip = net_info.get("ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let preliminary_profile = {
+            let cfg = state.config.read().unwrap();
+            matching_network_profile(&cfg, &current_ssid, &current_bssid, &LoginType::Unknown)
+        };
+        if let Some(profile) = preliminary_profile.as_ref() {
+            let interval = if is_bg { profile.check_interval_bg } else { profile.check_interval };
+            if let Some(interval) = interval.filter(|value| *value >= 5) {
+                state.countdown.store(interval, Ordering::SeqCst);
+            }
+        }
         let local_now = chrono::Local::now();
         let timestamp = local_now.format("%Y-%m-%d %H:%M:%S").to_string();
 
@@ -1707,10 +1802,32 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 *last_state = payload.clone();
             }
             let _ = app.emit("network-state-change", payload);
+            #[cfg(desktop)]
+            refresh_tray_menu(&app, &state);
             return;
         }
 
-        let login_type = detect_login_type_rust().await;
+        let detected_login_type = detect_login_type_rust().await;
+        let profile = {
+            let cfg = state.config.read().unwrap();
+            matching_network_profile(&cfg, &current_ssid, &current_bssid, &detected_login_type)
+        };
+        let login_type = profile.as_ref()
+            .and_then(|item| login_type_from_profile(&item.login_type))
+            .unwrap_or_else(|| detected_login_type.clone());
+        if let Some(profile) = profile.as_ref() {
+            rust_log(
+                &app,
+                &state,
+                "网络档案",
+                &format!("已匹配网络档案“{}”，使用其账号顺序与登录策略", profile.name),
+                "info",
+            );
+            let profile_interval = if is_bg { profile.check_interval_bg } else { profile.check_interval };
+            if let Some(interval) = profile_interval.filter(|value| *value >= 5) {
+                state.countdown.store(interval, Ordering::SeqCst);
+            }
+        }
         rust_log(&app, &state, "网络", &format!("[DEBUG] 检测到校园网环境判定: {}", if login_type != LoginType::Unknown { "需要登录认证" } else { "非校园网/完全离线" }), "debug");
         
         match login_type {
@@ -1727,11 +1844,13 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             _ => {
                 rust_log(&app, &state, "网络", &format!("检测到校园网登录页面 (登录类型: {:?})", login_type), "info");
                 let mut login_succeeded = false;
+                let auto_login_paused = state.auto_login_paused_until.load(Ordering::SeqCst)
+                    > chrono::Utc::now().timestamp();
                 let auto_login_enabled = {
                     let cfg = state.config.read().unwrap();
-                    cfg.auto_login
+                    profile.as_ref().and_then(|item| item.auto_login).unwrap_or(cfg.auto_login)
                 };
-                if auto_login_enabled {
+                if auto_login_enabled && !auto_login_paused {
                     let (whitelist, blacklist) = {
                         let cfg = state.config.read().unwrap();
                         (cfg.whitelist.clone(), cfg.blacklist.clone())
@@ -1762,9 +1881,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             cfg.accounts.clone()
                         };
                         let mut active_accounts = Vec::new();
-                        for account in accounts.into_iter()
-                            .filter(|acc| !acc.is_disabled.unwrap_or(false) && !acc.pass.is_empty())
-                        {
+                        for account in accounts_for_profile(accounts, profile.as_ref()) {
                             match account_attempt_allowed(&state, &account.user) {
                                 Ok(()) => active_accounts.push(account),
                                 Err(remaining) => rust_log(
@@ -1806,6 +1923,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             }
                         }
                     }
+                } else if auto_login_paused {
+                    rust_log(&app, &state, "网络", "自动登录已临时暂停，忽略重连", "info");
                 } else {
                     rust_log(&app, &state, "网络", "自动登录未开启，忽略重连", "info");
                 }
@@ -1834,6 +1953,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             }
         }
         state.is_checking.store(false, Ordering::SeqCst);
+        #[cfg(desktop)]
+        refresh_tray_menu(&app, &state);
     });
 }
 
@@ -2056,6 +2177,82 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     }
 }
 
+fn mask_identifier(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= 4 {
+        return "****".to_string();
+    }
+    format!("{}***{}", chars.iter().take(2).collect::<String>(), chars.iter().rev().take(2).collect::<Vec<_>>().into_iter().rev().collect::<String>())
+}
+
+fn redact_diagnostic_text(mut text: String, accounts: &[Account], ip: &str, bssid: &str) -> String {
+    for account in accounts {
+        if !account.user.is_empty() {
+            text = text.replace(&account.user, &mask_identifier(&account.user));
+        }
+        if !account.pass.is_empty() {
+            text = text.replace(&account.pass, "[REDACTED]");
+        }
+    }
+    if !ip.is_empty() {
+        text = text.replace(ip, "[LOCAL-IP]");
+    }
+    if !bssid.is_empty() {
+        text = text.replace(bssid, "[BSSID]");
+    }
+    text
+}
+
+#[tauri::command]
+async fn create_diagnostic_bundle(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let mut report = run_network_diagnostics(app.clone()).await;
+    let config = state.config.read().unwrap().clone();
+    let network_state = state.last_network_state.lock().unwrap().clone();
+    let ip = network_state.get("ip").and_then(|value| value.as_str()).unwrap_or("");
+    let bssid = network_state.get("bssid").and_then(|value| value.as_str()).unwrap_or("");
+    let logs: Vec<serde_json::Value> = state.logs.lock().unwrap().iter().rev().take(500).rev()
+        .map(|entry| serde_json::json!({
+            "time": entry.time,
+            "module": entry.module,
+            "type": entry.log_type,
+            "message": redact_diagnostic_text(entry.message.clone(), &config.accounts, ip, bssid),
+        }))
+        .collect();
+    let public_accounts: Vec<Account> = config.accounts.iter().cloned().map(|mut account| {
+        account.pass.clear();
+        account
+    }).collect();
+    report.summary = redact_diagnostic_text(report.summary, &public_accounts, ip, bssid);
+    report.ip = if report.ip.is_empty() { String::new() } else { "[LOCAL-IP]".to_string() };
+    for step in &mut report.steps {
+        step.message = redact_diagnostic_text(std::mem::take(&mut step.message), &public_accounts, ip, bssid);
+    }
+    let redacted_report = serde_json::to_value(&report).map_err(|error| error.to_string())?;
+    let bundle = serde_json::json!({
+        "schemaVersion": 1,
+        "appVersion": app.package_info().version.to_string(),
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "createdAt": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        "configuration": {
+            "accountCount": config.accounts.len(),
+            "enabledAccountCount": config.accounts.iter().filter(|account| !account.is_disabled.unwrap_or(false)).count(),
+            "networkProfileCount": config.network_profiles.len(),
+            "autoLogin": config.auto_login,
+            "checkInterval": config.check_interval,
+            "checkIntervalBackground": config.check_interval_bg,
+            "usageAlerts": config.usage_alerts,
+        },
+        "diagnostic": redacted_report,
+        "logs": logs,
+        "privacy": "账号、密码、本地 IP 与 BSSID 已脱敏；诊断包不包含凭据。",
+    });
+    serde_json::to_string_pretty(&bundle).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn get_logs(state: tauri::State<Arc<AppState>>) -> Vec<LogEntry> {
     state.logs.lock().unwrap().clone()
@@ -2160,6 +2357,8 @@ async fn manual_login(
                 });
                 *state.last_network_state.lock().unwrap() = payload.clone();
                 let _ = app.emit("network-state-change", payload);
+                #[cfg(desktop)]
+                refresh_tray_menu(&app, &state);
                 return Ok(ManualLoginResult { success: true, message });
             }
             Ok((false, message)) => {
@@ -2175,9 +2374,114 @@ async fn manual_login(
     Ok(ManualLoginResult { success: false, message: "所有可用账号均未能登录".to_string() })
 }
 
+fn first_decimal(value: &str) -> Option<f64> {
+    let number = value.chars()
+        .filter(|character| character.is_ascii_digit() || *character == '.')
+        .collect::<String>();
+    number.parse::<f64>().ok()
+}
+
+fn evaluate_usage_alerts(app: &tauri::AppHandle, state: &AppState, info: &UserInfo) {
+    let (enabled, balance_threshold, flow_threshold) = {
+        let config = state.config.read().unwrap();
+        (
+            config.usage_alerts,
+            config.balance_alert_threshold,
+            config.flow_alert_threshold,
+        )
+    };
+    if !enabled {
+        return;
+    }
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let mut alerts = Vec::new();
+    if let Some(balance) = first_decimal(&info.balance) {
+        if balance <= balance_threshold {
+            alerts.push(("balance", format!("校园网余额仅剩 {}，已低于 {:.2} 元提醒线", info.balance, balance_threshold)));
+        }
+    }
+    if info.flow != "无限" {
+        if let Some(flow) = first_decimal(&info.flow) {
+            if flow <= flow_threshold {
+                alerts.push(("flow", format!("套餐流量仅剩 {}，已低于 {:.2} GB 提醒线", info.flow, flow_threshold)));
+            }
+        }
+    }
+    for (kind, message) in alerts {
+        let should_notify = {
+            let mut history = state.usage_alert_history.lock().unwrap();
+            if history.get(kind) == Some(&today) {
+                false
+            } else {
+                history.insert(kind.to_string(), today.clone());
+                true
+            }
+        };
+        if should_notify {
+            rust_log(app, state, "用量提醒", &message, "error");
+            let _ = show_native_notification(app, "校园网用量提醒", &message);
+            let _ = app.emit("usage-alert", serde_json::json!({ "kind": kind, "message": message }));
+        }
+    }
+}
+
 #[tauri::command]
-async fn get_user_info(local_ip: Option<String>) -> Option<UserInfo> {
-    fetch_user_info_rust(local_ip.as_deref()).await
+async fn get_user_info(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    local_ip: Option<String>,
+) -> Result<Option<UserInfo>, String> {
+    let info = fetch_user_info_rust(local_ip.as_deref()).await;
+    if let Some(info) = info.as_ref() {
+        evaluate_usage_alerts(&app, &state, info);
+    }
+    Ok(info)
+}
+
+#[tauri::command]
+fn notify_network_change(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    source: Option<String>,
+) {
+    state.is_suspended.store(false, Ordering::SeqCst);
+    state.non_campus_count.store(0, Ordering::SeqCst);
+    rust_log(
+        &app,
+        &state,
+        "网络",
+        &format!("收到{}网络变化事件，立即执行完整检测", source.unwrap_or_else(|| "系统".to_string())),
+        "info",
+    );
+    let app_clone = app.clone();
+    let state_clone = state.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        trigger_network_check(app_clone, state_clone, true).await;
+    });
+}
+
+#[tauri::command]
+fn set_auto_login_pause(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    minutes: i64,
+) -> i64 {
+    let until = if minutes <= 0 {
+        0
+    } else {
+        chrono::Utc::now().timestamp() + minutes.saturating_mul(60)
+    };
+    state.auto_login_paused_until.store(until, Ordering::SeqCst);
+    rust_log(
+        &app,
+        &state,
+        "自动登录",
+        if until == 0 { "已恢复自动登录" } else { "已暂停自动登录 1 小时" },
+        "info",
+    );
+    #[cfg(desktop)]
+    refresh_tray_menu(&app, &state);
+    until
 }
 
 #[tauri::command]
@@ -2201,6 +2505,104 @@ fn get_current_network_state(state: tauri::State<Arc<AppState>>) -> serde_json::
     state.last_network_state.lock().unwrap().clone()
 }
 
+#[cfg(desktop)]
+fn refresh_tray_menu(app: &tauri::AppHandle, state: &AppState) {
+    use tauri::menu::{MenuBuilder, MenuItem};
+    let network_state = state.last_network_state.lock().unwrap().clone();
+    let state_name = match network_state.get("state").and_then(|value| value.as_str()) {
+        Some("Online") => "已联网",
+        Some("BjutCampus") => "校园网待认证",
+        _ => "离线",
+    };
+    let paused = state.auto_login_paused_until.load(Ordering::SeqCst) > chrono::Utc::now().timestamp();
+    let config = state.config.read().unwrap().clone();
+    let status_item = match MenuItem::with_id(app, "status", format!("状态：{state_name}"), false, None::<&str>) {
+        Ok(item) => item,
+        Err(_) => return,
+    };
+    let mut builder = MenuBuilder::new(app)
+        .item(&status_item)
+        .separator()
+        .text("show", "显示主窗口")
+        .text("check", "立即检测网络")
+        .text("login", "立即登录")
+        .text("pause", if paused { "恢复自动登录" } else { "暂停自动登录 1 小时" })
+        .separator();
+    for (index, account) in config.accounts.iter().enumerate()
+        .filter(|(_, account)| !account.is_disabled.unwrap_or(false))
+    {
+        let marker = if account.is_default { "✓" } else { " " };
+        builder = builder.text(format!("account:{index}"), format!("{marker} 首选账号：{}", account.user));
+    }
+    let menu = match builder.separator().text("quit", "退出").build() {
+        Ok(menu) => menu,
+        Err(_) => return,
+    };
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_menu(Some(menu));
+        let _ = tray.set_tooltip(Some(format!("BJUT-AL · {state_name}")));
+    }
+}
+
+#[cfg(desktop)]
+async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
+    let network = get_network_info(app.clone());
+    let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let bssid = network.get("bssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let detected = detect_login_type_rust().await;
+    let config = state.config.read().unwrap().clone();
+    let profile = matching_network_profile(&config, &ssid, &bssid, &detected);
+    let login_type = profile.as_ref()
+        .and_then(|item| login_type_from_profile(&item.login_type))
+        .unwrap_or(detected);
+    if login_type == LoginType::Unknown {
+        let _ = show_native_notification(&app, "校园网登录", "未检测到可用的校园网认证网关");
+        return;
+    }
+    if let Err(reason) = automatic_login_network_allowed(
+        &login_type,
+        &ssid,
+        &bssid,
+        &ip,
+        &config.whitelist,
+        &config.blacklist,
+    ) {
+        rust_log(&app, &state, "安全", &format!("托盘登录已阻止：{reason}"), "error");
+        let _ = show_native_notification(&app, "校园网登录已阻止", &reason);
+        return;
+    }
+    let accounts = accounts_for_profile(config.accounts, profile.as_ref());
+    let account = accounts.iter().find(|account| account.is_default)
+        .or_else(|| accounts.first());
+    let Some(account) = account else {
+        let _ = show_native_notification(&app, "校园网登录", "没有可用且已保存密码的账号");
+        return;
+    };
+    if let Err(remaining) = account_attempt_allowed(&state, &account.user) {
+        let _ = show_native_notification(&app, "账号正在冷却", &format!("请在 {remaining} 秒后重试或在诊断页解除"));
+        return;
+    }
+    rust_log(&app, &state, "托盘", &format!("使用首选账号 {} 执行快捷登录", account.user), "info");
+    match login_to_campus_network_rust(login_type, &account.user, &account.pass).await {
+        Ok((true, message)) => {
+            record_account_success(&app, &state, &account.user);
+            rust_log(&app, &state, "托盘", &format!("快捷登录成功：{message}"), "success");
+            let _ = show_native_notification(&app, "校园网登录成功", &format!("账号：{}", account.user));
+            trigger_network_check(app, state, true).await;
+        }
+        Ok((false, message)) => {
+            record_account_failure(&app, &state, &account.user, &message);
+            rust_log(&app, &state, "托盘", &format!("快捷登录失败：{message}"), "error");
+            let _ = show_native_notification(&app, "校园网登录失败", &message);
+        }
+        Err(error) => {
+            record_account_failure(&app, &state, &account.user, &format!("请求出错: {error}"));
+            rust_log(&app, &state, "托盘", &format!("快捷登录出错：{error}"), "error");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -2215,6 +2617,10 @@ pub fn run() {
                     log_level: "info".to_string(),
                     whitelist: Vec::new(),
                     blacklist: Vec::new(),
+                    network_profiles: Vec::new(),
+                    usage_alerts: true,
+                    balance_alert_threshold: default_balance_alert_threshold(),
+                    flow_alert_threshold: default_flow_alert_threshold(),
                 }),
                 credential_storage_status: Mutex::new("unknown".to_string()),
                 account_health: Mutex::new(load_account_health(_app.handle())),
@@ -2233,6 +2639,8 @@ pub fn run() {
                     "ip": "",
                     "timestamp": "--"
                 })),
+                auto_login_paused_until: std::sync::atomic::AtomicI64::new(0),
+                usage_alert_history: Mutex::new(HashMap::new()),
             });
             _app.manage(app_state.clone());
 
@@ -2367,10 +2775,9 @@ pub fn run() {
                 }
 
                 // System Tray Setup
-                use tauri::menu::{Menu, MenuItem};
                 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-                let mut tray_builder = TrayIconBuilder::new();
+                let mut tray_builder = TrayIconBuilder::with_id("main-tray");
                 
                 #[cfg(target_os = "macos")]
                 {
@@ -2385,19 +2792,56 @@ pub fn run() {
                     }
                 }
 
-                // Create the system menu for right click / context menu
-                let show_i = MenuItem::with_id(_app, "show", "显示主窗口", true, None::<&str>)?;
-                let quit_i = MenuItem::with_id(_app, "quit", "退出", true, None::<&str>)?;
-                let menu = Menu::with_items(_app, &[&show_i, &quit_i])?;
-
                 let tray = tray_builder
-                    .menu(&menu)
                     .show_menu_on_left_click(false)
                     .on_menu_event(|app, event| {
                         if event.id == "show" {
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
+                            }
+                        } else if event.id == "check" {
+                            let state = app.state::<Arc<AppState>>().inner().clone();
+                            let app_handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                trigger_network_check(app_handle, state, true).await;
+                            });
+                        } else if event.id == "login" {
+                            let state = app.state::<Arc<AppState>>().inner().clone();
+                            let app_handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tray_manual_login(app_handle, state).await;
+                            });
+                        } else if event.id == "pause" {
+                            let state = app.state::<Arc<AppState>>();
+                            let paused = state.auto_login_paused_until.load(Ordering::SeqCst)
+                                > chrono::Utc::now().timestamp();
+                            state.auto_login_paused_until.store(
+                                if paused { 0 } else { chrono::Utc::now().timestamp() + 3600 },
+                                Ordering::SeqCst,
+                            );
+                            rust_log(
+                                app,
+                                &state,
+                                "托盘",
+                                if paused { "已恢复自动登录" } else { "已暂停自动登录 1 小时" },
+                                "info",
+                            );
+                            refresh_tray_menu(app, &state);
+                        } else if let Some(index) = event.id.as_ref().strip_prefix("account:")
+                            .and_then(|value| value.parse::<usize>().ok())
+                        {
+                            let state = app.state::<Arc<AppState>>();
+                            let mut config = state.config.read().unwrap().clone();
+                            if index < config.accounts.len() {
+                                for (account_index, account) in config.accounts.iter_mut().enumerate() {
+                                    account.is_default = account_index == index;
+                                }
+                                if save_config(app, &state, config).is_ok() {
+                                    rust_log(app, &state, "托盘", "已切换首选账号", "info");
+                                    let _ = app.emit("preferred-account-change", serde_json::json!({ "index": index }));
+                                    refresh_tray_menu(app, &state);
+                                }
                             }
                         } else if event.id == "quit" {
                             app.exit(0);
@@ -2422,6 +2866,8 @@ pub fn run() {
                         }
                     })
                     .build(_app)?;
+
+                refresh_tray_menu(_app.handle(), &state_clone);
 
                 #[cfg(target_os = "macos")]
                 {
@@ -2463,6 +2909,7 @@ pub fn run() {
             get_account_health,
             reset_account_health,
             run_network_diagnostics,
+            create_diagnostic_bundle,
             get_logs,
             get_log_text,
             clear_all_logs,
@@ -2470,6 +2917,8 @@ pub fn run() {
             trigger_manual_check,
             manual_login,
             get_user_info,
+            notify_network_change,
+            set_auto_login_pause,
             get_update_target,
             download_and_install_update,
             log_from_js,
@@ -2528,6 +2977,10 @@ mod tests {
             log_level: "info".to_string(),
             whitelist: vec![],
             blacklist: vec![],
+            network_profiles: vec![],
+            usage_alerts: true,
+            balance_alert_threshold: default_balance_alert_threshold(),
+            flow_alert_threshold: default_flow_alert_threshold(),
         };
         let serialized = serde_json::to_string(&public_config(&config)).unwrap();
         assert!(!serialized.contains("secret"));
@@ -2695,5 +3148,32 @@ mod tests {
         assert_eq!(views.len(), 1);
         assert_eq!(views[0].status, "needs_attention");
         assert!(views[0].cooldown_seconds > 0);
+    }
+
+    #[test]
+    fn network_profiles_match_exact_network_and_order_accounts() {
+        let config: AppConfig = serde_json::from_str(r#"{
+            "accounts": [
+                {"user":"first","pass":"one","isDefault":true},
+                {"user":"second","pass":"two","isDefault":false}
+            ],
+            "network_profiles": [{
+                "id":"dorm","name":"宿舍","ssid":"bjut_sushe","login_type":"bjut-sushe",
+                "account_order":["second"],"enabled":true
+            }]
+        }"#).unwrap();
+        let profile = matching_network_profile(&config, "BJUT_SUSHE", "", &LoginType::Type2)
+            .expect("profile should match case-insensitively");
+        assert_eq!(login_type_from_profile(&profile.login_type), Some(LoginType::Type2));
+        let ordered = accounts_for_profile(config.accounts, Some(&profile));
+        assert_eq!(ordered.len(), 1);
+        assert_eq!(ordered[0].user, "second");
+    }
+
+    #[test]
+    fn usage_numbers_are_parsed_from_display_values() {
+        assert_eq!(first_decimal("余额 9.50 元"), Some(9.5));
+        assert_eq!(first_decimal("4.25 GB"), Some(4.25));
+        assert_eq!(first_decimal("无限"), None);
     }
 }

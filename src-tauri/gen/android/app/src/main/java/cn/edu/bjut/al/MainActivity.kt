@@ -5,6 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.provider.Settings
 import android.net.wifi.WifiManager
 import android.webkit.JavascriptInterface
@@ -14,10 +18,23 @@ import androidx.activity.enableEdgeToEdge
 class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
   private var resumedFromBackground = false
+  private var connectivityManager: ConnectivityManager? = null
+  private var networkCallback: ConnectivityManager.NetworkCallback? = null
+  private var lastNetworkEventAt = 0L
+  private var lastNetworkSignature = ""
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    registerNetworkCallback()
+  }
+
+  override fun onDestroy() {
+    networkCallback?.let { callback ->
+      try { connectivityManager?.unregisterNetworkCallback(callback) } catch (_: Exception) {}
+    }
+    networkCallback = null
+    super.onDestroy()
   }
 
   override fun onResume() {
@@ -42,6 +59,48 @@ class MainActivity : TauriActivity() {
     webView.setBackgroundColor(android.graphics.Color.rgb(15, 23, 42))
     // Register JavaScript interface so frontend can call Android native methods directly
     webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
+  }
+
+  @Synchronized
+  private fun notifyNetworkChanged(signature: String) {
+    val now = android.os.SystemClock.elapsedRealtime()
+    if (signature == lastNetworkSignature || now - lastNetworkEventAt < 800) return
+    lastNetworkSignature = signature
+    lastNetworkEventAt = now
+    appWebView?.post {
+      appWebView?.evaluateJavascript(
+        "window.__nativeNetworkChanged?.('Android NetworkCallback')",
+        null
+      )
+    }
+  }
+
+  private fun registerNetworkCallback() {
+    try {
+      val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+      connectivityManager = manager
+      val callback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = notifyNetworkChanged("available:${network.hashCode()}")
+        override fun onLost(network: Network) = notifyNetworkChanged("lost:${network.hashCode()}")
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+          val signature = "cap:${network.hashCode()}:" +
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) + ":" +
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) + ":" +
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) + ":" +
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)
+          notifyNetworkChanged(signature)
+        }
+      }
+      networkCallback = callback
+      manager.registerNetworkCallback(
+        NetworkRequest.Builder()
+          .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+          .build(),
+        callback
+      )
+    } catch (error: Exception) {
+      error.printStackTrace()
+    }
   }
 
   private fun requestForegroundPermissionsInternal() {

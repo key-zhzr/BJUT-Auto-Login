@@ -18,6 +18,12 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+.btn,
+button {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
 html {
   background: var(--bg-color);
 }
@@ -118,6 +124,8 @@ nav {
   margin-bottom: 3rem;
   padding: 0 1rem;
 }
+
+.nav-brand h2 { white-space: nowrap; word-break: keep-all; }
 
 .logo {
   width: 32px;
@@ -732,6 +740,42 @@ input:checked + .slider:before { transform: translateX(24px); }
 .diagnostic-steps-panel { margin-bottom: 1rem; }
 .diagnostic-empty { color: var(--text-muted); text-align: center; padding: 1rem; font-size: 0.85rem; }
 
+.log-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.log-filters input,
+.log-filters select,
+.profile-form-grid input,
+.profile-form-grid select {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.75);
+  color: var(--text-main);
+  padding: 0.65rem 0.75rem;
+}
+
+#log-filter-count { color: var(--text-muted); font-size: 0.8rem; white-space: nowrap; }
+.setting-group-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.setting-group-heading p { margin-top: 0.3rem; color: var(--text-muted); font-size: 0.85rem; }
+.network-profiles-list { display: flex; flex-direction: column; gap: 0.65rem; margin-top: 1rem; }
+.network-profile-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.8rem; border-radius: 10px; background: rgba(0, 0, 0, 0.16); }
+.network-profile-row.disabled { opacity: 0.55; }
+.network-profile-info { min-width: 0; }
+.network-profile-info strong { display: block; }
+.network-profile-info small { display: block; margin-top: 0.25rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.network-profile-actions { display: flex; gap: 0.45rem; flex-shrink: 0; }
+.network-profile-modal-content { max-width: 620px; max-height: 88dvh; overflow-y: auto; }
+.profile-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; }
+.profile-checkbox { display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted); }
+
 .account-health-inline {
   margin-top: 0.25rem;
   display: flex;
@@ -788,6 +832,12 @@ input:checked + .slider:before { transform: translateX(24px); }
     margin-left: 0;
     justify-content: flex-start;
   }
+  .log-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .log-filters input { grid-column: 1 / -1; }
+  .profile-form-grid { grid-template-columns: 1fr; }
+  .network-profile-row { align-items: flex-start; flex-direction: column; }
+  .network-profile-actions { width: 100%; }
+  .network-profile-actions .btn { flex: 1; }
   .diagnostics-header {
     align-items: flex-start;
     flex-direction: column;
@@ -819,6 +869,28 @@ input:checked + .slider:before { transform: translateX(24px); }
   }
   .status-action { width: 100%; }
   .status-action button { width: 100%; }
+}
+
+@media (max-width: 480px) {
+  nav { padding: 0.65rem 0.6rem; gap: 0.35rem; }
+  .nav-brand { margin: 0; padding: 0; flex: 0 0 auto; }
+  .nav-brand h2 { display: none; }
+  .nav-brand .logo { width: 30px; height: 30px; }
+  .nav-items { flex: 1; justify-content: flex-end; gap: 0.15rem; min-width: 0; }
+  .nav-item { flex: 0 1 2.45rem; justify-content: center; min-width: 0; padding: 0.45rem; }
+  .nav-item svg { width: 20px; height: 20px; flex-shrink: 0; }
+  main { padding-left: 0.75rem; padding-right: 0.75rem; }
+  .page-header { gap: 0.65rem; }
+  .logs-actions,
+  .diagnostics-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .logs-actions .btn,
+  .diagnostics-actions .btn { width: 100%; padding-left: 0.55rem; padding-right: 0.55rem; }
+  .setting-item { align-items: flex-start; }
+  .setting-item > div:last-child:not(.setting-info) { flex-wrap: nowrap !important; }
+  .setting-group-heading { flex-direction: column; }
+  .setting-group-heading .btn { width: 100%; }
+  .modal-actions { gap: 0.55rem; }
+  .modal-actions .btn { min-width: 0; }
 }
 
 /* Modals */

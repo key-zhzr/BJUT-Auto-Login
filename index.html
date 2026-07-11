@@ -322,11 +322,27 @@
           <header class="page-header logs-header">
             <h1 style="margin: 0;">运行日志</h1>
             <div class="logs-actions">
+              <button id="btn-diagnostic-bundle" class="btn btn-secondary btn-sm"><i data-lucide="shield-check"></i> 复制诊断包</button>
               <button id="btn-copy-logs" class="btn btn-secondary btn-sm"><i data-lucide="copy"></i> 复制日志</button>
               <button id="btn-scroll-logs" class="btn btn-secondary btn-sm"><i data-lucide="arrow-down-to-line"></i> 滚动到底部</button>
               <button id="btn-clear-logs" class="btn btn-sm btn-log-danger">清空日志</button>
             </div>
           </header>
+          <div class="log-filters glass-card">
+            <input id="log-search" type="search" placeholder="搜索时间、模块或内容" autocomplete="off">
+            <select id="log-session-filter" aria-label="启动会话">
+              <option value="all">全部启动</option>
+              <option value="current">本次启动</option>
+            </select>
+            <select id="log-level-filter" aria-label="日志级别">
+              <option value="all">全部级别</option>
+              <option value="error">错误</option>
+              <option value="success">成功</option>
+              <option value="info">信息</option>
+              <option value="debug">调试</option>
+            </select>
+            <span id="log-filter-count">0 条</span>
+          </div>
           
           <div class="logs-container glass-card">
             <div id="logs-content" class="logs-content">
@@ -358,7 +374,7 @@
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>Wi-Fi 变更检测</h4>
-                  <p>每 3 秒检测局域网 IP 变化以快速响应网络切换（非位置权限）</p>
+                  <p>系统网络事件触发即时检测，并以每 3 秒局域网 IP 检测作为后台兜底</p>
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="setting-wifi-change-detect">
@@ -406,6 +422,41 @@
                   <p>在此列表中的网络将被拒绝登录</p>
                 </div>
                 <button class="btn btn-secondary btn-sm" id="btn-manage-blacklist">管理</button>
+              </div>
+            </div>
+
+            <div class="settings-group glass-card" style="margin-top: 1rem;">
+              <div class="setting-group-heading">
+                <div>
+                  <h3>网络配置档案</h3>
+                  <p>按 SSID 或有线环境绑定账号顺序、协议和检测策略</p>
+                </div>
+                <button class="btn btn-primary btn-sm" id="btn-add-network-profile">添加档案</button>
+              </div>
+              <div id="network-profiles-list" class="network-profiles-list">
+                <div class="diagnostic-empty">暂无网络档案，将使用全局设置</div>
+              </div>
+            </div>
+
+            <div class="settings-group glass-card" style="margin-top: 1rem;">
+              <h3>流量与余额提醒</h3>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>启用用量提醒</h4>
+                  <p>余额或剩余套餐流量低于提醒线时每天通知一次</p>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="setting-usage-alerts" checked>
+                  <span class="slider round"></span>
+                </label>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info"><h4>余额提醒线</h4><p>单位：元</p></div>
+                <input type="number" id="setting-balance-threshold" class="input-inline" min="0" step="1" value="10">
+              </div>
+              <div class="setting-item">
+                <div class="setting-info"><h4>流量提醒线</h4><p>单位：GB</p></div>
+                <input type="number" id="setting-flow-threshold" class="input-inline" min="0" step="1" value="5">
               </div>
             </div>
 
@@ -494,6 +545,55 @@
     </div>
 
     <!-- Terms of Service Modal -->
+    <div id="network-profile-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card network-profile-modal-content">
+        <h3 id="network-profile-modal-title">添加网络档案</h3>
+        <form id="network-profile-form">
+          <input type="hidden" id="network-profile-index" value="-1">
+          <div class="form-group">
+            <label for="network-profile-name">档案名称</label>
+            <input id="network-profile-name" required maxlength="40" placeholder="例如：教学区无线">
+          </div>
+          <div class="profile-form-grid">
+            <div class="form-group">
+              <label for="network-profile-ssid">SSID（有线留空）</label>
+              <input id="network-profile-ssid" maxlength="64" placeholder="bjut_wifi">
+            </div>
+            <div class="form-group">
+              <label for="network-profile-bssid">BSSID（可选）</label>
+              <input id="network-profile-bssid" maxlength="32" placeholder="留空匹配全部接入点">
+            </div>
+            <div class="form-group">
+              <label for="network-profile-protocol">登录协议</label>
+              <select id="network-profile-protocol">
+                <option value="auto">自动检测</option>
+                <option value="bjut-wifi">教学区无线</option>
+                <option value="bjut-sushe">宿舍无线</option>
+                <option value="wired">校园有线</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="network-profile-account">首选账号</label>
+              <select id="network-profile-account"><option value="">沿用全局顺序</option></select>
+            </div>
+            <div class="form-group">
+              <label for="network-profile-interval">前台间隔（秒）</label>
+              <input id="network-profile-interval" type="number" min="5" placeholder="沿用全局">
+            </div>
+            <div class="form-group">
+              <label for="network-profile-interval-bg">后台间隔（秒）</label>
+              <input id="network-profile-interval-bg" type="number" min="5" placeholder="沿用全局">
+            </div>
+          </div>
+          <label class="profile-checkbox"><input id="network-profile-auto-login" type="checkbox" checked> 在该网络启用自动登录</label>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="btn-cancel-network-profile">取消</button>
+            <button type="submit" class="btn btn-primary">保存档案</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div id="tos-modal" class="modal-overlay hidden">
       <div class="modal-content glass-card" style="max-width: 500px; text-align: left;">
         <h3 style="display: flex; align-items: center; gap: 0.5rem;"><i data-lucide="shield-check" style="color: var(--text-primary);"></i> 用户协议与隐私政策</h3>
