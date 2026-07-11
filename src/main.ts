@@ -311,6 +311,44 @@ interface UpdateProgress {
   percent?: number | null;
 }
 
+interface AccountHealth {
+  user: string;
+  status: 'healthy' | 'cooling_down' | 'needs_attention' | 'degraded';
+  consecutiveFailures: number;
+  cooldownUntil: number | null;
+  cooldownSeconds: number;
+  lastSuccess: string | null;
+  lastFailure: string | null;
+  lastFailureReason: string | null;
+  failureKind: string | null;
+}
+
+interface CredentialStorageHealth {
+  status: string;
+  backend: string;
+  persistent: boolean;
+  savedAccounts: number;
+  missingPasswordAccounts: string[];
+  message: string;
+}
+
+interface DiagnosticStep {
+  id: string;
+  label: string;
+  status: 'success' | 'warning' | 'error' | 'skipped';
+  message: string;
+  durationMs: number;
+}
+
+interface DiagnosticReport {
+  createdAt: string;
+  overall: 'healthy' | 'auth_required' | 'no_network' | 'offline';
+  summary: string;
+  ssid: string;
+  ip: string;
+  steps: DiagnosticStep[];
+}
+
 function isVersionNewer(current: string, latest: string): boolean {
   const parseVersion = (value: string) => {
     const withoutBuild = value.replace(/^v/i, '').split('+', 1)[0];
@@ -587,6 +625,7 @@ async function loadConfigFromRust() {
     
     renderAccounts();
     warnAboutMissingPasswords(credentialStorageStatus);
+    await Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
   } catch (e) {
     console.error('Failed to load config from Rust:', e);
   }
@@ -650,6 +689,10 @@ async function listenToRustEvents() {
 
     listen<UpdateProgress>('update-progress', event => {
       updateUpdateProgress(event.payload);
+    });
+
+    listen<AccountHealth[]>('account-health-change', event => {
+      setAccountHealth(event.payload);
     });
 
     // Load initial logs
@@ -1009,6 +1052,11 @@ const logsContent = document.getElementById('logs-content')!;
 const btnClearLogs = document.getElementById('btn-clear-logs')!;
 const btnCopyLogs = document.getElementById('btn-copy-logs')!;
 const btnScrollLogs = document.getElementById('btn-scroll-logs')!;
+const btnRunDiagnostics = document.getElementById('btn-run-diagnostics') as HTMLButtonElement;
+const btnCopyDiagnostics = document.getElementById('btn-copy-diagnostics') as HTMLButtonElement;
+const btnResetAllHealth = document.getElementById('btn-reset-all-health') as HTMLButtonElement;
+const accountHealthList = document.getElementById('account-health-list')!;
+const diagnosticSteps = document.getElementById('diagnostic-steps')!;
 const settingAutoLogin = document.getElementById('setting-auto-login') as HTMLInputElement;
 const settingWifiChangeDetect = document.getElementById('setting-wifi-change-detect') as HTMLInputElement;
 const settingAutostart = document.getElementById('setting-autostart') as HTMLInputElement;
@@ -1038,6 +1086,8 @@ let autoLoginEnabled = localStorage.getItem('bjut_auto_login') === 'true';
 let checkInterval = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
 let isLoggingIn = false;
 let isChecking = false;
+let accountHealthCache = new Map<string, AccountHealth>();
+let lastDiagnosticReport: DiagnosticReport | null = null;
 
 // New state for split check loops
 let lastKnownIp = '';
@@ -1180,6 +1230,180 @@ async function init() {
   await finishAppLaunch();
 }
 
+function formatHealthTime(value: string | null): string {
+  if (!value) return '暂无记录';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatCooldown(seconds: number): string {
+  if (seconds <= 0) return '可正常尝试';
+  if (seconds < 60) return `${seconds} 秒后重试`;
+  const minutes = Math.ceil(seconds / 60);
+  return minutes < 60 ? `${minutes} 分钟后重试` : `${Math.ceil(minutes / 60)} 小时后重试`;
+}
+
+function accountHealthLabel(status: AccountHealth['status']): string {
+  if (status === 'needs_attention') return '需处理';
+  if (status === 'cooling_down') return '冷却中';
+  if (status === 'degraded') return '待观察';
+  return '正常';
+}
+
+function setAccountHealth(items: AccountHealth[]) {
+  accountHealthCache = new Map(items.map(item => [item.user, item]));
+  renderAccounts();
+  renderAccountHealthPanel();
+}
+
+function renderAccountHealthPanel() {
+  accountHealthList.innerHTML = '';
+  const items = Array.from(accountHealthCache.values());
+  if (items.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'diagnostic-empty';
+    empty.textContent = '暂无账号';
+    accountHealthList.appendChild(empty);
+    return;
+  }
+  items.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'account-health-row';
+    const info = document.createElement('div');
+    info.className = 'account-health-info';
+    const title = document.createElement('div');
+    title.className = 'account-health-title';
+    const user = document.createElement('strong');
+    user.textContent = item.user;
+    const badge = document.createElement('span');
+    badge.className = `account-health-badge ${item.status}`;
+    badge.textContent = accountHealthLabel(item.status);
+    title.append(user, badge);
+    const detail = document.createElement('small');
+    const failure = item.lastFailureReason ? `；最近失败：${item.lastFailureReason}` : '';
+    detail.textContent = `${formatCooldown(item.cooldownSeconds)}；连续失败 ${item.consecutiveFailures} 次${failure}`;
+    detail.title = `最近成功：${formatHealthTime(item.lastSuccess)}；最近失败：${formatHealthTime(item.lastFailure)}`;
+    info.append(title, detail);
+    const reset = document.createElement('button');
+    reset.className = 'btn btn-secondary btn-sm action-reset-health';
+    reset.dataset.user = item.user;
+    reset.textContent = '解除';
+    reset.disabled = item.status === 'healthy' && item.consecutiveFailures === 0;
+    row.append(info, reset);
+    accountHealthList.appendChild(row);
+  });
+}
+
+async function refreshAccountHealth() {
+  if (!(window as any).__TAURI__) return;
+  try {
+    setAccountHealth(await invoke<AccountHealth[]>('get_account_health'));
+  } catch (error) {
+    console.error('Failed to load account health:', error);
+  }
+}
+
+async function refreshCredentialStorageHealth() {
+  if (!(window as any).__TAURI__) return;
+  const backend = document.getElementById('credential-health-backend')!;
+  const badge = document.getElementById('credential-health-badge')!;
+  const message = document.getElementById('credential-health-message')!;
+  const saved = document.getElementById('credential-saved-count')!;
+  const missing = document.getElementById('credential-missing-count')!;
+  const users = document.getElementById('credential-missing-users')!;
+  try {
+    const health = await invoke<CredentialStorageHealth>('get_credential_storage_health');
+    backend.textContent = `${health.backend} · ${health.persistent ? '持久化存储' : '临时存储'}`;
+    badge.className = `health-badge ${health.status === 'available' ? 'success' : health.status === 'missing' ? 'warning' : 'error'}`;
+    badge.textContent = health.status === 'available' ? '正常' : health.status === 'missing' ? '需补录' : '异常';
+    message.textContent = health.message;
+    saved.textContent = String(health.savedAccounts);
+    missing.textContent = String(health.missingPasswordAccounts.length);
+    users.classList.toggle('hidden', health.missingPasswordAccounts.length === 0);
+    users.textContent = health.missingPasswordAccounts.length
+      ? `需要补录密码：${health.missingPasswordAccounts.join('、')}`
+      : '';
+  } catch (error) {
+    backend.textContent = '无法读取安全存储状态';
+    badge.className = 'health-badge error';
+    badge.textContent = '异常';
+    message.textContent = String(error);
+  }
+}
+
+function renderDiagnosticReport(report: DiagnosticReport) {
+  const summary = document.getElementById('diagnostic-summary')!;
+  const badge = document.getElementById('diagnostic-summary-badge')!;
+  const title = document.getElementById('diagnostic-summary-title')!;
+  const meta = document.getElementById('diagnostic-summary-meta')!;
+  const overallClass = report.overall === 'healthy' ? 'success'
+    : report.overall === 'auth_required' ? 'warning' : 'error';
+  const overallLabel = report.overall === 'healthy' ? '网络正常'
+    : report.overall === 'auth_required' ? '需要认证'
+      : report.overall === 'no_network' ? '无网络接口' : '无法联网';
+  summary.className = `diagnostic-summary glass-card diagnostic-${overallClass}`;
+  badge.className = `health-badge ${overallClass}`;
+  badge.textContent = overallLabel;
+  title.textContent = report.summary;
+  meta.textContent = `${formatHealthTime(report.createdAt)} · SSID ${report.ssid || '--'} · IP ${report.ip || '--'}`;
+  diagnosticSteps.innerHTML = '';
+  report.steps.forEach(step => {
+    const row = document.createElement('div');
+    row.className = `diagnostic-step ${step.status}`;
+    const marker = document.createElement('span');
+    marker.className = 'diagnostic-step-marker';
+    marker.textContent = step.status === 'success' ? '✓' : step.status === 'warning' ? '!' : step.status === 'skipped' ? '–' : '×';
+    const content = document.createElement('div');
+    content.className = 'diagnostic-step-info';
+    const label = document.createElement('strong');
+    label.textContent = step.label;
+    const detail = document.createElement('small');
+    detail.textContent = step.message;
+    content.append(label, detail);
+    const duration = document.createElement('span');
+    duration.className = 'diagnostic-step-duration';
+    duration.textContent = `${step.durationMs} ms`;
+    row.append(marker, content, duration);
+    diagnosticSteps.appendChild(row);
+  });
+  btnCopyDiagnostics.disabled = false;
+}
+
+function diagnosticReportText(report: DiagnosticReport): string {
+  const lines = [
+    'BJUT-AL 网络诊断报告',
+    `时间：${formatHealthTime(report.createdAt)}`,
+    `结论：${report.summary}`,
+    `SSID：${report.ssid || '--'}`,
+    `IP：${report.ip || '--'}`,
+    '',
+  ];
+  report.steps.forEach(step => lines.push(`[${step.status}] ${step.label}（${step.durationMs} ms）：${step.message}`));
+  lines.push('', '报告不包含账号密码。');
+  return lines.join('\n');
+}
+
+async function runDiagnostics() {
+  if (!(window as any).__TAURI__) {
+    await customAlert('网络诊断仅在桌面或移动应用中可用。');
+    return;
+  }
+  btnRunDiagnostics.disabled = true;
+  btnCopyDiagnostics.disabled = true;
+  btnRunDiagnostics.textContent = '诊断中…';
+  document.getElementById('diagnostic-summary-title')!.textContent = '正在逐项检查网络链路…';
+  try {
+    lastDiagnosticReport = await invoke<DiagnosticReport>('run_network_diagnostics');
+    renderDiagnosticReport(lastDiagnosticReport);
+    await Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
+  } catch (error) {
+    document.getElementById('diagnostic-summary-title')!.textContent = `诊断失败：${String(error)}`;
+  } finally {
+    btnRunDiagnostics.disabled = false;
+    btnRunDiagnostics.textContent = '开始诊断';
+  }
+}
+
 // Navigation
 function setupNavigation() {
   navItems.forEach(item => {
@@ -1190,6 +1414,9 @@ function setupNavigation() {
       item.classList.add('active');
       const target = item.getAttribute('data-target');
       document.getElementById(target!)?.classList.add('active');
+      if (target === 'diagnostics') {
+        void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
+      }
     });
   });
 }
@@ -1197,6 +1424,41 @@ function setupNavigation() {
 // Event Listeners
 function setupEventListeners() {
   btnLogin.addEventListener('click', manualLogin);
+
+  btnRunDiagnostics.addEventListener('click', () => void runDiagnostics());
+  btnCopyDiagnostics.addEventListener('click', async () => {
+    if (!lastDiagnosticReport) return;
+    try {
+      await writeTextToClipboard(diagnosticReportText(lastDiagnosticReport));
+      await customAlert('诊断报告已复制到剪贴板。');
+    } catch (error) {
+      await customAlert(`复制诊断报告失败：${String(error)}`);
+    }
+  });
+  btnResetAllHealth.addEventListener('click', async () => {
+    if (!(window as any).__TAURI__) return;
+    btnResetAllHealth.setAttribute('disabled', '');
+    try {
+      await invoke('reset_account_health', { user: null });
+      await refreshAccountHealth();
+      log('账号管理', '已解除全部账号的失败熔断');
+    } finally {
+      btnResetAllHealth.removeAttribute('disabled');
+    }
+  });
+  accountHealthList.addEventListener('click', async event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.action-reset-health');
+    if (!button?.dataset.user || !(window as any).__TAURI__) return;
+    button.disabled = true;
+    try {
+      await invoke('reset_account_health', { user: button.dataset.user });
+      await refreshAccountHealth();
+      log('账号管理', `已解除账号 ${button.dataset.user} 的失败熔断`);
+    } catch (error) {
+      await customAlert(`解除失败：${String(error)}`);
+      button.disabled = false;
+    }
+  });
   
   // Add modal toggle
   btnShowAdd.addEventListener('click', () => {
@@ -1976,6 +2238,10 @@ function renderAccounts() {
         <div class="account-user">
           <h4></h4>
           <span class="account-badge ${acc.isDefault ? 'text-primary font-bold' : 'text-muted'}">${acc.isDefault ? '默认' : '备用'}</span>
+          <div class="account-health-inline">
+            <span class="account-health-badge healthy">正常</span>
+            <small>暂无失败记录</small>
+          </div>
         </div>
         <div class="account-mobile-actions">
           <button class="btn-icon action-edit" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
@@ -1999,6 +2265,17 @@ function renderAccounts() {
     const passwordText = item.querySelector('.password-text') as HTMLElement;
     passwordText.dataset.password = acc.pass;
     passwordText.textContent = acc.pass ? '*************' : '未保存密码';
+    const health = accountHealthCache.get(acc.user);
+    if (health) {
+      const healthBadge = item.querySelector('.account-health-badge') as HTMLElement;
+      const healthDetail = item.querySelector('.account-health-inline small') as HTMLElement;
+      healthBadge.className = `account-health-badge ${health.status}`;
+      healthBadge.textContent = accountHealthLabel(health.status);
+      healthDetail.textContent = health.consecutiveFailures > 0
+        ? `${formatCooldown(health.cooldownSeconds)} · 失败 ${health.consecutiveFailures} 次`
+        : '暂无失败记录';
+      healthDetail.title = health.lastFailureReason || '';
+    }
     accountsList.appendChild(item);
   });
   createIcons({ icons });

@@ -494,6 +494,7 @@ fn write_clipboard(text: String) -> Result<(), String> {
     }
 }
 
+use std::collections::HashMap;
 use std::sync::{Mutex, RwLock, Arc};
 use std::sync::atomic::{AtomicI32, AtomicBool, AtomicU32, Ordering};
 use tauri::Emitter;
@@ -531,6 +532,69 @@ struct UpdateTarget {
     arch: String,
     format: String,
     current_version: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct AccountHealth {
+    #[serde(default)]
+    consecutive_failures: u32,
+    #[serde(default)]
+    cooldown_until: Option<i64>,
+    #[serde(default)]
+    last_success: Option<String>,
+    #[serde(default)]
+    last_failure: Option<String>,
+    #[serde(default)]
+    last_failure_reason: Option<String>,
+    #[serde(default)]
+    failure_kind: Option<String>,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+struct AccountHealthView {
+    user: String,
+    status: String,
+    consecutive_failures: u32,
+    cooldown_until: Option<i64>,
+    cooldown_seconds: i64,
+    last_success: Option<String>,
+    last_failure: Option<String>,
+    last_failure_reason: Option<String>,
+    failure_kind: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CredentialStorageHealth {
+    status: String,
+    backend: String,
+    persistent: bool,
+    saved_accounts: usize,
+    missing_password_accounts: Vec<String>,
+    message: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticStep {
+    id: String,
+    label: String,
+    status: String,
+    message: String,
+    duration_ms: u128,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticReport {
+    created_at: String,
+    overall: String,
+    summary: String,
+    ssid: String,
+    ip: String,
+    steps: Vec<DiagnosticStep>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
@@ -571,6 +635,7 @@ struct LogEntry {
 struct AppState {
     config: RwLock<AppConfig>,
     credential_storage_status: Mutex<String>,
+    account_health: Mutex<HashMap<String, AccountHealth>>,
     logs: Mutex<Vec<LogEntry>>,
     countdown: AtomicI32,
     is_checking: AtomicBool,
@@ -1067,6 +1132,161 @@ fn get_log_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     p
 }
 
+fn get_account_health_path(app: &tauri::AppHandle) -> std::path::PathBuf {
+    let mut path = app.path().app_data_dir().unwrap_or_else(|_| std::env::current_dir().unwrap());
+    let _ = std::fs::create_dir_all(&path);
+    path.push("account-health.json");
+    path
+}
+
+fn load_account_health(app: &tauri::AppHandle) -> HashMap<String, AccountHealth> {
+    std::fs::read_to_string(get_account_health_path(app))
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+fn persist_account_health(app: &tauri::AppHandle, health: &HashMap<String, AccountHealth>) {
+    if let Ok(content) = serde_json::to_string_pretty(health) {
+        let _ = std::fs::write(get_account_health_path(app), content);
+    }
+}
+
+fn account_health_views(health: &HashMap<String, AccountHealth>) -> Vec<AccountHealthView> {
+    let now = chrono::Utc::now().timestamp();
+    let mut views: Vec<AccountHealthView> = health.iter().map(|(user, item)| {
+        let cooldown_seconds = item.cooldown_until.map(|until| (until - now).max(0)).unwrap_or(0);
+        let status = if cooldown_seconds > 0 && item.failure_kind.as_deref() == Some("credential") {
+            "needs_attention"
+        } else if cooldown_seconds > 0 {
+            "cooling_down"
+        } else if item.consecutive_failures > 0 {
+            "degraded"
+        } else {
+            "healthy"
+        };
+        AccountHealthView {
+            user: user.clone(),
+            status: status.to_string(),
+            consecutive_failures: item.consecutive_failures,
+            cooldown_until: item.cooldown_until,
+            cooldown_seconds,
+            last_success: item.last_success.clone(),
+            last_failure: item.last_failure.clone(),
+            last_failure_reason: item.last_failure_reason.clone(),
+            failure_kind: item.failure_kind.clone(),
+        }
+    }).collect();
+    views.sort_by(|a, b| a.user.cmp(&b.user));
+    views
+}
+
+fn current_account_health_views(state: &AppState) -> Vec<AccountHealthView> {
+    let mut health = state.account_health.lock().unwrap().clone();
+    let users: Vec<String> = state.config.read().unwrap().accounts
+        .iter()
+        .map(|account| account.user.clone())
+        .collect();
+    for user in users {
+        health.entry(user).or_default();
+    }
+    account_health_views(&health)
+}
+
+fn classify_account_failure(reason: &str, consecutive_failures: u32) -> (&'static str, i64) {
+    let normalized = reason.to_ascii_lowercase();
+    if reason.contains("密码")
+        || reason.contains("账号不存在")
+        || reason.contains("用户名")
+        || normalized.contains("password")
+        || normalized.contains("credential")
+    {
+        return ("credential", 30 * 60);
+    }
+    if reason.contains("余额") || reason.contains("欠费") || normalized.contains("balance") {
+        return ("balance", 6 * 60 * 60);
+    }
+    let exponent = consecutive_failures.saturating_sub(1).min(6);
+    if reason.contains("请求出错")
+        || reason.contains("超时")
+        || normalized.contains("timeout")
+        || normalized.contains("connect")
+    {
+        return ("network", (15_i64 * (1_i64 << exponent)).min(15 * 60));
+    }
+    ("server", (60_i64 * (1_i64 << exponent)).min(15 * 60))
+}
+
+fn account_attempt_allowed(state: &AppState, user: &str) -> Result<(), i64> {
+    let now = chrono::Utc::now().timestamp();
+    let health = state.account_health.lock().unwrap();
+    let remaining = health.get(user)
+        .and_then(|item| item.cooldown_until)
+        .map(|until| (until - now).max(0))
+        .unwrap_or(0);
+    if remaining > 0 { Err(remaining) } else { Ok(()) }
+}
+
+fn emit_account_health(app: &tauri::AppHandle, state: &AppState) {
+    let views = current_account_health_views(state);
+    let _ = app.emit("account-health-change", views);
+}
+
+fn record_account_success(app: &tauri::AppHandle, state: &AppState, user: &str) {
+    let snapshot = {
+        let mut health = state.account_health.lock().unwrap();
+        let item = health.entry(user.to_string()).or_default();
+        item.consecutive_failures = 0;
+        item.cooldown_until = None;
+        item.last_success = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        item.last_failure_reason = None;
+        item.failure_kind = None;
+        health.clone()
+    };
+    persist_account_health(app, &snapshot);
+    emit_account_health(app, state);
+}
+
+fn record_account_failure(app: &tauri::AppHandle, state: &AppState, user: &str, reason: &str) {
+    let snapshot = {
+        let mut health = state.account_health.lock().unwrap();
+        let item = health.entry(user.to_string()).or_default();
+        item.consecutive_failures = item.consecutive_failures.saturating_add(1);
+        let (kind, cooldown_seconds) = classify_account_failure(reason, item.consecutive_failures);
+        item.cooldown_until = Some(chrono::Utc::now().timestamp() + cooldown_seconds);
+        item.last_failure = Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        item.last_failure_reason = Some(reason.chars().take(200).collect());
+        item.failure_kind = Some(kind.to_string());
+        health.clone()
+    };
+    persist_account_health(app, &snapshot);
+    emit_account_health(app, state);
+}
+
+fn reconcile_account_health_after_config_save(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    previous: &AppConfig,
+    current: &AppConfig,
+) {
+    let snapshot = {
+        let mut health = state.account_health.lock().unwrap();
+        health.retain(|user, _| current.accounts.iter().any(|account| account.user == *user));
+        for account in &current.accounts {
+            let password_changed = previous.accounts.iter()
+                .find(|candidate| candidate.user == account.user)
+                .map(|candidate| candidate.pass != account.pass)
+                .unwrap_or(true);
+            if password_changed {
+                health.remove(&account.user);
+            }
+        }
+        health.clone()
+    };
+    persist_account_health(app, &snapshot);
+    emit_account_health(app, state);
+}
+
 fn public_config(config: &AppConfig) -> AppConfig {
     let mut public = config.clone();
     for account in &mut public.accounts {
@@ -1391,10 +1611,11 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
 }
 
 fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig) -> Result<(), String> {
-    {
+    let previous_cfg = {
         let state_cfg = state.config.read().unwrap();
         fill_missing_passwords(&mut new_cfg, &state_cfg);
-    }
+        state_cfg.clone()
+    };
     let storage_was_unreadable = {
         let status = state.credential_storage_status.lock().unwrap();
         status.as_str() == "error" || status.as_str() == "unknown"
@@ -1419,6 +1640,7 @@ fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig)
         let mut state_cfg = state.config.write().unwrap();
         *state_cfg = new_cfg.clone();
     }
+    reconcile_account_health_after_config_save(app, state, &previous_cfg, &new_cfg);
     Ok(())
 }
 
@@ -1539,9 +1761,21 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             let cfg = state.config.read().unwrap();
                             cfg.accounts.clone()
                         };
-                        let active_accounts: Vec<Account> = accounts.into_iter()
+                        let mut active_accounts = Vec::new();
+                        for account in accounts.into_iter()
                             .filter(|acc| !acc.is_disabled.unwrap_or(false) && !acc.pass.is_empty())
-                            .collect();
+                        {
+                            match account_attempt_allowed(&state, &account.user) {
+                                Ok(()) => active_accounts.push(account),
+                                Err(remaining) => rust_log(
+                                    &app,
+                                    &state,
+                                    "账号健康",
+                                    &format!("账号 {} 仍在冷却中（剩余 {} 秒），跳过本次尝试", account.user, remaining),
+                                    "info",
+                                ),
+                            }
+                        }
                         if active_accounts.is_empty() {
                             rust_log(&app, &state, "网络", "未配置带已保存密码的有效账号，跳过自动登录", "error");
                         } else {
@@ -1550,6 +1784,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                 rust_log(&app, &state, "网络", &format!("尝试使用账号 {} 自动登录...", acc.user), "info");
                                 match login_to_campus_network_rust(login_type.clone(), &acc.user, &acc.pass).await {
                                     Ok((true, msg)) => {
+                                        record_account_success(&app, &state, &acc.user);
                                         rust_log(&app, &state, "网络", &format!("登录成功: {}", msg), "success");
                                         let _ = show_native_notification(&app, "自动登录成功", &format!("账号: {}", acc.user));
                                         success = true;
@@ -1557,9 +1792,11 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                         break;
                                     }
                                     Ok((false, msg)) => {
+                                        record_account_failure(&app, &state, &acc.user, &msg);
                                         rust_log(&app, &state, "网络", &format!("登录失败: {}", msg), "error");
                                     }
                                     Err(err) => {
+                                        record_account_failure(&app, &state, &acc.user, &format!("请求出错: {err}"));
                                         rust_log(&app, &state, "网络", &format!("请求出错: {}", err), "error");
                                     }
                                 }
@@ -1625,6 +1862,198 @@ fn get_app_config(state: tauri::State<Arc<AppState>>) -> AppConfig {
 #[tauri::command]
 fn get_credential_storage_status(state: tauri::State<Arc<AppState>>) -> String {
     state.credential_storage_status.lock().unwrap().clone()
+}
+
+fn credential_backend_name() -> &'static str {
+    if cfg!(target_os = "android") {
+        "Android Keystore (AES-GCM)"
+    } else if cfg!(target_os = "macos") {
+        "macOS Keychain"
+    } else if cfg!(target_os = "windows") {
+        "Windows Credential Manager"
+    } else if cfg!(target_os = "linux") {
+        "Linux Secret Service"
+    } else {
+        "系统安全存储"
+    }
+}
+
+#[tauri::command]
+fn get_credential_storage_health(state: tauri::State<Arc<AppState>>) -> CredentialStorageHealth {
+    let status = state.credential_storage_status.lock().unwrap().clone();
+    let config = state.config.read().unwrap();
+    let missing_password_accounts: Vec<String> = config.accounts.iter()
+        .filter(|account| account.pass.is_empty())
+        .map(|account| account.user.clone())
+        .collect();
+    let saved_accounts = config.accounts.len().saturating_sub(missing_password_accounts.len());
+    let message = match status.as_str() {
+        "available" if missing_password_accounts.is_empty() => "系统安全存储工作正常，所有账号均已保存密码",
+        "available" => "系统安全存储可用，但部分账号仍需补录密码",
+        "missing" => "系统安全存储可用，当前尚未保存凭据",
+        "error" => "系统安全存储暂时不可读；应用已阻止空密码覆盖",
+        _ => "系统安全存储状态尚未完成初始化",
+    }.to_string();
+    CredentialStorageHealth {
+        status,
+        backend: credential_backend_name().to_string(),
+        persistent: true,
+        saved_accounts,
+        missing_password_accounts,
+        message,
+    }
+}
+
+#[tauri::command]
+fn get_account_health(state: tauri::State<Arc<AppState>>) -> Vec<AccountHealthView> {
+    current_account_health_views(&state)
+}
+
+#[tauri::command]
+fn reset_account_health(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    user: Option<String>,
+) {
+    let snapshot = {
+        let mut health = state.account_health.lock().unwrap();
+        if let Some(user) = user {
+            health.remove(&user);
+        } else {
+            health.clear();
+        }
+        health.clone()
+    };
+    persist_account_health(&app, &snapshot);
+    emit_account_health(&app, &state);
+}
+
+fn make_diagnostic_step(
+    id: &str,
+    label: &str,
+    started: std::time::Instant,
+    status: &str,
+    message: String,
+) -> DiagnosticStep {
+    DiagnosticStep {
+        id: id.to_string(),
+        label: label.to_string(),
+        status: status.to_string(),
+        message,
+        duration_ms: started.elapsed().as_millis(),
+    }
+}
+
+#[tauri::command]
+async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
+    use std::net::ToSocketAddrs;
+
+    let mut steps = Vec::new();
+    let identity_started = std::time::Instant::now();
+    let network = get_network_info(app);
+    let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let mut ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    if ip.is_empty() {
+        ip = get_local_ip();
+    }
+    let identity_status = if ip.is_empty() { "error" } else if ssid.is_empty() { "warning" } else { "success" };
+    let identity_message = if ip.is_empty() {
+        "未检测到可用网络接口或 IPv4 地址".to_string()
+    } else if ssid.is_empty() || ssid.eq_ignore_ascii_case("<unknown ssid>") {
+        format!("已取得本地 IP {ip}，但未取得无线网络名称（可能为有线网络或权限不足）")
+    } else {
+        format!("已连接 {ssid}，本地 IP {ip}")
+    };
+    steps.push(make_diagnostic_step(
+        "network_identity",
+        "网络接口",
+        identity_started,
+        identity_status,
+        identity_message,
+    ));
+
+    let campus_started = std::time::Instant::now();
+    let campus_ip = is_campus_local_ip(&ip);
+    let campus_ssid = is_known_campus_ssid(&ssid);
+    let campus_status = if campus_ip && (campus_ssid || ssid.is_empty() || ssid.contains("unknown")) {
+        "success"
+    } else if campus_ip || campus_ssid {
+        "warning"
+    } else {
+        "error"
+    };
+    let campus_message = match (campus_ip, campus_ssid) {
+        (true, true) => "SSID 与本地网段均符合校园网特征".to_string(),
+        (true, false) => "本地网段符合校园网，但 SSID 未识别；自动登录需要白名单或有线协议".to_string(),
+        (false, true) => "SSID 符合校园网，但本地 IP 不在已知网段".to_string(),
+        (false, false) => "当前网络不符合已知校园网特征".to_string(),
+    };
+    steps.push(make_diagnostic_step(
+        "campus_environment",
+        "校园网环境",
+        campus_started,
+        campus_status,
+        campus_message,
+    ));
+
+    let dns_started = std::time::Instant::now();
+    let dns_ok = tauri::async_runtime::spawn_blocking(|| {
+        ("www.baidu.com", 443).to_socket_addrs()
+            .map(|mut addresses| addresses.next().is_some())
+            .unwrap_or(false)
+    }).await.unwrap_or(false);
+    steps.push(make_diagnostic_step(
+        "dns",
+        "DNS 解析",
+        dns_started,
+        if dns_ok { "success" } else { "warning" },
+        if dns_ok { "DNS 解析正常".to_string() } else { "DNS 解析失败或被认证页面限制".to_string() },
+    ));
+
+    let internet_started = std::time::Instant::now();
+    let online = check_internet_rust().await;
+    steps.push(make_diagnostic_step(
+        "internet",
+        "互联网连通性",
+        internet_started,
+        if online { "success" } else { "warning" },
+        if online { "互联网访问正常，无需校园网认证".to_string() } else { "暂时无法访问互联网，继续检测认证网关".to_string() },
+    ));
+
+    let portal_started = std::time::Instant::now();
+    let login_type = if online { LoginType::Unknown } else { detect_login_type_rust().await };
+    let (portal_status, portal_message) = if online {
+        ("success", "互联网已连通，跳过认证网关探测".to_string())
+    } else if login_type != LoginType::Unknown {
+        ("warning", format!("已检测到校园网认证协议 {}，当前需要登录", login_type.as_str()))
+    } else {
+        ("error", "未找到可访问的校园网认证网关，可能是完全离线或处于非校园网络".to_string())
+    };
+    steps.push(make_diagnostic_step(
+        "portal",
+        "认证网关",
+        portal_started,
+        portal_status,
+        portal_message,
+    ));
+
+    let (overall, summary) = if online {
+        ("healthy", "网络工作正常，互联网已连通")
+    } else if login_type != LoginType::Unknown {
+        ("auth_required", "已连接校园网，但需要完成账号认证")
+    } else if ip.is_empty() {
+        ("no_network", "未取得网络地址，请检查 Wi-Fi、有线连接或系统权限")
+    } else {
+        ("offline", "已取得本地网络，但无法访问互联网或校园网认证网关")
+    };
+    DiagnosticReport {
+        created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        overall: overall.to_string(),
+        summary: summary.to_string(),
+        ssid,
+        ip,
+        steps,
+    }
 }
 
 #[tauri::command]
@@ -1706,9 +2135,20 @@ async fn manual_login(
             rust_log(&app, &state, "登录", &format!("账号 {} 缺少已保存的密码", account.user), "error");
             continue;
         }
+        if let Err(remaining) = account_attempt_allowed(&state, &account.user) {
+            rust_log(
+                &app,
+                &state,
+                "账号健康",
+                &format!("账号 {} 正在冷却，剩余 {} 秒；可在网络诊断页解除", account.user, remaining),
+                "info",
+            );
+            continue;
+        }
         rust_log(&app, &state, "登录", &format!("尝试使用账号 {} 登录...", account.user), "info");
         match login_to_campus_network_rust(login_type.clone(), &account.user, &account.pass).await {
             Ok((true, message)) => {
+                record_account_success(&app, &state, &account.user);
                 rust_log(&app, &state, "登录", &format!("登录成功: {message}"), "success");
                 let net_info = get_network_info(app.clone());
                 let payload = serde_json::json!({
@@ -1722,8 +2162,14 @@ async fn manual_login(
                 let _ = app.emit("network-state-change", payload);
                 return Ok(ManualLoginResult { success: true, message });
             }
-            Ok((false, message)) => rust_log(&app, &state, "登录", &format!("登录失败: {message}"), "error"),
-            Err(error) => rust_log(&app, &state, "登录", &format!("请求出错: {error}"), "error"),
+            Ok((false, message)) => {
+                record_account_failure(&app, &state, &account.user, &message);
+                rust_log(&app, &state, "登录", &format!("登录失败: {message}"), "error");
+            }
+            Err(error) => {
+                record_account_failure(&app, &state, &account.user, &format!("请求出错: {error}"));
+                rust_log(&app, &state, "登录", &format!("请求出错: {error}"), "error");
+            }
         }
     }
     Ok(ManualLoginResult { success: false, message: "所有可用账号均未能登录".to_string() })
@@ -1771,6 +2217,7 @@ pub fn run() {
                     blacklist: Vec::new(),
                 }),
                 credential_storage_status: Mutex::new("unknown".to_string()),
+                account_health: Mutex::new(load_account_health(_app.handle())),
                 logs: Mutex::new(Vec::new()),
                 countdown: AtomicI32::new(15),
                 is_checking: AtomicBool::new(false),
@@ -2012,6 +2459,10 @@ pub fn run() {
             sync_config,
             get_app_config,
             get_credential_storage_status,
+            get_credential_storage_health,
+            get_account_health,
+            reset_account_health,
+            run_network_diagnostics,
             get_logs,
             get_log_text,
             clear_all_logs,
@@ -2218,5 +2669,31 @@ mod tests {
             &[],
             &[],
         ).is_err());
+    }
+
+    #[test]
+    fn account_failures_use_bounded_cooldowns() {
+        assert_eq!(classify_account_failure("密码错误", 1), ("credential", 1800));
+        assert_eq!(classify_account_failure("余额不足", 1), ("balance", 21600));
+        assert_eq!(classify_account_failure("请求出错: timeout", 1), ("network", 15));
+        assert_eq!(classify_account_failure("请求出错: timeout", 20), ("network", 900));
+        assert_eq!(classify_account_failure("认证服务器繁忙", 1), ("server", 60));
+        assert_eq!(classify_account_failure("认证服务器繁忙", 20), ("server", 900));
+    }
+
+    #[test]
+    fn account_health_view_reports_active_cooldown() {
+        let mut health = HashMap::new();
+        health.insert("student".to_string(), AccountHealth {
+            consecutive_failures: 1,
+            cooldown_until: Some(chrono::Utc::now().timestamp() + 120),
+            failure_kind: Some("credential".to_string()),
+            ..Default::default()
+        });
+
+        let views = account_health_views(&health);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].status, "needs_attention");
+        assert!(views[0].cooldown_seconds > 0);
     }
 }

@@ -594,6 +594,159 @@ input:checked + .slider:before { transform: translateX(24px); }
   color: var(--text-muted);
 }
 
+/* Diagnostics & account health */
+.diagnostics-header {
+  align-items: center;
+  gap: 1rem;
+}
+
+.diagnostics-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.diagnostic-summary,
+.diagnostic-panel {
+  border-radius: 14px;
+  padding: 1.25rem;
+}
+
+.diagnostic-summary {
+  margin-bottom: 1rem;
+  border-left: 4px solid var(--text-muted);
+}
+
+.diagnostic-summary.healthy { border-left-color: var(--success); }
+.diagnostic-summary.authentication_required { border-left-color: var(--warning); }
+.diagnostic-summary.offline,
+.diagnostic-summary.no_network { border-left-color: var(--error); }
+.diagnostic-summary.diagnostic-success { border-left-color: var(--success); }
+.diagnostic-summary.diagnostic-warning { border-left-color: var(--warning); }
+.diagnostic-summary.diagnostic-error { border-left-color: var(--error); }
+.diagnostic-summary h3 { margin: 0.65rem 0 0.3rem; }
+.diagnostic-summary p,
+.diagnostic-panel p { color: var(--text-muted); font-size: 0.88rem; }
+
+.diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.diagnostic-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.diagnostic-panel-header h3 { margin-bottom: 0.25rem; }
+.diagnostic-panel-message { min-height: 2.6em; line-height: 1.5; }
+
+.health-badge,
+.account-health-badge {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--text-muted);
+}
+
+.health-badge.success,
+.account-health-badge.healthy { color: var(--success); background: rgba(16, 185, 129, 0.12); }
+.health-badge.warning,
+.account-health-badge.cooling_down,
+.account-health-badge.degraded { color: var(--warning); background: rgba(245, 158, 11, 0.12); }
+.health-badge.error,
+.account-health-badge.needs_attention { color: var(--error); background: rgba(239, 68, 68, 0.12); }
+
+.diagnostic-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.diagnostic-metrics div {
+  padding: 0.8rem;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.diagnostic-metrics span { color: var(--text-muted); font-size: 0.82rem; }
+.diagnostic-metrics strong { font-size: 1.2rem; }
+.diagnostic-note { margin-top: 0.75rem; color: var(--warning); font-size: 0.82rem; line-height: 1.5; }
+.diagnostic-note.hidden { display: none; }
+
+.account-health-list,
+.diagnostic-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.account-health-row,
+.diagnostic-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.8rem;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.account-health-info,
+.diagnostic-step-info { min-width: 0; flex: 1; }
+.account-health-info strong,
+.diagnostic-step-info strong { display: block; margin-bottom: 0.2rem; }
+.account-health-info small,
+.diagnostic-step-info small { color: var(--text-muted); line-height: 1.4; }
+.account-health-actions { display: flex; align-items: center; gap: 0.5rem; }
+.diagnostic-step-duration { color: var(--text-muted); font-family: monospace; font-size: 0.75rem; }
+.diagnostic-step-marker {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-weight: 700;
+  background: rgba(148, 163, 184, 0.14);
+}
+.diagnostic-step.success .diagnostic-step-marker { color: var(--success); }
+.diagnostic-step.warning .diagnostic-step-marker { color: var(--warning); }
+.diagnostic-step.error .diagnostic-step-marker { color: var(--error); }
+.diagnostic-step.skipped .diagnostic-step-marker { color: var(--text-muted); }
+.diagnostic-steps-panel { margin-bottom: 1rem; }
+.diagnostic-empty { color: var(--text-muted); text-align: center; padding: 1rem; font-size: 0.85rem; }
+
+.account-health-inline {
+  margin-top: 0.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.account-health-inline small {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .app-container {
@@ -635,6 +788,16 @@ input:checked + .slider:before { transform: translateX(24px); }
     margin-left: 0;
     justify-content: flex-start;
   }
+  .diagnostics-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .diagnostics-actions { width: 100%; }
+  .diagnostics-actions .btn { flex: 1; }
+  .diagnostics-grid { grid-template-columns: 1fr; }
+  .diagnostic-panel-header { align-items: center; }
+  .account-health-row { align-items: flex-start; }
+  .account-health-actions { flex-direction: column; align-items: flex-end; }
   .accounts-container {
     grid-template-columns: 1fr;
   }

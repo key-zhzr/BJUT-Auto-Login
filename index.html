@@ -42,6 +42,9 @@
           <li class="nav-item" data-target="accounts">
             <i data-lucide="users"></i> <span>账号管理</span>
           </li>
+          <li class="nav-item" data-target="diagnostics">
+            <i data-lucide="shield-check"></i> <span>网络诊断</span>
+          </li>
           <li class="nav-item" data-target="logs">
             <i data-lucide="file-text"></i> <span>运行日志</span>
           </li>
@@ -248,6 +251,71 @@
             </div>
           </div>
         </div>
+
+        <!-- Diagnostics -->
+        <section id="diagnostics" class="page">
+          <header class="page-header diagnostics-header">
+            <div>
+              <h1>网络诊断</h1>
+              <p>检查网络链路、安全存储与账号健康状态</p>
+            </div>
+            <div class="diagnostics-actions">
+              <button id="btn-copy-diagnostics" class="btn btn-secondary btn-sm" disabled><i data-lucide="copy"></i> 复制报告</button>
+              <button id="btn-run-diagnostics" class="btn btn-primary"><i data-lucide="activity"></i> 开始诊断</button>
+            </div>
+          </header>
+
+          <div id="diagnostic-summary" class="diagnostic-summary glass-card diagnostic-idle">
+            <div>
+              <span id="diagnostic-summary-badge" class="health-badge neutral">尚未诊断</span>
+              <h3 id="diagnostic-summary-title">点击“开始诊断”检查完整网络链路</h3>
+              <p id="diagnostic-summary-meta">诊断不会发送账号密码</p>
+            </div>
+          </div>
+
+          <div class="diagnostics-grid">
+            <section class="diagnostic-panel glass-card">
+              <div class="diagnostic-panel-header">
+                <div>
+                  <h3>系统安全存储</h3>
+                  <p id="credential-health-backend">正在读取后端状态…</p>
+                </div>
+                <span id="credential-health-badge" class="health-badge neutral">读取中</span>
+              </div>
+              <p id="credential-health-message" class="diagnostic-panel-message">--</p>
+              <div class="diagnostic-metrics">
+                <div><span>已保存密码</span><strong id="credential-saved-count">0</strong></div>
+                <div><span>需要补录</span><strong id="credential-missing-count">0</strong></div>
+              </div>
+              <div id="credential-missing-users" class="diagnostic-note hidden"></div>
+            </section>
+
+            <section class="diagnostic-panel glass-card">
+              <div class="diagnostic-panel-header">
+                <div>
+                  <h3>账号健康与熔断</h3>
+                  <p>连续失败账号将在冷却期内暂停自动尝试</p>
+                </div>
+                <button id="btn-reset-all-health" class="btn btn-secondary btn-sm">全部解除</button>
+              </div>
+              <div id="account-health-list" class="account-health-list">
+                <div class="diagnostic-empty">暂无账号健康记录</div>
+              </div>
+            </section>
+          </div>
+
+          <section class="diagnostic-panel glass-card diagnostic-steps-panel">
+            <div class="diagnostic-panel-header">
+              <div>
+                <h3>网络链路</h3>
+                <p>网络接口 → 校园环境 → DNS → 互联网 → 认证网关</p>
+              </div>
+            </div>
+            <div id="diagnostic-steps" class="diagnostic-steps">
+              <div class="diagnostic-empty">运行诊断后将在此展示每一步结果</div>
+            </div>
+          </section>
+        </section>
 
         <!-- Logs -->
         <section id="logs" class="page">
