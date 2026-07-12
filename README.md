@@ -6,7 +6,7 @@
 
 ## ✨ 核心特性
 
-- 全平台支持：支持 Windows、macOS、Linux 桌面端， Android、iOS/iPadOS 移动端（iOS/iPadOS由快捷指令实现），以及Openwrt 路由端。
+- 全平台支持：支持 Windows、macOS、Linux 桌面端， Android、iOS/iPadOS 移动端（iOS/iPadOS由快捷指令实现），以及 Openwrt 路由端。
 - 无感自动登录：系统网络变化事件会立即触发检测，并以低成本局域网 IP 检测兜底；支持开机自启与后台驻留。
 - 智能环境感知：内置智能算法，精准识别当前是否处于校园网环境内，防止在非校园网环境下误触登录。
 - 网络安全提示：结合 SSID、BSSID、本地网段与黑白名单降低在错误网络发送凭据的风险；无法取得网络身份时，手动登录会默认阻止发送。
@@ -44,7 +44,7 @@
 
 ## 🛠️ 技术栈与开发指南
 
-本项目采用 **Tauri V2** 框架，使用最纯粹的 Vanilla HTML + CSS + TypeScript 构建，兼顾轻量与美观。
+本项目采用 **Tauri V2** 框架，使用 Vanilla HTML + CSS + TypeScript 构建，兼顾轻量与美观。
 
 ### 开发环境要求
 - [Node.js](https://nodejs.org/) (建议最新 LTS)
@@ -88,13 +88,14 @@
 
 本应用的账号密码仅保存在设备的安全凭据存储中：macOS 使用应用私有目录内、权限限制为当前用户的 AES-GCM 加密文件，Windows 使用 Credential Manager，Linux 使用 Secret Service，Android 使用 Android Keystore；常规 `config.json` 不包含密码。导出配置时会要求你设置独立密码并采用 AES-GCM 加密。应用不会向第三方服务器上传校园网密码，认证请求仅发送至北京工业大学校园网认证网关。
 
-部分校内认证协议（Type1 / Type2）由网关限定为明文 HTTP，网络身份判断只能降低误发风险，无法提供密码学意义上的防伪保证。请仅在可信的校园网络环境中启用自动登录，并通过黑白名单限制未知网络。
+网络身份判断只能降低误发风险，无法提供密码学意义上的防伪保证。请仅在可信的校园网络环境中启用自动登录，并通过黑白名单限制未知网络。
 
 ---
 
 ## 🤝 贡献与反馈
 
-如果您在使用过程中遇到了任何 Bug，或者有新的功能需求（例如适配新的校园网登录系统或网段更新），欢迎提交 [Issue](https://github.com/key-zhzr/BJUT-Auto-Login/issues) 或直接发起 Pull Request。
+如果您在使用过程中遇到了任何 Bug，或者有新的功能需求，欢迎提交 [Issue](https://github.com/key-zhzr/BJUT-Auto-Login/issues) 或直接发起 Pull Request。
+由于本人不在校内，本项目暂时停止更新（修复Bug除外），9月份继续更新。
 
 ## 📄 许可证
 
