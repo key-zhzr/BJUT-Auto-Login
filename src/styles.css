@@ -1125,13 +1125,14 @@ body.is-android .logs-content { contain: layout paint; }
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
+  transition: transform 300ms cubic-bezier(0.25, 1, 0.5, 1);
 }
 .account-item.dragging {
   opacity: 0.5;
   background: rgba(59, 130, 246, 0.1);
   border-radius: 8px;
 }
-.dragging-fallback {
+.dragging-fallback, .dragging-fallback-clone {
   opacity: 0.95 !important;
   background: var(--card-bg) !important;
   backdrop-filter: blur(12px) !important;

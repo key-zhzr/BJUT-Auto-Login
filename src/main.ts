@@ -2640,36 +2640,50 @@ function setupEventListeners() {
     onEnd: (evt) => {
       const { oldIndex, newIndex, item } = evt;
 
-      // Animate the released card from the pointer/fallback position back to
-      // Sortable's final slot. WAAPI keeps the movement on the compositor and
-      // does not get cut off by the account text ellipsis container.
       if (fallbackCaptureFrame !== null) cancelAnimationFrame(fallbackCaptureFrame);
       fallbackCaptureFrame = null;
       const activeFallback = document.querySelector<HTMLElement>('.dragging-fallback');
       const releaseRect = activeFallback?.getBoundingClientRect() || lastFallbackRect;
       lastFallbackRect = null;
-      item.getAnimations().forEach(animation => animation.cancel());
-      item.style.transition = 'none';
-      item.style.transform = '';
+      
       const finalRect = item.getBoundingClientRect();
       if (releaseRect) {
-        const fromX = releaseRect.left - finalRect.left;
-        const fromY = releaseRect.top - finalRect.top;
-        requestAnimationFrame(() => {
-          const animation = item.animate([
-            { transform: `translate3d(${fromX}px, ${fromY}px, 0) scale(1.018)`, boxShadow: '0 12px 28px rgba(0,0,0,0.32)' },
-            { transform: 'translate3d(0, -2px, 0) scale(1.006)', offset: 0.78, boxShadow: '0 5px 14px rgba(0,0,0,0.18)' },
-            { transform: 'translate3d(0, 0, 0) scale(1)', boxShadow: '0 0 0 rgba(0,0,0,0)' },
-          ], {
-            duration: 360,
-            easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-          });
-          void animation.finished
-            .catch(() => undefined)
-            .finally(() => item.style.removeProperty('transition'));
+        // Create a clone to animate the fly-back natively bypassing overflow: hidden
+        const clone = item.cloneNode(true) as HTMLElement;
+        clone.classList.remove('dragging');
+        clone.classList.add('dragging-fallback-clone');
+        clone.style.position = 'fixed';
+        clone.style.left = '0';
+        clone.style.top = '0';
+        clone.style.width = `${releaseRect.width}px`;
+        clone.style.height = `${releaseRect.height}px`;
+        clone.style.margin = '0';
+        
+        document.body.appendChild(clone);
+        
+        // Hide the real item while the clone is flying back
+        item.style.opacity = '0';
+        
+        const fromX = releaseRect.left;
+        const fromY = releaseRect.top;
+        const toX = finalRect.left;
+        const toY = finalRect.top;
+        
+        const animation = clone.animate([
+          { transform: `translate3d(${fromX}px, ${fromY}px, 0) scale(1.02)`, boxShadow: '0 12px 28px rgba(0,0,0,0.32)' },
+          { transform: `translate3d(${toX}px, ${toY - 2}px, 0) scale(1.006)`, offset: 0.78, boxShadow: '0 5px 14px rgba(0,0,0,0.18)' },
+          { transform: `translate3d(${toX}px, ${toY}px, 0) scale(1)`, boxShadow: '0 0 0 rgba(0,0,0,0)' },
+        ], {
+          duration: 360,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
         });
-      } else {
-        item.style.removeProperty('transition');
+        
+        const cleanup = () => {
+          clone.remove();
+          item.style.opacity = '';
+        };
+        animation.onfinish = cleanup;
+        animation.oncancel = cleanup;
       }
 
       if (oldIndex !== undefined && newIndex !== undefined && oldIndex !== newIndex) {
