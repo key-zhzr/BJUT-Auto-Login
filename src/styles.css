@@ -410,6 +410,12 @@ main {
   font-weight: bold;
   font-size: 1.1rem;
   flex-shrink: 0;
+  cursor: pointer;
+  transition: background-color 0.26s ease, transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.account-avatar:active {
+  transform: scale(0.92);
 }
 
 .account-left, .account-right {
@@ -987,8 +993,9 @@ body.is-android .logs-content { contain: layout paint; }
 @media (hover: none) and (pointer: coarse) {
   .nav-item,
   .btn,
-  .btn-icon,
-  .account-item { transition-duration: 0.12s; }
+  .btn-icon { transition-duration: 0.12s; }
+  .account-item,
+  .account-avatar { transition-duration: 0.22s; }
 }
 
 /* Modals */
@@ -1125,7 +1132,9 @@ body.is-android .logs-content { contain: layout paint; }
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
-  transition: transform 300ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+.account-item.flyback-target {
+  transition: none !important;
 }
 .account-item.dragging {
   opacity: 0.5;

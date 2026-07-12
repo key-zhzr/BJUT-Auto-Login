@@ -1408,8 +1408,31 @@ function accountHealthLabel(status: AccountHealth['status']): string {
 
 function setAccountHealth(items: AccountHealth[]) {
   accountHealthCache = new Map(items.map(item => [item.user, item]));
-  renderAccounts();
+  updateAccountHealthBadges();
   renderAccountHealthPanel();
+}
+
+function updateAccountHealthBadges() {
+  accountsList.querySelectorAll<HTMLElement>('.account-item').forEach(item => {
+    const user = item.querySelector('.account-user h4')?.textContent || '';
+    const health = accountHealthCache.get(user);
+    const badge = item.querySelector<HTMLElement>('.account-health-badge');
+    const detail = item.querySelector<HTMLElement>('.account-health-inline small');
+    if (!badge || !detail) return;
+    if (!health) {
+      badge.className = 'account-health-badge healthy';
+      badge.textContent = '正常';
+      detail.textContent = '暂无失败记录';
+      detail.title = '';
+      return;
+    }
+    badge.className = `account-health-badge ${health.status}`;
+    badge.textContent = accountHealthLabel(health.status);
+    detail.textContent = health.consecutiveFailures > 0
+      ? `${formatCooldown(health.cooldownSeconds)} · 失败 ${health.consecutiveFailures} 次`
+      : '暂无失败记录';
+    detail.title = health.lastFailureReason || '';
+  });
 }
 
 function renderAccountHealthPanel() {
@@ -2563,13 +2586,17 @@ function setupEventListeners() {
         const dy = first.top - last.top;
         
         if (dx !== 0 || dy !== 0) {
-          el.animate([
+          el.style.willChange = 'transform';
+          const animation = el.animate([
             { transform: `translate(${dx}px, ${dy}px)` },
             { transform: 'translate(0, 0)' }
           ], {
             duration: 400,
             easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)'
           });
+          void animation.finished
+            .catch(() => undefined)
+            .finally(() => el.style.removeProperty('will-change'));
         }
       });
       
@@ -2613,7 +2640,30 @@ function setupEventListeners() {
   // Drag and Drop using SortableJS
 
   let lastFallbackRect: DOMRect | null = null;
+  let lastDragPoint: { clientX: number, clientY: number } | null = null;
+  let dragGrabOffset: { x: number, y: number } | null = null;
+  let draggedCardSize: { width: number, height: number } | null = null;
   let fallbackCaptureFrame: number | null = null;
+  const pointFromDragEvent = (event: any): { clientX: number, clientY: number } | null => {
+    const point = event?.touches?.[0] || event?.changedTouches?.[0] || event;
+    return Number.isFinite(point?.clientX) && Number.isFinite(point?.clientY)
+      ? { clientX: point.clientX, clientY: point.clientY }
+      : null;
+  };
+  const captureDragPoint = (event: Event) => {
+    const point = pointFromDragEvent(event);
+    if (point) lastDragPoint = point;
+  };
+  const startPointerCapture = () => {
+    document.addEventListener('pointermove', captureDragPoint, true);
+    document.addEventListener('mousemove', captureDragPoint, true);
+    document.addEventListener('touchmove', captureDragPoint, { capture: true, passive: true });
+  };
+  const stopPointerCapture = () => {
+    document.removeEventListener('pointermove', captureDragPoint, true);
+    document.removeEventListener('mousemove', captureDragPoint, true);
+    document.removeEventListener('touchmove', captureDragPoint, true);
+  };
   const captureFallbackRect = () => {
     const fallback = document.querySelector<HTMLElement>('.dragging-fallback');
     if (fallback) lastFallbackRect = fallback.getBoundingClientRect();
@@ -2627,12 +2677,21 @@ function setupEventListeners() {
     forceFallback: true,
     fallbackClass: 'dragging-fallback',
     fallbackOnBody: true,
-    onStart: () => {
+    onStart: (evt) => {
       lastFallbackRect = null;
+      const itemRect = evt.item.getBoundingClientRect();
+      draggedCardSize = { width: itemRect.width, height: itemRect.height };
+      lastDragPoint = pointFromDragEvent((evt as any).originalEvent);
+      dragGrabOffset = lastDragPoint
+        ? { x: lastDragPoint.clientX - itemRect.left, y: lastDragPoint.clientY - itemRect.top }
+        : null;
+      startPointerCapture();
       if (fallbackCaptureFrame !== null) cancelAnimationFrame(fallbackCaptureFrame);
       fallbackCaptureFrame = requestAnimationFrame(captureFallbackRect);
     },
-    onMove: () => {
+    onMove: (_evt, originalEvent) => {
+      const point = pointFromDragEvent(originalEvent);
+      if (point) lastDragPoint = point;
       const fallback = document.querySelector<HTMLElement>('.dragging-fallback');
       if (fallback) lastFallbackRect = fallback.getBoundingClientRect();
       return true;
@@ -2642,9 +2701,22 @@ function setupEventListeners() {
 
       if (fallbackCaptureFrame !== null) cancelAnimationFrame(fallbackCaptureFrame);
       fallbackCaptureFrame = null;
-      const activeFallback = document.querySelector<HTMLElement>('.dragging-fallback');
-      const releaseRect = activeFallback?.getBoundingClientRect() || lastFallbackRect;
+      const releasePoint = pointFromDragEvent((evt as any).originalEvent);
+      if (releasePoint) lastDragPoint = releasePoint;
+      stopPointerCapture();
+      const pointerRect = lastDragPoint && dragGrabOffset && draggedCardSize
+        ? {
+            left: lastDragPoint.clientX - dragGrabOffset.x,
+            top: lastDragPoint.clientY - dragGrabOffset.y,
+            width: draggedCardSize.width,
+            height: draggedCardSize.height,
+          }
+        : null;
+      const releaseRect = pointerRect || lastFallbackRect;
       lastFallbackRect = null;
+      lastDragPoint = null;
+      dragGrabOffset = null;
+      draggedCardSize = null;
       
       const finalRect = item.getBoundingClientRect();
       if (releaseRect) {
@@ -2658,10 +2730,13 @@ function setupEventListeners() {
         clone.style.width = `${releaseRect.width}px`;
         clone.style.height = `${releaseRect.height}px`;
         clone.style.margin = '0';
+        clone.style.willChange = 'transform';
+        clone.setAttribute('aria-hidden', 'true');
         
         document.body.appendChild(clone);
         
         // Hide the real item while the clone is flying back
+        item.classList.add('flyback-target');
         item.style.opacity = '0';
         
         const fromX = releaseRect.left;
@@ -2678,9 +2753,17 @@ function setupEventListeners() {
           easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
         });
         
+        let cleanedUp = false;
         const cleanup = () => {
+          if (cleanedUp) return;
+          cleanedUp = true;
           clone.remove();
           item.style.opacity = '';
+          // Commit the restored opacity while transitions are disabled. Without
+          // this style flush, Android WebView can start an unintended fade-in
+          // when flyback-target is removed on the next frame.
+          void getComputedStyle(item).opacity;
+          requestAnimationFrame(() => item.classList.remove('flyback-target'));
         };
         animation.onfinish = cleanup;
         animation.oncancel = cleanup;
