@@ -1,6 +1,8 @@
 package cn.edu.bjut.al
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -131,24 +133,74 @@ class NetworkHelper {
         }
 
         @JvmStatic
-        fun getNetworkInfo(context: Context): String {
+        fun getNetworkInfo(context: Context, includeWifiDetails: Boolean): String {
             try {
-                val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                val wifiInfo = wifiManager.connectionInfo
-                val ssid = wifiInfo.ssid?.removeSurrounding("\"") ?: "Unknown"
-                val bssid = wifiInfo.bssid ?: "00:00:00:00:00:00"
-                val ipAddress = wifiInfo.ipAddress
-                val ipString = String.format("%d.%d.%d.%d", ipAddress and 0xff, ipAddress shr 8 and 0xff, ipAddress shr 16 and 0xff, ipAddress shr 24 and 0xff)
+                val appContext = context.applicationContext
+                val connectivityManager = appContext
+                    .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val activeNetwork = connectivityManager.activeNetwork
+                val capabilities = activeNetwork?.let(connectivityManager::getNetworkCapabilities)
+                val linkProperties = activeNetwork?.let(connectivityManager::getLinkProperties)
+                val transport = when {
+                    capabilities == null -> "none"
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> "bluetooth"
+                    else -> "other"
+                }
+                val validated = capabilities
+                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                val captivePortal = capabilities
+                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true
+                val metered = connectivityManager.isActiveNetworkMetered
+                var ssid = ""
+                var bssid = ""
+                var ipString = linkProperties?.linkAddresses
+                    ?.asSequence()
+                    ?.map { it.address }
+                    ?.filterIsInstance<Inet4Address>()
+                    ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+                    ?.hostAddress
+                    .orEmpty()
+
+                if (includeWifiDetails && transport == "wifi") {
+                    val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                    val wifiInfo = wifiManager.connectionInfo
+                    ssid = wifiInfo.ssid?.removeSurrounding("\"") ?: "Unknown"
+                    bssid = wifiInfo.bssid ?: "00:00:00:00:00:00"
+                    if (ipString.isEmpty()) {
+                        val ipAddress = wifiInfo.ipAddress
+                        if (ipAddress != 0) {
+                            ipString = String.format(
+                                "%d.%d.%d.%d",
+                                ipAddress and 0xff,
+                                ipAddress shr 8 and 0xff,
+                                ipAddress shr 16 and 0xff,
+                                ipAddress shr 24 and 0xff
+                            )
+                        }
+                    }
+                }
                 return JSONObject()
                     .put("ssid", ssid)
                     .put("bssid", bssid)
                     .put("ip", ipString)
+                    .put("transport", transport)
+                    .put("validated", validated)
+                    .put("captivePortal", captivePortal)
+                    .put("metered", metered)
                     .toString()
             } catch (e: Exception) {
                 return JSONObject()
                     .put("ssid", "")
                     .put("bssid", "")
                     .put("ip", "")
+                    .put("transport", "unknown")
+                    .put("validated", false)
+                    .put("captivePortal", false)
+                    .put("metered", false)
                     .toString()
             }
         }

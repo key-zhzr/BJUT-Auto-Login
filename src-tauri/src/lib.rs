@@ -11,7 +11,14 @@ fn get_network_info(
 ) -> serde_json::Value {
     #[cfg(target_os = "android")]
     {
-        let mut result = serde_json::json!({"ssid": "", "bssid": "", "ip": ""});
+        let mut result = serde_json::json!({
+            "ssid": "",
+            "bssid": "",
+            "ip": "",
+            "transport": "unknown",
+            "validated": false,
+            "metered": false
+        });
         if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
             if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
                 if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
@@ -22,8 +29,13 @@ fn get_network_info(
                             let method_call = env.call_static_method(
                                 class,
                                 "getNetworkInfo",
-                                "(Landroid/content/Context;)Ljava/lang/String;",
-                                &[jni::objects::JValue::Object(&activity)],
+                                "(Landroid/content/Context;Z)Ljava/lang/String;",
+                                &[
+                                    jni::objects::JValue::Object(&activity),
+                                    jni::objects::JValue::Bool(
+                                        if _include_wifi_details.unwrap_or(true) { 1 } else { 0 }
+                                    ),
+                                ],
                             );
                             
                             match method_call {
@@ -722,6 +734,25 @@ fn is_campus_local_ip(ip: &str) -> bool {
 fn is_known_campus_ssid(ssid: &str) -> bool {
     let normalized = ssid.trim().to_ascii_lowercase().replace('_', "-");
     normalized == "bjut-wifi" || normalized == "bjut-sushe"
+}
+
+const MOBILE_DATA_CHECK_INTERVAL_FOREGROUND: i32 = 120;
+const MOBILE_DATA_CHECK_INTERVAL_BACKGROUND: i32 = 300;
+
+fn network_transport(network: &serde_json::Value) -> &str {
+    network.get("transport").and_then(|value| value.as_str()).unwrap_or("unknown")
+}
+
+fn is_mobile_data_network(network: &serde_json::Value) -> bool {
+    network_transport(network).eq_ignore_ascii_case("cellular")
+}
+
+fn mobile_data_check_interval(configured: i32, is_background: bool) -> i32 {
+    configured.max(if is_background {
+        MOBILE_DATA_CHECK_INTERVAL_BACKGROUND
+    } else {
+        MOBILE_DATA_CHECK_INTERVAL_FOREGROUND
+    })
 }
 
 fn automatic_login_network_allowed(
@@ -1914,8 +1945,6 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             let cfg = state.config.read().unwrap();
             (cfg.check_interval, cfg.check_interval_bg)
         };
-        let next_interval = if is_bg { interval_bg } else { interval_fg };
-        state.countdown.store(next_interval, Ordering::SeqCst);
         let _ = app.emit("countdown-tick", serde_json::json!({"status": "checking"}));
         rust_log(&app, &state, "网络", &format!("[DEBUG] 开始检测网络连通性 (模式: {})", if is_bg { "后台" } else { "前台" }), "debug");
 
@@ -1928,31 +1957,72 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         if is_bg && full_details {
             rust_log(&app, &state, "隐私", "macOS 后台完整检测已触发，将读取 SSID/BSSID", "debug");
         }
+        #[cfg(target_os = "android")]
+        let net_info = get_network_info(app.clone(), Some(full_details));
+        #[cfg(not(target_os = "android"))]
         let net_info = if full_details {
             get_network_info(app.clone(), Some(true))
         } else {
             state.last_network_state.lock().unwrap().clone()
         };
-        let current_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let current_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let current_ip = net_info.get("ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let previous_network = state.last_network_state.lock().unwrap().clone();
+        let transport = network_transport(&net_info).to_string();
+        let is_mobile_data = is_mobile_data_network(&net_info);
+        let was_mobile_data = is_mobile_data_network(&previous_network);
+        let system_validated = net_info.get("validated").and_then(|value| value.as_bool()).unwrap_or(false);
+        let metered = net_info.get("metered").and_then(|value| value.as_bool()).unwrap_or(false);
+        let raw_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("");
+        let raw_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("");
+        let raw_ip = net_info.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+        let preserve_wifi_identity = !full_details && transport.eq_ignore_ascii_case("wifi");
+        let current_ssid = if preserve_wifi_identity && raw_ssid.is_empty() {
+            previous_network.get("ssid").and_then(|value| value.as_str()).unwrap_or("")
+        } else {
+            raw_ssid
+        }.to_string();
+        let current_bssid = if preserve_wifi_identity && raw_bssid.is_empty() {
+            previous_network.get("bssid").and_then(|value| value.as_str()).unwrap_or("")
+        } else {
+            raw_bssid
+        }.to_string();
+        let current_ip = if preserve_wifi_identity && raw_ip.is_empty() {
+            previous_network.get("ip").and_then(|value| value.as_str()).unwrap_or("")
+        } else {
+            raw_ip
+        }.to_string();
         let preliminary_profile = {
             let cfg = state.config.read().unwrap();
             matching_network_profile(&cfg, &current_ssid, &current_bssid, &LoginType::Unknown)
         };
+        let mut next_interval = if is_bg { interval_bg } else { interval_fg };
         if let Some(profile) = preliminary_profile.as_ref() {
             let interval = if is_bg { profile.check_interval_bg } else { profile.check_interval };
             if let Some(interval) = interval.filter(|value| *value >= 5) {
-                state.countdown.store(interval, Ordering::SeqCst);
+                next_interval = interval;
             }
         }
+        if is_mobile_data {
+            next_interval = mobile_data_check_interval(next_interval, is_bg);
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                &format!(
+                    "{}移动数据网络，自动检测间隔为 {} 秒，校园网认证网关探测已停用",
+                    if was_mobile_data { "继续使用" } else { "检测到" },
+                    next_interval
+                ),
+                if was_mobile_data { "debug" } else { "info" },
+            );
+        }
+        state.countdown.store(next_interval, Ordering::SeqCst);
         let local_now = chrono::Local::now();
         let timestamp = local_now.format("%Y-%m-%d %H:%M:%S").to_string();
 
         if full_details {
-            rust_log(&app, &state, "网络", &format!("[DEBUG] 完整检测网络详情: SSID={}, BSSID={}, IP={}", current_ssid, current_bssid, current_ip), "debug");
+            rust_log(&app, &state, "网络", &format!("[DEBUG] 完整检测网络详情: SSID={}, BSSID={}, IP={}, 传输类型={}, 系统验证={}", current_ssid, current_bssid, current_ip, transport, system_validated), "debug");
         } else {
-            rust_log(&app, &state, "网络", "[DEBUG] 后台间隔检测仅检查连通性，复用上次网络详情", "debug");
+            rust_log(&app, &state, "网络", &format!("[DEBUG] 后台间隔检测仅检查连通性，传输类型={}", transport), "debug");
         }
 
         let make_payload = |state_str: &str, login_type: Option<&LoginType>| {
@@ -1962,11 +2032,19 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 "ssid": current_ssid.clone(),
                 "bssid": current_bssid.clone(),
                 "ip": current_ip.clone(),
+                "transport": transport.clone(),
+                "validated": system_validated,
+                "metered": metered,
                 "timestamp": timestamp.clone()
             })
         };
 
-        let is_online = check_internet_rust().await;
+        let is_online = if system_validated {
+            rust_log(&app, &state, "网络", "[DEBUG] 系统已验证默认网络具备互联网能力，跳过额外连通性探测", "debug");
+            true
+        } else {
+            check_internet_rust().await
+        };
         rust_log(&app, &state, "网络", &format!("[DEBUG] 互联网可用性检测结果: {}", if is_online { "连通 (Online)" } else { "断开/受限" }), "debug");
         
         if is_online {
@@ -1974,6 +2052,27 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             state.is_checking.store(false, Ordering::SeqCst);
             state.non_campus_count.store(0, Ordering::SeqCst);
             let payload = make_payload("Online", None);
+            {
+                let mut last_state = state.last_network_state.lock().unwrap();
+                *last_state = payload.clone();
+            }
+            let _ = app.emit("network-state-change", payload);
+            #[cfg(desktop)]
+            refresh_tray_menu(&app, &state);
+            return;
+        }
+
+        if is_mobile_data {
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                "移动数据未通过互联网连通性验证；已跳过全部校园网认证网关探测与自动登录",
+                "info",
+            );
+            state.is_checking.store(false, Ordering::SeqCst);
+            state.non_campus_count.store(0, Ordering::SeqCst);
+            let payload = make_payload("Offline", None);
             {
                 let mut last_state = state.last_network_state.lock().unwrap();
                 *last_state = payload.clone();
@@ -2145,7 +2244,13 @@ fn sync_config(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>, config
     let is_bg = state.is_in_background.load(Ordering::SeqCst);
     let current_val = state.countdown.load(Ordering::SeqCst);
     let new_cfg = state.config.read().unwrap();
-    let new_interval = if is_bg { new_cfg.check_interval_bg } else { new_cfg.check_interval };
+    let configured_interval = if is_bg { new_cfg.check_interval_bg } else { new_cfg.check_interval };
+    let mobile_data = is_mobile_data_network(&state.last_network_state.lock().unwrap());
+    let new_interval = if mobile_data {
+        mobile_data_check_interval(configured_interval, is_bg)
+    } else {
+        configured_interval
+    };
     if current_val > new_interval {
         state.countdown.store(new_interval, Ordering::SeqCst);
     }
@@ -2249,14 +2354,19 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let mut steps = Vec::new();
     let identity_started = std::time::Instant::now();
     let network = get_network_info(app, Some(true));
+    let transport = network_transport(&network).to_string();
+    let mobile_data = is_mobile_data_network(&network);
+    let system_validated = network.get("validated").and_then(|value| value.as_bool()).unwrap_or(false);
     let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
     let mut ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
     if ip.is_empty() {
         ip = get_local_ip();
     }
-    let identity_status = if ip.is_empty() { "error" } else if ssid.is_empty() { "warning" } else { "success" };
+    let identity_status = if ip.is_empty() { "error" } else if mobile_data || !ssid.is_empty() { "success" } else { "warning" };
     let identity_message = if ip.is_empty() {
         "未检测到可用网络接口或 IPv4 地址".to_string()
+    } else if mobile_data {
+        format!("当前通过移动数据上网，本地 IP {ip}")
     } else if ssid.is_empty() || ssid.eq_ignore_ascii_case("<unknown ssid>") {
         format!("已取得本地 IP {ip}，但未取得无线网络名称（可能为有线网络或权限不足）")
     } else {
@@ -2273,18 +2383,24 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let campus_started = std::time::Instant::now();
     let campus_ip = is_campus_local_ip(&ip);
     let campus_ssid = is_known_campus_ssid(&ssid);
-    let campus_status = if campus_ip && (campus_ssid || ssid.is_empty() || ssid.contains("unknown")) {
+    let campus_status = if mobile_data {
+        "skipped"
+    } else if campus_ip && (campus_ssid || ssid.is_empty() || ssid.contains("unknown")) {
         "success"
     } else if campus_ip || campus_ssid {
         "warning"
     } else {
         "error"
     };
-    let campus_message = match (campus_ip, campus_ssid) {
-        (true, true) => "SSID 与本地网段均符合校园网特征".to_string(),
-        (true, false) => "本地网段符合校园网，但 SSID 未识别；自动登录需要白名单或有线协议".to_string(),
-        (false, true) => "SSID 符合校园网，但本地 IP 不在已知网段".to_string(),
-        (false, false) => "当前网络不符合已知校园网特征".to_string(),
+    let campus_message = if mobile_data {
+        "移动数据模式不属于校园局域网，已停用校园网环境判定".to_string()
+    } else {
+        match (campus_ip, campus_ssid) {
+            (true, true) => "SSID 与本地网段均符合校园网特征".to_string(),
+            (true, false) => "本地网段符合校园网，但 SSID 未识别；自动登录需要白名单或有线协议".to_string(),
+            (false, true) => "SSID 符合校园网，但本地 IP 不在已知网段".to_string(),
+            (false, false) => "当前网络不符合已知校园网特征".to_string(),
+        }
     };
     steps.push(make_diagnostic_step(
         "campus_environment",
@@ -2309,18 +2425,28 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     ));
 
     let internet_started = std::time::Instant::now();
-    let online = check_internet_rust().await;
+    let online = system_validated || check_internet_rust().await;
     steps.push(make_diagnostic_step(
         "internet",
         "互联网连通性",
         internet_started,
         if online { "success" } else { "warning" },
-        if online { "多个独立探测目标中至少一个验证成功，互联网访问正常".to_string() } else { "多个独立目标均未验证成功，继续检测认证网关".to_string() },
+        if system_validated {
+            "Android 已验证默认网络具备互联网能力".to_string()
+        } else if online {
+            "多个独立探测目标中至少一个验证成功，互联网访问正常".to_string()
+        } else if mobile_data {
+            "移动数据未通过互联网验证；不会继续探测校园网认证网关".to_string()
+        } else {
+            "多个独立目标均未验证成功，继续检测认证网关".to_string()
+        },
     ));
 
     let portal_started = std::time::Instant::now();
-    let login_type = if online { LoginType::Unknown } else { detect_login_type_rust().await };
-    let (portal_status, portal_message) = if online {
+    let login_type = if online || mobile_data { LoginType::Unknown } else { detect_login_type_rust().await };
+    let (portal_status, portal_message) = if mobile_data {
+        ("skipped", "当前使用移动数据，已跳过校园网认证网关探测".to_string())
+    } else if online {
         ("success", "互联网已连通，跳过认证网关探测".to_string())
     } else if login_type != LoginType::Unknown {
         ("warning", format!("已检测到校园网认证协议 {}，当前需要登录", login_type.as_str()))
@@ -2335,12 +2461,16 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         portal_message,
     ));
 
-    let (overall, summary) = if online {
+    let (overall, summary) = if online && mobile_data {
+        ("healthy", "移动数据网络工作正常；校园网探测已停用")
+    } else if online {
         ("healthy", "网络工作正常，互联网已连通")
     } else if login_type != LoginType::Unknown {
         ("auth_required", "已连接校园网，但需要完成账号认证")
-    } else if ip.is_empty() {
+    } else if ip.is_empty() || transport == "none" {
         ("no_network", "未取得网络地址，请检查 Wi-Fi、有线连接或系统权限")
+    } else if mobile_data {
+        ("offline", "移动数据存在，但系统与独立目标均未验证互联网连通性")
     } else {
         ("offline", "已取得本地网络，但无法访问互联网或校园网认证网关")
     };
@@ -2484,6 +2614,20 @@ async fn manual_login(
     account_index: Option<usize>,
     login_type_override: Option<String>,
 ) -> Result<ManualLoginResult, String> {
+    let network = get_network_info(app.clone(), Some(true));
+    if is_mobile_data_network(&network) {
+        rust_log(
+            &app,
+            &state,
+            "登录",
+            "当前使用移动数据，已阻止校园网网关探测和手动登录",
+            "info",
+        );
+        return Ok(ManualLoginResult {
+            success: false,
+            message: "当前使用移动数据，未连接 Wi-Fi；已停止校园网网关探测".to_string(),
+        });
+    }
     let detected_type = detect_login_type_rust().await;
     let login_type = match login_type_override.as_deref() {
         Some("bjut-wifi") => LoginType::Type1,
@@ -2680,7 +2824,13 @@ fn set_background_state(state: tauri::State<Arc<AppState>>, is_bg: bool) {
     state.is_in_background.store(is_bg, Ordering::SeqCst);
     let val = state.countdown.load(Ordering::SeqCst);
     let cfg = state.config.read().unwrap();
-    let max_interval = if is_bg { cfg.check_interval_bg } else { cfg.check_interval };
+    let configured_interval = if is_bg { cfg.check_interval_bg } else { cfg.check_interval };
+    let mobile_data = is_mobile_data_network(&state.last_network_state.lock().unwrap());
+    let max_interval = if mobile_data {
+        mobile_data_check_interval(configured_interval, is_bg)
+    } else {
+        configured_interval
+    };
     if val > max_interval {
         state.countdown.store(max_interval, Ordering::SeqCst);
     }
@@ -2823,6 +2973,9 @@ pub fn run() {
                     "ssid": "",
                     "bssid": "",
                     "ip": "",
+                    "transport": "unknown",
+                    "validated": false,
+                    "metered": false,
                     "timestamp": "--"
                 })),
                 auto_login_paused_until: std::sync::atomic::AtomicI64::new(0),
@@ -2855,9 +3008,14 @@ pub fn run() {
                         continue;
                     }
 
-                    // 1. Wi-Fi Change Check Loop (every 3 seconds)
+                    // 1. Local interface change check. Android NetworkCallback is the
+                    // primary signal on mobile data, so polling can be much slower there.
                     wifi_check_counter += 1;
-                    if wifi_check_counter >= 3 {
+                    let mobile_data_active = is_mobile_data_network(
+                        &loop_state.last_network_state.lock().unwrap()
+                    );
+                    let interface_poll_interval = if mobile_data_active { 15 } else { 3 };
+                    if wifi_check_counter >= interface_poll_interval {
                         wifi_check_counter = 0;
                         let wifi_change_detect = {
                             let cfg = loop_state.config.read().unwrap();
@@ -2881,7 +3039,7 @@ pub fn run() {
                                 }
                                 (changed, current_ip, last_ip)
                             };
-                            rust_log(&loop_handle, &loop_state, "网络", &format!("[DEBUG] 执行 Wi-Fi 变更检测。当前 IP: {} (上次 IP: {})", current_ip, last_ip.as_ref().map(|s| s.as_str()).unwrap_or("空")), "debug");
+                            rust_log(&loop_handle, &loop_state, "网络", &format!("[DEBUG] 执行网络接口变更检测。当前 IP: {} (上次 IP: {})", current_ip, last_ip.as_ref().map(|s| s.as_str()).unwrap_or("空")), "debug");
                             if ip_changed {
                                 rust_log(&loop_handle, &loop_state, "网络", &format!("检测到局域网 IP 发生变更: {} -> {}，重新检测网络环境...", last_ip.unwrap_or_default(), current_ip), "info");
                                 loop_state.is_suspended.store(false, Ordering::SeqCst);
@@ -3136,6 +3294,26 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identifies_only_cellular_transport_as_mobile_data() {
+        assert!(is_mobile_data_network(&serde_json::json!({"transport": "cellular"})));
+        assert!(is_mobile_data_network(&serde_json::json!({"transport": "CELLULAR"})));
+        assert!(!is_mobile_data_network(&serde_json::json!({
+            "ssid": "<unknown ssid>",
+            "bssid": "00:00:00:00:00:00",
+            "ip": "0.0.0.0"
+        })));
+        assert!(!is_mobile_data_network(&serde_json::json!({"transport": "wifi"})));
+    }
+
+    #[test]
+    fn mobile_data_detection_uses_battery_friendly_minimum_intervals() {
+        assert_eq!(mobile_data_check_interval(15, false), 120);
+        assert_eq!(mobile_data_check_interval(60, true), 300);
+        assert_eq!(mobile_data_check_interval(600, false), 600);
+        assert_eq!(mobile_data_check_interval(600, true), 600);
+    }
 
     #[test]
     fn encodes_portal_query_values() {
