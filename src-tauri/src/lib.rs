@@ -744,7 +744,27 @@ fn network_transport(network: &serde_json::Value) -> &str {
 }
 
 fn is_mobile_data_network(network: &serde_json::Value) -> bool {
-    network_transport(network).eq_ignore_ascii_case("cellular")
+    #[cfg(target_os = "android")]
+    {
+        return network_transport(network).eq_ignore_ascii_case("cellular");
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = network;
+        false
+    }
+}
+
+fn network_is_system_validated(network: &serde_json::Value) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        return network.get("validated").and_then(|value| value.as_bool()).unwrap_or(false);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = network;
+        false
+    }
 }
 
 fn mobile_data_check_interval(configured: i32, is_background: bool) -> i32 {
@@ -1969,7 +1989,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         let transport = network_transport(&net_info).to_string();
         let is_mobile_data = is_mobile_data_network(&net_info);
         let was_mobile_data = is_mobile_data_network(&previous_network);
-        let system_validated = net_info.get("validated").and_then(|value| value.as_bool()).unwrap_or(false);
+        let system_validated = network_is_system_validated(&net_info);
+        #[cfg(target_os = "android")]
         let metered = net_info.get("metered").and_then(|value| value.as_bool()).unwrap_or(false);
         let raw_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("");
         let raw_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("");
@@ -2020,23 +2041,34 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         let timestamp = local_now.format("%Y-%m-%d %H:%M:%S").to_string();
 
         if full_details {
+            #[cfg(target_os = "android")]
             rust_log(&app, &state, "网络", &format!("[DEBUG] 完整检测网络详情: SSID={}, BSSID={}, IP={}, 传输类型={}, 系统验证={}", current_ssid, current_bssid, current_ip, transport, system_validated), "debug");
+            #[cfg(not(target_os = "android"))]
+            rust_log(&app, &state, "网络", &format!("[DEBUG] 完整检测网络详情: SSID={}, BSSID={}, IP={}", current_ssid, current_bssid, current_ip), "debug");
         } else {
+            #[cfg(target_os = "android")]
             rust_log(&app, &state, "网络", &format!("[DEBUG] 后台间隔检测仅检查连通性，传输类型={}", transport), "debug");
+            #[cfg(not(target_os = "android"))]
+            rust_log(&app, &state, "网络", "[DEBUG] 后台间隔检测仅检查连通性，复用上次网络详情", "debug");
         }
 
         let make_payload = |state_str: &str, login_type: Option<&LoginType>| {
-            serde_json::json!({
+            #[allow(unused_mut)]
+            let mut payload = serde_json::json!({
                 "state": state_str,
                 "loginType": login_type.map(LoginType::as_str),
                 "ssid": current_ssid.clone(),
                 "bssid": current_bssid.clone(),
                 "ip": current_ip.clone(),
-                "transport": transport.clone(),
-                "validated": system_validated,
-                "metered": metered,
                 "timestamp": timestamp.clone()
-            })
+            });
+            #[cfg(target_os = "android")]
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("transport".to_string(), serde_json::json!(transport.clone()));
+                object.insert("validated".to_string(), serde_json::json!(system_validated));
+                object.insert("metered".to_string(), serde_json::json!(metered));
+            }
+            payload
         };
 
         let is_online = if system_validated {
@@ -2356,7 +2388,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let network = get_network_info(app, Some(true));
     let transport = network_transport(&network).to_string();
     let mobile_data = is_mobile_data_network(&network);
-    let system_validated = network.get("validated").and_then(|value| value.as_bool()).unwrap_or(false);
+    let system_validated = network_is_system_validated(&network);
     let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
     let mut ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
     if ip.is_empty() {
@@ -2973,9 +3005,6 @@ pub fn run() {
                     "ssid": "",
                     "bssid": "",
                     "ip": "",
-                    "transport": "unknown",
-                    "validated": false,
-                    "metered": false,
                     "timestamp": "--"
                 })),
                 auto_login_paused_until: std::sync::atomic::AtomicI64::new(0),
@@ -3296,15 +3325,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn identifies_only_cellular_transport_as_mobile_data() {
-        assert!(is_mobile_data_network(&serde_json::json!({"transport": "cellular"})));
-        assert!(is_mobile_data_network(&serde_json::json!({"transport": "CELLULAR"})));
+    fn mobile_data_runtime_policy_is_android_only() {
+        assert_eq!(
+            is_mobile_data_network(&serde_json::json!({"transport": "cellular"})),
+            cfg!(target_os = "android")
+        );
+        assert_eq!(
+            is_mobile_data_network(&serde_json::json!({"transport": "CELLULAR"})),
+            cfg!(target_os = "android")
+        );
         assert!(!is_mobile_data_network(&serde_json::json!({
             "ssid": "<unknown ssid>",
             "bssid": "00:00:00:00:00:00",
             "ip": "0.0.0.0"
         })));
         assert!(!is_mobile_data_network(&serde_json::json!({"transport": "wifi"})));
+        assert_eq!(
+            network_is_system_validated(&serde_json::json!({"validated": true})),
+            cfg!(target_os = "android")
+        );
     }
 
     #[test]

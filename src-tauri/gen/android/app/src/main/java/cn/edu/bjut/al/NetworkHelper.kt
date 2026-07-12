@@ -140,7 +140,6 @@ class NetworkHelper {
                     .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val activeNetwork = connectivityManager.activeNetwork
                 val capabilities = activeNetwork?.let(connectivityManager::getNetworkCapabilities)
-                val linkProperties = activeNetwork?.let(connectivityManager::getLinkProperties)
                 val transport = when {
                     capabilities == null -> "none"
                     capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
@@ -157,30 +156,28 @@ class NetworkHelper {
                 val metered = connectivityManager.isActiveNetworkMetered
                 var ssid = ""
                 var bssid = ""
-                var ipString = linkProperties?.linkAddresses
-                    ?.asSequence()
-                    ?.map { it.address }
-                    ?.filterIsInstance<Inet4Address>()
-                    ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
-                    ?.hostAddress
-                    .orEmpty()
+                // LinkProperties belongs to the active routed network. When a VPN is
+                // enabled it may expose the TUN/Fake-IP address instead of the Wi-Fi
+                // or cellular interface address. Reuse the physical-interface lookup
+                // used by the change detector so identity checks see the real LAN IP.
+                var ipString = getLocalIpAddress()
 
                 if (includeWifiDetails && transport == "wifi") {
                     val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
                     val wifiInfo = wifiManager.connectionInfo
                     ssid = wifiInfo.ssid?.removeSurrounding("\"") ?: "Unknown"
                     bssid = wifiInfo.bssid ?: "00:00:00:00:00:00"
-                    if (ipString.isEmpty()) {
-                        val ipAddress = wifiInfo.ipAddress
-                        if (ipAddress != 0) {
-                            ipString = String.format(
-                                "%d.%d.%d.%d",
-                                ipAddress and 0xff,
-                                ipAddress shr 8 and 0xff,
-                                ipAddress shr 16 and 0xff,
-                                ipAddress shr 24 and 0xff
-                            )
-                        }
+                    // WifiInfo reports the address assigned to the physical Wi-Fi
+                    // interface and is therefore preferred over any routed/VPN IP.
+                    val ipAddress = wifiInfo.ipAddress
+                    if (ipAddress != 0) {
+                        ipString = String.format(
+                            "%d.%d.%d.%d",
+                            ipAddress and 0xff,
+                            ipAddress shr 8 and 0xff,
+                            ipAddress shr 16 and 0xff,
+                            ipAddress shr 24 and 0xff
+                        )
                     }
                 }
                 return JSONObject()
