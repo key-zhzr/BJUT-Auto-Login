@@ -2718,12 +2718,23 @@ function setupEventListeners() {
       dragGrabOffset = null;
       draggedCardSize = null;
       
-      const finalRect = item.getBoundingClientRect();
       if (releaseRect) {
         // Create a clone to animate the fly-back natively bypassing overflow: hidden
         const clone = item.cloneNode(true) as HTMLElement;
         clone.classList.remove('dragging');
         clone.classList.add('dragging-fallback-clone');
+        clone.style.removeProperty('transform');
+        clone.style.removeProperty('transition');
+
+        // onEnd can run while Sortable is still transitioning the real item
+        // from an intermediate transform. Hide it and clear that transform
+        // without a transition before reading the stable layout destination.
+        item.classList.add('flyback-target');
+        item.style.opacity = '0';
+        item.style.removeProperty('transform');
+        void getComputedStyle(item).transform;
+        const finalRect = item.getBoundingClientRect();
+
         clone.style.position = 'fixed';
         clone.style.left = '0';
         clone.style.top = '0';
@@ -2734,10 +2745,6 @@ function setupEventListeners() {
         clone.setAttribute('aria-hidden', 'true');
         
         document.body.appendChild(clone);
-        
-        // Hide the real item while the clone is flying back
-        item.classList.add('flyback-target');
-        item.style.opacity = '0';
         
         const fromX = releaseRect.left;
         const fromY = releaseRect.top;
