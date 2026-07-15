@@ -597,6 +597,15 @@ input:checked + .slider:before { transform: translateX(24px); }
   flex: 1;
   min-width: 0;
 }
+.setting-info p {
+  overflow-wrap: break-word;
+}
+.setting-item-vpn #setting-vpn-compatibility {
+  flex: 0 1 330px;
+  width: min(42vw, 330px);
+  min-width: 230px;
+  max-width: 100%;
+}
 .setting-item .switch,
 .setting-item input,
 .setting-item select,
@@ -902,6 +911,24 @@ input:checked + .slider:before { transform: translateX(24px); }
   .logs-container { min-height: 45dvh; }
   .log-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .log-filters input { grid-column: 1 / -1; }
+  .setting-item-vpn {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .setting-item-vpn .setting-info,
+  .setting-item-vpn #setting-vpn-compatibility {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+  .setting-item-vpn #setting-vpn-compatibility {
+    flex-basis: auto;
+  }
+  .setting-item-vpn .custom-option {
+    white-space: normal;
+    overflow-wrap: break-word;
+    line-height: 1.4;
+  }
   .profile-form-grid { grid-template-columns: 1fr; }
   .network-profile-row { align-items: flex-start; flex-direction: column; }
   .network-profile-actions { width: 100%; }
@@ -965,19 +992,44 @@ input:checked + .slider:before { transform: translateX(24px); }
   .nav-brand h2 { display: none; }
 }
 
-/* Android WebView: retain blur on key surfaces with a small radius and keep
-   scrolling/dense lists opaque so the GPU does not recomposite every card. */
+/* Android WebView: approximate the desktop glass with layered translucent
+   gradients. Static surfaces avoid live backdrop recomposition while transient
+   overlays retain a small real blur. */
 body.is-android .glass-card {
-  -webkit-backdrop-filter: blur(2px) !important;
-  backdrop-filter: blur(2px) !important;
-  background: rgba(30, 41, 59, 0.9);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.045), rgba(59, 130, 246, 0.018) 55%, rgba(15, 23, 42, 0.04)),
+    rgba(27, 38, 57, 0.94);
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
-body.is-android nav,
 body.is-android .modal-overlay,
-body.is-android .custom-select-options,
-body.is-android .dragging-fallback {
-  -webkit-backdrop-filter: blur(6px) !important;
-  backdrop-filter: blur(6px) !important;
+body.is-android .custom-select-options {
+  -webkit-backdrop-filter: blur(4px) !important;
+  backdrop-filter: blur(4px) !important;
+}
+body.is-android .modal-overlay.hidden,
+body.is-android .custom-select:not(.open) .custom-select-options {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+body.is-android nav {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.025), transparent 55%),
+    rgba(15, 23, 42, 0.96);
+}
+body.is-android .custom-select-options {
+  background: rgba(24, 31, 52, 0.985);
+}
+body.is-android .dragging-fallback,
+body.is-android .dragging-fallback-clone {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background: rgba(30, 41, 59, 0.98) !important;
 }
 body.is-android .account-item,
 body.is-android .logs-container,
@@ -988,7 +1040,24 @@ body.is-android .permission-health-row {
 }
 body.is-android .page { animation-duration: 0.16s; }
 body.is-android main { contain: layout style; }
-body.is-android .logs-content { contain: layout paint; }
+body.is-android .logs-container { contain: paint style; }
+body.is-android .logs-content { contain: layout paint style; }
+body.is-android .log-entry {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
+  contain: layout paint style;
+}
+body.is-android .settings-group:not(:has(.custom-select.open)) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+}
+
+.log-history-sentinel {
+  padding: 0.35rem 0 0.8rem;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  text-align: center;
+}
 
 @media (hover: none) and (pointer: coarse) {
   .nav-item,
@@ -1006,11 +1075,14 @@ body.is-android .logs-content { contain: layout paint; }
   display: flex; align-items: center; justify-content: center;
   z-index: 1000;
   opacity: 1;
-  transition: opacity 0.3s ease;
+  visibility: visible;
+  transition: opacity 0.3s ease, visibility 0s linear;
 }
 .modal-overlay.hidden {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
+  transition: opacity 0.3s ease, visibility 0s linear 0.3s;
 }
 .modal-content {
   width: 90%; max-width: 400px;

@@ -334,16 +334,9 @@ class MainActivity : TauriActivity() {
       return try {
         // JavascriptInterface methods already run away from the Android main
         // thread. Keep potentially large, full-history file copies there.
-        val source = File(activity.filesDir, "app.log")
-        val serviceLogs = activity.filesDir.listFiles()
-          ?.filter {
-            it.isFile && (
-              it.name == "keepalive-journal.log" ||
-                (it.name.startsWith("keepalive-journal.importing") && it.name.endsWith(".log"))
-            ) && it.length() > 0L
-          }
-          ?.sortedBy { it.name }
-          .orEmpty()
+        // Tauri's Android app_data_dir() is applicationInfo.dataDir, not filesDir.
+        val source = File(activity.applicationInfo.dataDir, "app.log")
+        val serviceLogs = KeepAliveJournal.filesForExport(activity)
         if ((!source.isFile || source.length() == 0L) && serviceLogs.isEmpty()) return false
 
         val exportDirectory = File(activity.cacheDir, "exports").apply { mkdirs() }
@@ -352,12 +345,14 @@ class MainActivity : TauriActivity() {
         destination.outputStream().buffered().use { output ->
           if (source.isFile && source.length() > 0L) {
             source.inputStream().buffered().use { it.copyTo(output) }
+            output.write('\n'.code)
           }
           // The foreground service keeps writing a separate journal while the
           // WebView/Rust process is absent. Include current and crash-recovery
           // import files so the shared export is never limited to the 5000 UI rows.
           for (serviceLog in serviceLogs) {
             serviceLog.inputStream().buffered().use { it.copyTo(output) }
+            output.write('\n'.code)
           }
         }
         val uri = FileProvider.getUriForFile(
@@ -391,6 +386,11 @@ class MainActivity : TauriActivity() {
         KeepAliveJournal.append(activity, "导出日志失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
         false
       }
+    }
+
+    @JavascriptInterface
+    fun clearServiceLogs() {
+      KeepAliveJournal.clear(activity)
     }
   }
 }

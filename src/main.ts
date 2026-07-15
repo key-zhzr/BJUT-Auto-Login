@@ -1,6 +1,6 @@
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, Edit2, Eye, FileText, GripVertical,
+  ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, Download, Edit2, Eye, FileText, GripVertical,
   LayoutDashboard, Loader, LogIn, Minus, Plus, RefreshCw, Settings, ShieldAlert,
   ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
 } from 'lucide';
@@ -14,12 +14,18 @@ import DOMPurify from 'dompurify';
 
 const icons = {
   Activity, AlertCircle, ArrowDownToLine, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ClipboardCopy, ClipboardPaste, Clock, Copy, Edit2, Eye, FileText, GripVertical,
+  ClipboardCopy, ClipboardPaste, Clock, Copy, Download, Edit2, Eye, FileText, GripVertical,
   LayoutDashboard, Loader, LogIn, Minus, Plus, RefreshCw, Settings, ShieldAlert,
   ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
 };
 
-if (navigator.userAgent.toLowerCase().includes('android')) {
+const IS_ANDROID = navigator.userAgent.toLowerCase().includes('android');
+
+function renderIcons(root: Element | Document | DocumentFragment = document) {
+  createIcons({ icons, root });
+}
+
+if (IS_ANDROID) {
   document.body.classList.add('is-android');
 }
 
@@ -809,8 +815,7 @@ async function listenToRustEvents() {
 
     // Report visibility background status
     const updateBgState = () => {
-      const isAndroid = navigator.userAgent.toLowerCase().includes('android');
-      const isBg = document.hidden || (!isAndroid && !document.hasFocus());
+      const isBg = document.hidden || (!IS_ANDROID && !document.hasFocus());
       invoke('set_background_state', { isBg }).catch(() => {});
     };
     document.addEventListener('visibilitychange', updateBgState);
@@ -828,6 +833,24 @@ function getLogsScroller(): HTMLElement | null {
   return document.querySelector<HTMLElement>('main');
 }
 
+const ANDROID_LOG_RENDER_BATCH = 360;
+let renderedLogLimit = IS_ANDROID ? ANDROID_LOG_RENDER_BATCH : Number.MAX_SAFE_INTEGER;
+let logRenderFrame: number | null = null;
+let logFilterSignature = '';
+let logHistoryLoadPending = false;
+
+function logsAreAtBottom(scroller: HTMLElement | null): boolean {
+  return !scroller || scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 80;
+}
+
+function scheduleFilteredLogsRender() {
+  if (logRenderFrame !== null) return;
+  logRenderFrame = requestAnimationFrame(() => {
+    logRenderFrame = null;
+    renderFilteredLogs();
+  });
+}
+
 function renderLogEntry(module: string, message: string, type: 'info' | 'error' | 'success' | 'debug' = 'info', time?: string) {
   const currentLevel = localStorage.getItem('bjut_log_level') || 'info';
   if (currentLevel === 'error' && type !== 'error') {
@@ -841,16 +864,19 @@ function renderLogEntry(module: string, message: string, type: 'info' | 'error' 
   if (logEntriesCache.length > 5000) logEntriesCache.splice(0, logEntriesCache.length - 5000);
   logsDirty = true;
   if (logsContent.closest('.page')?.classList.contains('active')) {
-    renderFilteredLogs();
+    const scroller = getLogsScroller();
+    if (logsAreAtBottom(scroller)) scheduleFilteredLogsRender();
   } else {
     logFilterCount.textContent = `${logEntriesCache.length} 条`;
   }
 }
 
-function renderFilteredLogs() {
+function renderFilteredLogs(options: { resetWindow?: boolean; preserveScrollAnchor?: boolean } = {}) {
   const logsPageActive = logsContent.closest('.page')?.classList.contains('active') ?? false;
   const scroller = getLogsScroller();
-  const wasAtBottom = !scroller || scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 80;
+  const wasAtBottom = logsAreAtBottom(scroller);
+  const previousScrollHeight = scroller?.scrollHeight ?? 0;
+  const previousScrollTop = scroller?.scrollTop ?? 0;
   const query = logSearch?.value.trim().toLocaleLowerCase() || '';
   const level = logLevelFilter?.value || 'all';
   let lastSessionStart = -1;
@@ -866,8 +892,22 @@ function renderFilteredLogs() {
     if (!query) return true;
     return `${entry.time} ${entry.module} ${entry.message}`.toLocaleLowerCase().includes(query);
   });
-  logsContent.innerHTML = '';
-  visible.forEach(item => {
+  const nextFilterSignature = `${logSessionFilter?.value || 'all'}\u0000${level}\u0000${query}`;
+  if (options.resetWindow || nextFilterSignature !== logFilterSignature) {
+    renderedLogLimit = IS_ANDROID ? ANDROID_LOG_RENDER_BATCH : Number.MAX_SAFE_INTEGER;
+    logFilterSignature = nextFilterSignature;
+  }
+  const renderStart = IS_ANDROID ? Math.max(0, visible.length - renderedLogLimit) : 0;
+  const rendered = visible.slice(renderStart);
+  const fragment = document.createDocumentFragment();
+  if (renderStart > 0) {
+    const sentinel = document.createElement('div');
+    sentinel.className = 'log-history-sentinel';
+    sentinel.dataset.remaining = String(renderStart);
+    sentinel.textContent = `继续上滑加载更早的 ${renderStart} 条日志`;
+    fragment.appendChild(sentinel);
+  }
+  rendered.forEach(item => {
     const entry = document.createElement('div');
     entry.className = item.message.includes('=== SESSION START ===') ? 'log-entry log-session-divider' : 'log-entry';
     const timeElement = document.createElement('span');
@@ -877,14 +917,37 @@ function renderFilteredLogs() {
     messageElement.className = `log-${item.type}`;
     messageElement.textContent = `[${item.module}] ${item.message.replace('=== SESSION START ===', '启动会话')}`;
     entry.append(timeElement, messageElement);
-    logsContent.appendChild(entry);
+    fragment.appendChild(entry);
   });
-  if (logFilterCount) logFilterCount.textContent = `${visible.length} / ${logEntriesCache.length} 条`;
+  logsContent.replaceChildren(fragment);
+  if (logFilterCount) {
+    logFilterCount.textContent = renderStart > 0
+      ? `${rendered.length} / ${visible.length} 条`
+      : `${visible.length} / ${logEntriesCache.length} 条`;
+  }
   logsDirty = false;
   requestAnimationFrame(() => {
-    if (logsPageActive && scroller && wasAtBottom) {
+    if (!logsPageActive || !scroller) return;
+    if (options.preserveScrollAnchor) {
+      scroller.scrollTop = scroller.scrollHeight - previousScrollHeight + previousScrollTop;
+    } else if (wasAtBottom) {
       scroller.scrollTop = scroller.scrollHeight;
     }
+  });
+}
+
+function loadOlderLogsNearTop() {
+  if (!IS_ANDROID || logHistoryLoadPending) return;
+  const scroller = getLogsScroller();
+  const sentinel = logsContent.querySelector<HTMLElement>('.log-history-sentinel');
+  if (!scroller || !sentinel || scroller.scrollTop > 56) return;
+  const remaining = Number(sentinel.dataset.remaining || 0);
+  if (remaining <= 0) return;
+  logHistoryLoadPending = true;
+  requestAnimationFrame(() => {
+    renderedLogLimit += Math.min(ANDROID_LOG_RENDER_BATCH, remaining);
+    renderFilteredLogs({ preserveScrollAnchor: true });
+    logHistoryLoadPending = false;
   });
 }
 
@@ -1012,7 +1075,7 @@ function showListManageModal(title: string, list: string[], onSave: (list: strin
   content.addEventListener('click', onClickList);
   closeBtn.addEventListener('click', onClose);
   modal.classList.remove('hidden');
-  createIcons({ icons });
+  renderIcons(content);
 }
 
 enum NetworkState {
@@ -1029,6 +1092,8 @@ enum LoginType {
 }
 
 class CustomSelect {
+  private static instances = new Set<CustomSelect>();
+  private static outsideHandlerInstalled = false;
   element: HTMLElement;
   trigger: HTMLElement;
   triggerSpan: HTMLSpanElement;
@@ -1036,11 +1101,17 @@ class CustomSelect {
   private _value: string = '';
   onChangeCallbacks: ((value: string) => void)[] = [];
 
+  private close() {
+    this.element.classList.remove('open');
+    this.trigger.setAttribute('aria-expanded', 'false');
+  }
+
   constructor(elementId: string) {
     this.element = document.getElementById(elementId)!;
     this.trigger = this.element.querySelector('.custom-select-trigger')!;
     this.triggerSpan = this.trigger.querySelector('span')!;
     this.optionsContainer = this.element.querySelector('.custom-select-options')!;
+    CustomSelect.instances.add(this);
     this.trigger.setAttribute('role', 'combobox');
     this.trigger.setAttribute('aria-haspopup', 'listbox');
     this.trigger.setAttribute('aria-expanded', 'false');
@@ -1056,11 +1127,8 @@ class CustomSelect {
     this.trigger.addEventListener('click', (e) => {
       e.stopPropagation();
       // Close other dropdowns first
-      document.querySelectorAll('.custom-select').forEach(el => {
-        if (el !== this.element) {
-          el.classList.remove('open');
-          el.querySelector('.custom-select-trigger')?.setAttribute('aria-expanded', 'false');
-        }
+      CustomSelect.instances.forEach(instance => {
+        if (instance !== this) instance.close();
       });
       this.element.classList.toggle('open');
       this.trigger.setAttribute('aria-expanded', String(this.element.classList.contains('open')));
@@ -1068,8 +1136,7 @@ class CustomSelect {
 
     this.trigger.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
-        this.element.classList.remove('open');
-        this.trigger.setAttribute('aria-expanded', 'false');
+        this.close();
         return;
       }
       if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -1093,17 +1160,19 @@ class CustomSelect {
       if (option) {
         const val = option.getAttribute('data-value') || '';
         this.value = val;
-        this.element.classList.remove('open');
-        this.trigger.setAttribute('aria-expanded', 'false');
+        this.close();
         this.onChangeCallbacks.forEach(cb => cb(val));
       }
     });
 
-    // Close on click outside
-    document.addEventListener('click', () => {
-      this.element.classList.remove('open');
-      this.trigger.setAttribute('aria-expanded', 'false');
-    });
+    // A single global listener closes every select. This avoids running one
+    // document listener per custom control on every tap.
+    if (!CustomSelect.outsideHandlerInstalled) {
+      document.addEventListener('click', () => {
+        CustomSelect.instances.forEach(instance => instance.close());
+      });
+      CustomSelect.outsideHandlerInstalled = true;
+    }
 
     // Initial value
     const selectedOption = this.optionsContainer.querySelector('.custom-option.selected') as HTMLElement;
@@ -1265,14 +1334,13 @@ async function init() {
   networkProfileProtocolSelect = new CustomSelect('network-profile-protocol');
   networkProfileAccountSelect = new CustomSelect('network-profile-account');
 
-  createIcons({ icons });
+  renderIcons();
   settingAutoLogin.checked = autoLoginEnabled;
   settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
   settingCheckInterval.value = checkInterval.toString();
 
   // Handle autostart and quit element visibility and status
-  const isAndroid = navigator.userAgent.toLowerCase().includes('android');
-  if (!(window as any).__TAURI__ || isAndroid) {
+  if (!(window as any).__TAURI__ || IS_ANDROID) {
     document.getElementById('setting-autostart-item')?.style.setProperty('display', 'none');
     document.getElementById('setting-quit-item')?.style.setProperty('display', 'none');
   } else {
@@ -1325,12 +1393,12 @@ async function init() {
       // Request foreground permissions
       if ((window as any).__TAURI__) {
         try {
-          if (isAndroid && (window as any).AndroidBridge) {
+          if (IS_ANDROID && (window as any).AndroidBridge) {
             (window as any).AndroidBridge.requestForegroundPermissions();
-          } else if (isAndroid) {
+          } else if (IS_ANDROID) {
             await invoke('request_foreground_permissions');
           }
-          if (isAndroid) log('系统', '已申请前台网络定位相关权限');
+          if (IS_ANDROID) log('系统', '已申请前台网络定位相关权限');
         } catch (e) {
           console.error('Failed to request foreground permissions:', e);
         }
@@ -1363,7 +1431,7 @@ async function init() {
   } else {
     // Already accepted
     if ((window as any).__TAURI__) {
-      if (isAndroid && !(window as any).AndroidBridge) {
+      if (IS_ANDROID && !(window as any).AndroidBridge) {
         invoke('request_foreground_permissions').catch(e => {
           console.error('Failed to request foreground permissions:', e);
         });
@@ -1991,17 +2059,24 @@ function setupEventListeners() {
   });
 
   btnClearLogs.addEventListener('click', () => {
+    if (logRenderFrame !== null) {
+      cancelAnimationFrame(logRenderFrame);
+      logRenderFrame = null;
+    }
     logEntriesCache = [];
-    logsContent.innerHTML = '';
-    renderFilteredLogs();
+    renderedLogLimit = IS_ANDROID ? ANDROID_LOG_RENDER_BATCH : Number.MAX_SAFE_INTEGER;
+    logFilterSignature = '';
+    renderFilteredLogs({ resetWindow: true });
     if ((window as any).__TAURI__) {
       invoke('clear_all_logs').catch(e => console.error(e));
     }
+    (window as any).AndroidBridge?.clearServiceLogs?.();
   });
 
-  logSearch.addEventListener('input', renderFilteredLogs);
-  logSessionFilter.addEventListener('change', renderFilteredLogs);
-  logLevelFilter.addEventListener('change', renderFilteredLogs);
+  logSearch.addEventListener('input', () => renderFilteredLogs({ resetWindow: true }));
+  logSessionFilter.addEventListener('change', () => renderFilteredLogs({ resetWindow: true }));
+  logLevelFilter.addEventListener('change', () => renderFilteredLogs({ resetWindow: true }));
+  getLogsScroller()?.addEventListener('scroll', loadOlderLogsNearTop, { passive: true });
 
   btnDiagnosticBundle.addEventListener('click', async () => {
     if (!(window as any).__TAURI__) return;
@@ -2048,8 +2123,9 @@ function setupEventListeners() {
   });
 
   btnScrollLogs.addEventListener('click', () => {
+    if (logsDirty) renderFilteredLogs();
     const scroller = getLogsScroller();
-    if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+    if (scroller) requestAnimationFrame(() => scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' }));
     else logsContent.scrollIntoView({ block: 'end', behavior: 'smooth' });
   });
 
@@ -2927,7 +3003,7 @@ function renderAccounts() {
     }
     accountsList.appendChild(item);
   });
-  createIcons({ icons });
+  renderIcons(accountsList);
   updateOverrideOptions();
 }
 
@@ -3109,7 +3185,7 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType) {
     infoBalance.textContent = '--';
     infoFlow.textContent = '--';
   }
-  createIcons({ icons });
+  renderIcons(networkIcon);
 }
 
 async function updateUserInfo() {
@@ -3139,7 +3215,7 @@ async function manualLogin() {
   isLoggingIn = true;
   btnLogin.disabled = true;
   btnLogin.innerHTML = '<i data-lucide="loader"></i> 安全检查中...';
-  createIcons({ icons });
+  renderIcons(btnLogin);
   
   const isSafe = await checkNetworkSecurity();
   if (!isSafe) {
@@ -3147,12 +3223,12 @@ async function manualLogin() {
     isLoggingIn = false;
     btnLogin.disabled = false;
     btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
-    createIcons({ icons });
+    renderIcons(btnLogin);
     return;
   }
   
   btnLogin.innerHTML = '<i data-lucide="loader"></i> 登录中...';
-  createIcons({ icons });
+  renderIcons(btnLogin);
   
   let overrideAcc = overrideAccountSelect?.value || 'auto';
   let overrideMethod = overrideMethodSelect?.value || 'auto';
@@ -3177,7 +3253,7 @@ async function manualLogin() {
     btnLogin.disabled = false;
     btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
   } finally {
-    createIcons({ icons });
+    renderIcons(btnLogin);
     isLoggingIn = false;
   }
 }

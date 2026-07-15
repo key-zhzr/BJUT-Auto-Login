@@ -5,12 +5,43 @@ import android.app.ApplicationExitInfo
 import android.content.Context
 import android.os.Build
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 object KeepAliveJournal {
     private const val FILE_NAME = "keepalive-journal.log"
+
+    private fun dataDirectory(context: Context): File =
+        File(context.applicationInfo.dataDir)
+
+    private fun journalFile(context: Context): File =
+        File(dataDirectory(context), FILE_NAME)
+
+    /**
+     * Older builds wrote the foreground-service journal below filesDir while
+     * Tauri resolves app_data_dir() to the private data root. Move that journal
+     * before Rust starts so startup import, clearing and complete export all see
+     * the same history.
+     */
+    private fun migrateLegacyJournal(context: Context): File {
+        val destination = journalFile(context)
+        val legacy = File(context.applicationContext.filesDir, FILE_NAME)
+        if (!legacy.isFile || legacy.length() == 0L || legacy == destination) return destination
+        try {
+            if (!destination.exists() && legacy.renameTo(destination)) return destination
+            destination.parentFile?.mkdirs()
+            FileOutputStream(destination, true).buffered().use { output ->
+                if (destination.length() > 0L) output.write('\n'.code)
+                legacy.inputStream().buffered().use { input -> input.copyTo(output) }
+            }
+            legacy.delete()
+        } catch (_: Exception) {
+            // Keep both files; filesForExport() still includes the legacy copy.
+        }
+        return destination
+    }
 
     @JvmStatic
     @Synchronized
@@ -25,7 +56,7 @@ object KeepAliveJournal {
             val safeType = type.replace(Regex("[^a-z]"), "").ifEmpty { "info" }
             val safeModule = module.replace('\n', ' ').replace('\r', ' ')
             val safeMessage = message.replace('\n', ' ').replace('\r', ' ')
-            File(context.applicationContext.filesDir, FILE_NAME).appendText(
+            migrateLegacyJournal(context).appendText(
                 "[$timestamp] [$safeType] [$safeModule] $safeMessage\n",
                 Charsets.UTF_8
             )
@@ -35,7 +66,40 @@ object KeepAliveJournal {
     }
 
     @JvmStatic
+    @Synchronized
+    fun filesForExport(context: Context): List<File> {
+        migrateLegacyJournal(context)
+        val directories = listOf(dataDirectory(context), context.applicationContext.filesDir).distinct()
+        return directories.flatMap { directory ->
+            directory.listFiles()
+                ?.filter {
+                    it.isFile && (
+                        it.name == FILE_NAME ||
+                            (it.name.startsWith("keepalive-journal.importing") && it.name.endsWith(".log"))
+                        ) && it.length() > 0L
+                }
+                .orEmpty()
+        }.distinctBy { it.absolutePath }.sortedBy { it.name }
+    }
+
+    @JvmStatic
+    @Synchronized
+    fun clear(context: Context) {
+        val directories = listOf(dataDirectory(context), context.applicationContext.filesDir).distinct()
+        directories.forEach { directory ->
+            directory.listFiles()
+                ?.filter {
+                    it.name == FILE_NAME ||
+                        (it.name.startsWith("keepalive-journal.importing") && it.name.endsWith(".log"))
+                }
+                ?.forEach { it.delete() }
+        }
+    }
+
+    @JvmStatic
+    @Synchronized
     fun recordPreviousProcessExit(context: Context) {
+        migrateLegacyJournal(context)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         try {
             val appContext = context.applicationContext
