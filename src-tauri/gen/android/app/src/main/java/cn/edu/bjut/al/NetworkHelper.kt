@@ -27,7 +27,6 @@ class NetworkHelper {
         private const val SECURE_CONFIG_KEY_V2 = "encrypted_config"
         private const val KEY_ALIAS_V2 = "bjut_al_config_key_v2"
         private const val CONFIG_AAD = "cn.edu.bjut.al/config/v2"
-
         private fun securePreferences(context: Context) = EncryptedSharedPreferences.create(
             context,
             SECURE_PREFS,
@@ -140,13 +139,33 @@ class NetworkHelper {
                     .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val activeNetwork = connectivityManager.activeNetwork
                 val capabilities = activeNetwork?.let(connectivityManager::getNetworkCapabilities)
+                val vpnActive = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                // A VPN becomes Android's active routed network. Inspect its physical
+                // underlay so mobile-data throttling and cached Wi-Fi identity still
+                // work without asking for location-protected SSID/BSSID details.
+                val physicalCapabilities = if (vpnActive) {
+                    connectivityManager.allNetworks
+                        .asSequence()
+                        .filter { it != activeNetwork }
+                        .mapNotNull(connectivityManager::getNetworkCapabilities)
+                        .filter { !it.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+                        .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+                        .sortedByDescending {
+                            when {
+                                it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 3
+                                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 2
+                                it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> 1
+                                else -> 0
+                            }
+                        }
+                        .firstOrNull()
+                } else capabilities
                 val transport = when {
-                    capabilities == null -> "none"
-                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
-                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
-                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
-                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
-                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> "bluetooth"
+                    physicalCapabilities == null -> if (vpnActive) "vpn" else "none"
+                    physicalCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                    physicalCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                    physicalCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                    physicalCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> "bluetooth"
                     else -> "other"
                 }
                 val validated = capabilities
@@ -167,6 +186,13 @@ class NetworkHelper {
                     val wifiInfo = wifiManager.connectionInfo
                     ssid = wifiInfo.ssid?.removeSurrounding("\"") ?: "Unknown"
                     bssid = wifiInfo.bssid ?: "00:00:00:00:00:00"
+                    if (ssid.isNotEmpty() && !ssid.contains("unknown", ignoreCase = true)) {
+                        appContext.getSharedPreferences("service_state", Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("last_ssid", ssid)
+                            .putString("last_bssid", bssid)
+                            .apply()
+                    }
                     // WifiInfo reports the address assigned to the physical Wi-Fi
                     // interface and is therefore preferred over any routed/VPN IP.
                     val ipAddress = wifiInfo.ipAddress
@@ -185,6 +211,7 @@ class NetworkHelper {
                     .put("bssid", bssid)
                     .put("ip", ipString)
                     .put("transport", transport)
+                    .put("vpnActive", vpnActive)
                     .put("validated", validated)
                     .put("captivePortal", captivePortal)
                     .put("metered", metered)
@@ -195,6 +222,7 @@ class NetworkHelper {
                     .put("bssid", "")
                     .put("ip", "")
                     .put("transport", "unknown")
+                    .put("vpnActive", false)
                     .put("validated", false)
                     .put("captivePortal", false)
                     .put("metered", false)

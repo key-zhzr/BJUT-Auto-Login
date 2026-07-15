@@ -31,6 +31,9 @@
 -keep class cn.edu.bjut.al.KeepAliveService {
     public *;
 }
+-keep class cn.edu.bjut.al.NativeKeepAlive {
+    public static native <methods>;
+}
 -keep class cn.edu.bjut.al.UpdateHelper {
     public *;
 }

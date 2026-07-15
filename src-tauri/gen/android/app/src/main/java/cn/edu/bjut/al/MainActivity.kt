@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
@@ -13,12 +15,27 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
   private var resumedFromBackground = false
+  private val engineHeartbeatHandler = Handler(Looper.getMainLooper())
+  private val engineHeartbeatRunnable = object : Runnable {
+    override fun run() {
+      getSharedPreferences("service_state", Context.MODE_PRIVATE)
+        .edit()
+        .putLong("engine_heartbeat", System.currentTimeMillis())
+        .apply()
+      engineHeartbeatHandler.postDelayed(this, 10_000L)
+    }
+  }
   private val serviceEventReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       val action = intent?.getStringExtra(KeepAliveService.EXTRA_COMMAND) ?: return
@@ -35,7 +52,9 @@ class MainActivity : TauriActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
+    KeepAliveJournal.recordPreviousProcessExit(this)
     super.onCreate(savedInstanceState)
+    engineHeartbeatHandler.post(engineHeartbeatRunnable)
     ContextCompat.registerReceiver(
       this,
       serviceEventReceiver,
@@ -45,6 +64,11 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onDestroy() {
+    engineHeartbeatHandler.removeCallbacks(engineHeartbeatRunnable)
+    getSharedPreferences("service_state", Context.MODE_PRIVATE)
+      .edit()
+      .putLong("engine_heartbeat", 0L)
+      .apply()
     try { unregisterReceiver(serviceEventReceiver) } catch (_: Exception) {}
     super.onDestroy()
   }
@@ -114,6 +138,11 @@ class MainActivity : TauriActivity() {
 
   private fun startKeepAliveServiceInternal() {
     try {
+        getSharedPreferences("service_state", Context.MODE_PRIVATE)
+          .edit()
+          .putBoolean("auto_login_enabled", true)
+          .apply()
+        KeepAliveRestartScheduler.cancel(this)
         val serviceIntent = Intent(this, KeepAliveService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent)
@@ -127,6 +156,12 @@ class MainActivity : TauriActivity() {
 
   private fun stopKeepAliveServiceInternal() {
     try {
+        getSharedPreferences("service_state", Context.MODE_PRIVATE)
+          .edit()
+          .putBoolean("auto_login_enabled", false)
+          .putLong("paused_until", 0L)
+          .apply()
+        KeepAliveRestartScheduler.cancel(this)
         val serviceIntent = Intent(this, KeepAliveService::class.java)
         stopService(serviceIntent)
     } catch (e: Exception) {
@@ -156,6 +191,15 @@ class MainActivity : TauriActivity() {
     val battery = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
       (getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
     val installPackages = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()
+    val servicePreferences = getSharedPreferences("service_state", Context.MODE_PRIVATE)
+    val keepAliveEnabled = servicePreferences.getBoolean("auto_login_enabled", false)
+    val serviceHeartbeat = servicePreferences.getLong("service_heartbeat", 0L)
+    val serviceHealthy = serviceHeartbeat > 0L && System.currentTimeMillis() - serviceHeartbeat < 90_000L
+    val serviceDetail = when {
+      !keepAliveEnabled -> "后台自动登录未开启，无需常驻检测引擎"
+      serviceHealthy -> "前台服务心跳正常"
+      else -> "未收到前台服务心跳；请检查系统后台限制"
+    }
     return JSONArray()
       .put(JSONObject().put("id", "notifications").put("label", "通知权限").put("granted", notifications).put("required", true))
       .put(JSONObject().put("id", "nearbyWifi").put("label", "附近 Wi-Fi 设备").put("granted", nearbyWifi).put("required", true))
@@ -163,6 +207,7 @@ class MainActivity : TauriActivity() {
       .put(JSONObject().put("id", "backgroundLocation").put("label", "后台位置权限").put("granted", backgroundLocation).put("required", false))
       .put(JSONObject().put("id", "batteryOptimization").put("label", "忽略电池优化").put("granted", battery).put("required", false))
       .put(JSONObject().put("id", "installPackages").put("label", "安装应用更新").put("granted", installPackages).put("required", true))
+      .put(JSONObject().put("id", "keepAliveEngine").put("label", "后台检测引擎").put("granted", !keepAliveEnabled || serviceHealthy).put("required", keepAliveEnabled).put("detail", serviceDetail))
       .toString()
   }
 
@@ -177,6 +222,10 @@ class MainActivity : TauriActivity() {
       }
       "backgroundLocation" -> requestBackgroundPermissionsInternal()
       "nearbyWifi", "foregroundLocation" -> requestForegroundPermissionsInternal()
+      "keepAliveEngine" -> if (
+        getSharedPreferences("service_state", Context.MODE_PRIVATE)
+          .getBoolean("auto_login_enabled", false)
+      ) startKeepAliveServiceInternal()
       else -> startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
     }
   }
@@ -276,6 +325,70 @@ class MainActivity : TauriActivity() {
         completed.await(2, java.util.concurrent.TimeUnit.SECONDS) && success
       } catch (e: InterruptedException) {
         Thread.currentThread().interrupt()
+        false
+      }
+    }
+
+    @JavascriptInterface
+    fun exportLogs(): Boolean {
+      return try {
+        // JavascriptInterface methods already run away from the Android main
+        // thread. Keep potentially large, full-history file copies there.
+        val source = File(activity.filesDir, "app.log")
+        val serviceLogs = activity.filesDir.listFiles()
+          ?.filter {
+            it.isFile && (
+              it.name == "keepalive-journal.log" ||
+                (it.name.startsWith("keepalive-journal.importing") && it.name.endsWith(".log"))
+            ) && it.length() > 0L
+          }
+          ?.sortedBy { it.name }
+          .orEmpty()
+        if ((!source.isFile || source.length() == 0L) && serviceLogs.isEmpty()) return false
+
+        val exportDirectory = File(activity.cacheDir, "exports").apply { mkdirs() }
+        val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val destination = File(exportDirectory, "BJUT-AL-logs-$timestamp.log")
+        destination.outputStream().buffered().use { output ->
+          if (source.isFile && source.length() > 0L) {
+            source.inputStream().buffered().use { it.copyTo(output) }
+          }
+          // The foreground service keeps writing a separate journal while the
+          // WebView/Rust process is absent. Include current and crash-recovery
+          // import files so the shared export is never limited to the 5000 UI rows.
+          for (serviceLog in serviceLogs) {
+            serviceLog.inputStream().buffered().use { it.copyTo(output) }
+          }
+        }
+        val uri = FileProvider.getUriForFile(
+          activity,
+          "${activity.packageName}.fileprovider",
+          destination
+        )
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+          type = "text/plain"
+          putExtra(Intent.EXTRA_STREAM, uri)
+          putExtra(Intent.EXTRA_SUBJECT, "BJUT-AL 完整运行日志")
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val completed = java.util.concurrent.CountDownLatch(1)
+        var launched = false
+        activity.runOnUiThread {
+          try {
+            activity.startActivity(Intent.createChooser(shareIntent, "导出完整日志"))
+            launched = true
+          } catch (error: Exception) {
+            KeepAliveJournal.append(activity, "启动日志分享窗口失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
+          } finally {
+            completed.countDown()
+          }
+        }
+        completed.await(3, java.util.concurrent.TimeUnit.SECONDS) && launched
+      } catch (error: InterruptedException) {
+        Thread.currentThread().interrupt()
+        false
+      } catch (error: Exception) {
+        KeepAliveJournal.append(activity, "导出日志失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
         false
       }
     }

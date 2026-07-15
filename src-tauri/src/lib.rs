@@ -647,6 +647,8 @@ struct AppConfig {
     wifi_change_detect: bool,
     #[serde(default = "default_log_level", alias = "logLevel")]
     log_level: String,
+    #[serde(default = "default_vpn_compatibility", alias = "vpnCompatibility")]
+    vpn_compatibility: String,
     #[serde(default)]
     whitelist: Vec<String>,
     #[serde(default)]
@@ -666,6 +668,7 @@ fn default_check_interval() -> i32 { 15 }
 fn default_check_interval_bg() -> i32 { 60 }
 fn default_wifi_change_detect() -> bool { true }
 fn default_log_level() -> String { "info".to_string() }
+fn default_vpn_compatibility() -> String { "high".to_string() }
 fn default_true() -> bool { true }
 fn default_profile_login_type() -> String { "auto".to_string() }
 fn default_usage_alerts() -> bool { true }
@@ -706,6 +709,39 @@ enum LoginType {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VpnCompatibility {
+    /// HTTPS and the operating system resolver.
+    Minimum,
+    /// HTTPS, with the campus DNS server used to obtain reqwest overrides.
+    Low,
+    /// HTTPS, with known portal addresses pinned in reqwest while preserving SNI.
+    High,
+    /// Direct HTTP requests to the portal IP addresses.
+    Maximum,
+}
+
+impl VpnCompatibility {
+    fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "minimum" | "min" | "lowest" => Self::Minimum,
+            "low" | "lower" => Self::Low,
+            "maximum" | "max" | "highest" => Self::Maximum,
+            _ => Self::High,
+        }
+    }
+
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Minimum => "minimum",
+            Self::Low => "low",
+            Self::High => "high",
+            Self::Maximum => "maximum",
+        }
+    }
+}
+
 impl LoginType {
     fn as_str(&self) -> &'static str {
         match self {
@@ -725,10 +761,10 @@ fn is_campus_local_ip(ip: &str) -> bool {
     if octets.len() != 4 {
         return false;
     }
-    match (octets[0], octets[1]) {
-        (10, 17..=27) | (10, 121) | (10, 126) | (10, 226) | (172, 17..=27) => true,
-        _ => false,
-    }
+    matches!(
+        (octets[0], octets[1]),
+        (10, 17..=27) | (10, 121) | (10, 126) | (10, 226) | (172, 17..=27)
+    )
 }
 
 fn is_known_campus_ssid(ssid: &str) -> bool {
@@ -780,6 +816,7 @@ fn automatic_login_network_allowed(
     ssid: &str,
     bssid: &str,
     ip: &str,
+    transport: &str,
     whitelist: &[String],
     blacklist: &[String],
 ) -> Result<(), String> {
@@ -798,22 +835,24 @@ fn automatic_login_network_allowed(
     match login_type {
         LoginType::Type1 | LoginType::Type2 if is_known_campus_ssid(normalized_ssid) => Ok(()),
         LoginType::Type3
-            if normalized_ssid.is_empty()
-                || normalized_ssid.eq_ignore_ascii_case("unknown")
-                || normalized_ssid.eq_ignore_ascii_case("<unknown ssid>")
-                || is_known_campus_ssid(normalized_ssid) => Ok(()),
+            if (transport.is_empty()
+                || transport.eq_ignore_ascii_case("unknown")
+                || transport.eq_ignore_ascii_case("ethernet"))
+                && (normalized_ssid.is_empty()
+                    || normalized_ssid.eq_ignore_ascii_case("unknown")
+                    || normalized_ssid.eq_ignore_ascii_case("<unknown ssid>")) => Ok(()),
         LoginType::Type1 | LoginType::Type2 => {
             Err("无线网络名称未经识别，且未加入白名单".to_string())
         }
-        LoginType::Type3 => Err("当前无线网络未经识别，且未加入白名单".to_string()),
+        LoginType::Type3 => Err("lgn 协议仅允许有线连接，当前网络未加入白名单".to_string()),
         LoginType::Unknown => Err("未识别到校园网认证协议".to_string()),
     }
 }
 
 fn login_type_from_profile(value: &str) -> Option<LoginType> {
     match value {
-        "bjut-wifi" | "type1" => Some(LoginType::Type1),
-        "bjut-sushe" | "bjut_sushe" | "type2" => Some(LoginType::Type2),
+        "bjut-sushe" | "bjut_sushe" | "type1" => Some(LoginType::Type1),
+        "bjut-wifi" | "bjut_wifi" | "type2" => Some(LoginType::Type2),
         "wired" | "type3" => Some(LoginType::Type3),
         _ => None,
     }
@@ -872,6 +911,7 @@ fn profile_auto_login_enabled(
     profile.auto_login_types.get(key).copied().unwrap_or(legacy_default)
 }
 
+#[allow(unused_variables)]
 fn app_is_in_background(app: &tauri::AppHandle, state: &AppState) -> bool {
     let reported_background = state.is_in_background.load(Ordering::SeqCst);
     #[cfg(desktop)]
@@ -982,53 +1022,258 @@ async fn check_internet_rust() -> bool {
     futures_util::future::join_all(checks).await.into_iter().flatten().any(|online| online)
 }
 
-async fn detect_login_type_rust() -> LoginType {
-    let ips = [
-        ("http://10.21.221.98/", LoginType::Type1),
-        ("http://10.21.251.3/", LoginType::Type2),
-        ("http://172.30.201.2/", LoginType::Type3),
-        ("http://172.30.201.10/", LoginType::Type3),
-    ];
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(1500))
-        .build()
-        .unwrap_or_default();
-    let probes = ips.into_iter().map(|(url, ltype)| {
-        let client = client.clone();
-        async move {
-            client.get(url)
-                .header("Cache-Control", "no-cache")
-                .send()
-                .await
-                .ok()
-                .map(|_| ltype)
+const CAMPUS_DNS_SERVER: &str = "10.21.200.28:53";
+const WLGN_HOST: &str = "wlgn.bjut.edu.cn";
+const LGN_HOST: &str = "lgn.bjut.edu.cn";
+const LGN6_HOST: &str = "lgn6.bjut.edu.cn";
+
+fn skip_dns_name(packet: &[u8], position: &mut usize) -> Result<(), String> {
+    loop {
+        let length = *packet.get(*position).ok_or("校园网 DNS 响应不完整")?;
+        if length & 0xc0 == 0xc0 {
+            if packet.get(*position + 1).is_none() {
+                return Err("校园网 DNS 压缩指针不完整".to_string());
+            }
+            *position += 2;
+            return Ok(());
         }
-    });
+        *position += 1;
+        if length == 0 {
+            return Ok(());
+        }
+        *position = position.checked_add(length as usize)
+            .filter(|next| *next <= packet.len())
+            .ok_or("校园网 DNS 名称越界")?;
+    }
+}
+
+fn query_campus_dns_ipv4(host: &str) -> Result<Vec<std::net::Ipv4Addr>, String> {
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.is_empty() || labels.iter().any(|label| label.is_empty() || label.len() > 63) {
+        return Err("校园网 DNS 查询域名无效".to_string());
+    }
+    let query_id = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() & 0xffff) as u16;
+    let mut query = Vec::with_capacity(64);
+    query.extend_from_slice(&query_id.to_be_bytes());
+    query.extend_from_slice(&[0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    for label in labels {
+        query.push(label.len() as u8);
+        query.extend_from_slice(label.as_bytes());
+    }
+    query.push(0);
+    query.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0")
+        .map_err(|error| format!("无法创建校园网 DNS 查询：{error}"))?;
+    let timeout = Some(std::time::Duration::from_millis(1200));
+    socket.set_read_timeout(timeout).map_err(|error| error.to_string())?;
+    socket.set_write_timeout(timeout).map_err(|error| error.to_string())?;
+    socket.connect(CAMPUS_DNS_SERVER)
+        .map_err(|error| format!("无法连接校园网 DNS：{error}"))?;
+    socket.send(&query).map_err(|error| format!("校园网 DNS 查询发送失败：{error}"))?;
+    let mut packet = [0u8; 2048];
+    let size = socket.recv(&mut packet).map_err(|error| format!("校园网 DNS 查询失败：{error}"))?;
+    let packet = &packet[..size];
+    if packet.len() < 12 || u16::from_be_bytes([packet[0], packet[1]]) != query_id {
+        return Err("校园网 DNS 返回了无效响应".to_string());
+    }
+    if packet[3] & 0x0f != 0 {
+        return Err(format!("校园网 DNS 返回错误码 {}", packet[3] & 0x0f));
+    }
+    let question_count = u16::from_be_bytes([packet[4], packet[5]]) as usize;
+    let answer_count = u16::from_be_bytes([packet[6], packet[7]]) as usize;
+    let mut position = 12usize;
+    for _ in 0..question_count {
+        skip_dns_name(packet, &mut position)?;
+        position = position.checked_add(4).filter(|next| *next <= packet.len())
+            .ok_or("校园网 DNS 问题段越界")?;
+    }
+    let mut addresses = Vec::new();
+    for _ in 0..answer_count {
+        skip_dns_name(packet, &mut position)?;
+        if position + 10 > packet.len() {
+            return Err("校园网 DNS 答案段不完整".to_string());
+        }
+        let record_type = u16::from_be_bytes([packet[position], packet[position + 1]]);
+        let record_class = u16::from_be_bytes([packet[position + 2], packet[position + 3]]);
+        let data_length = u16::from_be_bytes([packet[position + 8], packet[position + 9]]) as usize;
+        position += 10;
+        if position + data_length > packet.len() {
+            return Err("校园网 DNS 记录数据越界".to_string());
+        }
+        if record_type == 1 && record_class == 1 && data_length == 4 {
+            let address = std::net::Ipv4Addr::new(
+                packet[position], packet[position + 1], packet[position + 2], packet[position + 3],
+            );
+            if !addresses.contains(&address) {
+                addresses.push(address);
+            }
+        }
+        position += data_length;
+    }
+    if addresses.is_empty() {
+        Err(format!("校园网 DNS 未返回 {host} 的 IPv4 地址"))
+    } else {
+        Ok(addresses)
+    }
+}
+
+async fn portal_client(
+    compatibility: VpnCompatibility,
+    login_type: &LoginType,
+    timeout: std::time::Duration,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none());
+    let hosts: Vec<(&str, Vec<std::net::Ipv4Addr>)> = match login_type {
+        LoginType::Type2 => vec![(WLGN_HOST, vec![std::net::Ipv4Addr::new(10, 21, 251, 3)])],
+        LoginType::Type3 => vec![
+            (LGN_HOST, vec![std::net::Ipv4Addr::new(172, 30, 201, 2), std::net::Ipv4Addr::new(172, 30, 201, 10)]),
+            (LGN6_HOST, vec![std::net::Ipv4Addr::new(172, 30, 201, 2), std::net::Ipv4Addr::new(172, 30, 201, 10)]),
+        ],
+        _ => Vec::new(),
+    };
+    if matches!(compatibility, VpnCompatibility::Low | VpnCompatibility::High) {
+        for (host, fixed_addresses) in hosts {
+            let ipv4_addresses = if compatibility == VpnCompatibility::Low {
+                let host_owned = host.to_string();
+                tokio::task::spawn_blocking(move || query_campus_dns_ipv4(&host_owned))
+                    .await
+                    .map_err(|error| format!("校园网 DNS 任务失败：{error}"))??
+            } else {
+                fixed_addresses
+            };
+            let socket_addresses: Vec<std::net::SocketAddr> = ipv4_addresses.into_iter()
+                .map(|address| std::net::SocketAddr::new(std::net::IpAddr::V4(address), 443))
+                .collect();
+            builder = builder.resolve_to_addrs(host, &socket_addresses);
+        }
+    }
+    builder.build().map_err(redact_request_error)
+}
+
+fn portal_probe_urls(compatibility: VpnCompatibility, login_type: &LoginType) -> Vec<String> {
+    match login_type {
+        LoginType::Type1 if compatibility == VpnCompatibility::Maximum => {
+            vec!["http://10.21.221.98:801/eportal/portal/login".to_string()]
+        }
+        LoginType::Type1 => vec!["https://10.21.221.98:802/eportal/portal/login".to_string()],
+        LoginType::Type2 if compatibility == VpnCompatibility::Maximum => {
+            vec!["http://10.21.251.3/drcom/login".to_string()]
+        }
+        LoginType::Type2 => vec!["https://wlgn.bjut.edu.cn/drcom/login".to_string()],
+        LoginType::Type3 if compatibility == VpnCompatibility::Maximum => vec![
+            "http://172.30.201.2".to_string(),
+            "http://172.30.201.10".to_string(),
+        ],
+        LoginType::Type3 => vec!["https://lgn.bjut.edu.cn".to_string()],
+        LoginType::Unknown => Vec::new(),
+    }
+}
+
+async fn probe_login_type(
+    compatibility: VpnCompatibility,
+    login_type: LoginType,
+) -> Option<LoginType> {
+    let client = portal_client(
+        compatibility,
+        &login_type,
+        std::time::Duration::from_millis(1800),
+    ).await.ok()?;
+    for url in portal_probe_urls(compatibility, &login_type) {
+        if client.get(url)
+            .header("Cache-Control", "no-cache")
+            .send()
+            .await
+            .is_ok()
+        {
+            return Some(login_type);
+        }
+    }
+    None
+}
+
+async fn detect_login_type_rust(compatibility: VpnCompatibility) -> LoginType {
+    let probes = [LoginType::Type1, LoginType::Type2, LoginType::Type3]
+        .into_iter()
+        .map(|login_type| probe_login_type(compatibility, login_type));
     futures_util::future::join_all(probes).await.into_iter().flatten().next()
         .unwrap_or(LoginType::Unknown)
+}
+
+async fn login_lgn_once(
+    client: &reqwest::Client,
+    first_url: &str,
+    second_url: &str,
+    user: &str,
+    pass: &str,
+) -> Result<(bool, String), String> {
+    let mut first_form = std::collections::HashMap::new();
+    first_form.insert("DDDDD", user);
+    first_form.insert("upass", pass);
+    first_form.insert("v46s", "0");
+    first_form.insert("0MKKey", "");
+    let first_response = client.post(first_url)
+        .form(&first_form)
+        .send()
+        .await
+        .map_err(redact_request_error)?;
+    let html = first_response.text().await.map_err(redact_request_error)?;
+    let v6ip = find_v6ip(&html);
+    if v6ip.is_empty() {
+        return Err("有线登录页未返回动态 IPv6 地址".to_string());
+    }
+
+    let mut second_form = std::collections::HashMap::new();
+    second_form.insert("DDDDD", user);
+    second_form.insert("upass", pass);
+    second_form.insert("0MKKey", "Login");
+    second_form.insert("v6ip", v6ip.as_str());
+    let final_response = client.post(second_url)
+        .form(&second_form)
+        .send()
+        .await
+        .map_err(redact_request_error)?;
+    let final_html = final_response.text().await.map_err(redact_request_error)?;
+    if final_html.contains("DispQianFei") || final_html.contains("Msg=") {
+        Ok((false, "登录失败，请检查账号密码或余额".to_string()))
+    } else {
+        Ok((true, "Portal协议认证成功！".to_string()))
+    }
 }
 
 async fn login_to_campus_network_rust(
     login_type: LoginType,
     user: &str,
     pass: &str,
+    compatibility: VpnCompatibility,
 ) -> Result<(bool, String), String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(redact_request_error)?;
+    let client = portal_client(
+        compatibility,
+        &login_type,
+        std::time::Duration::from_secs(5),
+    ).await?;
     match login_type {
         LoginType::Type1 => {
             let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
             let v = format!("{:04}", nanos % 9000 + 1000);
             let user_encoded = url_encode(&(format!("{}@campus", user)));
             let pass_encoded = url_encode(pass);
+            let base = if compatibility == VpnCompatibility::Maximum {
+                "http://10.21.221.98:801/eportal/portal/login"
+            } else {
+                "https://10.21.221.98:802/eportal/portal/login"
+            };
             let url = format!(
-                "http://10.21.221.98:801/eportal/portal/login?callback=dr1003&login_method=1&user_account={}&user_password={}&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=000000000000&wlan_ac_ip=&wlan_ac_name=&jsVersion=4.2.1&terminal_type=1&lang=zh-cn&v={}",
+                "{base}?callback=dr1003&login_method=1&user_account={}&user_password={}&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=000000000000&wlan_ac_ip=&wlan_ac_name=&jsVersion=4.2.1&terminal_type=1&lang=zh-cn&v={}",
                 user_encoded, pass_encoded, v
             );
-            let res = client.get(&url).send().await.map_err(redact_request_error)?;
-            let text = res.text().await.map_err(redact_request_error)?;
+            let response = client.get(&url).send().await.map_err(redact_request_error)?;
+            let text = response.text().await.map_err(redact_request_error)?;
             Ok(parse_dr_response(&text))
         }
         LoginType::Type2 => {
@@ -1036,46 +1281,248 @@ async fn login_to_campus_network_rust(
             let v = format!("{:04}", nanos % 9000 + 1000);
             let user_encoded = url_encode(user);
             let pass_encoded = url_encode(pass);
+            let base = if compatibility == VpnCompatibility::Maximum {
+                "http://10.21.251.3/drcom/login"
+            } else {
+                "https://wlgn.bjut.edu.cn/drcom/login"
+            };
             let url = format!(
-                "http://10.21.251.3/drcom/login?callback=dr1002&DDDDD={}&upass={}&0MKKey=123456&R1=0&R2=&R3=0&R6=0&para=00&v6ip=&terminal_type=1&lang=zh-cn&jsVersion=4.1&v={}",
+                "{base}?callback=dr1002&DDDDD={}&upass={}&0MKKey=123456&R1=0&R2=&R3=0&R6=0&para=00&v6ip=&terminal_type=1&lang=zh-cn&jsVersion=4.1&v={}",
                 user_encoded, pass_encoded, v
             );
-            let res = client.get(&url).send().await.map_err(redact_request_error)?;
-            let text = res.text().await.map_err(redact_request_error)?;
+            let response = client.get(&url).send().await.map_err(redact_request_error)?;
+            let text = response.text().await.map_err(redact_request_error)?;
             Ok(parse_dr_response(&text))
         }
-        LoginType::Type3 => {
-            let mut params1 = std::collections::HashMap::new();
-            params1.insert("DDDDD", user);
-            params1.insert("upass", pass);
-            params1.insert("v46s", "0");
-            params1.insert("0MKKey", "");
-            let res1 = client.post("https://lgn6.bjut.edu.cn/V6?https://lgn.bjut.edu.cn")
-                .form(&params1)
-                .send()
-                .await
-                .map_err(redact_request_error)?;
-            let html = res1.text().await.map_err(redact_request_error)?;
-            let v6ip = find_v6ip(&html);
-            let mut params2 = std::collections::HashMap::new();
-            params2.insert("DDDDD", user);
-            params2.insert("upass", pass);
-            params2.insert("0MKKey", "Login");
-            params2.insert("v6ip", &v6ip);
-            let res2 = client.post("https://lgn.bjut.edu.cn")
-                .form(&params2)
-                .send()
-                .await
-                .map_err(redact_request_error)?;
-            let final_html = res2.text().await.map_err(redact_request_error)?;
-            if final_html.contains("DispQianFei") || final_html.contains("Msg=") {
-                Ok((false, "登录失败，请检查账号密码或余额".to_string()))
-            } else {
-                Ok((true, "Portal协议认证成功！".to_string()))
+        LoginType::Type3 if compatibility == VpnCompatibility::Maximum => {
+            let mut last_error = "有线登录网关不可达".to_string();
+            for address in ["172.30.201.2", "172.30.201.10"] {
+                let first_url = format!("http://{address}/V6?http://{address}");
+                let second_url = format!("http://{address}");
+                match login_lgn_once(&client, &first_url, &second_url, user, pass).await {
+                    Ok(result) => return Ok(result),
+                    Err(error) => last_error = error,
+                }
+            }
+            Err(last_error)
+        }
+        LoginType::Type3 => login_lgn_once(
+            &client,
+            "https://lgn6.bjut.edu.cn/V6?https://lgn.bjut.edu.cn",
+            "https://lgn.bjut.edu.cn",
+            user,
+            pass,
+        ).await,
+        LoginType::Unknown => Err("未设定的登录类型".to_string()),
+    }
+}
+
+#[cfg(target_os = "android")]
+#[derive(serde::Serialize)]
+struct HeadlessLog {
+    module: String,
+    message: String,
+    #[serde(rename = "type")]
+    log_type: String,
+}
+
+#[cfg(target_os = "android")]
+fn headless_log(logs: &mut Vec<HeadlessLog>, module: &str, message: impl Into<String>, log_type: &str) {
+    logs.push(HeadlessLog {
+        module: module.to_string(),
+        message: message.into(),
+        log_type: log_type.to_string(),
+    });
+}
+
+#[cfg(target_os = "android")]
+async fn run_headless_network_check(
+    config: AppConfig,
+    network: serde_json::Value,
+    reason: &str,
+) -> serde_json::Value {
+    let mut logs = Vec::new();
+    let compatibility = VpnCompatibility::from_config(&config.vpn_compatibility);
+    let transport = network_transport(&network).to_string();
+    let validated = network.get("validated").and_then(|value| value.as_bool()).unwrap_or(false);
+    let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let bssid = network.get("bssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    if config.log_level == "debug" {
+        headless_log(
+            &mut logs,
+            "Android后台",
+            format!(
+                "[DEBUG] 无界面检测开始：来源={reason}，传输={transport}，系统验证={validated}，VPN兼容={}",
+                compatibility.as_str()
+            ),
+            "debug",
+        );
+    }
+
+    if transport.eq_ignore_ascii_case("cellular") {
+        headless_log(
+            &mut logs,
+            "网络",
+            "当前使用移动数据；已放缓后台检测并停止校园网网关探测",
+            "info",
+        );
+        return serde_json::json!({
+            "status": if validated { "online" } else { "cellular" },
+            "notification": if validated { "移动数据已连接，校园网探测已暂停" } else { "移动数据尚未通过系统验证" },
+            "logs": logs,
+        });
+    }
+
+    if validated || check_internet_rust().await {
+        headless_log(&mut logs, "网络", "无界面检测完成：互联网已连通", "info");
+        return serde_json::json!({
+            "status": "online",
+            "notification": "后台检测正常，互联网已连接",
+            "logs": logs,
+        });
+    }
+
+    let detected = detect_login_type_rust(compatibility).await;
+    let profile = matching_network_profile(&config, &ssid, &bssid, &detected);
+    let login_type = profile.as_ref()
+        .and_then(|item| login_type_from_profile(&item.login_type))
+        .unwrap_or(detected);
+    if login_type == LoginType::Unknown {
+        headless_log(&mut logs, "网络", "无界面检测未找到可访问的校园网认证网关", "info");
+        return serde_json::json!({
+            "status": "offline",
+            "notification": "网络离线或不在校园网环境",
+            "logs": logs,
+        });
+    }
+
+    if !profile_auto_login_enabled(profile.as_ref(), &login_type, config.auto_login) {
+        headless_log(&mut logs, "网络", "已检测到校园网认证网关，但当前协议的自动登录已停用", "info");
+        return serde_json::json!({
+            "status": "campus",
+            "notification": "校园网需要认证，自动登录已停用",
+            "logs": logs,
+        });
+    }
+    if let Err(reason) = automatic_login_network_allowed(
+        &login_type,
+        &ssid,
+        &bssid,
+        &ip,
+        &transport,
+        &config.whitelist,
+        &config.blacklist,
+    ) {
+        headless_log(&mut logs, "安全", format!("无界面自动登录已阻止：{reason}"), "error");
+        return serde_json::json!({
+            "status": "blocked",
+            "notification": "校园网登录被安全策略阻止",
+            "logs": logs,
+        });
+    }
+
+    let accounts = accounts_for_profile(config.accounts.clone(), profile.as_ref());
+    if accounts.is_empty() {
+        headless_log(&mut logs, "网络", "没有可供无界面自动登录使用的已保存账号", "error");
+        return serde_json::json!({
+            "status": "campus",
+            "notification": "校园网需要认证，但没有可用账号",
+            "logs": logs,
+        });
+    }
+
+    let mut last_message = "所有账号均登录失败".to_string();
+    for account in accounts {
+        headless_log(
+            &mut logs,
+            "网络",
+            format!("无界面核心尝试使用账号 {} 自动登录", account.user),
+            "info",
+        );
+        match login_to_campus_network_rust(
+            login_type.clone(),
+            &account.user,
+            &account.pass,
+            compatibility,
+        ).await {
+            Ok((true, message)) => {
+                headless_log(
+                    &mut logs,
+                    "网络",
+                    format!("无界面自动登录成功：账号 {}，{message}", account.user),
+                    "success",
+                );
+                return serde_json::json!({
+                    "status": "login_success",
+                    "notification": format!("校园网自动登录成功：{}", account.user),
+                    "logs": logs,
+                });
+            }
+            Ok((false, message)) => {
+                last_message = message.clone();
+                headless_log(
+                    &mut logs,
+                    "网络",
+                    format!("无界面自动登录失败：账号 {}，{message}", account.user),
+                    "error",
+                );
+            }
+            Err(error) => {
+                last_message = error.clone();
+                headless_log(
+                    &mut logs,
+                    "网络",
+                    format!("无界面登录请求失败：账号 {}，{error}", account.user),
+                    "error",
+                );
             }
         }
-        _ => Err("未设定的登录类型".to_string()),
     }
+    serde_json::json!({
+        "status": "login_failed",
+        "notification": format!("校园网自动登录失败：{last_message}"),
+        "logs": logs,
+    })
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_cn_edu_bjut_al_NativeKeepAlive_runHeadlessCheck(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    config_json: jni::objects::JString,
+    network_info_json: jni::objects::JString,
+    reason: jni::objects::JString,
+) -> jni::sys::jstring {
+    let result = (|| -> Result<String, String> {
+        let config_json: String = env.get_string(&config_json).map_err(|error| error.to_string())?.into();
+        let network_info_json: String = env.get_string(&network_info_json).map_err(|error| error.to_string())?.into();
+        let reason: String = env.get_string(&reason).map_err(|error| error.to_string())?.into();
+        let config: AppConfig = serde_json::from_str(&config_json)
+            .map_err(|error| format!("解析安全配置失败：{error}"))?;
+        let network: serde_json::Value = serde_json::from_str(&network_info_json)
+            .map_err(|error| format!("解析网络信息失败：{error}"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("创建无界面运行时失败：{error}"))?;
+        let payload = runtime.block_on(run_headless_network_check(config, network, &reason));
+        serde_json::to_string(&payload).map_err(|error| error.to_string())
+    })().unwrap_or_else(|error| {
+        serde_json::json!({
+            "status": "error",
+            "notification": "后台检测核心启动失败",
+            "logs": [{
+                "module": "Android后台",
+                "message": error,
+                "type": "error"
+            }]
+        }).to_string()
+    });
+    env.new_string(result)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
 }
 
 fn redact_request_error(error: reqwest::Error) -> String {
@@ -1714,7 +2161,9 @@ fn write_public_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(),
 
 const LOG_SESSION_MARKER: &str = "=== SESSION START ===";
 const MAX_LOG_SESSIONS: usize = 5;
-const MAX_LOG_ENTRIES: usize = 2000;
+const MAX_LOG_ENTRIES: usize = 5000;
+#[cfg(target_os = "android")]
+const ANDROID_KEEPALIVE_JOURNAL: &str = "keepalive-journal.log";
 
 fn parse_log_line(line: &str) -> Option<LogEntry> {
     let idx1 = line.find(']')?;
@@ -1737,7 +2186,48 @@ fn parse_log_line(line: &str) -> Option<LogEntry> {
 
 fn initialize_log_history(app: &tauri::AppHandle, state: &AppState) {
     let path = get_log_path(app);
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    #[allow(unused_mut)]
+    let mut existing = std::fs::read_to_string(&path).unwrap_or_default();
+    #[cfg(target_os = "android")]
+    let mut imported_journals = Vec::new();
+    #[cfg(target_os = "android")]
+    if let Some(parent) = path.parent() {
+        let journal_path = parent.join(ANDROID_KEEPALIVE_JOURNAL);
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let importing_path = parent.join(format!("keepalive-journal.importing-{suffix}.log"));
+        if std::fs::rename(&journal_path, &importing_path).is_ok() {
+            imported_journals.push(importing_path);
+        }
+        // Also recover an import left behind if the previous startup stopped
+        // between the atomic rename and the final app.log write.
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                if file_name.starts_with("keepalive-journal.importing")
+                    && file_name.ends_with(".log")
+                    && !imported_journals.contains(&entry.path())
+                {
+                    imported_journals.push(entry.path());
+                }
+            }
+        }
+        imported_journals.sort();
+        imported_journals.retain(|importing_path| {
+            if let Ok(journal) = std::fs::read_to_string(importing_path) {
+                if !existing.is_empty() && !existing.ends_with('\n') {
+                    existing.push('\n');
+                }
+                existing.push_str(&journal);
+                true
+            } else {
+                false
+            }
+        });
+    }
     let existing_lines: Vec<&str> = existing.lines().collect();
     let session_starts: Vec<usize> = existing_lines.iter().enumerate()
         .filter_map(|(index, line)| line.contains(LOG_SESSION_MARKER).then_some(index))
@@ -1750,15 +2240,24 @@ fn initialize_log_history(app: &tauri::AppHandle, state: &AppState) {
     let mut lines: Vec<String> = existing_lines[keep_from..].iter().map(|line| (*line).to_string()).collect();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     lines.push(format!("[{}] [info] [系统] {} {}", now, LOG_SESSION_MARKER, now));
-    if lines.len() > MAX_LOG_ENTRIES {
-        lines.drain(..lines.len() - MAX_LOG_ENTRIES);
-    }
     let serialized = format!("{}\n", lines.join("\n"));
-    let _ = std::fs::write(path, serialized);
+    let history_written = std::fs::write(path, serialized).is_ok();
+    #[cfg(target_os = "android")]
+    if history_written {
+        for importing_path in imported_journals {
+            let _ = std::fs::remove_file(importing_path);
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = history_written;
 
     let mut memory = state.logs.lock().unwrap();
     memory.clear();
     memory.extend(lines.iter().filter_map(|line| parse_log_line(line)));
+    if memory.len() > MAX_LOG_ENTRIES {
+        let remove_count = memory.len() - MAX_LOG_ENTRIES;
+        memory.drain(..remove_count);
+    }
 }
 
 fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &str, log_type: &str) {
@@ -1961,9 +2460,13 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
     tauri::async_runtime::spawn(async move {
         let is_bg = app_is_in_background(&app, &state);
         state.is_in_background.store(is_bg, Ordering::SeqCst);
-        let (interval_fg, interval_bg) = {
+        let (interval_fg, interval_bg, compatibility) = {
             let cfg = state.config.read().unwrap();
-            (cfg.check_interval, cfg.check_interval_bg)
+            (
+                cfg.check_interval,
+                cfg.check_interval_bg,
+                VpnCompatibility::from_config(&cfg.vpn_compatibility),
+            )
         };
         let _ = app.emit("countdown-tick", serde_json::json!({"status": "checking"}));
         rust_log(&app, &state, "网络", &format!("[DEBUG] 开始检测网络连通性 (模式: {})", if is_bg { "后台" } else { "前台" }), "debug");
@@ -2115,7 +2618,14 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             return;
         }
 
-        let detected_login_type = detect_login_type_rust().await;
+        rust_log(
+            &app,
+            &state,
+            "网络",
+            &format!("[DEBUG] 使用 VPN 共存兼容等级 {} 探测校园网网关", compatibility.as_str()),
+            "debug",
+        );
+        let detected_login_type = detect_login_type_rust(compatibility).await;
         let profile = {
             let cfg = state.config.read().unwrap();
             matching_network_profile(&cfg, &current_ssid, &current_bssid, &detected_login_type)
@@ -2168,6 +2678,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                         &current_ssid,
                         &current_bssid,
                         &current_ip,
+                        &transport,
                         &whitelist,
                         &blacklist,
                     ) {
@@ -2207,7 +2718,12 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             let mut success = false;
                             for acc in active_accounts {
                                 rust_log(&app, &state, "网络", &format!("尝试使用账号 {} 自动登录...", acc.user), "info");
-                                match login_to_campus_network_rust(login_type.clone(), &acc.user, &acc.pass).await {
+                                match login_to_campus_network_rust(
+                                    login_type.clone(),
+                                    &acc.user,
+                                    &acc.pass,
+                                    compatibility,
+                                ).await {
                                     Ok((true, msg)) => {
                                         record_account_success(&app, &state, &acc.user);
                                         rust_log(&app, &state, "网络", &format!("登录成功: {}", msg), "success");
@@ -2383,6 +2899,12 @@ fn make_diagnostic_step(
 async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     use std::net::ToSocketAddrs;
 
+    let compatibility = app.try_state::<Arc<AppState>>()
+        .map(|state| {
+            let config = state.config.read().unwrap();
+            VpnCompatibility::from_config(&config.vpn_compatibility)
+        })
+        .unwrap_or(VpnCompatibility::High);
     let mut steps = Vec::new();
     let identity_started = std::time::Instant::now();
     let network = get_network_info(app, Some(true));
@@ -2475,7 +2997,11 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     ));
 
     let portal_started = std::time::Instant::now();
-    let login_type = if online || mobile_data { LoginType::Unknown } else { detect_login_type_rust().await };
+    let login_type = if online || mobile_data {
+        LoginType::Unknown
+    } else {
+        detect_login_type_rust(compatibility).await
+    };
     let (portal_status, portal_message) = if mobile_data {
         ("skipped", "当前使用移动数据，已跳过校园网认证网关探测".to_string())
     } else if online {
@@ -2603,10 +3129,51 @@ fn get_log_text(app: tauri::AppHandle) -> String {
 }
 
 #[tauri::command]
+fn export_logs(app: tauri::AppHandle) -> Result<String, String> {
+    let source = get_log_path(&app);
+    let metadata = std::fs::metadata(&source).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "当前没有可导出的日志".to_string()
+        } else {
+            format!("读取日志失败：{error}")
+        }
+    })?;
+    if metadata.len() == 0 {
+        return Err("当前没有可导出的日志".to_string());
+    }
+    let directory = app.path().download_dir()
+        .or_else(|_| app.path().document_dir())
+        .map_err(|error| format!("无法定位导出目录：{error}"))?;
+    std::fs::create_dir_all(&directory).map_err(|error| format!("无法创建导出目录：{error}"))?;
+    let filename = format!(
+        "BJUT-AL-logs-{}.log",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    );
+    let destination = directory.join(filename);
+    std::fs::copy(&source, &destination).map_err(|error| format!("导出日志失败：{error}"))?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn clear_all_logs(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) {
     state.logs.lock().unwrap().clear();
     let p = get_log_path(&app);
     let _ = std::fs::remove_file(p);
+    #[cfg(target_os = "android")]
+    if let Some(parent) = get_log_path(&app).parent() {
+        let _ = std::fs::remove_file(parent.join(ANDROID_KEEPALIVE_JOURNAL));
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                if file_name.starts_with("keepalive-journal.importing")
+                    && file_name.ends_with(".log")
+                {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -2660,10 +3227,14 @@ async fn manual_login(
             message: "当前使用移动数据，未连接 Wi-Fi；已停止校园网网关探测".to_string(),
         });
     }
-    let detected_type = detect_login_type_rust().await;
+    let compatibility = {
+        let config = state.config.read().unwrap();
+        VpnCompatibility::from_config(&config.vpn_compatibility)
+    };
+    let detected_type = detect_login_type_rust(compatibility).await;
     let login_type = match login_type_override.as_deref() {
-        Some("bjut-wifi") => LoginType::Type1,
-        Some("bjut_sushe") => LoginType::Type2,
+        Some("bjut_sushe") | Some("bjut-sushe") => LoginType::Type1,
+        Some("bjut-wifi") | Some("bjut_wifi") => LoginType::Type2,
         Some("wired") => LoginType::Type3,
         _ => detected_type,
     };
@@ -2696,7 +3267,12 @@ async fn manual_login(
             continue;
         }
         rust_log(&app, &state, "登录", &format!("尝试使用账号 {} 登录...", account.user), "info");
-        match login_to_campus_network_rust(login_type.clone(), &account.user, &account.pass).await {
+        match login_to_campus_network_rust(
+            login_type.clone(),
+            &account.user,
+            &account.pass,
+            compatibility,
+        ).await {
             Ok((true, message)) => {
                 record_account_success(&app, &state, &account.user);
                 rust_log(&app, &state, "登录", &format!("登录成功: {message}"), "success");
@@ -2915,11 +3491,13 @@ fn refresh_tray_menu(app: &tauri::AppHandle, state: &AppState) {
 #[cfg(desktop)]
 async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
     let network = get_network_info(app.clone(), Some(true));
+    let transport = network_transport(&network).to_string();
     let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
     let bssid = network.get("bssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
     let ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
-    let detected = detect_login_type_rust().await;
     let config = state.config.read().unwrap().clone();
+    let compatibility = VpnCompatibility::from_config(&config.vpn_compatibility);
+    let detected = detect_login_type_rust(compatibility).await;
     let profile = matching_network_profile(&config, &ssid, &bssid, &detected);
     let login_type = profile.as_ref()
         .and_then(|item| login_type_from_profile(&item.login_type))
@@ -2933,6 +3511,7 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         &ssid,
         &bssid,
         &ip,
+        &transport,
         &config.whitelist,
         &config.blacklist,
     ) {
@@ -2952,7 +3531,12 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         return;
     }
     rust_log(&app, &state, "托盘", &format!("使用首选账号 {} 执行快捷登录", account.user), "info");
-    match login_to_campus_network_rust(login_type, &account.user, &account.pass).await {
+    match login_to_campus_network_rust(
+        login_type,
+        &account.user,
+        &account.pass,
+        compatibility,
+    ).await {
         Ok((true, message)) => {
             record_account_success(&app, &state, &account.user);
             rust_log(&app, &state, "托盘", &format!("快捷登录成功：{message}"), "success");
@@ -2983,6 +3567,7 @@ pub fn run() {
                     check_interval_bg: 60,
                     wifi_change_detect: true,
                     log_level: "info".to_string(),
+                    vpn_compatibility: default_vpn_compatibility(),
                     whitelist: Vec::new(),
                     blacklist: Vec::new(),
                     network_profiles: Vec::new(),
@@ -3068,7 +3653,7 @@ pub fn run() {
                                 }
                                 (changed, current_ip, last_ip)
                             };
-                            rust_log(&loop_handle, &loop_state, "网络", &format!("[DEBUG] 执行网络接口变更检测。当前 IP: {} (上次 IP: {})", current_ip, last_ip.as_ref().map(|s| s.as_str()).unwrap_or("空")), "debug");
+                            rust_log(&loop_handle, &loop_state, "网络", &format!("[DEBUG] 执行网络接口变更检测。当前 IP: {} (上次 IP: {})", current_ip, last_ip.as_deref().unwrap_or("空")), "debug");
                             if ip_changed {
                                 rust_log(&loop_handle, &loop_state, "网络", &format!("检测到局域网 IP 发生变更: {} -> {}，重新检测网络环境...", last_ip.unwrap_or_default(), current_ip), "info");
                                 loop_state.is_suspended.store(false, Ordering::SeqCst);
@@ -3288,6 +3873,7 @@ pub fn run() {
             create_diagnostic_bundle,
             get_logs,
             get_log_text,
+            export_logs,
             clear_all_logs,
             get_countdown_status,
             trigger_manual_check,
@@ -3381,6 +3967,7 @@ mod tests {
             check_interval_bg: 60,
             wifi_change_detect: true,
             log_level: "info".to_string(),
+            vpn_compatibility: default_vpn_compatibility(),
             whitelist: vec![],
             blacklist: vec![],
             network_profiles: vec![],
@@ -3501,6 +4088,7 @@ mod tests {
             "bjut_wifi",
             "11:22",
             "10.21.2.3",
+            "wifi",
             &[],
             &[],
         ).is_ok());
@@ -3509,6 +4097,7 @@ mod tests {
             "evil-ap",
             "11:22",
             "10.21.2.3",
+            "wifi",
             &[],
             &[],
         ).is_err());
@@ -3517,6 +4106,7 @@ mod tests {
             "custom-campus",
             "aa:bb",
             "10.21.2.3",
+            "wifi",
             &whitelist,
             &[],
         ).is_ok());
@@ -3525,6 +4115,7 @@ mod tests {
             "",
             "",
             "192.168.1.5",
+            "ethernet",
             &[],
             &[],
         ).is_err());
@@ -3568,9 +4159,9 @@ mod tests {
                 "account_order":["second"],"enabled":true
             }]
         }"#).unwrap();
-        let profile = matching_network_profile(&config, "BJUT_SUSHE", "", &LoginType::Type2)
+        let profile = matching_network_profile(&config, "BJUT_SUSHE", "", &LoginType::Type1)
             .expect("profile should match case-insensitively");
-        assert_eq!(login_type_from_profile(&profile.login_type), Some(LoginType::Type2));
+        assert_eq!(login_type_from_profile(&profile.login_type), Some(LoginType::Type1));
         let ordered = accounts_for_profile(config.accounts, Some(&profile));
         assert_eq!(ordered.len(), 1);
         assert_eq!(ordered[0].user, "second");
@@ -3590,6 +4181,66 @@ mod tests {
         assert!(!profile_auto_login_enabled(Some(profile), &LoginType::Type2, true));
         assert!(profile_auto_login_enabled(Some(profile), &LoginType::Type3, false));
         assert!(!profile_auto_login_enabled(Some(profile), &LoginType::Unknown, true));
+    }
+
+    #[test]
+    fn campus_profile_names_map_to_the_documented_gateways() {
+        assert_eq!(login_type_from_profile("bjut-sushe"), Some(LoginType::Type1));
+        assert_eq!(login_type_from_profile("bjut_sushe"), Some(LoginType::Type1));
+        assert_eq!(login_type_from_profile("bjut-wifi"), Some(LoginType::Type2));
+        assert_eq!(login_type_from_profile("bjut_wifi"), Some(LoginType::Type2));
+        assert_eq!(login_type_from_profile("wired"), Some(LoginType::Type3));
+    }
+
+    #[test]
+    fn vpn_compatibility_selects_secure_or_direct_probe_endpoints() {
+        assert_eq!(
+            portal_probe_urls(VpnCompatibility::Minimum, &LoginType::Type1),
+            vec!["https://10.21.221.98:802/eportal/portal/login"]
+        );
+        assert_eq!(
+            portal_probe_urls(VpnCompatibility::High, &LoginType::Type2),
+            vec!["https://wlgn.bjut.edu.cn/drcom/login"]
+        );
+        assert_eq!(
+            portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type2),
+            vec!["http://10.21.251.3/drcom/login"]
+        );
+        assert_eq!(
+            portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3),
+            vec!["http://172.30.201.2", "http://172.30.201.10"]
+        );
+    }
+
+    #[test]
+    fn lgn_protocol_is_wired_only_unless_explicitly_trusted() {
+        assert!(automatic_login_network_allowed(
+            &LoginType::Type3,
+            "bjut_wifi",
+            "11:22",
+            "10.21.2.3",
+            "wifi",
+            &[],
+            &[],
+        ).is_err());
+        assert!(automatic_login_network_allowed(
+            &LoginType::Type3,
+            "",
+            "",
+            "10.21.2.3",
+            "ethernet",
+            &[],
+            &[],
+        ).is_ok());
+        assert!(automatic_login_network_allowed(
+            &LoginType::Type3,
+            "",
+            "",
+            "10.21.2.3",
+            "wifi",
+            &[],
+            &[],
+        ).is_err());
     }
 
     #[test]

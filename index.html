@@ -323,7 +323,7 @@
             <h1 style="margin: 0;">运行日志</h1>
             <div class="logs-actions">
               <button id="btn-diagnostic-bundle" class="btn btn-secondary btn-sm"><i data-lucide="shield-check"></i> 复制诊断包</button>
-              <button id="btn-copy-logs" class="btn btn-secondary btn-sm"><i data-lucide="copy"></i> 复制日志</button>
+              <button id="btn-export-logs" class="btn btn-secondary btn-sm"><i data-lucide="download"></i> 导出日志</button>
               <button id="btn-scroll-logs" class="btn btn-secondary btn-sm"><i data-lucide="arrow-down-to-line"></i> 滚动到底部</button>
               <button id="btn-clear-logs" class="btn btn-sm btn-log-danger">清空日志</button>
             </div>
@@ -417,6 +417,24 @@
               <h3>网络与安全</h3>
               <div class="setting-item">
                 <div class="setting-info">
+                  <h4>VPN 共存兼容等级</h4>
+                  <p>推荐“高兼容”：保留 HTTPS 校验，并将校园网域名固定到已知网关地址</p>
+                </div>
+                <div class="custom-select" id="setting-vpn-compatibility" aria-label="VPN 共存兼容等级">
+                  <div class="custom-select-trigger" tabindex="0">
+                    <span>高兼容（HTTPS + 固定地址）</span>
+                    <i data-lucide="chevron-down"></i>
+                  </div>
+                  <div class="custom-select-options">
+                    <div class="custom-option" data-value="minimum">最低兼容（HTTPS + 系统 DNS）</div>
+                    <div class="custom-option" data-value="low">较低兼容（HTTPS + 校园网 DNS）</div>
+                    <div class="custom-option selected" data-value="high">高兼容（HTTPS + 固定地址）</div>
+                    <div class="custom-option" data-value="maximum">最高兼容（HTTP + IP，账密明文传输）</div>
+                  </div>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
                   <h4>受信任的 WiFi (白名单)</h4>
                   <p>在此列表中的网络将跳过安全提示</p>
                 </div>
@@ -503,7 +521,7 @@
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>当前版本</h4>
-                  <p id="app-version">v0.1.3-beta.1</p>
+                  <p id="app-version">v0.1.4</p>
                 </div>
                 <button class="btn btn-secondary btn-sm" id="btn-check-update">检查更新</button>
               </div>
@@ -611,8 +629,8 @@
           </div>
           <fieldset class="profile-auto-login-types">
             <legend>按认证类型启用自动登录</legend>
-            <label class="profile-checkbox"><input id="network-profile-auto-type1" type="checkbox" checked> 教学区无线</label>
-            <label class="profile-checkbox"><input id="network-profile-auto-type2" type="checkbox" checked> 宿舍无线</label>
+            <label class="profile-checkbox"><input id="network-profile-auto-type1" type="checkbox" checked> 宿舍无线</label>
+            <label class="profile-checkbox"><input id="network-profile-auto-type2" type="checkbox" checked> 教学区无线</label>
             <label class="profile-checkbox"><input id="network-profile-auto-type3" type="checkbox" checked> 校园有线</label>
           </fieldset>
           <div class="modal-actions">

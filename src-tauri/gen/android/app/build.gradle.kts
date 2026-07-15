@@ -37,6 +37,9 @@ android {
             }
         }
         getByName("release") {
+            // The opt-in "maximum VPN compatibility" mode talks to the documented
+            // campus gateway IPs over HTTP. All such URLs are still hard-coded in Rust.
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

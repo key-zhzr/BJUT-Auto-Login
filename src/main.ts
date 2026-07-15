@@ -544,6 +544,7 @@ function syncConfigToRust(): Promise<void> {
     check_interval_bg: parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10),
     wifi_change_detect: localStorage.getItem('bjut_wifi_change_detect') !== 'false',
     log_level: localStorage.getItem('bjut_log_level') || 'info',
+    vpn_compatibility: localStorage.getItem('bjut_vpn_compatibility') || 'high',
     whitelist: JSON.parse(localStorage.getItem('bjut_whitelist') || '[]'),
     blacklist: JSON.parse(localStorage.getItem('bjut_blacklist') || '[]'),
     network_profiles: networkProfilesCache.map(profile => ({ ...profile, account_order: [...profile.account_order] })),
@@ -602,6 +603,7 @@ async function loadConfigFromRust() {
     localStorage.setItem('bjut_check_interval_bg', config.check_interval_bg.toString());
     localStorage.setItem('bjut_wifi_change_detect', config.wifi_change_detect.toString());
     localStorage.setItem('bjut_log_level', config.log_level);
+    localStorage.setItem('bjut_vpn_compatibility', config.vpn_compatibility || 'high');
     localStorage.setItem('bjut_whitelist', JSON.stringify(config.whitelist || []));
     localStorage.setItem('bjut_blacklist', JSON.stringify(config.blacklist || []));
     networkProfilesCache = (config.network_profiles || []).map((profile: NetworkProfile) => ({ ...profile }));
@@ -617,6 +619,7 @@ async function loadConfigFromRust() {
     settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
     settingCheckInterval.value = checkInterval.toString();
     settingLogLevel.value = config.log_level;
+    settingVpnCompatibility.value = config.vpn_compatibility || 'high';
     settingUsageAlerts.checked = config.usage_alerts !== false;
     settingBalanceThreshold.value = String(config.balance_alert_threshold ?? 10);
     settingFlowThreshold.value = String(config.flow_alert_threshold ?? 5);
@@ -1180,7 +1183,7 @@ const accountsList = document.getElementById('accounts-list')!;
 const addAccountForm = document.getElementById('add-account-form') as HTMLFormElement;
 const logsContent = document.getElementById('logs-content')!;
 const btnClearLogs = document.getElementById('btn-clear-logs')!;
-const btnCopyLogs = document.getElementById('btn-copy-logs')!;
+const btnExportLogs = document.getElementById('btn-export-logs')!;
 const btnScrollLogs = document.getElementById('btn-scroll-logs')!;
 const btnRunDiagnostics = document.getElementById('btn-run-diagnostics') as HTMLButtonElement;
 const btnCopyDiagnostics = document.getElementById('btn-copy-diagnostics') as HTMLButtonElement;
@@ -1207,6 +1210,7 @@ let settingLogLevel: CustomSelect;
 let overrideAccountSelect: CustomSelect;
 let overrideMethodSelect: CustomSelect;
 let settingUpdateChannel: CustomSelect;
+let settingVpnCompatibility: CustomSelect;
 let logSessionFilter: CustomSelect;
 let logLevelFilter: CustomSelect;
 let networkProfileProtocolSelect: CustomSelect;
@@ -1255,6 +1259,7 @@ async function init() {
   overrideMethodSelect = new CustomSelect('override-method');
   settingUpdateChannel = new CustomSelect('setting-update-channel');
   settingLogLevel = new CustomSelect('setting-log-level');
+  settingVpnCompatibility = new CustomSelect('setting-vpn-compatibility');
   logSessionFilter = new CustomSelect('log-session-filter');
   logLevelFilter = new CustomSelect('log-level-filter');
   networkProfileProtocolSelect = new CustomSelect('network-profile-protocol');
@@ -1282,6 +1287,7 @@ async function init() {
 
   // Initialize selectors values
   settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
+  settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
   settingUpdateChannel.value = localStorage.getItem('bjut_update_channel') || 'release';
   if ((window as any).__TAURI__) {
     void invoke<UpdateTarget>('get_update_target')
@@ -1332,6 +1338,9 @@ async function init() {
         // terms cannot overwrite an existing account set with the empty WebView cache.
         await loadConfigFromRust();
         await listenToRustEvents();
+        if ((window as any).AndroidBridge && autoLoginEnabled) {
+          (window as any).AndroidBridge.startKeepAliveService();
+        }
         log('系统', '应用启动');
       } else {
         startWifiChangeCheckLoop();
@@ -1354,15 +1363,7 @@ async function init() {
   } else {
     // Already accepted
     if ((window as any).__TAURI__) {
-      if (isAndroid && (window as any).AndroidBridge) {
-        if (autoLoginEnabled) {
-          try {
-            (window as any).AndroidBridge.startKeepAliveService();
-          } catch (e) {
-            console.error('Failed to start keep-alive service:', e);
-          }
-        }
-      } else if (isAndroid) {
+      if (isAndroid && !(window as any).AndroidBridge) {
         invoke('request_foreground_permissions').catch(e => {
           console.error('Failed to request foreground permissions:', e);
         });
@@ -1371,8 +1372,13 @@ async function init() {
         await loadConfigFromRust();
         await listenToRustEvents();
         log('系统', '应用启动');
-        if ((window as any).AndroidBridge && autoLoginEnabled) {
-          log('系统', '后台保活服务已启动');
+        if ((window as any).AndroidBridge) {
+          if (autoLoginEnabled) {
+            (window as any).AndroidBridge.startKeepAliveService();
+            log('系统', '后台保活服务已启动');
+          } else {
+            (window as any).AndroidBridge.stopKeepAliveService();
+          }
         }
       } catch (error) {
         console.error('Failed to initialize persisted configuration:', error);
@@ -1608,8 +1614,8 @@ function renderNetworkProfiles() {
     const typePolicy = profile.auto_login_types || {};
     const legacyAutoLogin = profile.auto_login !== false;
     const enabledTypes = [
-      (typePolicy.type1 ?? legacyAutoLogin) ? '教学' : '',
-      (typePolicy.type2 ?? legacyAutoLogin) ? '宿舍' : '',
+      (typePolicy.type1 ?? legacyAutoLogin) ? '宿舍' : '',
+      (typePolicy.type2 ?? legacyAutoLogin) ? '教学' : '',
       (typePolicy.type3 ?? legacyAutoLogin) ? '有线' : '',
     ].filter(Boolean).join('/');
     details.textContent = `${network} · ${profile.login_type === 'auto' ? '自动协议' : profile.login_type} · 自动登录 ${enabledTypes || '全关'} · ${account}`;
@@ -1920,6 +1926,17 @@ function setupEventListeners() {
   });
 
   settingUsageAlerts.addEventListener('change', () => saveSetting('bjut_usage_alerts', String(settingUsageAlerts.checked)));
+  settingVpnCompatibility.addEventListener('change', () => {
+    const value = settingVpnCompatibility.value || 'high';
+    saveSetting('bjut_vpn_compatibility', value);
+    const labels: Record<string, string> = {
+      minimum: '最低兼容（HTTPS + 系统 DNS）',
+      low: '较低兼容（HTTPS + 校园网 DNS）',
+      high: '高兼容（HTTPS + 固定地址）',
+      maximum: '最高兼容（HTTP + IP，账密明文传输）',
+    };
+    log('设置', `VPN 共存兼容等级已切换为${labels[value] || labels.high}`);
+  });
   settingBalanceThreshold.addEventListener('change', () => {
     const value = Math.max(0, parseFloat(settingBalanceThreshold.value) || 0);
     settingBalanceThreshold.value = String(value);
@@ -2000,19 +2017,33 @@ function setupEventListeners() {
     }
   });
 
-  btnCopyLogs.addEventListener('click', async () => {
+  btnExportLogs.addEventListener('click', async () => {
     try {
-      const text = (window as any).__TAURI__
-        ? await invoke<string>('get_log_text')
-        : logsContent.textContent || '';
-      if (!text.trim()) {
-        await customAlert('当前没有可复制的日志。');
+      const androidBridge = (window as any).AndroidBridge;
+      if ((window as any).__TAURI__ && androidBridge?.exportLogs) {
+        const launched = Boolean(androidBridge.exportLogs());
+        if (!launched) await customAlert('当前没有可导出的日志，或系统分享窗口启动失败。');
         return;
       }
-      await writeTextToClipboard(text);
-      await customAlert('最近几次启动的日志已复制到剪贴板。');
+      if ((window as any).__TAURI__) {
+        const destination = await invoke<string>('export_logs');
+        await customAlert(`完整日志已导出到：\n${destination}`);
+        return;
+      }
+      const text = logsContent.textContent || '';
+      if (!text.trim()) {
+        await customAlert('当前没有可导出的日志。');
+        return;
+      }
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `BJUT-AL-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+      anchor.click();
+      URL.revokeObjectURL(url);
     } catch (error) {
-      await customAlert(`复制日志失败：${String(error)}`);
+      await customAlert(`导出日志失败：${String(error)}`);
     }
   });
 
@@ -2362,6 +2393,7 @@ function setupEventListeners() {
           usageAlerts: localStorage.getItem('bjut_usage_alerts'),
           balanceAlertThreshold: localStorage.getItem('bjut_balance_alert_threshold'),
           flowAlertThreshold: localStorage.getItem('bjut_flow_alert_threshold'),
+          vpnCompatibility: localStorage.getItem('bjut_vpn_compatibility'),
         };
         const encrypted = await encryptExport(config, passphrase);
         await writeTextToClipboard(encrypted);
@@ -2401,6 +2433,7 @@ function setupEventListeners() {
         if (config.usageAlerts !== undefined && config.usageAlerts !== null) localStorage.setItem('bjut_usage_alerts', config.usageAlerts);
         if (config.balanceAlertThreshold !== undefined && config.balanceAlertThreshold !== null) localStorage.setItem('bjut_balance_alert_threshold', config.balanceAlertThreshold);
         if (config.flowAlertThreshold !== undefined && config.flowAlertThreshold !== null) localStorage.setItem('bjut_flow_alert_threshold', config.flowAlertThreshold);
+        if (config.vpnCompatibility !== undefined && config.vpnCompatibility !== null) localStorage.setItem('bjut_vpn_compatibility', config.vpnCompatibility);
         
         syncConfigToRust().then(() => {
           customAlert('导入成功，请刷新以应用更改！');
