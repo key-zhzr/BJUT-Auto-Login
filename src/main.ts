@@ -924,6 +924,15 @@ async function listenToRustEvents() {
       updateUpdateProgress(event.payload);
     });
 
+    listen<{ message: string }>('billing-center-progress', event => {
+      if (!billingCenterLoading) return;
+      const message = event.payload?.message?.trim();
+      if (!message) return;
+      btnRefreshBillingCenter.textContent = `${message}…`;
+      billingCenterMessage.textContent = message;
+      billingCenterMessage.hidden = false;
+    });
+
     listen<AccountHealth[]>('account-health-change', event => {
       setAccountHealth(event.payload);
     });
@@ -1535,6 +1544,7 @@ let billingQuestionSelects: CustomSelect[] = [];
 let billingCenterData: BillingCenterData | null = null;
 let billingRecordQueryStates: Partial<Record<BillingRecordKind, BillingRecordQueryState>> = {};
 let billingRecordQueryBusy = false;
+let billingCenterLoading = false;
 let selectedBillingPackageId = '';
 
 // Add Modal
@@ -4155,11 +4165,14 @@ function renderBillingCenterData(data: BillingCenterData) {
 }
 
 async function refreshBillingCenterData() {
-  if (billingRecordQueryBusy) return;
+  if (billingRecordQueryBusy || billingCenterLoading) return;
+  billingCenterLoading = true;
   btnRefreshBillingCenter.disabled = true;
   const original = btnRefreshBillingCenter.innerHTML;
   setBillingRecordQueryBusy(true);
-  btnRefreshBillingCenter.textContent = '读取完整数据…';
+  btnRefreshBillingCenter.textContent = '正在连接计费系统…';
+  billingCenterMessage.textContent = '正在连接计费系统';
+  billingCenterMessage.hidden = false;
   try {
     const data = await invoke<BillingCenterData>('get_billing_center');
     renderBillingCenterData(data);
@@ -4170,6 +4183,7 @@ async function refreshBillingCenterData() {
     btnRefreshBillingCenter.disabled = false;
     btnRefreshBillingCenter.innerHTML = original;
     setBillingRecordQueryBusy(false);
+    billingCenterLoading = false;
     renderIcons(btnRefreshBillingCenter);
   }
 }

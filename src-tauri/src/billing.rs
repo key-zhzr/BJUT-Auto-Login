@@ -1,5 +1,10 @@
 use super::{query_campus_dns_ipv4, redact_request_error, VpnCompatibility};
 use chrono::Datelike;
+use futures_util::{
+    future::{join, join4},
+    stream::FuturesUnordered,
+    StreamExt,
+};
 use reqwest::header::{
     HeaderMap, ACCEPT, ACCEPT_LANGUAGE, COOKIE, LOCATION, ORIGIN, REFERER, SET_COOKIE,
 };
@@ -232,7 +237,7 @@ impl BillingError {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct SessionCookies {
     values: BTreeMap<String, String>,
 }
@@ -277,6 +282,10 @@ impl SessionCookies {
             )
         }
     }
+
+    fn merge(&mut self, other: Self) {
+        self.values.extend(other.values);
+    }
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -297,6 +306,7 @@ struct DashboardService {
     extend: Option<String>,
 }
 
+#[derive(Clone)]
 struct BillingSession {
     client: Client,
     cookies: SessionCookies,
@@ -390,13 +400,19 @@ pub(crate) async fn fetch(
     result
 }
 
-pub(crate) async fn fetch_center(
+pub(crate) async fn fetch_center<F>(
     account: &str,
     password: &str,
     compatibility: VpnCompatibility,
-) -> Result<BillingCenterData, BillingError> {
+    progress: F,
+) -> Result<BillingCenterData, BillingError>
+where
+    F: Fn(&str) + Send + Sync + 'static,
+{
+    progress("正在连接并登录计费系统");
     let mut session = authenticate(account, password, compatibility).await?;
     let result = async {
+        progress("登录成功，正在读取账户概览");
         let mut overview = parse_dashboard(&session.dashboard_html, account);
         populate_dashboard_details(&mut session, &mut overview).await;
         let end_date = chrono::Local::now().date_naive();
@@ -407,182 +423,199 @@ pub(crate) async fn fetch_center(
         let mut warnings = Vec::new();
 
         let common_page = [("pageSize", "10"), ("pageNumber", "1"), ("searchText", "")];
-        let (_, usage_records) = fetch_page_table_or_warning(
-            &mut session,
-            "/Self/bill/userOnlineLog",
-            "/Self/bill/getUserOnlineLog",
-            &[
-                common_page[0],
-                common_page[1],
-                common_page[2],
-                ("sortName", "loginTime"),
-                ("sortOrder", "DESC"),
-                ("startTime", &query_start_date),
-                ("endTime", &query_end_date),
-            ],
-            USAGE_RECORD_FIELDS,
-            "上网记录",
-            &mut warnings,
-        )
-        .await;
-        let (_, monthly_bills) = fetch_page_table_or_warning(
-            &mut session,
-            "/Self/bill/monthPay",
-            "/Self/bill/getMonthPay",
-            &[
-                common_page[0],
-                common_page[1],
-                common_page[2],
-                ("sortName", "0"),
-                ("sortOrder", "DESC"),
-                ("year", &query_year),
-            ],
-            &[
-                "startAt",
-                "endAt",
-                "package",
-                "baseFee",
-                "usageFee",
-                "durationMinutes",
-                "flowMb",
-                "billedAt",
-            ],
-            "历史账单",
-            &mut warnings,
-        )
-        .await;
-        let (_, payments) = fetch_page_table_or_warning(
-            &mut session,
-            "/Self/bill/payMent",
-            "/Self/bill/getPayMent",
-            &[
-                common_page[0],
-                common_page[1],
-                common_page[2],
-                ("sortName", "0"),
-                ("sortOrder", "DESC"),
-                ("startTime", &query_start_date),
-                ("endTime", &query_end_date),
-            ],
-            &["paidAt", "type", "amount", "terminal", "note"],
-            "充值明细",
-            &mut warnings,
-        )
-        .await;
-        let (_, operations) = fetch_page_table_or_warning(
-            &mut session,
-            "/Self/bill/operatorLog",
-            "/Self/bill/getOperatorLog",
-            &[
-                common_page[0],
-                common_page[1],
-                common_page[2],
-                ("sortName", "0"),
-                ("sortOrder", "DESC"),
-                ("startTime", &query_start_date),
-                ("endTime", &query_end_date),
-            ],
-            &["operatedAt", "description", "terminal", "unused", "note"],
-            "业务办理记录",
-            &mut warnings,
-        )
-        .await;
-        let (stop_html, stop_logs) = fetch_page_table_or_warning(
-            &mut session,
-            "/Self/service/goStop",
-            "/Self/service/getStopLog",
-            &common_page,
-            STOP_LOG_FIELDS,
-            "报停记录",
-            &mut warnings,
-        )
-        .await;
-        let (reopen_html, reopen_logs) = fetch_page_table_or_warning(
-            &mut session,
-            "/Self/service/goReopen",
-            "/Self/service/goReopenLog",
-            &common_page,
-            REOPEN_LOG_FIELDS,
-            "复通记录",
-            &mut warnings,
-        )
-        .await;
-        let (package_html, package_logs) = fetch_page_table_or_warning(
-            &mut session,
-            "/Self/service/package",
-            "/Self/service/packageLog",
-            &[
-                common_page[0],
-                common_page[1],
-                common_page[2],
-                ("sortName", "fldchangedate"),
-                ("sortOrder", "DESC"),
-            ],
-            PACKAGE_LOG_FIELDS,
-            "预约套餐记录",
-            &mut warnings,
-        )
-        .await;
-        let (_, devices) = fetch_page_table_or_warning(
-            &mut session,
-            "/Self/service/myMac",
-            "/Self/service/getMacList",
-            &[
-                ("pageSize", "100"),
-                ("pageNumber", "1"),
-                ("searchText", ""),
-                ("sortName", "2"),
-                ("sortOrder", "DESC"),
-            ],
-            &["online", "mac", "device", "lastLoginAt", "lastIp"],
-            "设备列表",
-            &mut warnings,
-        )
-        .await;
-        let (_, tariff_groups) = fetch_page_table_or_warning(
-            &mut session,
-            "/Self/service/userGroups",
-            "/Self/service/getUserGroups",
-            &[
-                ("pageSize", "100"),
-                ("pageNumber", "1"),
-                ("sortOrder", "asc"),
-            ],
-            TARIFF_GROUP_FIELDS,
-            "资费列表",
-            &mut warnings,
-        )
-        .await;
-        let protect_html = get_page_or_warning(
-            &mut session,
-            "/Self/service/consumeProtect",
-            "消费保护页面",
-            &mut warnings,
-        )
-        .await;
-        let password_html = get_page_or_warning(
-            &mut session,
-            "/Self/setting/changePassword",
-            "修改密码页面",
-            &mut warnings,
-        )
-        .await;
-        let questions_html = get_page_or_warning(
-            &mut session,
-            "/Self/setting/passwordQuestion",
-            "密码保护页面",
-            &mut warnings,
-        )
-        .await;
-        let recharge_html = get_page_or_warning(
-            &mut session,
-            "/Self/service/userRecharge",
-            "在线充值页面",
-            &mut warnings,
-        )
-        .await;
+        let usage_params = [
+            common_page[0],
+            common_page[1],
+            common_page[2],
+            ("sortName", "loginTime"),
+            ("sortOrder", "DESC"),
+            ("startTime", query_start_date.as_str()),
+            ("endTime", query_end_date.as_str()),
+        ];
+        let monthly_params = [
+            common_page[0],
+            common_page[1],
+            common_page[2],
+            ("sortName", "0"),
+            ("sortOrder", "DESC"),
+            ("year", query_year.as_str()),
+        ];
+        let payment_params = [
+            common_page[0],
+            common_page[1],
+            common_page[2],
+            ("sortName", "0"),
+            ("sortOrder", "DESC"),
+            ("startTime", query_start_date.as_str()),
+            ("endTime", query_end_date.as_str()),
+        ];
+        let operation_params = payment_params;
 
-        Ok(BillingCenterData {
+        progress("正在读取上网记录与账单");
+        let (usage_result, monthly_result, payment_result, operation_result) = join4(
+            fetch_page_table_isolated(
+                session.clone(),
+                "/Self/bill/userOnlineLog",
+                "/Self/bill/getUserOnlineLog",
+                &usage_params,
+                USAGE_RECORD_FIELDS,
+                "上网记录",
+            ),
+            fetch_page_table_isolated(
+                session.clone(),
+                "/Self/bill/monthPay",
+                "/Self/bill/getMonthPay",
+                &monthly_params,
+                &[
+                    "startAt",
+                    "endAt",
+                    "package",
+                    "baseFee",
+                    "usageFee",
+                    "durationMinutes",
+                    "flowMb",
+                    "billedAt",
+                ],
+                "历史账单",
+            ),
+            fetch_page_table_isolated(
+                session.clone(),
+                "/Self/bill/payMent",
+                "/Self/bill/getPayMent",
+                &payment_params,
+                &["paidAt", "type", "amount", "terminal", "note"],
+                "充值明细",
+            ),
+            fetch_page_table_isolated(
+                session.clone(),
+                "/Self/bill/operatorLog",
+                "/Self/bill/getOperatorLog",
+                &operation_params,
+                &["operatedAt", "description", "terminal", "unused", "note"],
+                "业务办理记录",
+            ),
+        )
+        .await;
+        let (_, usage_records, usage_warnings) = usage_result;
+        let (_, monthly_bills, monthly_warnings) = monthly_result;
+        let (_, payments, payment_warnings) = payment_result;
+        let (_, operations, operation_warnings) = operation_result;
+        warnings.extend(usage_warnings);
+        warnings.extend(monthly_warnings);
+        warnings.extend(payment_warnings);
+        warnings.extend(operation_warnings);
+
+        let package_params = [
+            common_page[0],
+            common_page[1],
+            common_page[2],
+            ("sortName", "fldchangedate"),
+            ("sortOrder", "DESC"),
+        ];
+        let device_params = [
+            ("pageSize", "100"),
+            ("pageNumber", "1"),
+            ("searchText", ""),
+            ("sortName", "2"),
+            ("sortOrder", "DESC"),
+        ];
+        let tariff_params = [
+            ("pageSize", "100"),
+            ("pageNumber", "1"),
+            ("sortOrder", "asc"),
+        ];
+
+        progress("正在读取账号服务与设备");
+        let (stop_result, reopen_result, package_result, (device_result, tariff_result)) = join4(
+            fetch_page_table_isolated(
+                session.clone(),
+                "/Self/service/goStop",
+                "/Self/service/getStopLog",
+                &common_page,
+                STOP_LOG_FIELDS,
+                "报停记录",
+            ),
+            fetch_page_table_isolated(
+                session.clone(),
+                "/Self/service/goReopen",
+                "/Self/service/goReopenLog",
+                &common_page,
+                REOPEN_LOG_FIELDS,
+                "复通记录",
+            ),
+            fetch_page_table_isolated(
+                session.clone(),
+                "/Self/service/package",
+                "/Self/service/packageLog",
+                &package_params,
+                PACKAGE_LOG_FIELDS,
+                "预约套餐记录",
+            ),
+            join(
+                fetch_page_table_isolated(
+                    session.clone(),
+                    "/Self/service/myMac",
+                    "/Self/service/getMacList",
+                    &device_params,
+                    &["online", "mac", "device", "lastLoginAt", "lastIp"],
+                    "设备列表",
+                ),
+                fetch_page_table_isolated(
+                    session.clone(),
+                    "/Self/service/userGroups",
+                    "/Self/service/getUserGroups",
+                    &tariff_params,
+                    TARIFF_GROUP_FIELDS,
+                    "资费列表",
+                ),
+            ),
+        )
+        .await;
+        let (stop_html, stop_logs, stop_warnings) = stop_result;
+        let (reopen_html, reopen_logs, reopen_warnings) = reopen_result;
+        let (package_html, package_logs, package_warnings) = package_result;
+        let (_, devices, device_warnings) = device_result;
+        let (_, tariff_groups, tariff_warnings) = tariff_result;
+        warnings.extend(stop_warnings);
+        warnings.extend(reopen_warnings);
+        warnings.extend(package_warnings);
+        warnings.extend(device_warnings);
+        warnings.extend(tariff_warnings);
+
+        progress("正在读取安全设置");
+        let (protect_result, password_result, questions_result, recharge_result) = join4(
+            get_page_isolated(
+                session.clone(),
+                "/Self/service/consumeProtect",
+                "消费保护页面",
+            ),
+            get_page_isolated(
+                session.clone(),
+                "/Self/setting/changePassword",
+                "修改密码页面",
+            ),
+            get_page_isolated(
+                session.clone(),
+                "/Self/setting/passwordQuestion",
+                "密码保护页面",
+            ),
+            get_page_isolated(
+                session.clone(),
+                "/Self/service/userRecharge",
+                "在线充值页面",
+            ),
+        )
+        .await;
+        let (protect_html, protect_warnings) = protect_result;
+        let (password_html, password_warnings) = password_result;
+        let (questions_html, question_warnings) = questions_result;
+        let (recharge_html, recharge_warnings) = recharge_result;
+        warnings.extend(protect_warnings);
+        warnings.extend(password_warnings);
+        warnings.extend(question_warnings);
+        warnings.extend(recharge_warnings);
+
+        let data = BillingCenterData {
             account: account.to_string(),
             overview,
             fetched_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -609,10 +642,14 @@ pub(crate) async fn fetch_center(
             security_questions: parse_security_questions(&questions_html),
             recharge_available: recharge_is_available(&recharge_html),
             warnings,
-        })
+        };
+        Ok(data)
     }
     .await;
     logout(&mut session).await;
+    if result.is_ok() {
+        progress("计费中心数据读取完成");
+    }
     result
 }
 
@@ -1453,20 +1490,7 @@ async fn authenticate(
     // The service enables its normal login path only after the browser has
     // loaded the page resources and requested randomCode. These requests are
     // session-local, read-only, and bounded to the same HTTPS origin.
-    for (asset_url, destination) in login_assets(&login_html, &login_effective_url) {
-        if let Ok((_, response)) = get_follow(
-            &client,
-            asset_url,
-            &mut cookies,
-            Some(&login_effective_url),
-            "*/*",
-            destination,
-        )
-        .await
-        {
-            let _ = response.bytes().await;
-        }
-    }
+    replay_login_assets(&client, &mut cookies, &login_html, &login_effective_url).await;
 
     let cache_buster = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1539,23 +1563,69 @@ async fn authenticate(
     })
 }
 
+async fn replay_login_assets(
+    client: &Client,
+    cookies: &mut SessionCookies,
+    login_html: &str,
+    login_url: &Url,
+) {
+    let base_cookies = cookies.clone();
+    let assets = login_assets(login_html, login_url);
+    for batch in assets.chunks(6) {
+        let mut pending = FuturesUnordered::new();
+        for (asset_url, destination) in batch.iter().cloned() {
+            let client = client.clone();
+            let mut request_cookies = base_cookies.clone();
+            let referer = login_url.clone();
+            pending.push(async move {
+                let request = async {
+                    let (_, response) = get_follow(
+                        &client,
+                        asset_url,
+                        &mut request_cookies,
+                        Some(&referer),
+                        "*/*",
+                        destination,
+                    )
+                    .await?;
+                    let _ = response.bytes().await.map_err(network_error)?;
+                    Ok::<SessionCookies, BillingError>(request_cookies)
+                };
+                tokio::time::timeout(Duration::from_secs(6), request)
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+            });
+        }
+
+        while let Some(request_cookies) = pending.next().await {
+            if let Some(request_cookies) = request_cookies {
+                cookies.merge(request_cookies);
+            }
+        }
+    }
+}
+
 async fn logout(session: &mut BillingSession) {
     // Logging out only ends this temporary billing session. It does not
     // disconnect the campus network or change any account setting.
-    if let Ok(logout_url) = Url::parse(BILLING_LOGOUT_URL) {
-        if let Ok((_, response)) = get_follow(
-            &session.client,
-            logout_url,
-            &mut session.cookies,
-            Some(&session.dashboard_url),
-            "text/html,*/*;q=0.8",
-            "document",
-        )
-        .await
-        {
-            let _ = response.bytes().await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        if let Ok(logout_url) = Url::parse(BILLING_LOGOUT_URL) {
+            if let Ok((_, response)) = get_follow(
+                &session.client,
+                logout_url,
+                &mut session.cookies,
+                Some(&session.dashboard_url),
+                "text/html,*/*;q=0.8",
+                "document",
+            )
+            .await
+            {
+                let _ = response.bytes().await;
+            }
         }
-    }
+    })
+    .await;
 }
 
 fn cache_buster() -> u128 {
@@ -1669,6 +1739,38 @@ async fn fetch_page_table_or_warning(
     )
     .await;
     (html, table)
+}
+
+async fn fetch_page_table_isolated(
+    mut session: BillingSession,
+    page_path: &str,
+    table_path: &str,
+    params: &[(&str, &str)],
+    fields: &[&str],
+    table_label: &str,
+) -> (String, BillingTable, Vec<String>) {
+    let mut warnings = Vec::new();
+    let (html, table) = fetch_page_table_or_warning(
+        &mut session,
+        page_path,
+        table_path,
+        params,
+        fields,
+        table_label,
+        &mut warnings,
+    )
+    .await;
+    (html, table, warnings)
+}
+
+async fn get_page_isolated(
+    mut session: BillingSession,
+    path: &str,
+    label: &str,
+) -> (String, Vec<String>) {
+    let mut warnings = Vec::new();
+    let html = get_page_or_warning(&mut session, path, label, &mut warnings).await;
+    (html, warnings)
 }
 
 async fn get_ajax_text(
@@ -1975,49 +2077,64 @@ fn validate_question_answers(
 }
 
 async fn populate_dashboard_details(session: &mut BillingSession, snapshot: &mut BillingSnapshot) {
-    match get_dashboard_text(
-        session,
-        "/Self/dashboard/getLoginHistory",
-        "application/json,*/*;q=0.8",
+    let mut login_session = session.clone();
+    let mut online_session = session.clone();
+    let mut offline_session = session.clone();
+    let mut mauth_session = session.clone();
+    let (login_history, online_sessions, offline_tip, mauth_enabled) = join4(
+        async {
+            get_dashboard_text(
+                &mut login_session,
+                "/Self/dashboard/getLoginHistory",
+                "application/json,*/*;q=0.8",
+            )
+            .await
+            .and_then(|text| parse_login_history(&text))
+        },
+        async {
+            get_dashboard_text(
+                &mut online_session,
+                "/Self/dashboard/getOnlineList",
+                "application/json,*/*;q=0.8",
+            )
+            .await
+            .and_then(|text| parse_online_sessions(&text))
+        },
+        async {
+            get_dashboard_text(
+                &mut offline_session,
+                "/Self/dashboard/getOfflineTip",
+                "text/plain,*/*;q=0.8",
+            )
+            .await
+            .and_then(|text| parse_offline_tip(&text))
+        },
+        fetch_mauth_state(&mut mauth_session),
     )
-    .await
-    .and_then(|text| parse_login_history(&text))
-    {
+    .await;
+
+    match login_history {
         Ok(records) => snapshot.login_history = records,
         Err(error) => snapshot
             .warnings
             .push(format!("最近上网记录读取失败：{}", error.user_message())),
     }
 
-    match get_dashboard_text(
-        session,
-        "/Self/dashboard/getOnlineList",
-        "application/json,*/*;q=0.8",
-    )
-    .await
-    .and_then(|text| parse_online_sessions(&text))
-    {
+    match online_sessions {
         Ok(records) => snapshot.online_sessions = records,
         Err(error) => snapshot
             .warnings
             .push(format!("在线会话读取失败：{}", error.user_message())),
     }
 
-    match get_dashboard_text(
-        session,
-        "/Self/dashboard/getOfflineTip",
-        "text/plain,*/*;q=0.8",
-    )
-    .await
-    .and_then(|text| parse_offline_tip(&text))
-    {
+    match offline_tip {
         Ok(tip) => snapshot.offline_tip = tip,
         Err(error) => snapshot
             .warnings
             .push(format!("注销提示读取失败：{}", error.user_message())),
     }
 
-    match fetch_mauth_state(session).await {
+    match mauth_enabled {
         Ok(enabled) => snapshot.mauth_enabled = Some(enabled),
         Err(error) => snapshot
             .warnings

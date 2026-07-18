@@ -3511,16 +3511,24 @@ async fn fetch_billing_cached(
         }
     }
 
-    let fetched = billing::fetch(&account.user, &account.pass, compatibility).await;
+    let fetched = tokio::time::timeout(
+        std::time::Duration::from_secs(45),
+        billing::fetch(&account.user, &account.pass, compatibility),
+    )
+    .await;
     let (result, duration) = match fetched {
-        Ok(snapshot) => (
+        Ok(Ok(snapshot)) => (
             Ok(billing_snapshot_to_user_info(snapshot)),
             std::time::Duration::from_secs(10 * 60),
         ),
-        Err(error) => {
+        Ok(Err(error)) => {
             let duration = error.cache_duration();
             (Err(error.user_message()), duration)
         }
+        Err(_) => (
+            Err("计费系统概览读取超过 45 秒，已停止本次请求".to_string()),
+            std::time::Duration::from_secs(60),
+        ),
     };
     *state.billing_cache.lock().unwrap() = Some(BillingCacheEntry {
         account: account.user.clone(),
@@ -3553,6 +3561,18 @@ fn unavailable_billing_info(account: &str, error: String) -> UserInfo {
     }
 }
 
+fn emit_billing_center_progress(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    message: &str,
+) {
+    rust_log(app, state, "计费", message, "info");
+    let _ = app.emit(
+        "billing-center-progress",
+        serde_json::json!({ "message": message }),
+    );
+}
+
 #[tauri::command]
 async fn get_user_info(
     app: tauri::AppHandle,
@@ -3573,8 +3593,18 @@ async fn get_user_info(
             cached_billing_result(&state, &account.user, compatibility)
                 .or_else(|| Some(Err("Android 移动数据网络下已暂停计费系统刷新".to_string())))
         } else {
+            let force = force.unwrap_or(false);
+            if force || cached_billing_result(&state, &account.user, compatibility).is_none() {
+                rust_log(
+                    &app,
+                    &state,
+                    "计费",
+                    "开始刷新计费系统账户概览",
+                    "info",
+                );
+            }
             let (result, fetched_now) =
-                fetch_billing_cached(&state, account, compatibility, force.unwrap_or(false)).await;
+                fetch_billing_cached(&state, account, compatibility, force).await;
             if fetched_now {
                 match &result {
                     Ok(_) => rust_log(&app, &state, "计费", "计费系统数据已安全更新", "debug"),
@@ -3613,10 +3643,43 @@ async fn get_billing_center(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<billing::BillingCenterData, String> {
     let (account, compatibility) = billing_action_target(&state)?;
-    let _fetch_guard = state.billing_fetch_lock.lock().await;
-    let result = billing::fetch_center(&account.user, &account.pass, compatibility)
-        .await
-        .map_err(|error| error.user_message());
+    emit_billing_center_progress(&app, &state, "准备读取计费中心完整数据");
+    let _fetch_guard = match state.billing_fetch_lock.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            emit_billing_center_progress(&app, &state, "正在等待已有的计费刷新完成");
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(50),
+                state.billing_fetch_lock.lock(),
+            )
+            .await
+            {
+                Ok(guard) => guard,
+                Err(_) => {
+                    let error = "等待已有计费刷新超过 50 秒，请稍后重试".to_string();
+                    rust_log(&app, &state, "计费", &error, "error");
+                    return Err(error);
+                }
+            }
+        }
+    };
+    let progress_app = app.clone();
+    let progress_state = state.inner().clone();
+    let emit_progress = move |message: &str| {
+        emit_billing_center_progress(&progress_app, &progress_state, message);
+    };
+    let fetched = tokio::time::timeout(
+        std::time::Duration::from_secs(75),
+        billing::fetch_center(&account.user, &account.pass, compatibility, emit_progress),
+    )
+    .await;
+    let result = match fetched {
+        Ok(result) => result.map_err(|error| error.user_message()),
+        Err(_) => Err(
+            "计费中心完整数据读取超过 75 秒，已停止本次请求；请检查 VPN 后重试"
+                .to_string(),
+        ),
+    };
     match &result {
         Ok(data) => {
             let overview = billing_snapshot_to_user_info(data.overview.clone());
