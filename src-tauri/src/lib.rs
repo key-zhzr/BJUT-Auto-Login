@@ -3493,6 +3493,7 @@ fn cached_billing_result(
 }
 
 async fn fetch_billing_cached(
+    app: &tauri::AppHandle,
     state: &AppState,
     account: &Account,
     compatibility: VpnCompatibility,
@@ -3510,6 +3511,14 @@ async fn fetch_billing_cached(
             return (result, false);
         }
     }
+
+    rust_log(
+        app,
+        state,
+        "计费",
+        "开始刷新计费系统账户概览",
+        "info",
+    );
 
     let fetched = tokio::time::timeout(
         std::time::Duration::from_secs(45),
@@ -3594,18 +3603,9 @@ async fn get_user_info(
                 .or_else(|| Some(Err("Android 移动数据网络下已暂停计费系统刷新".to_string())))
         } else {
             let force = force.unwrap_or(false);
-            if force || cached_billing_result(&state, &account.user, compatibility).is_none() {
-                rust_log(
-                    &app,
-                    &state,
-                    "计费",
-                    "开始刷新计费系统账户概览",
-                    "info",
-                );
-            }
             let fetch_started = std::time::Instant::now();
             let (result, fetched_now) =
-                fetch_billing_cached(&state, account, compatibility, force).await;
+                fetch_billing_cached(&app, &state, account, compatibility, force).await;
             if fetched_now {
                 match &result {
                     Ok(info) => rust_log(
@@ -3679,9 +3679,19 @@ async fn get_billing_center(
     let emit_progress = move |message: &str| {
         emit_billing_center_progress(&progress_app, &progress_state, message);
     };
+    let overview_app = app.clone();
+    let emit_overview = move |overview: &billing::BillingSnapshot| {
+        let _ = overview_app.emit("billing-center-overview", overview.clone());
+    };
     let fetched = tokio::time::timeout(
         std::time::Duration::from_secs(75),
-        billing::fetch_center(&account.user, &account.pass, compatibility, emit_progress),
+        billing::fetch_center(
+            &account.user,
+            &account.pass,
+            compatibility,
+            emit_progress,
+            emit_overview,
+        ),
     )
     .await;
     let result = match fetched {

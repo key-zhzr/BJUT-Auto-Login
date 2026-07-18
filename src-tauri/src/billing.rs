@@ -386,31 +386,29 @@ pub(crate) async fn fetch(
     compatibility: VpnCompatibility,
 ) -> Result<BillingSnapshot, BillingError> {
     let mut session = authenticate(account, password, compatibility).await?;
-    let result = async {
-        let mut snapshot = parse_dashboard(&session.dashboard_html, account);
-        populate_dashboard_details(&mut session, &mut snapshot).await;
-        Ok(snapshot)
-    }
-    .await;
+    let snapshot = parse_dashboard(&session.dashboard_html, account);
     logout(&mut session).await;
-    result
+    Ok(snapshot)
 }
 
-pub(crate) async fn fetch_center<F>(
+pub(crate) async fn fetch_center<F, O>(
     account: &str,
     password: &str,
     compatibility: VpnCompatibility,
     progress: F,
+    overview_ready: O,
 ) -> Result<BillingCenterData, BillingError>
 where
     F: Fn(&str) + Send + Sync + 'static,
+    O: Fn(&BillingSnapshot) + Send + Sync + 'static,
 {
     progress("正在连接并登录计费系统");
     let mut session = authenticate(account, password, compatibility).await?;
     let result = async {
         progress("登录成功，正在读取账户概览");
         let mut overview = parse_dashboard(&session.dashboard_html, account);
-        populate_dashboard_details(&mut session, &mut overview).await;
+        overview_ready(&overview);
+        populate_dashboard_details(&mut session, &mut overview, &progress).await;
         let end_date = chrono::Local::now().date_naive();
         let start_date = end_date - chrono::Duration::days(60);
         let query_start_date = start_date.format("%Y-%m-%d").to_string();
@@ -2090,10 +2088,17 @@ fn validate_question_answers(
     Ok(())
 }
 
-async fn populate_dashboard_details(session: &mut BillingSession, snapshot: &mut BillingSnapshot) {
+async fn populate_dashboard_details<P>(
+    session: &mut BillingSession,
+    snapshot: &mut BillingSnapshot,
+    progress: &P,
+) where
+    P: Fn(&str) + Send + Sync,
+{
     // These endpoints are quick in normal operation, but must remain
     // sequential for the same authenticated Dr.COM session. Bound every
     // optional request so one unavailable endpoint cannot block the overview.
+    progress("账户概览已读取，正在读取近期上网记录");
     let login_history = match tokio::time::timeout(Duration::from_secs(6), async {
         get_dashboard_text(
             session,
@@ -2110,6 +2115,7 @@ async fn populate_dashboard_details(session: &mut BillingSession, snapshot: &mut
             "最近上网记录请求超过 6 秒".to_string(),
         )),
     };
+    progress("正在读取当前在线会话");
     let online_sessions = match tokio::time::timeout(Duration::from_secs(6), async {
         get_dashboard_text(
             session,
@@ -2124,6 +2130,7 @@ async fn populate_dashboard_details(session: &mut BillingSession, snapshot: &mut
         Ok(result) => result,
         Err(_) => Err(BillingError::Network("在线会话请求超过 6 秒".to_string())),
     };
+    progress("正在读取会话注销提示");
     let offline_tip = match tokio::time::timeout(Duration::from_secs(6), async {
         get_dashboard_text(
             session,
@@ -2138,6 +2145,7 @@ async fn populate_dashboard_details(session: &mut BillingSession, snapshot: &mut
         Ok(result) => result,
         Err(_) => Err(BillingError::Network("注销提示请求超过 6 秒".to_string())),
     };
+    progress("正在读取无感认证状态");
     let mauth_enabled =
         match tokio::time::timeout(Duration::from_secs(6), fetch_mauth_state(session)).await {
             Ok(result) => result,

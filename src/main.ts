@@ -933,6 +933,15 @@ async function listenToRustEvents() {
       billingCenterMessage.hidden = false;
     });
 
+    listen<BillingOverview>('billing-center-overview', event => {
+      if (!billingCenterLoading) return;
+      const info = billingOverviewToUserInfo(event.payload);
+      infoAccount.textContent = info.account || '--';
+      infoBalance.textContent = info.balance || '--';
+      infoFlow.textContent = info.flow || '--';
+      renderBillingInfo(info);
+    });
+
     listen<AccountHealth[]>('account-health-change', event => {
       setAccountHealth(event.payload);
     });
@@ -1574,6 +1583,7 @@ let logEntriesCache: AppLogEntry[] = [];
 let logsDirty = true;
 let networkEventDebounce: number | null = null;
 let userInfoRequestId = 0;
+let userInfoLoading = false;
 let currentUserInfo: UserInfo | null = null;
 
 // New state for split check loops
@@ -4459,6 +4469,8 @@ function renderBillingInfo(info: UserInfo | null) {
 }
 
 async function updateUserInfo(force = false) {
+  if (userInfoLoading) return;
+  userInfoLoading = true;
   const requestId = ++userInfoRequestId;
   const refreshButtons = [btnRefreshBilling, btnRefreshBillingCenter];
   const refreshIcons = refreshButtons
@@ -4494,6 +4506,7 @@ async function updateUserInfo(force = false) {
     billingMessage.textContent = `无法读取计费信息：${String(error)}`;
     billingMessage.hidden = false;
   } finally {
+    userInfoLoading = false;
     if (force) {
       refreshButtons.forEach(button => { button.disabled = false; });
       refreshIcons.forEach(icon => { icon.style.animation = ''; });
