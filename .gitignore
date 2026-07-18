@@ -29,6 +29,7 @@ dist-ssr
 *.p12
 *.b64
 *.png
+!src-tauri/icons/dmg-background.png
 *.jpg
 *.dmg
 src-tauri/.keys/

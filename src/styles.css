@@ -880,6 +880,7 @@ main {
 
 .billing-package-options {
   display: grid;
+  min-width: 0;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 0.65rem;
   margin-top: 0.75rem;
@@ -888,6 +889,7 @@ main {
 .billing-package-option {
   display: flex;
   min-width: 0;
+  overflow: hidden;
   padding: 0.8rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
@@ -913,9 +915,14 @@ button.billing-package-option:hover,
 }
 
 .billing-package-option span {
+  display: block;
+  min-width: 0;
   color: var(--text-muted);
   font-size: 0.7rem;
   line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .billing-bind-mac {

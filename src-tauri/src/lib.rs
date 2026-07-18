@@ -3618,13 +3618,25 @@ async fn get_billing_center(
         .await
         .map_err(|error| error.user_message());
     match &result {
-        Ok(data) => rust_log(
-            &app,
-            &state,
-            "计费",
-            &format!("计费中心完整数据已更新（{} 条警告）", data.warnings.len()),
-            "debug",
-        ),
+        Ok(data) => {
+            let overview = billing_snapshot_to_user_info(data.overview.clone());
+            *state.billing_cache.lock().unwrap() = Some(BillingCacheEntry {
+                account: account.user.clone(),
+                compatibility,
+                expires_at: std::time::Instant::now() + std::time::Duration::from_secs(10 * 60),
+                result: Ok(overview),
+            });
+            rust_log(
+                &app,
+                &state,
+                "计费",
+                &format!(
+                    "计费中心完整数据已更新（{} 条警告）",
+                    data.warnings.len() + data.overview.warnings.len()
+                ),
+                "debug",
+            )
+        }
         Err(error) => rust_log(&app, &state, "计费", error, "error"),
     }
     result
@@ -3700,12 +3712,8 @@ async fn perform_billing_action(
 
     *state.billing_cache.lock().unwrap() = None;
     let action_label = match action.as_str() {
-        "stopNow" => "立即报停",
-        "stopScheduled" => "预约报停",
-        "cancelStop" => "取消预约报停",
+        "stopNow" => "立即停机",
         "reopenNow" => "立即复通",
-        "reopenScheduled" => "预约复通",
-        "cancelReopen" => "取消预约复通",
         "schedulePackage" => "预约套餐",
         "cancelPackage" => "取消套餐预约",
         "setConsumeLimit" => "修改消费保护",

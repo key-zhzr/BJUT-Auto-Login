@@ -30,6 +30,8 @@ class KeepAliveService : Service() {
         const val COMMAND_CHECK = "check"
         const val COMMAND_PAUSE = "pause"
         const val COMMAND_RESUME = "resume"
+        const val ACTION_UPDATE_STATUS = "cn.edu.bjut.al.action.UPDATE_STATUS"
+        const val EXTRA_STATUS_TEXT = "status_text"
         private const val ACTION_CHECK = "cn.edu.bjut.al.action.CHECK"
         private const val ACTION_PAUSE = "cn.edu.bjut.al.action.PAUSE"
         private const val ACTION_RESUME = "cn.edu.bjut.al.action.RESUME"
@@ -59,7 +61,7 @@ class KeepAliveService : Service() {
     private val periodicCheckRunnable = object : Runnable {
         override fun run() {
             if (destroyed) return
-            if (!isPaused() && !engineIsAlive()) {
+            if (!isPaused() && !interfaceIsForeground()) {
                 performHeadlessCheck("后台定时检测", false)
             }
             schedulePeriodicCheck()
@@ -100,7 +102,7 @@ class KeepAliveService : Service() {
             pausedUntil = 0L
             persistPauseState()
             statusText = "自动登录已恢复"
-            if (engineIsAlive()) sendCommand(COMMAND_RESUME) else performHeadlessCheck("暂停到期自动恢复", true)
+            if (interfaceIsForeground()) sendCommand(COMMAND_RESUME) else performHeadlessCheck("暂停到期自动恢复", true)
             updateNotification()
             schedulePeriodicCheck(5_000L)
         }
@@ -134,8 +136,15 @@ class KeepAliveService : Service() {
             KeepAliveJournal.append(this, "系统以 START_STICKY 方式重新创建了保活服务；界面心跳失效后将切换至 Rust 无界面核心", "info")
         }
         when (intent?.action) {
+            ACTION_UPDATE_STATUS -> {
+                val message = intent.getStringExtra(EXTRA_STATUS_TEXT)?.trim().orEmpty().take(80)
+                if (message.isNotEmpty()) {
+                    statusText = message
+                    updateNotification()
+                }
+            }
             ACTION_CHECK -> {
-                val useInterfaceEngine = engineIsAlive()
+                val useInterfaceEngine = interfaceIsForeground()
                 KeepAliveJournal.append(
                     this,
                     "用户通过常驻通知触发立即检测；已交给${if (useInterfaceEngine) "界面核心" else "Rust 无界面核心"}"
@@ -146,7 +155,7 @@ class KeepAliveService : Service() {
                 pausedUntil = System.currentTimeMillis() + 60 * 60 * 1000L
                 persistPauseState()
                 statusText = "自动登录已暂停一小时"
-                if (engineIsAlive()) sendCommand(COMMAND_PAUSE)
+                if (interfaceIsForeground()) sendCommand(COMMAND_PAUSE)
                 KeepAliveJournal.append(this, "用户通过常驻通知暂停自动登录一小时")
                 updateNotification()
                 scheduleAutomaticResume()
@@ -155,7 +164,7 @@ class KeepAliveService : Service() {
                 pausedUntil = 0L
                 persistPauseState()
                 statusText = "自动登录已恢复"
-                if (engineIsAlive()) sendCommand(COMMAND_RESUME) else performHeadlessCheck("通知栏恢复", true)
+                if (interfaceIsForeground()) sendCommand(COMMAND_RESUME) else performHeadlessCheck("通知栏恢复", true)
                 KeepAliveJournal.append(this, "用户通过常驻通知恢复自动登录")
                 updateNotification()
                 scheduleAutomaticResume()
@@ -227,6 +236,8 @@ class KeepAliveService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setUsesChronometer(false)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .addAction(0, "立即检测", servicePendingIntent(11, ACTION_CHECK))
             .addAction(0, if (paused) "恢复" else "暂停一小时", servicePendingIntent(12, if (paused) ACTION_RESUME else ACTION_PAUSE))
@@ -263,6 +274,9 @@ class KeepAliveService : Service() {
         return heartbeat > 0L && System.currentTimeMillis() - heartbeat <= ENGINE_HEARTBEAT_MAX_AGE
     }
 
+    private fun interfaceIsForeground(): Boolean =
+        engineIsAlive() && preferences.getBoolean("engine_foreground", false)
+
     private fun sendCommand(command: String) {
         sendBroadcast(
             Intent(ACTION_SERVICE_EVENT)
@@ -282,7 +296,7 @@ class KeepAliveService : Service() {
 
     private fun dispatchNetworkChange(reason: String, fullDetails: Boolean) {
         if (isPaused()) return
-        if (engineIsAlive()) {
+        if (interfaceIsForeground()) {
             sendCommand(COMMAND_NETWORK_CHANGED)
         } else {
             performHeadlessCheck(reason, fullDetails)
@@ -334,7 +348,8 @@ class KeepAliveService : Service() {
         try {
             worker.execute {
                 try {
-                    KeepAliveJournal.append(this, "Tauri 界面心跳缺失，Rust 无界面核心开始执行：$reason", "debug")
+                    val engineState = if (engineIsAlive()) "Tauri 界面处于后台" else "Tauri 界面心跳缺失"
+                    KeepAliveJournal.append(this, "$engineState，Rust 无界面核心开始执行：$reason", "debug")
                     val config = NetworkHelper.getSecureConfig(this)
                     if (config.isBlank()) throw IllegalStateException("安全存储中没有应用配置")
                     val networkInfo = networkInfoForCheck(fullDetails)

@@ -19,7 +19,8 @@ const BILLING_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Appl
 const MAX_REDIRECTS: usize = 5;
 const MAX_FULL_EXPORT_ROWS: u64 = 50_000;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BillingSnapshot {
     pub account: String,
     pub balance: String,
@@ -106,14 +107,8 @@ pub(crate) struct BillingServiceState {
     pub current_package: Option<String>,
     pub package_detail: Option<String>,
     pub next_settlement_date: Option<String>,
-    pub can_stop: bool,
-    pub can_reopen: bool,
     pub can_stop_now: bool,
-    pub can_stop_scheduled: bool,
     pub can_reopen_now: bool,
-    pub can_reopen_scheduled: bool,
-    pub stop_scheduled: bool,
-    pub reopen_scheduled: bool,
     pub package_scheduled: bool,
     pub consume_limit: Option<String>,
     pub current_cycle_spend: Option<String>,
@@ -121,10 +116,11 @@ pub(crate) struct BillingServiceState {
     pub package_options: Vec<BillingPackageOption>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BillingCenterData {
     pub account: String,
+    pub overview: BillingSnapshot,
     pub fetched_at: String,
     pub query_start_date: String,
     pub query_end_date: String,
@@ -156,7 +152,6 @@ pub(crate) struct BillingQuestionAnswer {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BillingActionRequest {
     pub action: String,
-    pub date: Option<String>,
     pub package_id: Option<String>,
     pub consume_limit: Option<String>,
     pub mac: Option<String>,
@@ -386,7 +381,7 @@ pub(crate) async fn fetch(
 ) -> Result<BillingSnapshot, BillingError> {
     let mut session = authenticate(account, password, compatibility).await?;
     let result = async {
-        let mut snapshot = parse_dashboard(&session.dashboard_html, account)?;
+        let mut snapshot = parse_dashboard(&session.dashboard_html, account);
         populate_dashboard_details(&mut session, &mut snapshot).await;
         Ok(snapshot)
     }
@@ -402,6 +397,8 @@ pub(crate) async fn fetch_center(
 ) -> Result<BillingCenterData, BillingError> {
     let mut session = authenticate(account, password, compatibility).await?;
     let result = async {
+        let mut overview = parse_dashboard(&session.dashboard_html, account);
+        populate_dashboard_details(&mut session, &mut overview).await;
         let end_date = chrono::Local::now().date_naive();
         let start_date = end_date - chrono::Duration::days(60);
         let query_start_date = start_date.format("%Y-%m-%d").to_string();
@@ -587,6 +584,7 @@ pub(crate) async fn fetch_center(
 
         Ok(BillingCenterData {
             account: account.to_string(),
+            overview,
             fetched_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             query_start_date,
             query_end_date,
@@ -893,11 +891,7 @@ pub(crate) async fn perform_action(
     if !matches!(
         request.action.as_str(),
         "stopNow"
-            | "stopScheduled"
-            | "cancelStop"
             | "reopenNow"
-            | "reopenScheduled"
-            | "cancelReopen"
             | "schedulePackage"
             | "cancelPackage"
             | "setConsumeLimit"
@@ -912,15 +906,8 @@ pub(crate) async fn perform_action(
     let mut session = authenticate(account, password, compatibility).await?;
     let result = async {
         match request.action.as_str() {
-            "stopNow" => stop_account(&mut session, "1").await,
-            "stopScheduled" => stop_account(&mut session, "2").await,
-            "cancelStop" => cancel_stop(&mut session).await,
-            "reopenNow" => reopen_account(&mut session, "1", None).await,
-            "reopenScheduled" => {
-                let date = validate_future_date(request.date.as_deref())?;
-                reopen_account(&mut session, "2", Some(&date)).await
-            }
-            "cancelReopen" => cancel_reopen(&mut session).await,
+            "stopNow" => stop_account(&mut session).await,
+            "reopenNow" => reopen_account(&mut session).await,
             "schedulePackage" => {
                 schedule_package(&mut session, request.package_id.as_deref()).await
             }
@@ -956,10 +943,7 @@ pub(crate) async fn perform_action(
     result
 }
 
-async fn stop_account(
-    session: &mut BillingSession,
-    flag: &str,
-) -> Result<BillingActionResult, BillingError> {
+async fn stop_account(session: &mut BillingSession) -> Result<BillingActionResult, BillingError> {
     let user = dashboard_user(&session.dashboard_html);
     if user.use_flag != Some(1) {
         return Err(BillingError::ActionRejected(
@@ -967,8 +951,7 @@ async fn stop_account(
         ));
     }
     let page = get_page_text(session, "/Self/service/goStop").await?;
-    let action_id = if flag == "1" { "stopNow" } else { "stop" };
-    if !has_enabled_element_id(&page, action_id) {
+    if !has_enabled_element_id(&page, "stopNow") {
         return Err(BillingError::ActionRejected(
             "计费系统当前未向该账号开放所选报停方式".to_string(),
         ));
@@ -977,49 +960,17 @@ async fn stop_account(
         session,
         "/Self/service/stop",
         "/Self/service/goStop",
-        vec![("flag".to_string(), flag.to_string())],
+        vec![("flag".to_string(), "1".to_string())],
         true,
     )
     .await?;
     Ok(BillingActionResult {
-        message: parse_action_response(
-            &text,
-            if flag == "1" {
-                "账号已报停"
-            } else {
-                "已预约在本周期结束后报停"
-            },
-        )?,
+        message: parse_action_response(&text, "账号已报停")?,
         password_changed: false,
     })
 }
 
-async fn cancel_stop(session: &mut BillingSession) -> Result<BillingActionResult, BillingError> {
-    let page = get_page_text(session, "/Self/service/goStop").await?;
-    if !has_tag_attribute(&page, "data-toggle", "undoPreStop") {
-        return Err(BillingError::ActionRejected(
-            "当前没有可取消的报停预约".to_string(),
-        ));
-    }
-    let text = post_form_action(
-        session,
-        "/Self/service/undoStop",
-        "/Self/service/goStop",
-        Vec::new(),
-        true,
-    )
-    .await?;
-    Ok(BillingActionResult {
-        message: parse_action_response(&text, "报停预约已取消")?,
-        password_changed: false,
-    })
-}
-
-async fn reopen_account(
-    session: &mut BillingSession,
-    flag: &str,
-    date: Option<&str>,
-) -> Result<BillingActionResult, BillingError> {
+async fn reopen_account(session: &mut BillingSession) -> Result<BillingActionResult, BillingError> {
     let user = dashboard_user(&session.dashboard_html);
     if user.use_flag == Some(1) && user.stop_reason.is_none() {
         return Err(BillingError::ActionRejected(
@@ -1027,54 +978,21 @@ async fn reopen_account(
         ));
     }
     let page = get_page_text(session, "/Self/service/goReopen").await?;
-    let action_id = if flag == "1" { "reOpenNow" } else { "reOpen" };
-    if !has_enabled_element_id(&page, action_id) {
+    if !has_enabled_element_id(&page, "reOpenNow") {
         return Err(BillingError::ActionRejected(
             "计费系统当前未向该账号开放所选复通方式".to_string(),
         ));
-    }
-    let mut fields = vec![("flag".to_string(), flag.to_string())];
-    if let Some(date) = date {
-        fields.push(("date".to_string(), date.to_string()));
     }
     let text = post_form_action(
         session,
         "/Self/service/reOpen",
         "/Self/service/goReopen",
-        fields,
+        vec![("flag".to_string(), "1".to_string())],
         true,
     )
     .await?;
     Ok(BillingActionResult {
-        message: parse_action_response(
-            &text,
-            if flag == "1" {
-                "账号已复通"
-            } else {
-                "复通预约已提交"
-            },
-        )?,
-        password_changed: false,
-    })
-}
-
-async fn cancel_reopen(session: &mut BillingSession) -> Result<BillingActionResult, BillingError> {
-    let page = get_page_text(session, "/Self/service/goReopen").await?;
-    if !has_tag_attribute(&page, "data-toggle", "undoPreReopen") {
-        return Err(BillingError::ActionRejected(
-            "当前没有可取消的复通预约".to_string(),
-        ));
-    }
-    let text = post_form_action(
-        session,
-        "/Self/service/undoReOpen",
-        "/Self/service/goReopen",
-        Vec::new(),
-        true,
-    )
-    .await?;
-    Ok(BillingActionResult {
-        message: parse_action_response(&text, "复通预约已取消")?,
+        message: parse_action_response(&text, "账号已复通")?,
         password_changed: false,
     })
 }
@@ -1095,7 +1013,7 @@ async fn schedule_package(
             "套餐列表已经变化，请刷新后重新选择".to_string(),
         ));
     }
-    let csrf = action_csrf_token(&page, "doPackage")?;
+    let csrf = form_csrf_token(&page)?;
     let text = post_form_action(
         session,
         "/Self/service/doPackage",
@@ -1655,9 +1573,6 @@ async fn get_dashboard_text(
     let mut url = same_origin_url(&format!("{BILLING_ORIGIN}{path}"))?;
     {
         let mut query = url.query_pairs_mut();
-        if let Some(token) = session.ajax_csrf_token.as_deref() {
-            query.append_pair("ajaxCsrfToken", token);
-        }
         query.append_pair("t", &cache_buster().to_string());
     }
     let referer = session.dashboard_url.clone();
@@ -1767,9 +1682,6 @@ async fn get_ajax_text(
         let mut query = url.query_pairs_mut();
         for (name, value) in params {
             query.append_pair(name, value);
-        }
-        if let Some(token) = session.ajax_csrf_token.as_deref() {
-            query.append_pair("ajaxCsrfToken", token);
         }
         query.append_pair("t", &cache_buster().to_string());
     }
@@ -1930,68 +1842,6 @@ fn form_csrf_token(html: &str) -> Result<String, BillingError> {
         })
         .ok_or_else(|| BillingError::Protocol("页面缺少有效的表单安全令牌".to_string()))?;
     Ok(token)
-}
-
-fn action_csrf_token(html: &str, action_marker: &str) -> Result<String, BillingError> {
-    let marker = html
-        .find(action_marker)
-        .ok_or_else(|| BillingError::Protocol("页面缺少预期的操作入口".to_string()))?;
-    let segment = &html[marker..(marker + 1600).min(html.len())];
-    let lower = segment.to_ascii_lowercase();
-    let field = lower
-        .find("csrftoken")
-        .ok_or_else(|| BillingError::Protocol("操作入口缺少表单安全令牌".to_string()))?;
-    let bytes = segment.as_bytes();
-    let mut index = field + "csrftoken".len();
-    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
-        index += 1;
-    }
-    if bytes.get(index) != Some(&b':') {
-        return Err(BillingError::Protocol(
-            "操作入口的安全令牌格式无效".to_string(),
-        ));
-    }
-    index += 1;
-    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
-        index += 1;
-    }
-    let quote = bytes
-        .get(index)
-        .copied()
-        .filter(|byte| matches!(byte, b'\'' | b'"'))
-        .ok_or_else(|| BillingError::Protocol("操作入口的安全令牌不是字面量".to_string()))?;
-    index += 1;
-    let start = index;
-    while bytes.get(index).is_some_and(|byte| *byte != quote) {
-        index += 1;
-    }
-    let token = segment.get(start..index).unwrap_or_default();
-    if token.is_empty()
-        || token.len() > 256
-        || !token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
-        return Err(BillingError::Protocol(
-            "操作入口的安全令牌格式无效".to_string(),
-        ));
-    }
-    Ok(token.to_string())
-}
-
-fn validate_future_date(value: Option<&str>) -> Result<String, BillingError> {
-    let value = value
-        .filter(|value| value.len() == 10)
-        .ok_or_else(|| BillingError::InvalidRequest("请选择预约复通日期".to_string()))?;
-    let date = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .map_err(|_| BillingError::InvalidRequest("预约复通日期格式无效".to_string()))?;
-    let today = chrono::Local::now().date_naive();
-    if date <= today {
-        return Err(BillingError::InvalidRequest(
-            "预约复通日期必须晚于今天".to_string(),
-        ));
-    }
-    Ok(value.to_string())
 }
 
 fn validate_consume_limit(value: Option<&str>) -> Result<String, BillingError> {
@@ -2744,19 +2594,32 @@ fn attribute(tag: &str, wanted: &str) -> Option<String> {
     None
 }
 
-fn parse_dashboard(html: &str, account: &str) -> Result<BillingSnapshot, BillingError> {
+fn parse_dashboard(html: &str, account: &str) -> BillingSnapshot {
     let user = embedded_user_json(html)
         .and_then(|json| serde_json::from_str::<DashboardUser>(json).ok())
         .unwrap_or_default();
+    let mut warnings = Vec::new();
     let balance = extract_dl_metric(html, "账户余额")
         .or_else(|| {
             user.left_money
                 .map(|value| format!("{} 元", compact_decimal(value, 4)))
         })
-        .ok_or_else(|| BillingError::Protocol("控制台缺少账户余额".to_string()))?;
-    let raw_remaining = extract_dl_metric(html, "可用流量")
-        .ok_or_else(|| BillingError::Protocol("控制台缺少可用流量".to_string()))?;
-    let remaining_flow = format_remaining_flow(&raw_remaining)?;
+        .unwrap_or_else(|| {
+            warnings.push("控制台没有返回账户余额".to_string());
+            "--".to_string()
+        });
+    let remaining_flow = extract_dl_metric(html, "可用流量")
+        .or_else(|| extract_dl_metric(html, "剩余流量"))
+        .map(|raw| {
+            format_remaining_flow(&raw).unwrap_or_else(|_| {
+                warnings.push("控制台返回了无法识别的剩余流量格式".to_string());
+                normalize_text(&raw)
+            })
+        })
+        .unwrap_or_else(|| {
+            warnings.push("控制台没有返回剩余流量".to_string());
+            "--".to_string()
+        });
     let status_reason = user.stop_reason.filter(|value| !value.trim().is_empty());
     let status = if status_reason.is_some() || user.use_flag == Some(0) {
         Some("停机".to_string())
@@ -2767,7 +2630,7 @@ fn parse_dashboard(html: &str, account: &str) -> Result<BillingSnapshot, Billing
     };
     let service = user.service_default.unwrap_or_default();
 
-    Ok(BillingSnapshot {
+    BillingSnapshot {
         account: account.to_string(),
         balance: normalize_text(&balance),
         remaining_flow,
@@ -2784,16 +2647,50 @@ fn parse_dashboard(html: &str, account: &str) -> Result<BillingSnapshot, Billing
         online_sessions: Vec::new(),
         offline_tip: None,
         mauth_enabled: None,
-        warnings: Vec::new(),
-    })
+        warnings,
+    }
+}
+
+fn parse_json_payload(text: &str, label: &str) -> Result<serde_json::Value, BillingError> {
+    let trimmed = text.trim_start_matches('\u{feff}').trim();
+    if trimmed.is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed)
+        .map_err(|_| BillingError::Protocol(format!("{label}不是有效 JSON")))?;
+    if let Some(nested) = value.as_str() {
+        let nested = nested.trim_start_matches('\u{feff}').trim();
+        if nested.starts_with('{') || nested.starts_with('[') || nested == "null" {
+            return serde_json::from_str(nested)
+                .map_err(|_| BillingError::Protocol(format!("{label}包含无效的嵌套 JSON")));
+        }
+    }
+    Ok(value)
+}
+
+fn response_rows<'a>(
+    value: &'a serde_json::Value,
+    label: &str,
+) -> Result<&'a Vec<serde_json::Value>, BillingError> {
+    if let Some(rows) = value.as_array() {
+        return Ok(rows);
+    }
+    if let Some(rows) = value
+        .as_object()
+        .and_then(|object| object.get("rows").or_else(|| object.get("data")))
+        .and_then(serde_json::Value::as_array)
+    {
+        return Ok(rows);
+    }
+    Err(BillingError::Protocol(format!("{label}不是记录数组")))
 }
 
 fn parse_login_history(text: &str) -> Result<Vec<BillingLoginRecord>, BillingError> {
-    let value: serde_json::Value = serde_json::from_str(text)
-        .map_err(|_| BillingError::Protocol("最近上网记录不是有效 JSON".to_string()))?;
-    let rows = value
-        .as_array()
-        .ok_or_else(|| BillingError::Protocol("最近上网记录不是数组".to_string()))?;
+    let value = parse_json_payload(text, "最近上网记录")?;
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let rows = response_rows(&value, "最近上网记录")?;
     if rows.len() > 5_000 {
         return Err(BillingError::Protocol(
             "最近上网记录数量超过安全上限".to_string(),
@@ -2831,11 +2728,11 @@ fn parse_login_history(text: &str) -> Result<Vec<BillingLoginRecord>, BillingErr
 }
 
 fn parse_online_sessions(text: &str) -> Result<Vec<BillingOnlineSession>, BillingError> {
-    let value: serde_json::Value = serde_json::from_str(text)
-        .map_err(|_| BillingError::Protocol("在线会话不是有效 JSON".to_string()))?;
-    let rows = value
-        .as_array()
-        .ok_or_else(|| BillingError::Protocol("在线会话不是数组".to_string()))?;
+    let value = parse_json_payload(text, "在线会话")?;
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let rows = response_rows(&value, "在线会话")?;
     if rows.len() > 500 {
         return Err(BillingError::Protocol(
             "在线会话数量超过安全上限".to_string(),
@@ -2902,8 +2799,8 @@ fn parse_offline_tip(text: &str) -> Result<Option<String>, BillingError> {
 }
 
 fn parse_mauth_state(text: &str) -> Result<bool, BillingError> {
-    let html: String = serde_json::from_str(text)
-        .map_err(|_| BillingError::Protocol("无感认证状态不是有效 JSON".to_string()))?;
+    let trimmed = text.trim_start_matches('\u{feff}').trim();
+    let html = serde_json::from_str::<String>(trimmed).unwrap_or_else(|_| trimmed.to_string());
     let action = html_text(&html);
     if action.contains("开启") {
         Ok(false)
@@ -2921,8 +2818,10 @@ fn parse_billing_table(
     array_fields: &[&str],
     label: &str,
 ) -> Result<BillingTable, BillingError> {
-    let value: serde_json::Value = serde_json::from_str(text)
-        .map_err(|_| BillingError::Protocol(format!("{label}不是有效 JSON")))?;
+    let value = parse_json_payload(text, label)?;
+    if value.is_null() {
+        return Ok(BillingTable::default());
+    }
     let (rows, total, summary) = if let Some(rows) = value.as_array() {
         (rows, rows.len() as u64, BTreeMap::new())
     } else if let Some(object) = value.as_object() {
@@ -2990,11 +2889,46 @@ fn parse_billing_table(
             Ok(mapped)
         })
         .collect::<Result<Vec<_>, BillingError>>()?;
-    Ok(BillingTable {
+    let mut table = BillingTable {
         total,
         rows,
         summary,
-    })
+    };
+    if label == "上网记录" {
+        sanitize_usage_table(&mut table);
+    }
+    Ok(table)
+}
+
+fn sanitize_usage_table(table: &mut BillingTable) {
+    for row in &mut table.rows {
+        let mac = row.get("macAddress").map(String::as_str).unwrap_or("--");
+        let nas_ip = row.get("nasIp").map(String::as_str).unwrap_or("--");
+        let nas_port = row.get("nasPort").map(String::as_str).unwrap_or("--");
+        let access_method = if normalize_mac_for_action(mac) == "000000000000"
+            && nas_ip == "0.0.0.0"
+            && nas_port == "0"
+        {
+            "lgn（有线）"
+        } else if nas_ip == "10.21.251.3" {
+            "bjut_wifi"
+        } else if nas_ip == "10.21.221.97" {
+            "bjut-sushe"
+        } else {
+            "未知"
+        };
+        for field in [
+            "internetUpFlow",
+            "internetDownFlow",
+            "chinanetUpFlow",
+            "chinanetDownFlow",
+            "nasIp",
+            "nasPort",
+        ] {
+            row.remove(field);
+        }
+        row.insert("accessMethod".to_string(), access_method.to_string());
+    }
 }
 
 fn billing_summary_label(table_label: &str, raw: &str) -> Option<&'static str> {
@@ -3003,10 +2937,6 @@ fn billing_summary_label(table_label: &str, raw: &str) -> Option<&'static str> {
         ("上网记录", "COU") => "记录数",
         ("上网记录", "FLOW") => "使用流量(MB)",
         ("上网记录", "TIME") => "使用时长(分钟)",
-        ("上网记录", "INTERNETUPFLOW") => "国际上行流量(MB)",
-        ("上网记录", "INTERNETDOWNFLOW") => "国际下行流量(MB)",
-        ("上网记录", "CHINANETUPFLOW") => "国内上行流量(MB)",
-        ("上网记录", "CHINANETDOWNFLOW") => "国内下行流量(MB)",
         ("历史账单", "USEBASEMONEY") => "基本月租(元)",
         ("历史账单", "USEDMONEY") => "时长/流量计费(元)",
         ("历史账单", "USETIME") => "使用时长(分钟)",
@@ -3053,9 +2983,7 @@ fn parse_service_state(
     let service = user.service_default.clone().unwrap_or_default();
     let stopped = user.use_flag == Some(0) || user.stop_reason.is_some();
     let can_stop_now = user.use_flag == Some(1) && has_enabled_element_id(stop_html, "stopNow");
-    let can_stop_scheduled = user.use_flag == Some(1) && has_enabled_element_id(stop_html, "stop");
     let can_reopen_now = stopped && has_enabled_element_id(reopen_html, "reOpenNow");
-    let can_reopen_scheduled = stopped && has_enabled_element_id(reopen_html, "reOpen");
     BillingServiceState {
         account_status: user.use_flag.map(|flag| {
             if flag == 1 {
@@ -3068,14 +2996,8 @@ fn parse_service_state(
         current_package: service.default_name,
         package_detail: service.extend,
         next_settlement_date: date_near_label(stop_html, "下次结算日期"),
-        can_stop: can_stop_now || can_stop_scheduled,
-        can_reopen: can_reopen_now || can_reopen_scheduled,
         can_stop_now,
-        can_stop_scheduled,
         can_reopen_now,
-        can_reopen_scheduled,
-        stop_scheduled: has_tag_attribute(stop_html, "data-toggle", "undoPreStop"),
-        reopen_scheduled: has_tag_attribute(reopen_html, "data-toggle", "undoPreReopen"),
         package_scheduled: has_tag_attribute(package_html, "data-toggle", "undoPackage"),
         consume_limit: user.installment_flag.map(|value| {
             if (value - 999_999.0).abs() < f64::EPSILON {
@@ -3389,6 +3311,9 @@ fn dates_in(source: &str) -> Vec<String> {
 
 fn format_remaining_flow(raw: &str) -> Result<String, BillingError> {
     let normalized = normalize_text(raw);
+    if normalized.contains("无限") || normalized.contains("不限") {
+        return Ok("无限".to_string());
+    }
     let value = first_number(&normalized)
         .ok_or_else(|| BillingError::Protocol("可用流量数值无法解析".to_string()))?;
     if value < 0.0 {
@@ -3523,7 +3448,7 @@ mod tests {
             <dl><dt>12.3456 <small>元</small></dt><dd>账户余额</dd></dl>
             <label>计费周期：</label><span>2026-07-01</span> 至 <span>2026-07-31</span>
         "#;
-        let snapshot = parse_dashboard(html, "synthetic-account").unwrap();
+        let snapshot = parse_dashboard(html, "synthetic-account");
         assert_eq!(snapshot.account, "synthetic-account");
         assert_eq!(snapshot.balance, "12.3456 元");
         assert_eq!(snapshot.remaining_flow, "3.05 GB");
@@ -3539,7 +3464,21 @@ mod tests {
     #[test]
     fn treats_negative_available_flow_as_unlimited() {
         assert_eq!(format_remaining_flow("-1 MB").unwrap(), "无限");
+        assert_eq!(format_remaining_flow("不限").unwrap(), "无限");
         assert_eq!(format_remaining_flow("2 GB").unwrap(), "2.00 GB");
+    }
+
+    #[test]
+    fn keeps_partial_dashboard_data_when_optional_metrics_are_missing() {
+        let snapshot = parse_dashboard(
+            r#"<script>(function(user){window.user=user;})({"leftMoney":3.5,"useFlag":1});</script>"#,
+            "synthetic-account",
+        );
+        assert_eq!(snapshot.account, "synthetic-account");
+        assert_eq!(snapshot.balance, "3.5 元");
+        assert_eq!(snapshot.remaining_flow, "--");
+        assert_eq!(snapshot.status.as_deref(), Some("正常"));
+        assert_eq!(snapshot.warnings.len(), 1);
     }
 
     #[test]
@@ -3635,6 +3574,24 @@ mod tests {
         assert!(!usage.rows[0].contains_key("userPhone"));
         assert!(!usage.summary.contains_key("PRIVATE"));
 
+        let access = parse_billing_table(
+            r#"{"total":3,"rows":[{"macAddress":"00-00-00-00-00-00","nasIp":"0.0.0.0","nasPort":0,"flow":1},{"macAddress":"AA-BB-CC-DD-EE-FF","nasIp":"10.21.251.3","nasPort":123,"flow":2},{"macAddress":"AA-BB-CC-DD-EE-FF","nasIp":"10.21.221.97","nasPort":456,"flow":3}],"summary":{"FLOW":6,"INTERNETUPFLOW":99,"CHINANETDOWNFLOW":88}}"#,
+            USAGE_RECORD_FIELDS,
+            "上网记录",
+        )
+        .unwrap();
+        assert_eq!(access.rows[0]["accessMethod"], "lgn（有线）");
+        assert_eq!(access.rows[1]["accessMethod"], "bjut_wifi");
+        assert_eq!(access.rows[2]["accessMethod"], "bjut-sushe");
+        for row in &access.rows {
+            assert!(!row.contains_key("nasIp"));
+            assert!(!row.contains_key("nasPort"));
+            assert!(!row.contains_key("internetUpFlow"));
+            assert!(!row.contains_key("chinanetDownFlow"));
+        }
+        assert_eq!(access.summary.len(), 1);
+        assert_eq!(access.summary["使用流量(MB)"], "6");
+
         let payments = parse_billing_table(
             r#"{"total":"1","rows":[[1721091600000,"扫码",20,"自助服务","成功","must-not-cross"]]}"#,
             &["paidAt", "type", "amount", "terminal", "note"],
@@ -3698,11 +3655,8 @@ mod tests {
             r#"<button id="reOpenNow">立即复通</button><button id="reOpen">预约复通</button>"#;
         let state = parse_service_state(dashboard, stop, reopen, "", "");
         assert_eq!(state.account_status.as_deref(), Some("停机"));
-        assert!(state.can_reopen);
         assert!(state.can_reopen_now);
-        assert!(state.can_reopen_scheduled);
-        assert!(!state.can_stop);
-        assert!(!state.stop_scheduled);
+        assert!(!state.can_stop_now);
         assert_eq!(state.consume_limit.as_deref(), Some("不限制"));
         assert_eq!(state.next_settlement_date.as_deref(), Some("2026-08-01"));
         assert!(!has_enabled_element_id(
@@ -3739,7 +3693,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_action_results_and_action_specific_csrf_token() {
+    fn parses_action_results_and_form_csrf_token() {
         assert_eq!(
             parse_action_response(r#"{"state":"success","message":"完成"}"#, "默认").unwrap(),
             "完成"
@@ -3750,10 +3704,22 @@ mod tests {
           <script>$.post("doPackage", { csrftoken: 'action-token', serid: id });</script>
         "#;
         assert_eq!(form_csrf_token(html).unwrap(), "form-token");
-        assert_eq!(
-            action_csrf_token(html, "doPackage").unwrap(),
-            "action-token"
-        );
+    }
+
+    #[test]
+    fn accepts_read_only_payload_wrappers_and_raw_mauth_html() {
+        let records = parse_login_history(
+            "\u{feff}{\"rows\":[[1721091600000,1721095200000,\"10.0.0.1\",\"\",\"000000000000\",60,1.5,3,0]]}",
+        )
+        .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].billing_mode, "包月");
+
+        assert!(!parse_mauth_state("<a data-toggle='oprateMauth'>开启</a>").unwrap());
+        assert!(parse_billing_table("null", USAGE_RECORD_FIELDS, "上网记录")
+            .unwrap()
+            .rows
+            .is_empty());
     }
 
     #[test]

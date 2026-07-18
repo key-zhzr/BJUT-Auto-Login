@@ -53,6 +53,10 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     KeepAliveJournal.recordPreviousProcessExit(this)
+    getSharedPreferences("service_state", Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean("engine_foreground", false)
+      .apply()
     super.onCreate(savedInstanceState)
     engineHeartbeatHandler.post(engineHeartbeatRunnable)
     ContextCompat.registerReceiver(
@@ -68,6 +72,7 @@ class MainActivity : TauriActivity() {
     getSharedPreferences("service_state", Context.MODE_PRIVATE)
       .edit()
       .putLong("engine_heartbeat", 0L)
+      .putBoolean("engine_foreground", false)
       .apply()
     try { unregisterReceiver(serviceEventReceiver) } catch (_: Exception) {}
     super.onDestroy()
@@ -75,6 +80,11 @@ class MainActivity : TauriActivity() {
 
   override fun onResume() {
     super.onResume()
+    getSharedPreferences("service_state", Context.MODE_PRIVATE)
+      .edit()
+      .putLong("engine_heartbeat", System.currentTimeMillis())
+      .putBoolean("engine_foreground", true)
+      .apply()
     UpdateHelper.resumePendingInstall(this)
     if (resumedFromBackground) {
       appWebView?.post {
@@ -86,6 +96,10 @@ class MainActivity : TauriActivity() {
 
   override fun onPause() {
     resumedFromBackground = true
+    getSharedPreferences("service_state", Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean("engine_foreground", false)
+      .apply()
     super.onPause()
   }
 
@@ -166,6 +180,26 @@ class MainActivity : TauriActivity() {
         stopService(serviceIntent)
     } catch (e: Exception) {
         e.printStackTrace()
+    }
+  }
+
+  private fun updateKeepAliveStatusInternal(status: String): Boolean {
+    val message = status.trim().take(80)
+    val preferences = getSharedPreferences("service_state", Context.MODE_PRIVATE)
+    if (message.isEmpty() || !preferences.getBoolean("auto_login_enabled", false)) return false
+    return try {
+      val serviceIntent = Intent(this, KeepAliveService::class.java)
+        .setAction(KeepAliveService.ACTION_UPDATE_STATUS)
+        .putExtra(KeepAliveService.EXTRA_STATUS_TEXT, message)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        startForegroundService(serviceIntent)
+      } else {
+        startService(serviceIntent)
+      }
+      true
+    } catch (error: Exception) {
+      KeepAliveJournal.append(this, "更新常驻通知失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
+      false
     }
   }
 
@@ -264,6 +298,10 @@ class MainActivity : TauriActivity() {
         activity.stopKeepAliveServiceInternal()
       }
     }
+
+    @JavascriptInterface
+    fun updateKeepAliveStatus(status: String): Boolean =
+      activity.updateKeepAliveStatusInternal(status)
 
     @JavascriptInterface
     fun requestBatteryOptimizations() {

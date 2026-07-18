@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1730"/>
+      <stop offset="0.55" stop-color="#111c3f"/>
+      <stop offset="1" stop-color="#1d1745"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#c6943e"/>
+    </linearGradient>
+    <filter id="blur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="45"/>
+    </filter>
+  </defs>
+  <rect width="660" height="400" fill="url(#background)"/>
+  <circle cx="86" cy="62" r="115" fill="#2563eb" opacity="0.18" filter="url(#blur)"/>
+  <circle cx="590" cy="345" r="130" fill="#9b6b2b" opacity="0.16" filter="url(#blur)"/>
+  <rect x="0" y="0" width="660" height="5" fill="url(#accent)"/>
+  <text x="330" y="48" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="21" font-weight="700">Install BJUT Auto Login</text>
+  <text x="330" y="75" text-anchor="middle" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13">Drag the app into Applications</text>
+  <path d="M270 185 H381" fill="none" stroke="#60a5fa" stroke-width="4" stroke-linecap="round" opacity="0.9"/>
+  <path d="M369 171 L387 185 L369 199" fill="none" stroke="#d6a34e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="180" cy="185" r="63" fill="#ffffff" opacity="0.045" stroke="#ffffff" stroke-opacity="0.12"/>
+  <circle cx="480" cy="185" r="63" fill="#ffffff" opacity="0.045" stroke="#ffffff" stroke-opacity="0.12"/>
+  <text x="330" y="352" text-anchor="middle" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11">BJUT-AL · Campus network companion</text>
+</svg>

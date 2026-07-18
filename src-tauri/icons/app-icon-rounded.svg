@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="rounded-icon">
+      <rect x="56" y="56" width="912" height="912" rx="208" ry="208"/>
+    </clipPath>
+  </defs>
+  <image
+    x="56"
+    y="56"
+    width="912"
+    height="912"
+    preserveAspectRatio="xMidYMid slice"
+    clip-path="url(#rounded-icon)"
+    xlink:href="../../public/logo.png"
+  />
+</svg>

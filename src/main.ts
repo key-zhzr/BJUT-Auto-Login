@@ -424,6 +424,24 @@ interface BillingOnlineSession {
   sessionId: string;
 }
 
+interface BillingOverview {
+  account: string;
+  balance: string;
+  remainingFlow: string;
+  usedFlow?: string | null;
+  status?: string | null;
+  statusReason?: string | null;
+  package?: string | null;
+  packageDetail?: string | null;
+  billingCycle?: string | null;
+  updatedAt: string;
+  loginHistory: BillingLoginRecord[];
+  onlineSessions: BillingOnlineSession[];
+  offlineTip?: string | null;
+  mauthEnabled?: boolean | null;
+  warnings: string[];
+}
+
 interface BillingTable {
   total: number;
   rows: Record<string, string>[];
@@ -456,14 +474,8 @@ interface BillingServiceState {
   currentPackage?: string | null;
   packageDetail?: string | null;
   nextSettlementDate?: string | null;
-  canStop: boolean;
-  canReopen: boolean;
   canStopNow: boolean;
-  canStopScheduled: boolean;
   canReopenNow: boolean;
-  canReopenScheduled: boolean;
-  stopScheduled: boolean;
-  reopenScheduled: boolean;
   packageScheduled: boolean;
   consumeLimit?: string | null;
   currentCycleSpend?: string | null;
@@ -473,6 +485,7 @@ interface BillingServiceState {
 
 interface BillingCenterData {
   account: string;
+  overview: BillingOverview;
   fetchedAt: string;
   queryStartDate: string;
   queryEndDate: string;
@@ -500,7 +513,6 @@ interface BillingQuestionAnswer {
 
 interface BillingActionRequest {
   action: string;
-  date?: string;
   packageId?: string;
   consumeLimit?: string;
   mac?: string;
@@ -1458,13 +1470,8 @@ const billingServicePackage = document.getElementById('billing-service-package')
 const billingServiceSettlement = document.getElementById('billing-service-settlement')!;
 const billingServiceSpend = document.getElementById('billing-service-spend')!;
 const billingServiceLimit = document.getElementById('billing-service-limit')!;
-const billingServiceDate = document.getElementById('billing-service-date') as HTMLInputElement;
 const btnBillingStopNow = document.getElementById('btn-billing-stop-now') as HTMLButtonElement;
 const btnBillingReopenNow = document.getElementById('btn-billing-reopen-now') as HTMLButtonElement;
-const btnBillingStopScheduled = document.getElementById('btn-billing-stop-scheduled') as HTMLButtonElement;
-const btnBillingReopenScheduled = document.getElementById('btn-billing-reopen-scheduled') as HTMLButtonElement;
-const btnBillingCancelStop = document.getElementById('btn-billing-cancel-stop') as HTMLButtonElement;
-const btnBillingCancelReopen = document.getElementById('btn-billing-cancel-reopen') as HTMLButtonElement;
 const billingPackageOptions = document.getElementById('billing-package-options')!;
 const btnBillingPackage = document.getElementById('btn-billing-package') as HTMLButtonElement;
 const btnBillingCancelPackage = document.getElementById('btn-billing-cancel-package') as HTMLButtonElement;
@@ -2142,7 +2149,6 @@ function setupEventListeners() {
   btnRefreshBillingCenter.addEventListener('click', () => void refreshBillingCenterData());
   btnOpenBilling.addEventListener('click', () => {
     activatePage('billing-center', 'dashboard');
-    if (!currentUserInfo || currentUserInfo.source !== 'billing') void updateUserInfo(true);
     if (!billingCenterData) void refreshBillingCenterData();
   });
   btnCloseBilling.addEventListener('click', () => activatePage('dashboard'));
@@ -2167,50 +2173,17 @@ function setupEventListeners() {
     });
     btnBillingPackage.disabled = !selectedBillingPackageId;
   });
-  const tomorrowDate = new Date();
-  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-  const tomorrow = [
-    tomorrowDate.getFullYear(),
-    String(tomorrowDate.getMonth() + 1).padStart(2, '0'),
-    String(tomorrowDate.getDate()).padStart(2, '0'),
-  ].join('-');
-  billingServiceDate.min = tomorrow;
-  billingServiceDate.value = tomorrow;
   btnBillingStopNow.addEventListener('click', () => void performConfirmedBillingAction(
     { action: 'stopNow' },
-    '立即报停',
-    '报停后该账号将无法继续使用校园网，并停止计费。确定立即报停吗？',
+    '立即停机',
+    '停机后该账号将无法继续使用校园网，并停止计费。确定立即停机吗？',
     btnBillingStopNow,
-  ));
-  btnBillingStopScheduled.addEventListener('click', () => void performConfirmedBillingAction(
-    { action: 'stopScheduled' },
-    '预约报停',
-    '计费系统将在本计费周期结束后自动报停该账号。确定提交预约吗？',
-    btnBillingStopScheduled,
   ));
   btnBillingReopenNow.addEventListener('click', () => void performConfirmedBillingAction(
     { action: 'reopenNow' },
     '立即复通',
     '复通成功后账号将恢复校园网使用并继续计费；余额不足时可能失败。确定继续吗？',
     btnBillingReopenNow,
-  ));
-  btnBillingReopenScheduled.addEventListener('click', () => {
-    if (!billingServiceDate.value || billingServiceDate.value < tomorrow) {
-      void customAlert('请选择明天或之后的预约复通日期。');
-      return;
-    }
-    void performConfirmedBillingAction(
-      { action: 'reopenScheduled', date: billingServiceDate.value },
-      '预约复通',
-      `计费系统将在 ${billingServiceDate.value} 尝试复通该账号。确定提交预约吗？`,
-      btnBillingReopenScheduled,
-    );
-  });
-  btnBillingCancelStop.addEventListener('click', () => void performConfirmedBillingAction(
-    { action: 'cancelStop' }, '取消预约报停', '确定取消当前报停预约吗？', btnBillingCancelStop,
-  ));
-  btnBillingCancelReopen.addEventListener('click', () => void performConfirmedBillingAction(
-    { action: 'cancelReopen' }, '取消预约复通', '确定取消当前复通预约吗？', btnBillingCancelReopen,
   ));
   btnBillingPackage.addEventListener('click', () => {
     const option = billingCenterData?.service.packageOptions.find(item => item.id === selectedBillingPackageId);
@@ -3611,6 +3584,14 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType) {
     infoFlow.textContent = '--';
     renderBillingInfo(null);
   }
+  if (IS_ANDROID && (window as any).AndroidBridge?.updateKeepAliveStatus) {
+    const notification = state === NetworkState.Online
+      ? '互联网已连接，后台自动登录正常'
+      : state === NetworkState.BjutCampus
+        ? '校园网需要认证，自动登录正在处理'
+        : '网络离线或不在校园网环境';
+    (window as any).AndroidBridge.updateKeepAliveStatus(notification);
+  }
   renderIcons(networkIcon);
 }
 
@@ -3732,15 +3713,10 @@ const billingRecordDefinitions: Record<BillingRecordKind, {
       { keys: ['time'], label: '使用时长', unit: '分钟' },
       { keys: ['flow'], label: '使用流量', unit: 'MB' },
       { keys: ['costMoney'], label: '计费金额', unit: '元' },
-      { keys: ['internetUpFlow'], label: '国际上行', unit: 'MB' },
-      { keys: ['internetDownFlow'], label: '国际下行', unit: 'MB' },
-      { keys: ['chinanetUpFlow'], label: '国内上行', unit: 'MB' },
-      { keys: ['chinanetDownFlow'], label: '国内下行', unit: 'MB' },
       { keys: ['userIp'], label: 'IPv4' },
       { keys: ['userIp1'], label: 'IPv6' },
       { keys: ['macAddress'], label: 'MAC' },
-      { keys: ['nasIp'], label: 'NAS IP' },
-      { keys: ['nasPort'], label: 'NAS 端口' },
+      { keys: ['accessMethod'], label: '上网方式' },
     ],
   },
   monthly: {
@@ -4050,11 +4026,7 @@ function renderBillingService(data: BillingCenterData) {
   billingServiceSpend.textContent = service.currentCycleSpend || '--';
   billingServiceLimit.textContent = service.consumeLimit || '--';
   btnBillingStopNow.disabled = !service.canStopNow;
-  btnBillingStopScheduled.disabled = !service.canStopScheduled;
   btnBillingReopenNow.disabled = !service.canReopenNow;
-  btnBillingReopenScheduled.disabled = !service.canReopenScheduled;
-  btnBillingCancelStop.hidden = !service.stopScheduled;
-  btnBillingCancelReopen.hidden = !service.reopenScheduled;
   btnBillingCancelPackage.hidden = !service.packageScheduled;
   btnBillingConsumeLimit.disabled = false;
 
@@ -4162,6 +4134,11 @@ function renderBillingSecurity(data: BillingCenterData) {
 
 function renderBillingCenterData(data: BillingCenterData) {
   billingCenterData = data;
+  const info = billingOverviewToUserInfo(data.overview);
+  infoAccount.textContent = info.account || '--';
+  infoBalance.textContent = info.balance || '--';
+  infoFlow.textContent = info.flow || '--';
+  renderBillingInfo(info);
   initializeBillingRecordQueryStates(data);
   syncBillingRecordControls();
   renderBillingRecords();
@@ -4169,8 +4146,7 @@ function renderBillingCenterData(data: BillingCenterData) {
   renderBillingDevices(data);
   renderBillingSecurity(data);
   const messages = [
-    currentUserInfo?.billingError,
-    ...(currentUserInfo?.billingWarnings || []),
+    ...info.billingWarnings,
     ...data.warnings,
   ].filter(Boolean) as string[];
   billingCenterMessage.textContent = messages.join('\n');
@@ -4266,17 +4242,25 @@ async function exportBillingRecords(all: boolean) {
   }
 }
 
-function syncDashboardFromBillingCenter() {
-  if (!currentUserInfo || !billingCenterData) return;
-  const service = billingCenterData.service;
-  currentUserInfo.status = service.accountStatus || currentUserInfo.status;
-  currentUserInfo.statusReason = service.statusReason || null;
-  currentUserInfo.package = service.currentPackage || currentUserInfo.package;
-  currentUserInfo.packageDetail = service.packageDetail || currentUserInfo.packageDetail;
-  currentUserInfo.balance = service.balance || currentUserInfo.balance;
-  currentUserInfo.updatedAt = billingCenterData.fetchedAt;
-  renderBillingInfo(currentUserInfo);
-  renderBillingCenter(currentUserInfo);
+function billingOverviewToUserInfo(overview: BillingOverview): UserInfo {
+  return {
+    account: overview.account,
+    balance: overview.balance,
+    flow: overview.remainingFlow,
+    source: 'billing',
+    status: overview.status,
+    statusReason: overview.statusReason,
+    package: overview.package,
+    packageDetail: overview.packageDetail,
+    usedFlow: overview.usedFlow,
+    billingCycle: overview.billingCycle,
+    updatedAt: overview.updatedAt,
+    loginHistory: overview.loginHistory || [],
+    onlineSessions: overview.onlineSessions || [],
+    offlineTip: overview.offlineTip,
+    mauthEnabled: overview.mauthEnabled,
+    billingWarnings: overview.warnings || [],
+  };
 }
 
 function clearBillingSecretInputs() {
@@ -4309,7 +4293,6 @@ async function performConfirmedBillingAction(
       renderAccounts();
     }
     await refreshBillingCenterData();
-    syncDashboardFromBillingCenter();
     await customAlert(result.message, '操作完成');
   } catch (error) {
     clearBillingSecretInputs();
@@ -4388,7 +4371,7 @@ async function disconnectBillingSession(button: HTMLButtonElement) {
   button.textContent = '注销中…';
   try {
     const message = await invoke<string>('disconnect_billing_session', { sessionId, ip, mac });
-    await updateUserInfo(true);
+    await refreshBillingCenterData();
     await customAlert(message, '操作完成');
   } catch (error) {
     await customAlert(`注销失败：${String(error)}`);
@@ -4412,7 +4395,7 @@ async function toggleBillingMauth() {
   btnToggleBillingMauth.disabled = true;
   try {
     const message = await invoke<string>('set_billing_mauth', { enabled });
-    await updateUserInfo(true);
+    await refreshBillingCenterData();
     await customAlert(message, '操作完成');
   } catch (error) {
     await customAlert(`修改失败：${String(error)}`);
