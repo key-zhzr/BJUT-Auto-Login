@@ -3603,11 +3603,22 @@ async fn get_user_info(
                     "info",
                 );
             }
+            let fetch_started = std::time::Instant::now();
             let (result, fetched_now) =
                 fetch_billing_cached(&state, account, compatibility, force).await;
             if fetched_now {
                 match &result {
-                    Ok(_) => rust_log(&app, &state, "计费", "计费系统数据已安全更新", "debug"),
+                    Ok(info) => rust_log(
+                        &app,
+                        &state,
+                        "计费",
+                        &format!(
+                            "计费系统账户概览已更新（耗时 {:.1} 秒，{} 条警告）",
+                            fetch_started.elapsed().as_secs_f32(),
+                            info.billing_warnings.len()
+                        ),
+                        "info",
+                    ),
                     Err(error) => rust_log(&app, &state, "计费", error, "info"),
                 }
             }

@@ -1,10 +1,6 @@
 use super::{query_campus_dns_ipv4, redact_request_error, VpnCompatibility};
 use chrono::Datelike;
-use futures_util::{
-    future::{join, join4},
-    stream::FuturesUnordered,
-    StreamExt,
-};
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use reqwest::header::{
     HeaderMap, ACCEPT, ACCEPT_LANGUAGE, COOKIE, LOCATION, ORIGIN, REFERER, SET_COOKIE,
 };
@@ -451,49 +447,53 @@ where
         ];
         let operation_params = payment_params;
 
+        // Keep authenticated requests sequential. The Dr.COM service (and
+        // some off-campus VPN proxies in front of it) can stall when one
+        // session sends multiple module requests concurrently.
         progress("正在读取上网记录与账单");
-        let (usage_result, monthly_result, payment_result, operation_result) = join4(
-            fetch_page_table_isolated(
-                session.clone(),
-                "/Self/bill/userOnlineLog",
-                "/Self/bill/getUserOnlineLog",
-                &usage_params,
-                USAGE_RECORD_FIELDS,
-                "上网记录",
-            ),
-            fetch_page_table_isolated(
-                session.clone(),
-                "/Self/bill/monthPay",
-                "/Self/bill/getMonthPay",
-                &monthly_params,
-                &[
-                    "startAt",
-                    "endAt",
-                    "package",
-                    "baseFee",
-                    "usageFee",
-                    "durationMinutes",
-                    "flowMb",
-                    "billedAt",
-                ],
-                "历史账单",
-            ),
-            fetch_page_table_isolated(
-                session.clone(),
-                "/Self/bill/payMent",
-                "/Self/bill/getPayMent",
-                &payment_params,
-                &["paidAt", "type", "amount", "terminal", "note"],
-                "充值明细",
-            ),
-            fetch_page_table_isolated(
-                session.clone(),
-                "/Self/bill/operatorLog",
-                "/Self/bill/getOperatorLog",
-                &operation_params,
-                &["operatedAt", "description", "terminal", "unused", "note"],
-                "业务办理记录",
-            ),
+        let usage_result = fetch_page_table_isolated(
+            session.clone(),
+            "/Self/bill/userOnlineLog",
+            "/Self/bill/getUserOnlineLog",
+            &usage_params,
+            USAGE_RECORD_FIELDS,
+            "上网记录",
+        )
+        .await;
+        let monthly_result = fetch_page_table_isolated(
+            session.clone(),
+            "/Self/bill/monthPay",
+            "/Self/bill/getMonthPay",
+            &monthly_params,
+            &[
+                "startAt",
+                "endAt",
+                "package",
+                "baseFee",
+                "usageFee",
+                "durationMinutes",
+                "flowMb",
+                "billedAt",
+            ],
+            "历史账单",
+        )
+        .await;
+        let payment_result = fetch_page_table_isolated(
+            session.clone(),
+            "/Self/bill/payMent",
+            "/Self/bill/getPayMent",
+            &payment_params,
+            &["paidAt", "type", "amount", "terminal", "note"],
+            "充值明细",
+        )
+        .await;
+        let operation_result = fetch_page_table_isolated(
+            session.clone(),
+            "/Self/bill/operatorLog",
+            "/Self/bill/getOperatorLog",
+            &operation_params,
+            &["operatedAt", "description", "terminal", "unused", "note"],
+            "业务办理记录",
         )
         .await;
         let (_, usage_records, usage_warnings) = usage_result;
@@ -526,49 +526,49 @@ where
         ];
 
         progress("正在读取账号服务与设备");
-        let (stop_result, reopen_result, package_result, (device_result, tariff_result)) = join4(
-            fetch_page_table_isolated(
-                session.clone(),
-                "/Self/service/goStop",
-                "/Self/service/getStopLog",
-                &common_page,
-                STOP_LOG_FIELDS,
-                "报停记录",
-            ),
-            fetch_page_table_isolated(
-                session.clone(),
-                "/Self/service/goReopen",
-                "/Self/service/goReopenLog",
-                &common_page,
-                REOPEN_LOG_FIELDS,
-                "复通记录",
-            ),
-            fetch_page_table_isolated(
-                session.clone(),
-                "/Self/service/package",
-                "/Self/service/packageLog",
-                &package_params,
-                PACKAGE_LOG_FIELDS,
-                "预约套餐记录",
-            ),
-            join(
-                fetch_page_table_isolated(
-                    session.clone(),
-                    "/Self/service/myMac",
-                    "/Self/service/getMacList",
-                    &device_params,
-                    &["online", "mac", "device", "lastLoginAt", "lastIp"],
-                    "设备列表",
-                ),
-                fetch_page_table_isolated(
-                    session.clone(),
-                    "/Self/service/userGroups",
-                    "/Self/service/getUserGroups",
-                    &tariff_params,
-                    TARIFF_GROUP_FIELDS,
-                    "资费列表",
-                ),
-            ),
+        let stop_result = fetch_page_table_isolated(
+            session.clone(),
+            "/Self/service/goStop",
+            "/Self/service/getStopLog",
+            &common_page,
+            STOP_LOG_FIELDS,
+            "报停记录",
+        )
+        .await;
+        let reopen_result = fetch_page_table_isolated(
+            session.clone(),
+            "/Self/service/goReopen",
+            "/Self/service/goReopenLog",
+            &common_page,
+            REOPEN_LOG_FIELDS,
+            "复通记录",
+        )
+        .await;
+        let package_result = fetch_page_table_isolated(
+            session.clone(),
+            "/Self/service/package",
+            "/Self/service/packageLog",
+            &package_params,
+            PACKAGE_LOG_FIELDS,
+            "预约套餐记录",
+        )
+        .await;
+        let device_result = fetch_page_table_isolated(
+            session.clone(),
+            "/Self/service/myMac",
+            "/Self/service/getMacList",
+            &device_params,
+            &["online", "mac", "device", "lastLoginAt", "lastIp"],
+            "设备列表",
+        )
+        .await;
+        let tariff_result = fetch_page_table_isolated(
+            session.clone(),
+            "/Self/service/userGroups",
+            "/Self/service/getUserGroups",
+            &tariff_params,
+            TARIFF_GROUP_FIELDS,
+            "资费列表",
         )
         .await;
         let (stop_html, stop_logs, stop_warnings) = stop_result;
@@ -583,27 +583,28 @@ where
         warnings.extend(tariff_warnings);
 
         progress("正在读取安全设置");
-        let (protect_result, password_result, questions_result, recharge_result) = join4(
-            get_page_isolated(
-                session.clone(),
-                "/Self/service/consumeProtect",
-                "消费保护页面",
-            ),
-            get_page_isolated(
-                session.clone(),
-                "/Self/setting/changePassword",
-                "修改密码页面",
-            ),
-            get_page_isolated(
-                session.clone(),
-                "/Self/setting/passwordQuestion",
-                "密码保护页面",
-            ),
-            get_page_isolated(
-                session.clone(),
-                "/Self/service/userRecharge",
-                "在线充值页面",
-            ),
+        let protect_result = get_page_isolated(
+            session.clone(),
+            "/Self/service/consumeProtect",
+            "消费保护页面",
+        )
+        .await;
+        let password_result = get_page_isolated(
+            session.clone(),
+            "/Self/setting/changePassword",
+            "修改密码页面",
+        )
+        .await;
+        let questions_result = get_page_isolated(
+            session.clone(),
+            "/Self/setting/passwordQuestion",
+            "密码保护页面",
+        )
+        .await;
+        let recharge_result = get_page_isolated(
+            session.clone(),
+            "/Self/service/userRecharge",
+            "在线充值页面",
         )
         .await;
         let (protect_html, protect_warnings) = protect_result;
@@ -1750,7 +1751,7 @@ async fn fetch_page_table_isolated(
     table_label: &str,
 ) -> (String, BillingTable, Vec<String>) {
     let mut warnings = Vec::new();
-    let (html, table) = fetch_page_table_or_warning(
+    let request = fetch_page_table_or_warning(
         &mut session,
         page_path,
         table_path,
@@ -1758,8 +1759,14 @@ async fn fetch_page_table_isolated(
         fields,
         table_label,
         &mut warnings,
-    )
-    .await;
+    );
+    let (html, table) = match tokio::time::timeout(Duration::from_secs(10), request).await {
+        Ok(result) => result,
+        Err(_) => {
+            warnings.push(format!("{table_label}读取超过 10 秒，已跳过"));
+            (String::new(), BillingTable::default())
+        }
+    };
     (html, table, warnings)
 }
 
@@ -1769,7 +1776,14 @@ async fn get_page_isolated(
     label: &str,
 ) -> (String, Vec<String>) {
     let mut warnings = Vec::new();
-    let html = get_page_or_warning(&mut session, path, label, &mut warnings).await;
+    let request = get_page_or_warning(&mut session, path, label, &mut warnings);
+    let html = match tokio::time::timeout(Duration::from_secs(8), request).await {
+        Ok(html) => html,
+        Err(_) => {
+            warnings.push(format!("{label}读取超过 8 秒，已跳过"));
+            String::new()
+        }
+    };
     (html, warnings)
 }
 
@@ -2077,41 +2091,60 @@ fn validate_question_answers(
 }
 
 async fn populate_dashboard_details(session: &mut BillingSession, snapshot: &mut BillingSnapshot) {
-    let mut login_session = session.clone();
-    let mut online_session = session.clone();
-    let mut offline_session = session.clone();
-    let mut mauth_session = session.clone();
-    let (login_history, online_sessions, offline_tip, mauth_enabled) = join4(
-        async {
-            get_dashboard_text(
-                &mut login_session,
-                "/Self/dashboard/getLoginHistory",
-                "application/json,*/*;q=0.8",
-            )
-            .await
-            .and_then(|text| parse_login_history(&text))
-        },
-        async {
-            get_dashboard_text(
-                &mut online_session,
-                "/Self/dashboard/getOnlineList",
-                "application/json,*/*;q=0.8",
-            )
-            .await
-            .and_then(|text| parse_online_sessions(&text))
-        },
-        async {
-            get_dashboard_text(
-                &mut offline_session,
-                "/Self/dashboard/getOfflineTip",
-                "text/plain,*/*;q=0.8",
-            )
-            .await
-            .and_then(|text| parse_offline_tip(&text))
-        },
-        fetch_mauth_state(&mut mauth_session),
-    )
-    .await;
+    // These endpoints are quick in normal operation, but must remain
+    // sequential for the same authenticated Dr.COM session. Bound every
+    // optional request so one unavailable endpoint cannot block the overview.
+    let login_history = match tokio::time::timeout(Duration::from_secs(6), async {
+        get_dashboard_text(
+            session,
+            "/Self/dashboard/getLoginHistory",
+            "application/json,*/*;q=0.8",
+        )
+        .await
+        .and_then(|text| parse_login_history(&text))
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(BillingError::Network(
+            "最近上网记录请求超过 6 秒".to_string(),
+        )),
+    };
+    let online_sessions = match tokio::time::timeout(Duration::from_secs(6), async {
+        get_dashboard_text(
+            session,
+            "/Self/dashboard/getOnlineList",
+            "application/json,*/*;q=0.8",
+        )
+        .await
+        .and_then(|text| parse_online_sessions(&text))
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(BillingError::Network("在线会话请求超过 6 秒".to_string())),
+    };
+    let offline_tip = match tokio::time::timeout(Duration::from_secs(6), async {
+        get_dashboard_text(
+            session,
+            "/Self/dashboard/getOfflineTip",
+            "text/plain,*/*;q=0.8",
+        )
+        .await
+        .and_then(|text| parse_offline_tip(&text))
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(BillingError::Network("注销提示请求超过 6 秒".to_string())),
+    };
+    let mauth_enabled =
+        match tokio::time::timeout(Duration::from_secs(6), fetch_mauth_state(session)).await {
+            Ok(result) => result,
+            Err(_) => Err(BillingError::Network(
+                "无感认证状态请求超过 6 秒".to_string(),
+            )),
+        };
 
     match login_history {
         Ok(records) => snapshot.login_history = records,
