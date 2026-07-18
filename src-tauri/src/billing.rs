@@ -3182,7 +3182,7 @@ fn parse_service_state(
 
 fn date_near_label(html: &str, label: &str) -> Option<String> {
     let start = html.find(label)?;
-    dates_in(&html[start..(start + 800).min(html.len())])
+    dates_in(char_boundary_window(html, start, 800))
         .into_iter()
         .next()
 }
@@ -3448,9 +3448,19 @@ fn extract_dl_metric(html: &str, label: &str) -> Option<String> {
 
 fn extract_billing_cycle(html: &str) -> Option<String> {
     let label = html.find("计费周期")?;
-    let end = (label + 1600).min(html.len());
-    let dates = dates_in(&html[label..end]);
+    let dates = dates_in(char_boundary_window(html, label, 1600));
     (dates.len() >= 2).then(|| format!("{} 至 {}", dates[0], dates[1]))
+}
+
+fn char_boundary_window(source: &str, start: usize, max_bytes: usize) -> &str {
+    if start > source.len() || !source.is_char_boundary(start) {
+        return "";
+    }
+    let mut end = start.saturating_add(max_bytes).min(source.len());
+    while end > start && !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    &source[start..end]
 }
 
 fn dates_in(source: &str) -> Vec<String> {
@@ -3622,6 +3632,29 @@ mod tests {
         assert_eq!(
             snapshot.billing_cycle.as_deref(),
             Some("2026-07-01 至 2026-07-31")
+        );
+    }
+
+    #[test]
+    fn fixed_byte_windows_end_on_utf8_character_boundaries() {
+        let cycle_prefix = "计费周期：2026-07-01 至 2026-07-31 ";
+        let cycle_html = format!(
+            "{cycle_prefix}{}单",
+            "x".repeat(1599usize.saturating_sub(cycle_prefix.len()))
+        );
+        assert_eq!(
+            extract_billing_cycle(&cycle_html).as_deref(),
+            Some("2026-07-01 至 2026-07-31")
+        );
+
+        let settlement_prefix = "下次结算日期：2026-08-01 ";
+        let settlement_html = format!(
+            "{settlement_prefix}{}单",
+            "x".repeat(799usize.saturating_sub(settlement_prefix.len()))
+        );
+        assert_eq!(
+            date_near_label(&settlement_html, "下次结算日期").as_deref(),
+            Some("2026-08-01")
         );
     }
 
