@@ -3679,19 +3679,9 @@ async fn get_billing_center(
     let emit_progress = move |message: &str| {
         emit_billing_center_progress(&progress_app, &progress_state, message);
     };
-    let overview_app = app.clone();
-    let emit_overview = move |overview: &billing::BillingSnapshot| {
-        let _ = overview_app.emit("billing-center-overview", overview.clone());
-    };
     let fetched = tokio::time::timeout(
         std::time::Duration::from_secs(75),
-        billing::fetch_center(
-            &account.user,
-            &account.pass,
-            compatibility,
-            emit_progress,
-            emit_overview,
-        ),
+        billing::fetch_center(&account.user, &account.pass, compatibility, emit_progress),
     )
     .await;
     let result = match fetched {

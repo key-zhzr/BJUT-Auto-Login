@@ -933,15 +933,6 @@ async function listenToRustEvents() {
       billingCenterMessage.hidden = false;
     });
 
-    listen<BillingOverview>('billing-center-overview', event => {
-      if (!billingCenterLoading) return;
-      const info = billingOverviewToUserInfo(event.payload);
-      infoAccount.textContent = info.account || '--';
-      infoBalance.textContent = info.balance || '--';
-      infoFlow.textContent = info.flow || '--';
-      renderBillingInfo(info);
-    });
-
     listen<AccountHealth[]>('account-health-change', event => {
       setAccountHealth(event.payload);
     });

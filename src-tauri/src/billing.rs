@@ -224,7 +224,7 @@ impl BillingError {
 
     pub(crate) fn cache_duration(&self) -> Duration {
         match self {
-            Self::Network(_) => Duration::from_secs(5 * 60),
+            Self::Network(_) => Duration::from_secs(15),
             Self::Protocol(_) => Duration::from_secs(15 * 60),
             Self::InvalidRequest(_) => Duration::from_secs(60),
             Self::ActionRejected(_) => Duration::from_secs(5 * 60),
@@ -386,28 +386,25 @@ pub(crate) async fn fetch(
     compatibility: VpnCompatibility,
 ) -> Result<BillingSnapshot, BillingError> {
     let mut session = authenticate(account, password, compatibility).await?;
-    let snapshot = parse_dashboard(&session.dashboard_html, account);
+    let snapshot = parse_dashboard_bounded(&session.dashboard_html, account).await?;
     logout(&mut session).await;
     Ok(snapshot)
 }
 
-pub(crate) async fn fetch_center<F, O>(
+pub(crate) async fn fetch_center<F>(
     account: &str,
     password: &str,
     compatibility: VpnCompatibility,
     progress: F,
-    overview_ready: O,
 ) -> Result<BillingCenterData, BillingError>
 where
     F: Fn(&str) + Send + Sync + 'static,
-    O: Fn(&BillingSnapshot) + Send + Sync + 'static,
 {
     progress("正在连接并登录计费系统");
     let mut session = authenticate(account, password, compatibility).await?;
     let result = async {
-        progress("登录成功，正在读取账户概览");
-        let mut overview = parse_dashboard(&session.dashboard_html, account);
-        overview_ready(&overview);
+        progress("登录成功，正在解析账户概览");
+        let mut overview = parse_dashboard_bounded(&session.dashboard_html, account).await?;
         populate_dashboard_details(&mut session, &mut overview, &progress).await;
         let end_date = chrono::Local::now().date_naive();
         let start_date = end_date - chrono::Duration::days(60);
@@ -449,17 +446,18 @@ where
         // some off-campus VPN proxies in front of it) can stall when one
         // session sends multiple module requests concurrently.
         progress("正在读取上网记录与账单");
-        let usage_result = fetch_page_table_isolated(
-            session.clone(),
+        let (_, usage_records) = fetch_page_table_bounded(
+            &mut session,
             "/Self/bill/userOnlineLog",
             "/Self/bill/getUserOnlineLog",
             &usage_params,
             USAGE_RECORD_FIELDS,
             "上网记录",
+            &mut warnings,
         )
         .await;
-        let monthly_result = fetch_page_table_isolated(
-            session.clone(),
+        let (_, monthly_bills) = fetch_page_table_bounded(
+            &mut session,
             "/Self/bill/monthPay",
             "/Self/bill/getMonthPay",
             &monthly_params,
@@ -474,34 +472,29 @@ where
                 "billedAt",
             ],
             "历史账单",
+            &mut warnings,
         )
         .await;
-        let payment_result = fetch_page_table_isolated(
-            session.clone(),
+        let (_, payments) = fetch_page_table_bounded(
+            &mut session,
             "/Self/bill/payMent",
             "/Self/bill/getPayMent",
             &payment_params,
             &["paidAt", "type", "amount", "terminal", "note"],
             "充值明细",
+            &mut warnings,
         )
         .await;
-        let operation_result = fetch_page_table_isolated(
-            session.clone(),
+        let (_, operations) = fetch_page_table_bounded(
+            &mut session,
             "/Self/bill/operatorLog",
             "/Self/bill/getOperatorLog",
             &operation_params,
             &["operatedAt", "description", "terminal", "unused", "note"],
             "业务办理记录",
+            &mut warnings,
         )
         .await;
-        let (_, usage_records, usage_warnings) = usage_result;
-        let (_, monthly_bills, monthly_warnings) = monthly_result;
-        let (_, payments, payment_warnings) = payment_result;
-        let (_, operations, operation_warnings) = operation_result;
-        warnings.extend(usage_warnings);
-        warnings.extend(monthly_warnings);
-        warnings.extend(payment_warnings);
-        warnings.extend(operation_warnings);
 
         let package_params = [
             common_page[0],
@@ -524,95 +517,86 @@ where
         ];
 
         progress("正在读取账号服务与设备");
-        let stop_result = fetch_page_table_isolated(
-            session.clone(),
+        let (stop_html, stop_logs) = fetch_page_table_bounded(
+            &mut session,
             "/Self/service/goStop",
             "/Self/service/getStopLog",
             &common_page,
             STOP_LOG_FIELDS,
             "报停记录",
+            &mut warnings,
         )
         .await;
-        let reopen_result = fetch_page_table_isolated(
-            session.clone(),
+        let (reopen_html, reopen_logs) = fetch_page_table_bounded(
+            &mut session,
             "/Self/service/goReopen",
             "/Self/service/goReopenLog",
             &common_page,
             REOPEN_LOG_FIELDS,
             "复通记录",
+            &mut warnings,
         )
         .await;
-        let package_result = fetch_page_table_isolated(
-            session.clone(),
+        let (package_html, package_logs) = fetch_page_table_bounded(
+            &mut session,
             "/Self/service/package",
             "/Self/service/packageLog",
             &package_params,
             PACKAGE_LOG_FIELDS,
             "预约套餐记录",
+            &mut warnings,
         )
         .await;
-        let device_result = fetch_page_table_isolated(
-            session.clone(),
+        let (_, devices) = fetch_page_table_bounded(
+            &mut session,
             "/Self/service/myMac",
             "/Self/service/getMacList",
             &device_params,
             &["online", "mac", "device", "lastLoginAt", "lastIp"],
             "设备列表",
+            &mut warnings,
         )
         .await;
-        let tariff_result = fetch_page_table_isolated(
-            session.clone(),
+        let (_, tariff_groups) = fetch_page_table_bounded(
+            &mut session,
             "/Self/service/userGroups",
             "/Self/service/getUserGroups",
             &tariff_params,
             TARIFF_GROUP_FIELDS,
             "资费列表",
+            &mut warnings,
         )
         .await;
-        let (stop_html, stop_logs, stop_warnings) = stop_result;
-        let (reopen_html, reopen_logs, reopen_warnings) = reopen_result;
-        let (package_html, package_logs, package_warnings) = package_result;
-        let (_, devices, device_warnings) = device_result;
-        let (_, tariff_groups, tariff_warnings) = tariff_result;
-        warnings.extend(stop_warnings);
-        warnings.extend(reopen_warnings);
-        warnings.extend(package_warnings);
-        warnings.extend(device_warnings);
-        warnings.extend(tariff_warnings);
 
         progress("正在读取安全设置");
-        let protect_result = get_page_isolated(
-            session.clone(),
+        let protect_html = get_page_bounded(
+            &mut session,
             "/Self/service/consumeProtect",
             "消费保护页面",
+            &mut warnings,
         )
         .await;
-        let password_result = get_page_isolated(
-            session.clone(),
+        let password_html = get_page_bounded(
+            &mut session,
             "/Self/setting/changePassword",
             "修改密码页面",
+            &mut warnings,
         )
         .await;
-        let questions_result = get_page_isolated(
-            session.clone(),
+        let questions_html = get_page_bounded(
+            &mut session,
             "/Self/setting/passwordQuestion",
             "密码保护页面",
+            &mut warnings,
         )
         .await;
-        let recharge_result = get_page_isolated(
-            session.clone(),
+        let recharge_html = get_page_bounded(
+            &mut session,
             "/Self/service/userRecharge",
             "在线充值页面",
+            &mut warnings,
         )
         .await;
-        let (protect_html, protect_warnings) = protect_result;
-        let (password_html, password_warnings) = password_result;
-        let (questions_html, question_warnings) = questions_result;
-        let (recharge_html, recharge_warnings) = recharge_result;
-        warnings.extend(protect_warnings);
-        warnings.extend(password_warnings);
-        warnings.extend(question_warnings);
-        warnings.extend(recharge_warnings);
 
         let data = BillingCenterData {
             account: account.to_string(),
@@ -1740,23 +1724,23 @@ async fn fetch_page_table_or_warning(
     (html, table)
 }
 
-async fn fetch_page_table_isolated(
-    mut session: BillingSession,
+async fn fetch_page_table_bounded(
+    session: &mut BillingSession,
     page_path: &str,
     table_path: &str,
     params: &[(&str, &str)],
     fields: &[&str],
     table_label: &str,
-) -> (String, BillingTable, Vec<String>) {
-    let mut warnings = Vec::new();
+    warnings: &mut Vec<String>,
+) -> (String, BillingTable) {
     let request = fetch_page_table_or_warning(
-        &mut session,
+        session,
         page_path,
         table_path,
         params,
         fields,
         table_label,
-        &mut warnings,
+        warnings,
     );
     let (html, table) = match tokio::time::timeout(Duration::from_secs(10), request).await {
         Ok(result) => result,
@@ -1765,16 +1749,16 @@ async fn fetch_page_table_isolated(
             (String::new(), BillingTable::default())
         }
     };
-    (html, table, warnings)
+    (html, table)
 }
 
-async fn get_page_isolated(
-    mut session: BillingSession,
+async fn get_page_bounded(
+    session: &mut BillingSession,
     path: &str,
     label: &str,
-) -> (String, Vec<String>) {
-    let mut warnings = Vec::new();
-    let request = get_page_or_warning(&mut session, path, label, &mut warnings);
+    warnings: &mut Vec<String>,
+) -> String {
+    let request = get_page_or_warning(session, path, label, warnings);
     let html = match tokio::time::timeout(Duration::from_secs(8), request).await {
         Ok(html) => html,
         Err(_) => {
@@ -1782,7 +1766,7 @@ async fn get_page_isolated(
             String::new()
         }
     };
-    (html, warnings)
+    html
 }
 
 async fn get_ajax_text(
@@ -2750,6 +2734,28 @@ fn attribute(tag: &str, wanted: &str) -> Option<String> {
         return Some(decode_html_entities(&tag[value_start..index]));
     }
     None
+}
+
+async fn parse_dashboard_bounded(
+    html: &str,
+    account: &str,
+) -> Result<BillingSnapshot, BillingError> {
+    let html = html.to_string();
+    let account = account.to_string();
+    match tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::task::spawn_blocking(move || parse_dashboard(&html, &account)),
+    )
+    .await
+    {
+        Ok(Ok(snapshot)) => Ok(snapshot),
+        Ok(Err(error)) => Err(BillingError::Protocol(format!(
+            "账户概览解析任务异常：{error}"
+        ))),
+        Err(_) => Err(BillingError::Protocol(
+            "账户概览解析超过 3 秒，已停止本次请求".to_string(),
+        )),
+    }
 }
 
 fn parse_dashboard(html: &str, account: &str) -> BillingSnapshot {
