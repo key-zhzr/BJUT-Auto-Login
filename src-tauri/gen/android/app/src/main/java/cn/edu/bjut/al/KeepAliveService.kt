@@ -135,7 +135,12 @@ class KeepAliveService : Service() {
         }
         when (intent?.action) {
             ACTION_CHECK -> {
-                if (engineIsAlive()) sendCommand(COMMAND_CHECK) else performHeadlessCheck("通知栏立即检测", true)
+                val useInterfaceEngine = engineIsAlive()
+                KeepAliveJournal.append(
+                    this,
+                    "用户通过常驻通知触发立即检测；已交给${if (useInterfaceEngine) "界面核心" else "Rust 无界面核心"}"
+                )
+                if (useInterfaceEngine) sendCommand(COMMAND_CHECK) else performHeadlessCheck("通知栏立即检测", true)
             }
             ACTION_PAUSE -> {
                 pausedUntil = System.currentTimeMillis() + 60 * 60 * 1000L
@@ -163,7 +168,7 @@ class KeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        KeepAliveJournal.append(this, "应用任务已从最近任务中移除，保活服务仍将尝试恢复", "error")
+        KeepAliveJournal.append(this, "应用任务已从最近任务中移除，保活服务仍将尝试恢复")
         KeepAliveRestartScheduler.schedule(this, 10_000L, "task_removed")
         super.onTaskRemoved(rootIntent)
     }

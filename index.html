@@ -60,6 +60,9 @@
         <section id="dashboard" class="page active">
           <header class="page-header">
             <h1>控制台</h1>
+            <button id="btn-open-billing" class="btn btn-secondary btn-sm" type="button">
+              <i data-lucide="receipt-text"></i> 计费中心
+            </button>
           </header>
           
           <div id="dashboard-override-options" class="glass-card" style="display: none; padding: 1rem; margin-bottom: 1rem; border-radius: 12px;">
@@ -134,7 +137,7 @@
             <div class="info-card glass-card">
               <i data-lucide="user"></i>
               <div class="info-content">
-                <h4>当前登录账号</h4>
+                <h4 id="info-account-label">当前登录账号</h4>
                 <p id="info-account">未登录</p>
               </div>
             </div>
@@ -153,6 +156,335 @@
               </div>
             </div>
           </div>
+
+          <div id="billing-details" class="billing-details glass-card" hidden aria-live="polite">
+            <div class="billing-details-header">
+              <div>
+                <div class="billing-title-row">
+                  <i data-lucide="receipt-text"></i>
+                  <h3>校园网计费</h3>
+                  <span id="billing-source" class="billing-source">计费系统</span>
+                </div>
+                <p id="billing-package-detail" class="billing-package-detail"></p>
+              </div>
+              <div class="billing-header-actions">
+                <button id="btn-refresh-billing" class="btn btn-secondary btn-sm" type="button">
+                  <i data-lucide="refresh-cw"></i> 刷新计费
+                </button>
+              </div>
+            </div>
+            <div class="billing-detail-grid">
+              <div class="billing-detail-item">
+                <span>账号状态</span>
+                <strong id="billing-status">--</strong>
+              </div>
+              <div class="billing-detail-item billing-detail-wide">
+                <span>当前套餐</span>
+                <strong id="billing-package">--</strong>
+              </div>
+              <div class="billing-detail-item">
+                <span>已用流量</span>
+                <strong id="billing-used-flow">--</strong>
+              </div>
+              <div class="billing-detail-item billing-detail-wide">
+                <span>计费周期</span>
+                <strong id="billing-cycle">--</strong>
+              </div>
+              <div class="billing-detail-item">
+                <span>更新时间</span>
+                <strong id="billing-updated-at">--</strong>
+              </div>
+            </div>
+            <p id="billing-message" class="billing-message" hidden></p>
+          </div>
+        </section>
+
+        <!-- Billing center (opened from the dashboard to keep mobile navigation compact) -->
+        <section id="billing-center" class="page">
+          <header class="page-header billing-center-header">
+            <div>
+              <button id="btn-close-billing" class="billing-back-button" type="button">
+                <i data-lucide="arrow-left"></i> 返回控制台
+              </button>
+              <h1>校园网计费中心</h1>
+              <p>账户状态、在线会话与近期上网记录</p>
+            </div>
+            <button id="btn-refresh-billing-center" class="btn btn-secondary" type="button">
+              <i data-lucide="refresh-cw"></i> 刷新
+            </button>
+          </header>
+
+          <div id="billing-center-message" class="billing-center-message" hidden aria-live="polite"></div>
+
+          <div class="billing-center-summary">
+            <article class="billing-summary-card glass-card">
+              <span>计费账号</span>
+              <strong id="billing-center-account">--</strong>
+            </article>
+            <article class="billing-summary-card glass-card">
+              <span>账户余额</span>
+              <strong id="billing-center-balance">--</strong>
+            </article>
+            <article class="billing-summary-card glass-card">
+              <span>剩余流量</span>
+              <strong id="billing-center-flow">--</strong>
+            </article>
+            <article class="billing-summary-card glass-card">
+              <span>账号状态</span>
+              <strong id="billing-center-status">--</strong>
+            </article>
+          </div>
+
+          <section class="billing-center-panel glass-card">
+            <div class="billing-center-panel-header">
+              <div>
+                <div class="billing-panel-title">
+                  <i data-lucide="fingerprint"></i>
+                  <h2>无感认证</h2>
+                  <span id="billing-mauth-badge" class="billing-state-badge neutral">未知</span>
+                </div>
+                <p>开启后，计费系统可按已绑定设备识别校园网会话。</p>
+              </div>
+              <button id="btn-toggle-billing-mauth" class="btn btn-secondary btn-sm" type="button" disabled>状态未知</button>
+            </div>
+          </section>
+
+          <section class="billing-center-panel glass-card">
+            <div class="billing-center-panel-header">
+              <div>
+                <div class="billing-panel-title">
+                  <i data-lucide="monitor-smartphone"></i>
+                  <h2>当前在线会话</h2>
+                  <span id="billing-online-count" class="billing-count-badge">0</span>
+                </div>
+                <p>注销会话可能会中断对应设备的校园网连接。</p>
+              </div>
+            </div>
+            <div id="billing-online-list" class="billing-record-list">
+              <div class="billing-empty">正在读取在线会话…</div>
+            </div>
+          </section>
+
+          <section class="billing-center-panel glass-card">
+            <div class="billing-center-panel-header">
+              <div>
+                <div class="billing-panel-title">
+                  <i data-lucide="history"></i>
+                  <h2>近期上网记录</h2>
+                  <span id="billing-history-count" class="billing-count-badge">0</span>
+                </div>
+                <p>时间、地址、流量与计费方式均来自计费系统。</p>
+              </div>
+            </div>
+            <div id="billing-history-list" class="billing-record-list">
+              <div class="billing-empty">正在读取上网记录…</div>
+            </div>
+          </section>
+
+          <section class="billing-center-panel glass-card" id="billing-records-panel">
+            <div class="billing-center-panel-header billing-module-header">
+              <div>
+                <div class="billing-panel-title">
+                  <i data-lucide="bar-chart-2"></i>
+                  <h2>账单与办理记录</h2>
+                  <span id="billing-record-total" class="billing-count-badge">0</span>
+                </div>
+                <p id="billing-record-range">选择记录类型、日期或年份后查询；日期范围最多 60 天。</p>
+              </div>
+              <div class="billing-export-actions">
+                <button id="btn-export-billing-records" class="btn btn-secondary btn-sm" type="button" disabled>
+                  <i data-lucide="download"></i> 导出本页
+                </button>
+                <button id="btn-export-all-billing-records" class="btn btn-secondary btn-sm" type="button" disabled>
+                  <i data-lucide="arrow-down-to-line"></i> 导出全部
+                </button>
+              </div>
+            </div>
+            <div class="billing-record-toolbar">
+              <div class="custom-select compact-select" id="billing-record-kind" aria-label="账单记录类型">
+                <div class="custom-select-trigger" tabindex="0"><span>上网记录</span><i data-lucide="chevron-down"></i></div>
+                <div class="custom-select-options">
+                  <div class="custom-option selected" data-value="usage">上网记录</div>
+                  <div class="custom-option" data-value="monthly">历史账单</div>
+                  <div class="custom-option" data-value="payments">充值明细</div>
+                  <div class="custom-option" data-value="operations">业务办理记录</div>
+                  <div class="custom-option" data-value="stopLogs">报停记录</div>
+                  <div class="custom-option" data-value="reopenLogs">复通记录</div>
+                  <div class="custom-option" data-value="packageLogs">套餐预约记录</div>
+                </div>
+              </div>
+              <div id="billing-record-date-filter" class="billing-record-date-filter">
+                <label>开始日期<input id="billing-record-start-date" type="date" aria-label="查询开始日期"></label>
+                <span>至</span>
+                <label>结束日期<input id="billing-record-end-date" type="date" aria-label="查询结束日期"></label>
+              </div>
+              <div id="billing-record-year-filter" class="custom-select compact-select" aria-label="历史账单年份" hidden>
+                <div class="custom-select-trigger" tabindex="0"><span>选择年份</span><i data-lucide="chevron-down"></i></div>
+                <div class="custom-select-options"></div>
+              </div>
+              <div class="custom-select compact-select billing-page-size-select" id="billing-record-page-size" aria-label="每页记录数">
+                <div class="custom-select-trigger" tabindex="0"><span>每页 10 条</span><i data-lucide="chevron-down"></i></div>
+                <div class="custom-select-options">
+                  <div class="custom-option selected" data-value="10">每页 10 条</div>
+                  <div class="custom-option" data-value="20">每页 20 条</div>
+                  <div class="custom-option" data-value="25">每页 25 条</div>
+                  <div class="custom-option" data-value="50">每页 50 条</div>
+                  <div class="custom-option" data-value="100">每页 100 条</div>
+                </div>
+              </div>
+              <button id="btn-query-billing-records" class="btn btn-primary btn-sm" type="button">
+                <i data-lucide="search"></i> 查询
+              </button>
+            </div>
+            <div class="billing-record-summary-row">
+              <div id="billing-record-summary" class="billing-record-summary"></div>
+            </div>
+            <div id="billing-records-list" class="billing-record-list">
+              <div class="billing-empty">打开计费中心后读取完整记录…</div>
+            </div>
+            <div class="billing-record-pager" aria-label="账单记录分页">
+              <button id="btn-billing-record-prev" class="btn btn-secondary btn-sm" type="button" disabled>
+                <i data-lucide="chevron-left"></i> 上一页
+              </button>
+              <span id="billing-record-page-label">第 1 / 1 页</span>
+              <button id="btn-billing-record-next" class="btn btn-secondary btn-sm" type="button" disabled>
+                下一页 <i data-lucide="chevron-right"></i>
+              </button>
+            </div>
+          </section>
+
+          <section class="billing-center-panel glass-card" id="billing-services-panel">
+            <div class="billing-center-panel-header billing-module-header">
+              <div>
+                <div class="billing-panel-title">
+                  <i data-lucide="power"></i>
+                  <h2>账号服务</h2>
+                  <span id="billing-service-status-badge" class="billing-state-badge neutral">未知</span>
+                </div>
+                <p id="billing-service-reason">报停、复通、套餐预约与消费保护。</p>
+              </div>
+            </div>
+            <div class="billing-service-grid">
+              <div class="billing-detail-item"><span>当前套餐</span><strong id="billing-service-package">--</strong></div>
+              <div class="billing-detail-item"><span>下次结算</span><strong id="billing-service-settlement">--</strong></div>
+              <div class="billing-detail-item"><span>本周期消费</span><strong id="billing-service-spend">--</strong></div>
+              <div class="billing-detail-item"><span>消费限额</span><strong id="billing-service-limit">--</strong></div>
+            </div>
+            <div class="billing-action-group">
+              <div class="billing-action-copy">
+                <h3>停复机</h3>
+                <p>写操作仅在你确认后发送；立即操作可能中断或恢复校园网计费。</p>
+              </div>
+              <div class="billing-action-controls">
+                <button id="btn-billing-stop-now" class="btn btn-danger btn-sm" type="button" disabled>立即报停</button>
+                <button id="btn-billing-reopen-now" class="btn btn-primary btn-sm" type="button" disabled>立即复通</button>
+                <input id="billing-service-date" type="date" aria-label="预约日期">
+                <button id="btn-billing-stop-scheduled" class="btn btn-secondary btn-sm" type="button" disabled>预约报停</button>
+                <button id="btn-billing-reopen-scheduled" class="btn btn-secondary btn-sm" type="button" disabled>预约复通</button>
+                <button id="btn-billing-cancel-stop" class="btn btn-secondary btn-sm" type="button" hidden>取消预约报停</button>
+                <button id="btn-billing-cancel-reopen" class="btn btn-secondary btn-sm" type="button" hidden>取消预约复通</button>
+              </div>
+            </div>
+            <div class="billing-action-group billing-package-action">
+              <div class="billing-action-copy">
+                <h3>预约套餐</h3>
+                <p>新套餐通常在下一计费周期生效；停机账号需复通后才会生效。</p>
+              </div>
+              <div id="billing-package-options" class="billing-package-options">
+                <div class="billing-empty">正在读取可预约套餐…</div>
+              </div>
+              <div class="billing-action-controls">
+                <button id="btn-billing-package" class="btn btn-primary btn-sm" type="button" disabled>确认预约套餐</button>
+                <button id="btn-billing-cancel-package" class="btn btn-secondary btn-sm" type="button" hidden>取消套餐预约</button>
+              </div>
+            </div>
+            <div class="billing-action-group">
+              <div class="billing-action-copy">
+                <h3>消费保护</h3>
+                <p>输入非负金额，最多三位小数；999999 表示不限制。</p>
+              </div>
+              <div class="billing-action-controls">
+                <input id="billing-consume-limit" inputmode="decimal" placeholder="例如 50 或 999999" maxlength="12">
+                <button id="btn-billing-consume-limit" class="btn btn-primary btn-sm" type="button" disabled>更新限额</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="billing-center-panel glass-card" id="billing-devices-panel">
+            <div class="billing-center-panel-header billing-module-header">
+              <div>
+                <div class="billing-panel-title">
+                  <i data-lucide="monitor-smartphone"></i>
+                  <h2>设备与资费</h2>
+                  <span id="billing-device-count" class="billing-count-badge">0</span>
+                </div>
+                <p>查看、绑定或解绑 MAC，并查看计费系统当前公布的资费。</p>
+              </div>
+            </div>
+            <div class="billing-action-controls billing-bind-mac">
+              <input id="billing-bind-mac" inputmode="text" autocomplete="off" maxlength="17" placeholder="MAC，例如 00-24-21-19-BD-E1">
+              <button id="btn-billing-bind-mac" class="btn btn-primary btn-sm" type="button" disabled>绑定 MAC</button>
+            </div>
+            <div id="billing-device-list" class="billing-record-list">
+              <div class="billing-empty">正在读取设备列表…</div>
+            </div>
+            <h3 class="billing-subsection-title">资费介绍</h3>
+            <div id="billing-tariff-list" class="billing-package-options">
+              <div class="billing-empty">正在读取资费列表…</div>
+            </div>
+            <p id="billing-recharge-state" class="billing-inline-note">正在确认在线充值入口…</p>
+          </section>
+
+          <section class="billing-center-panel glass-card" id="billing-security-panel">
+            <div class="billing-center-panel-header billing-module-header">
+              <div>
+                <div class="billing-panel-title">
+                  <i data-lucide="shield-check"></i>
+                  <h2>安全设置</h2>
+                </div>
+                <p>修改密码成功后，会同步更新本 App 中该计费账号的凭据。</p>
+              </div>
+            </div>
+            <form id="billing-password-form" class="billing-security-form" autocomplete="off">
+              <h3>修改密码</h3>
+              <p id="billing-password-policy" class="billing-inline-note">正在读取密码策略…</p>
+              <div class="billing-security-fields">
+                <input id="billing-old-password" type="password" autocomplete="current-password" maxlength="16" placeholder="当前密码" required>
+                <input id="billing-new-password" type="password" autocomplete="new-password" maxlength="16" placeholder="新密码" required>
+                <input id="billing-confirm-password" type="password" autocomplete="new-password" maxlength="16" placeholder="确认新密码" required>
+              </div>
+              <button id="btn-billing-password" class="btn btn-danger btn-sm" type="submit" disabled>修改并同步密码</button>
+            </form>
+            <form id="billing-questions-form" class="billing-security-form" autocomplete="off">
+              <h3>密码保护</h3>
+              <p class="billing-inline-note">三个问题不能重复；密码和答案仅用于本次 HTTPS 请求，不会写入日志。</p>
+              <input id="billing-question-password" type="password" autocomplete="current-password" maxlength="16" placeholder="当前密码" required>
+              <div class="billing-question-grid">
+                <div class="billing-question-row" data-question-index="1">
+                  <div class="custom-select form-select billing-question-select" id="billing-question-1" aria-label="问题一">
+                    <div class="custom-select-trigger" tabindex="0"><span>选择问题一</span><i data-lucide="chevron-down"></i></div>
+                    <div class="custom-select-options"></div>
+                  </div>
+                  <input id="billing-answer-1" maxlength="16" autocomplete="off" placeholder="答案一" required>
+                </div>
+                <div class="billing-question-row" data-question-index="2">
+                  <div class="custom-select form-select billing-question-select" id="billing-question-2" aria-label="问题二">
+                    <div class="custom-select-trigger" tabindex="0"><span>选择问题二</span><i data-lucide="chevron-down"></i></div>
+                    <div class="custom-select-options"></div>
+                  </div>
+                  <input id="billing-answer-2" maxlength="16" autocomplete="off" placeholder="答案二" required>
+                </div>
+                <div class="billing-question-row" data-question-index="3">
+                  <div class="custom-select form-select billing-question-select" id="billing-question-3" aria-label="问题三">
+                    <div class="custom-select-trigger" tabindex="0"><span>选择问题三</span><i data-lucide="chevron-down"></i></div>
+                    <div class="custom-select-options"></div>
+                  </div>
+                  <input id="billing-answer-3" maxlength="16" autocomplete="off" placeholder="答案三" required>
+                </div>
+              </div>
+              <button id="btn-billing-questions" class="btn btn-danger btn-sm" type="submit" disabled>更新密码保护</button>
+            </form>
+          </section>
         </section>
 
         <!-- Accounts -->

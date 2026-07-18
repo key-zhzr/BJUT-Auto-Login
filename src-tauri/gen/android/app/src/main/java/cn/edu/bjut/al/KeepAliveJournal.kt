@@ -134,7 +134,18 @@ object KeepAliveJournal {
                 append("，重要性=${latest.importance}，PSS=${latest.pss / 1024}MB，RSS=${latest.rss / 1024}MB")
                 if (description.isNotEmpty()) append("，说明=$description")
             }
-            append(appContext, details, if (latest.reason == ApplicationExitInfo.REASON_EXIT_SELF) "info" else "error")
+            val severity = when (latest.reason) {
+                ApplicationExitInfo.REASON_ANR,
+                ApplicationExitInfo.REASON_CRASH,
+                ApplicationExitInfo.REASON_CRASH_NATIVE,
+                ApplicationExitInfo.REASON_DEPENDENCY_DIED,
+                ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
+                ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
+                ApplicationExitInfo.REASON_LOW_MEMORY,
+                ApplicationExitInfo.REASON_SIGNALED -> "error"
+                else -> "info"
+            }
+            append(appContext, details, severity)
         } catch (error: Exception) {
             append(context, "读取上次进程退出原因失败：${error.javaClass.simpleName}", "debug")
         }
