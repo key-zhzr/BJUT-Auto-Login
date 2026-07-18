@@ -1,8 +1,9 @@
 import {
-  Activity, AlertCircle, ArrowDownToLine, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, Download, Edit2, Eye, FileText, GripVertical,
-  LayoutDashboard, Loader, LogIn, Minus, Plus, RefreshCw, Settings, ShieldAlert,
-  ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
+  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, Download, Edit2, Eye, FileText, GripVertical,
+  Fingerprint, History, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power,
+  ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
+  WifiOff, X,
 } from 'lucide';
 import Sortable from 'sortablejs';
 import { invoke } from '@tauri-apps/api/core';
@@ -13,10 +14,11 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 const icons = {
-  Activity, AlertCircle, ArrowDownToLine, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ClipboardCopy, ClipboardPaste, Clock, Copy, Download, Edit2, Eye, FileText, GripVertical,
-  LayoutDashboard, Loader, LogIn, Minus, Plus, RefreshCw, Settings, ShieldAlert,
-  ShieldCheck, Square, Trash2, User, Users, Wifi, WifiOff, X,
+  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, Download, Edit2, Eye, FileText, GripVertical,
+  Fingerprint, History, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power,
+  ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
+  WifiOff, X,
 };
 
 const IS_ANDROID = navigator.userAgent.toLowerCase().includes('android');
@@ -378,6 +380,169 @@ interface AppLogEntry {
   module: string;
   message: string;
   type: 'info' | 'error' | 'success' | 'debug';
+}
+
+interface UserInfo {
+  account: string;
+  balance: string;
+  flow: string;
+  source: 'billing' | 'portal' | 'unavailable';
+  status?: string | null;
+  statusReason?: string | null;
+  package?: string | null;
+  packageDetail?: string | null;
+  usedFlow?: string | null;
+  billingCycle?: string | null;
+  updatedAt: string;
+  billingError?: string | null;
+  loginHistory: BillingLoginRecord[];
+  onlineSessions: BillingOnlineSession[];
+  offlineTip?: string | null;
+  mauthEnabled?: boolean | null;
+  billingWarnings: string[];
+}
+
+interface BillingLoginRecord {
+  loginAt: string;
+  logoutAt: string;
+  ip: string;
+  ipv6: string;
+  mac: string;
+  durationMinutes: string;
+  usedFlowMb: string;
+  billingMode: string;
+  amount: string;
+}
+
+interface BillingOnlineSession {
+  loginAt: string;
+  ip: string;
+  ipv6: string;
+  mac: string;
+  durationMinutes: string;
+  usedFlowMb: string;
+  sessionId: string;
+}
+
+interface BillingTable {
+  total: number;
+  rows: Record<string, string>[];
+  summary: Record<string, string>;
+}
+
+interface BillingPackageOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
+interface BillingPasswordPolicy {
+  minLength: number;
+  maxLength: number;
+  requireUppercase: boolean;
+  requireLowercase: boolean;
+  requireDigit: boolean;
+  requireSpecial: boolean;
+}
+
+interface BillingSecurityQuestion {
+  id: string;
+  text: string;
+}
+
+interface BillingServiceState {
+  accountStatus?: string | null;
+  statusReason?: string | null;
+  currentPackage?: string | null;
+  packageDetail?: string | null;
+  nextSettlementDate?: string | null;
+  canStop: boolean;
+  canReopen: boolean;
+  canStopNow: boolean;
+  canStopScheduled: boolean;
+  canReopenNow: boolean;
+  canReopenScheduled: boolean;
+  stopScheduled: boolean;
+  reopenScheduled: boolean;
+  packageScheduled: boolean;
+  consumeLimit?: string | null;
+  currentCycleSpend?: string | null;
+  balance?: string | null;
+  packageOptions: BillingPackageOption[];
+}
+
+interface BillingCenterData {
+  account: string;
+  fetchedAt: string;
+  queryStartDate: string;
+  queryEndDate: string;
+  queryYear: string;
+  usageRecords: BillingTable;
+  monthlyBills: BillingTable;
+  payments: BillingTable;
+  operations: BillingTable;
+  stopLogs: BillingTable;
+  reopenLogs: BillingTable;
+  packageLogs: BillingTable;
+  devices: BillingTable;
+  tariffGroups: BillingTable;
+  service: BillingServiceState;
+  passwordPolicy: BillingPasswordPolicy;
+  securityQuestions: BillingSecurityQuestion[];
+  rechargeAvailable: boolean;
+  warnings: string[];
+}
+
+interface BillingQuestionAnswer {
+  questionId: string;
+  answer: string;
+}
+
+interface BillingActionRequest {
+  action: string;
+  date?: string;
+  packageId?: string;
+  consumeLimit?: string;
+  mac?: string;
+  oldPassword?: string;
+  newPassword?: string;
+  questions?: BillingQuestionAnswer[];
+}
+
+interface BillingActionResult {
+  message: string;
+  passwordChanged: boolean;
+}
+
+type BillingRecordKind = 'usage' | 'monthly' | 'payments' | 'operations' | 'stopLogs' | 'reopenLogs' | 'packageLogs';
+
+interface BillingRecordQuery {
+  kind: BillingRecordKind;
+  page: number;
+  pageSize: number;
+  startDate?: string;
+  endDate?: string;
+  year?: string;
+  all?: boolean;
+}
+
+interface BillingRecordResult {
+  kind: BillingRecordKind;
+  page: number;
+  pageSize: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  year?: string | null;
+  all: boolean;
+  table: BillingTable;
+}
+
+interface BillingRecordQueryState {
+  page: number;
+  pageSize: number;
+  startDate: string;
+  endDate: string;
+  year: string;
 }
 
 interface PermissionHealthItem {
@@ -1246,8 +1411,80 @@ const networkDetail = document.getElementById('network-detail')!;
 const networkIcon = document.getElementById('network-icon')!;
 const btnLogin = document.getElementById('btn-login') as HTMLButtonElement;
 const infoAccount = document.getElementById('info-account')!;
+const infoAccountLabel = document.getElementById('info-account-label')!;
 const infoBalance = document.getElementById('info-balance')!;
 const infoFlow = document.getElementById('info-flow')!;
+const billingDetails = document.getElementById('billing-details') as HTMLElement;
+const billingSource = document.getElementById('billing-source')!;
+const billingStatus = document.getElementById('billing-status')!;
+const billingPackage = document.getElementById('billing-package')!;
+const billingPackageDetail = document.getElementById('billing-package-detail')!;
+const billingUsedFlow = document.getElementById('billing-used-flow')!;
+const billingCycle = document.getElementById('billing-cycle')!;
+const billingUpdatedAt = document.getElementById('billing-updated-at')!;
+const billingMessage = document.getElementById('billing-message')!;
+const btnRefreshBilling = document.getElementById('btn-refresh-billing') as HTMLButtonElement;
+const btnOpenBilling = document.getElementById('btn-open-billing') as HTMLButtonElement;
+const btnCloseBilling = document.getElementById('btn-close-billing') as HTMLButtonElement;
+const btnRefreshBillingCenter = document.getElementById('btn-refresh-billing-center') as HTMLButtonElement;
+const btnToggleBillingMauth = document.getElementById('btn-toggle-billing-mauth') as HTMLButtonElement;
+const billingCenterMessage = document.getElementById('billing-center-message')!;
+const billingCenterAccount = document.getElementById('billing-center-account')!;
+const billingCenterBalance = document.getElementById('billing-center-balance')!;
+const billingCenterFlow = document.getElementById('billing-center-flow')!;
+const billingCenterStatus = document.getElementById('billing-center-status')!;
+const billingMauthBadge = document.getElementById('billing-mauth-badge')!;
+const billingOnlineCount = document.getElementById('billing-online-count')!;
+const billingOnlineList = document.getElementById('billing-online-list')!;
+const billingHistoryCount = document.getElementById('billing-history-count')!;
+const billingHistoryList = document.getElementById('billing-history-list')!;
+const billingRecordTotal = document.getElementById('billing-record-total')!;
+const billingRecordRange = document.getElementById('billing-record-range')!;
+const billingRecordSummary = document.getElementById('billing-record-summary')!;
+const billingRecordsList = document.getElementById('billing-records-list')!;
+const btnExportBillingRecords = document.getElementById('btn-export-billing-records') as HTMLButtonElement;
+const btnExportAllBillingRecords = document.getElementById('btn-export-all-billing-records') as HTMLButtonElement;
+const billingRecordDateFilter = document.getElementById('billing-record-date-filter')!;
+const billingRecordYearFilter = document.getElementById('billing-record-year-filter')!;
+const billingRecordStartDate = document.getElementById('billing-record-start-date') as HTMLInputElement;
+const billingRecordEndDate = document.getElementById('billing-record-end-date') as HTMLInputElement;
+const btnQueryBillingRecords = document.getElementById('btn-query-billing-records') as HTMLButtonElement;
+const btnBillingRecordPrev = document.getElementById('btn-billing-record-prev') as HTMLButtonElement;
+const btnBillingRecordNext = document.getElementById('btn-billing-record-next') as HTMLButtonElement;
+const billingRecordPageLabel = document.getElementById('billing-record-page-label')!;
+const billingServiceStatusBadge = document.getElementById('billing-service-status-badge')!;
+const billingServiceReason = document.getElementById('billing-service-reason')!;
+const billingServicePackage = document.getElementById('billing-service-package')!;
+const billingServiceSettlement = document.getElementById('billing-service-settlement')!;
+const billingServiceSpend = document.getElementById('billing-service-spend')!;
+const billingServiceLimit = document.getElementById('billing-service-limit')!;
+const billingServiceDate = document.getElementById('billing-service-date') as HTMLInputElement;
+const btnBillingStopNow = document.getElementById('btn-billing-stop-now') as HTMLButtonElement;
+const btnBillingReopenNow = document.getElementById('btn-billing-reopen-now') as HTMLButtonElement;
+const btnBillingStopScheduled = document.getElementById('btn-billing-stop-scheduled') as HTMLButtonElement;
+const btnBillingReopenScheduled = document.getElementById('btn-billing-reopen-scheduled') as HTMLButtonElement;
+const btnBillingCancelStop = document.getElementById('btn-billing-cancel-stop') as HTMLButtonElement;
+const btnBillingCancelReopen = document.getElementById('btn-billing-cancel-reopen') as HTMLButtonElement;
+const billingPackageOptions = document.getElementById('billing-package-options')!;
+const btnBillingPackage = document.getElementById('btn-billing-package') as HTMLButtonElement;
+const btnBillingCancelPackage = document.getElementById('btn-billing-cancel-package') as HTMLButtonElement;
+const billingConsumeLimit = document.getElementById('billing-consume-limit') as HTMLInputElement;
+const btnBillingConsumeLimit = document.getElementById('btn-billing-consume-limit') as HTMLButtonElement;
+const billingDeviceCount = document.getElementById('billing-device-count')!;
+const billingDeviceList = document.getElementById('billing-device-list')!;
+const billingTariffList = document.getElementById('billing-tariff-list')!;
+const billingRechargeState = document.getElementById('billing-recharge-state')!;
+const billingBindMac = document.getElementById('billing-bind-mac') as HTMLInputElement;
+const btnBillingBindMac = document.getElementById('btn-billing-bind-mac') as HTMLButtonElement;
+const billingPasswordForm = document.getElementById('billing-password-form') as HTMLFormElement;
+const billingPasswordPolicy = document.getElementById('billing-password-policy')!;
+const billingOldPassword = document.getElementById('billing-old-password') as HTMLInputElement;
+const billingNewPassword = document.getElementById('billing-new-password') as HTMLInputElement;
+const billingConfirmPassword = document.getElementById('billing-confirm-password') as HTMLInputElement;
+const btnBillingPassword = document.getElementById('btn-billing-password') as HTMLButtonElement;
+const billingQuestionsForm = document.getElementById('billing-questions-form') as HTMLFormElement;
+const billingQuestionPassword = document.getElementById('billing-question-password') as HTMLInputElement;
+const btnBillingQuestions = document.getElementById('btn-billing-questions') as HTMLButtonElement;
 const accountsList = document.getElementById('accounts-list')!;
 const addAccountForm = document.getElementById('add-account-form') as HTMLFormElement;
 const logsContent = document.getElementById('logs-content')!;
@@ -1284,6 +1521,14 @@ let logSessionFilter: CustomSelect;
 let logLevelFilter: CustomSelect;
 let networkProfileProtocolSelect: CustomSelect;
 let networkProfileAccountSelect: CustomSelect;
+let billingRecordKindSelect: CustomSelect;
+let billingRecordYearSelect: CustomSelect;
+let billingRecordPageSizeSelect: CustomSelect;
+let billingQuestionSelects: CustomSelect[] = [];
+let billingCenterData: BillingCenterData | null = null;
+let billingRecordQueryStates: Partial<Record<BillingRecordKind, BillingRecordQueryState>> = {};
+let billingRecordQueryBusy = false;
+let selectedBillingPackageId = '';
 
 // Add Modal
 const addModal = document.getElementById('add-modal')!;
@@ -1311,6 +1556,8 @@ let networkProfilesCache: NetworkProfile[] = [];
 let logEntriesCache: AppLogEntry[] = [];
 let logsDirty = true;
 let networkEventDebounce: number | null = null;
+let userInfoRequestId = 0;
+let currentUserInfo: UserInfo | null = null;
 
 // New state for split check loops
 let lastKnownIp = '';
@@ -1333,6 +1580,23 @@ async function init() {
   logLevelFilter = new CustomSelect('log-level-filter');
   networkProfileProtocolSelect = new CustomSelect('network-profile-protocol');
   networkProfileAccountSelect = new CustomSelect('network-profile-account');
+  billingRecordKindSelect = new CustomSelect('billing-record-kind');
+  billingRecordYearSelect = new CustomSelect('billing-record-year-filter');
+  billingRecordPageSizeSelect = new CustomSelect('billing-record-page-size');
+  billingQuestionSelects = [1, 2, 3].map(index => new CustomSelect(`billing-question-${index}`));
+  const currentYear = new Date().getFullYear();
+  billingRecordYearSelect.setOptions(Array.from({ length: 10 }, (_, index) => {
+    const year = String(currentYear - index);
+    return { value: year, text: `${year} 年` };
+  }));
+  billingRecordYearSelect.setValue(String(currentYear));
+  billingRecordKindSelect.addEventListener('change', () => {
+    syncBillingRecordControls();
+    renderBillingRecords();
+  });
+  billingRecordPageSizeSelect.addEventListener('change', () => {
+    if (billingCenterData) void queryBillingRecords(1);
+  });
 
   renderIcons();
   settingAutoLogin.checked = autoLoginEnabled;
@@ -1849,20 +2113,24 @@ async function refreshPermissionHealth() {
 }
 
 // Navigation
+function activatePage(target: string, navTarget = target) {
+  navItems.forEach(item => {
+    item.classList.toggle('active', item.getAttribute('data-target') === navTarget);
+  });
+  pages.forEach(page => page.classList.toggle('active', page.id === target));
+  if (target === 'diagnostics') {
+    void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
+  }
+  if (target === 'logs' && logsDirty) renderFilteredLogs();
+  if (target === 'settings') void refreshPermissionHealth();
+  if (target === 'billing-center') renderBillingCenter(currentUserInfo);
+}
+
 function setupNavigation() {
   navItems.forEach(item => {
     item.addEventListener('click', () => {
-      navItems.forEach(n => n.classList.remove('active'));
-      pages.forEach(p => p.classList.remove('active'));
-      
-      item.classList.add('active');
       const target = item.getAttribute('data-target');
-      document.getElementById(target!)?.classList.add('active');
-      if (target === 'diagnostics') {
-        void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
-      }
-      if (target === 'logs' && logsDirty) renderFilteredLogs();
-      if (target === 'settings') void refreshPermissionHealth();
+      if (target) activatePage(target);
     });
   });
 }
@@ -1870,6 +2138,163 @@ function setupNavigation() {
 // Event Listeners
 function setupEventListeners() {
   btnLogin.addEventListener('click', manualLogin);
+  btnRefreshBilling.addEventListener('click', () => void updateUserInfo(true));
+  btnRefreshBillingCenter.addEventListener('click', () => void refreshBillingCenterData());
+  btnOpenBilling.addEventListener('click', () => {
+    activatePage('billing-center', 'dashboard');
+    if (!currentUserInfo || currentUserInfo.source !== 'billing') void updateUserInfo(true);
+    if (!billingCenterData) void refreshBillingCenterData();
+  });
+  btnCloseBilling.addEventListener('click', () => activatePage('dashboard'));
+  btnToggleBillingMauth.addEventListener('click', () => void toggleBillingMauth());
+  btnExportBillingRecords.addEventListener('click', () => void exportBillingRecords(false));
+  btnExportAllBillingRecords.addEventListener('click', () => void exportBillingRecords(true));
+  btnQueryBillingRecords.addEventListener('click', () => void queryBillingRecords(1));
+  btnBillingRecordPrev.addEventListener('click', () => {
+    const state = currentBillingRecordQueryState();
+    if (state.page > 1) void queryBillingRecords(state.page - 1);
+  });
+  btnBillingRecordNext.addEventListener('click', () => {
+    const state = currentBillingRecordQueryState();
+    void queryBillingRecords(state.page + 1);
+  });
+  billingPackageOptions.addEventListener('click', event => {
+    const option = (event.target as HTMLElement).closest<HTMLButtonElement>('.billing-package-option[data-package-id]');
+    if (!option) return;
+    selectedBillingPackageId = option.dataset.packageId || '';
+    billingPackageOptions.querySelectorAll('.billing-package-option').forEach(element => {
+      element.classList.toggle('selected', element === option);
+    });
+    btnBillingPackage.disabled = !selectedBillingPackageId;
+  });
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = [
+    tomorrowDate.getFullYear(),
+    String(tomorrowDate.getMonth() + 1).padStart(2, '0'),
+    String(tomorrowDate.getDate()).padStart(2, '0'),
+  ].join('-');
+  billingServiceDate.min = tomorrow;
+  billingServiceDate.value = tomorrow;
+  btnBillingStopNow.addEventListener('click', () => void performConfirmedBillingAction(
+    { action: 'stopNow' },
+    '立即报停',
+    '报停后该账号将无法继续使用校园网，并停止计费。确定立即报停吗？',
+    btnBillingStopNow,
+  ));
+  btnBillingStopScheduled.addEventListener('click', () => void performConfirmedBillingAction(
+    { action: 'stopScheduled' },
+    '预约报停',
+    '计费系统将在本计费周期结束后自动报停该账号。确定提交预约吗？',
+    btnBillingStopScheduled,
+  ));
+  btnBillingReopenNow.addEventListener('click', () => void performConfirmedBillingAction(
+    { action: 'reopenNow' },
+    '立即复通',
+    '复通成功后账号将恢复校园网使用并继续计费；余额不足时可能失败。确定继续吗？',
+    btnBillingReopenNow,
+  ));
+  btnBillingReopenScheduled.addEventListener('click', () => {
+    if (!billingServiceDate.value || billingServiceDate.value < tomorrow) {
+      void customAlert('请选择明天或之后的预约复通日期。');
+      return;
+    }
+    void performConfirmedBillingAction(
+      { action: 'reopenScheduled', date: billingServiceDate.value },
+      '预约复通',
+      `计费系统将在 ${billingServiceDate.value} 尝试复通该账号。确定提交预约吗？`,
+      btnBillingReopenScheduled,
+    );
+  });
+  btnBillingCancelStop.addEventListener('click', () => void performConfirmedBillingAction(
+    { action: 'cancelStop' }, '取消预约报停', '确定取消当前报停预约吗？', btnBillingCancelStop,
+  ));
+  btnBillingCancelReopen.addEventListener('click', () => void performConfirmedBillingAction(
+    { action: 'cancelReopen' }, '取消预约复通', '确定取消当前复通预约吗？', btnBillingCancelReopen,
+  ));
+  btnBillingPackage.addEventListener('click', () => {
+    const option = billingCenterData?.service.packageOptions.find(item => item.id === selectedBillingPackageId);
+    if (!option) {
+      void customAlert('请先选择一个可预约套餐。');
+      return;
+    }
+    void performConfirmedBillingAction(
+      { action: 'schedulePackage', packageId: option.id },
+      '预约套餐',
+      `确定预约“${option.name}”吗？新套餐通常在下一计费周期生效。`,
+      btnBillingPackage,
+    );
+  });
+  btnBillingCancelPackage.addEventListener('click', () => void performConfirmedBillingAction(
+    { action: 'cancelPackage' }, '取消套餐预约', '确定取消当前套餐预约吗？', btnBillingCancelPackage,
+  ));
+  btnBillingConsumeLimit.addEventListener('click', () => {
+    const value = billingConsumeLimit.value.trim();
+    if (!/^\d+(?:\.\d{1,3})?$/.test(value) || Number(value) > 999999) {
+      void customAlert('消费限额必须是 0–999999 的非负数字，最多三位小数。');
+      return;
+    }
+    void performConfirmedBillingAction(
+      { action: 'setConsumeLimit', consumeLimit: value },
+      '修改消费保护',
+      value === '999999' ? '确定取消消费限额吗？' : `确定将本周期消费限额调整为 ${value} 元吗？`,
+      btnBillingConsumeLimit,
+    );
+  });
+  btnBillingBindMac.addEventListener('click', () => {
+    const mac = normalizeBillingMac(billingBindMac.value);
+    if (!/^[0-9A-F]{12}$/.test(mac)) {
+      void customAlert('请输入由 12 位十六进制字符组成的 MAC 地址。');
+      return;
+    }
+    void performConfirmedBillingAction(
+      { action: 'bindMac', mac }, '绑定设备', `确定将 MAC ${mac.match(/.{2}/g)?.join('-')} 绑定到当前账号吗？`, btnBillingBindMac,
+    );
+  });
+  billingDeviceList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.action-billing-unbind-mac');
+    if (!button?.dataset.mac) return;
+    void performConfirmedBillingAction(
+      { action: 'unbindMac', mac: button.dataset.mac },
+      '解除设备绑定',
+      `解除 ${button.dataset.mac} 后，无感认证可能不再识别该设备。确定继续吗？`,
+      button,
+    );
+  });
+  billingPasswordForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const oldPassword = billingOldPassword.value;
+    const newPassword = billingNewPassword.value;
+    if (!oldPassword || !newPassword || newPassword !== billingConfirmPassword.value) {
+      void customAlert('请填写当前密码，并确保两次输入的新密码一致。');
+      return;
+    }
+    void performConfirmedBillingAction(
+      { action: 'changePassword', oldPassword, newPassword },
+      '修改计费密码',
+      '修改成功后旧密码会立即失效，App 会同步更新安全存储中的账号密码。确定继续吗？',
+      btnBillingPassword,
+    );
+  });
+  billingQuestionsForm.addEventListener('submit', event => {
+    event.preventDefault();
+    if (!billingQuestionPassword.value) {
+      void customAlert('请输入当前密码。');
+      return;
+    }
+    const questions = billingQuestionAnswers();
+    if (!questions) return;
+    void performConfirmedBillingAction(
+      { action: 'updateQuestions', oldPassword: billingQuestionPassword.value, questions },
+      '更新密码保护',
+      '密码保护答案遗失后可能无法找回，请确认已经记录。确定更新吗？',
+      btnBillingQuestions,
+    );
+  });
+  billingOnlineList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.action-billing-disconnect');
+    if (button) void disconnectBillingSession(button);
+  });
 
   btnRefreshPermissions.addEventListener('click', () => void refreshPermissionHealth());
   permissionHealthList.addEventListener('click', async event => {
@@ -3184,20 +3609,898 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType) {
     infoAccount.textContent = '未登录';
     infoBalance.textContent = '--';
     infoFlow.textContent = '--';
+    renderBillingInfo(null);
   }
   renderIcons(networkIcon);
 }
 
-async function updateUserInfo() {
-  const info: { account: string, balance: string, flow: string } | null = await invoke('get_user_info', { localIp: lastKnownIp || null });
-  if (info) {
-    infoAccount.textContent = info.account;
-    infoBalance.textContent = info.balance;
-    infoFlow.textContent = info.flow;
+function billingValueWithUnit(value: string | null | undefined, unit: string): string {
+  const normalized = value?.trim();
+  if (!normalized || normalized === '--') return '--';
+  return normalized.includes(unit) ? normalized : `${normalized} ${unit}`;
+}
+
+function createBillingField(label: string, value: string): HTMLElement {
+  const field = document.createElement('div');
+  field.className = 'billing-record-field';
+  const labelElement = document.createElement('span');
+  labelElement.textContent = label;
+  const valueElement = document.createElement('strong');
+  valueElement.textContent = value || '--';
+  field.append(labelElement, valueElement);
+  return field;
+}
+
+function createBillingEmpty(text: string): HTMLElement {
+  const empty = document.createElement('div');
+  empty.className = 'billing-empty';
+  empty.textContent = text;
+  return empty;
+}
+
+function renderBillingOnlineSessions(sessions: BillingOnlineSession[]) {
+  billingOnlineCount.textContent = String(sessions.length);
+  if (sessions.length === 0) {
+    billingOnlineList.replaceChildren(createBillingEmpty('当前没有在线会话'));
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  sessions.forEach(session => {
+    const card = document.createElement('article');
+    card.className = 'billing-record-card';
+    const header = document.createElement('div');
+    header.className = 'billing-record-header';
+    const route = document.createElement('div');
+    route.className = 'billing-record-route';
+    const title = document.createElement('span');
+    title.textContent = session.ip || session.ipv6 || '在线设备';
+    route.appendChild(title);
+    const disconnect = document.createElement('button');
+    disconnect.type = 'button';
+    disconnect.className = 'btn btn-danger btn-sm action-billing-disconnect';
+    disconnect.textContent = '注销';
+    disconnect.dataset.sessionId = session.sessionId;
+    disconnect.dataset.ip = session.ip;
+    disconnect.dataset.mac = session.mac;
+    header.append(route, disconnect);
+    const grid = document.createElement('div');
+    grid.className = 'billing-record-grid';
+    grid.append(
+      createBillingField('上线时间', session.loginAt),
+      createBillingField('IPv4', session.ip),
+      createBillingField('IPv6', session.ipv6),
+      createBillingField('MAC', session.mac),
+      createBillingField('使用时长', billingValueWithUnit(session.durationMinutes, '分钟')),
+      createBillingField('使用流量', billingValueWithUnit(session.usedFlowMb, 'MB')),
+    );
+    card.append(header, grid);
+    fragment.appendChild(card);
+  });
+  billingOnlineList.replaceChildren(fragment);
+}
+
+function renderBillingHistory(records: BillingLoginRecord[]) {
+  billingHistoryCount.textContent = String(records.length);
+  if (records.length === 0) {
+    billingHistoryList.replaceChildren(createBillingEmpty('暂无近期上网记录'));
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  records.forEach(record => {
+    const card = document.createElement('article');
+    card.className = 'billing-record-card';
+    const header = document.createElement('div');
+    header.className = 'billing-record-header';
+    const route = document.createElement('div');
+    route.className = 'billing-record-route';
+    const login = document.createElement('span');
+    login.textContent = record.loginAt;
+    const arrow = document.createElement('i');
+    arrow.setAttribute('data-lucide', 'arrow-right');
+    const logout = document.createElement('span');
+    logout.textContent = record.logoutAt;
+    route.append(login, arrow, logout);
+    header.appendChild(route);
+    const grid = document.createElement('div');
+    grid.className = 'billing-record-grid';
+    grid.append(
+      createBillingField('IPv4', record.ip),
+      createBillingField('IPv6', record.ipv6),
+      createBillingField('MAC', record.mac),
+      createBillingField('使用时长', billingValueWithUnit(record.durationMinutes, '分钟')),
+      createBillingField('使用流量', billingValueWithUnit(record.usedFlowMb, 'MB')),
+      createBillingField('计费方式', record.billingMode),
+      createBillingField('计费金额', billingValueWithUnit(record.amount, '元')),
+    );
+    card.append(header, grid);
+    fragment.appendChild(card);
+  });
+  billingHistoryList.replaceChildren(fragment);
+}
+
+const billingRecordDefinitions: Record<BillingRecordKind, {
+  table: keyof Pick<BillingCenterData, 'usageRecords' | 'monthlyBills' | 'payments' | 'operations' | 'stopLogs' | 'reopenLogs' | 'packageLogs'>;
+  title: string;
+  fields: { keys: string[]; label: string; unit?: string; format?: (value: string) => string }[];
+}> = {
+  usage: {
+    table: 'usageRecords',
+    title: '上网记录',
+    fields: [
+      { keys: ['loginTime'], label: '上线时间' },
+      { keys: ['logoutTime'], label: '下线时间' },
+      { keys: ['time'], label: '使用时长', unit: '分钟' },
+      { keys: ['flow'], label: '使用流量', unit: 'MB' },
+      { keys: ['costMoney'], label: '计费金额', unit: '元' },
+      { keys: ['internetUpFlow'], label: '国际上行', unit: 'MB' },
+      { keys: ['internetDownFlow'], label: '国际下行', unit: 'MB' },
+      { keys: ['chinanetUpFlow'], label: '国内上行', unit: 'MB' },
+      { keys: ['chinanetDownFlow'], label: '国内下行', unit: 'MB' },
+      { keys: ['userIp'], label: 'IPv4' },
+      { keys: ['userIp1'], label: 'IPv6' },
+      { keys: ['macAddress'], label: 'MAC' },
+      { keys: ['nasIp'], label: 'NAS IP' },
+      { keys: ['nasPort'], label: 'NAS 端口' },
+    ],
+  },
+  monthly: {
+    table: 'monthlyBills',
+    title: '历史账单',
+    fields: [
+      { keys: ['startAt'], label: '账单开始' },
+      { keys: ['endAt'], label: '账单结束' },
+      { keys: ['package'], label: '套餐' },
+      { keys: ['baseFee'], label: '基本月租', unit: '元' },
+      { keys: ['usageFee'], label: '流量/时长计费', unit: '元' },
+      { keys: ['durationMinutes'], label: '使用时长', unit: '分钟' },
+      { keys: ['flowMb'], label: '使用流量', unit: 'MB' },
+      { keys: ['billedAt'], label: '出账时间' },
+    ],
+  },
+  payments: {
+    table: 'payments',
+    title: '充值明细',
+    fields: [
+      { keys: ['paidAt'], label: '交费时间' },
+      { keys: ['amount'], label: '金额', unit: '元' },
+      { keys: ['type'], label: '交费类型' },
+      { keys: ['terminal'], label: '受理终端' },
+      { keys: ['note'], label: '备注' },
+    ],
+  },
+  operations: {
+    table: 'operations',
+    title: '业务办理记录',
+    fields: [
+      { keys: ['operatedAt'], label: '办理时间' },
+      { keys: ['description'], label: '业务描述' },
+      { keys: ['terminal'], label: '受理终端' },
+      { keys: ['note'], label: '备注' },
+    ],
+  },
+  stopLogs: {
+    table: 'stopLogs',
+    title: '报停记录',
+    fields: [
+      { keys: ['fldoperatedate'], label: '办理时间' },
+      { keys: ['fldoperateid'], label: '业务描述', format: value => value === '8' ? '立即报停' : '预约报停' },
+      { keys: ['fldadminid'], label: '受理终端' },
+      { keys: ['fldmemo'], label: '备注' },
+    ],
+  },
+  reopenLogs: {
+    table: 'reopenLogs',
+    title: '复通记录',
+    fields: [
+      { keys: ['fldoperatedate'], label: '办理时间' },
+      { keys: ['fldoperateid'], label: '业务描述', format: value => value === '9' ? '立即复通' : '预约复通' },
+      { keys: ['fldnewvalue'], label: '预约日期' },
+      { keys: ['fldadminid'], label: '受理终端' },
+      { keys: ['fldmemo'], label: '备注' },
+    ],
+  },
+  packageLogs: {
+    table: 'packageLogs',
+    title: '套餐预约记录',
+    fields: [
+      { keys: ['fldchangedate'], label: '操作时间' },
+      { keys: ['fldexcutedate'], label: '生效时间' },
+      { keys: ['flddefaultname1'], label: '原套餐' },
+      { keys: ['flddefaultname2'], label: '预约套餐' },
+      { keys: ['fldstate'], label: '状态', format: value => value === '1' ? '有效' : '已取消' },
+      { keys: ['fldstatedate'], label: '状态变更' },
+      { keys: ['fldextend'], label: '备注' },
+    ],
+  },
+};
+
+function billingRowValue(row: Record<string, string>, keys: string[]): string {
+  for (const key of keys) {
+    if (row[key] !== undefined) return row[key];
+    const actual = Object.keys(row).find(candidate => candidate.toLowerCase() === key.toLowerCase());
+    if (actual) return row[actual];
+  }
+  return '--';
+}
+
+function activeBillingRecordKind(): BillingRecordKind {
+  const value = billingRecordKindSelect?.value || 'usage';
+  return (value in billingRecordDefinitions ? value : 'usage') as BillingRecordKind;
+}
+
+function currentBillingRecordQueryState(kind = activeBillingRecordKind()): BillingRecordQueryState {
+  const fallbackYear = billingCenterData?.queryYear || String(new Date().getFullYear());
+  const existing = billingRecordQueryStates[kind];
+  if (existing) return existing;
+  const state = {
+    page: 1,
+    pageSize: 10,
+    startDate: billingCenterData?.queryStartDate || '',
+    endDate: billingCenterData?.queryEndDate || '',
+    year: fallbackYear,
+  };
+  billingRecordQueryStates[kind] = state;
+  return state;
+}
+
+function initializeBillingRecordQueryStates(data: BillingCenterData) {
+  const next: Partial<Record<BillingRecordKind, BillingRecordQueryState>> = {};
+  (Object.keys(billingRecordDefinitions) as BillingRecordKind[]).forEach(kind => {
+    next[kind] = {
+      page: 1,
+      pageSize: 10,
+      startDate: data.queryStartDate,
+      endDate: data.queryEndDate,
+      year: data.queryYear,
+    };
+  });
+  billingRecordQueryStates = next;
+  billingRecordStartDate.max = data.queryEndDate;
+  billingRecordEndDate.max = data.queryEndDate;
+}
+
+function billingKindUsesDate(kind: BillingRecordKind): boolean {
+  return kind === 'usage' || kind === 'payments' || kind === 'operations';
+}
+
+function syncBillingRecordControls() {
+  const kind = activeBillingRecordKind();
+  const state = currentBillingRecordQueryState(kind);
+  const usesDate = billingKindUsesDate(kind);
+  const usesYear = kind === 'monthly';
+  billingRecordDateFilter.hidden = !usesDate;
+  billingRecordYearFilter.hidden = !usesYear;
+  billingRecordStartDate.value = state.startDate;
+  billingRecordEndDate.value = state.endDate;
+  billingRecordYearSelect.setValue(state.year);
+  billingRecordPageSizeSelect.setValue(String(state.pageSize));
+  if (usesDate) {
+    billingRecordRange.textContent = `${state.startDate} 至 ${state.endDate}；日期范围最多 60 天。`;
+  } else if (usesYear) {
+    billingRecordRange.textContent = `${state.year} 年历史账单。`;
   } else {
-    infoAccount.textContent = '--';
-    infoBalance.textContent = '--';
-    infoFlow.textContent = '--';
+    billingRecordRange.textContent = '该类办理记录不提供日期筛选。';
+  }
+}
+
+function readBillingRecordQuery(page: number, all = false): BillingRecordQuery | null {
+  const kind = activeBillingRecordKind();
+  const state = currentBillingRecordQueryState(kind);
+  const pageSize = Number.parseInt(billingRecordPageSizeSelect.value || String(state.pageSize), 10);
+  if (![10, 20, 25, 50, 100].includes(pageSize)) {
+    void customAlert('请选择有效的每页记录数。');
+    return null;
+  }
+  const query: BillingRecordQuery = { kind, page, pageSize, all };
+  if (billingKindUsesDate(kind)) {
+    const startDate = billingRecordStartDate.value;
+    const endDate = billingRecordEndDate.value;
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T00:00:00`);
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    if (!startDate || !endDate || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())
+      || start > end || end > today || end.getTime() - start.getTime() > 60 * 86_400_000) {
+      void customAlert('查询日期必须截至今天，且范围不能超过 60 天。');
+      return null;
+    }
+    query.startDate = startDate;
+    query.endDate = endDate;
+  } else if (kind === 'monthly') {
+    const year = billingRecordYearSelect.value;
+    if (!/^\d{4}$/.test(year)) {
+      void customAlert('请选择历史账单年份。');
+      return null;
+    }
+    query.year = year;
+  }
+  return query;
+}
+
+function setBillingRecordQueryBusy(busy: boolean) {
+  billingRecordQueryBusy = busy;
+  btnQueryBillingRecords.disabled = busy || !billingCenterData;
+  btnExportBillingRecords.disabled = busy || !currentBillingRecordSelection()?.table.rows.length;
+  btnExportAllBillingRecords.disabled = busy || !currentBillingRecordSelection()?.table.total;
+  if (busy) {
+    btnBillingRecordPrev.disabled = true;
+    btnBillingRecordNext.disabled = true;
+  } else {
+    renderBillingRecordPager();
+  }
+}
+
+async function queryBillingRecords(page: number) {
+  if (!billingCenterData || billingRecordQueryBusy) return;
+  const query = readBillingRecordQuery(page);
+  if (!query) return;
+  const queriedKind = query.kind;
+  const original = btnQueryBillingRecords.innerHTML;
+  setBillingRecordQueryBusy(true);
+  btnQueryBillingRecords.textContent = '查询中…';
+  try {
+    const result = await invoke<BillingRecordResult>('query_billing_records', { query });
+    if (!billingCenterData || result.kind !== queriedKind) {
+      throw new Error('计费记录类型与请求不一致');
+    }
+    const definition = billingRecordDefinitions[queriedKind];
+    billingCenterData[definition.table] = result.table;
+    billingRecordQueryStates[queriedKind] = {
+      page: result.page,
+      pageSize: result.pageSize,
+      startDate: result.startDate || query.startDate || '',
+      endDate: result.endDate || query.endDate || '',
+      year: result.year || query.year || billingCenterData.queryYear,
+    };
+    if (activeBillingRecordKind() === queriedKind) {
+      syncBillingRecordControls();
+      renderBillingRecords();
+    }
+  } catch (error) {
+    await customAlert(`账单记录查询失败：${String(error)}`);
+  } finally {
+    btnQueryBillingRecords.innerHTML = original;
+    setBillingRecordQueryBusy(false);
+    renderIcons(btnQueryBillingRecords);
+  }
+}
+
+function currentBillingRecordSelection(): { kind: BillingRecordKind; definition: typeof billingRecordDefinitions[BillingRecordKind]; table: BillingTable } | null {
+  if (!billingCenterData) return null;
+  const kind = activeBillingRecordKind();
+  const definition = billingRecordDefinitions[kind];
+  return { kind, definition, table: billingCenterData[definition.table] };
+}
+
+function renderBillingRecordPager() {
+  const selection = currentBillingRecordSelection();
+  if (!selection) {
+    billingRecordPageLabel.textContent = '第 1 / 1 页';
+    btnBillingRecordPrev.disabled = true;
+    btnBillingRecordNext.disabled = true;
+    return;
+  }
+  const state = currentBillingRecordQueryState(selection.kind);
+  const pages = Math.max(1, Math.ceil(selection.table.total / state.pageSize));
+  billingRecordPageLabel.textContent = `第 ${state.page} / ${pages} 页`;
+  btnBillingRecordPrev.disabled = billingRecordQueryBusy || state.page <= 1;
+  btnBillingRecordNext.disabled = billingRecordQueryBusy || state.page >= pages;
+}
+
+function renderBillingRecords() {
+  const selection = currentBillingRecordSelection();
+  if (!selection) {
+    billingRecordTotal.textContent = '0';
+    billingRecordSummary.replaceChildren();
+    billingRecordsList.replaceChildren(createBillingEmpty('尚未读取完整账单数据'));
+    btnExportBillingRecords.disabled = true;
+    btnExportAllBillingRecords.disabled = true;
+    renderBillingRecordPager();
+    return;
+  }
+  const { kind, definition, table } = selection;
+  const queryState = currentBillingRecordQueryState(kind);
+  billingRecordTotal.textContent = String(table.total);
+  btnExportBillingRecords.disabled = billingRecordQueryBusy || table.rows.length === 0;
+  btnExportAllBillingRecords.disabled = billingRecordQueryBusy || table.total === 0;
+  const summary = document.createDocumentFragment();
+  Object.entries(table.summary).forEach(([name, value]) => {
+    const item = document.createElement('span');
+    item.className = 'billing-summary-chip';
+    item.textContent = `${name}: ${value}`;
+    summary.appendChild(item);
+  });
+  billingRecordSummary.replaceChildren(summary);
+  if (table.rows.length === 0) {
+    billingRecordsList.replaceChildren(createBillingEmpty(`暂无${definition.title}`));
+    renderBillingRecordPager();
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  table.rows.forEach((row, index) => {
+    const card = document.createElement('article');
+    card.className = 'billing-record-card billing-module-record-card';
+    const title = document.createElement('div');
+    title.className = 'billing-record-header';
+    const strong = document.createElement('strong');
+    strong.textContent = `${definition.title} #${(queryState.page - 1) * queryState.pageSize + index + 1}`;
+    title.appendChild(strong);
+    const grid = document.createElement('div');
+    grid.className = 'billing-record-grid';
+    definition.fields.forEach(field => {
+      let value = billingRowValue(row, field.keys);
+      if (field.format) value = field.format(value);
+      if (field.unit && value !== '--' && !value.endsWith(field.unit)) value = `${value} ${field.unit}`;
+      grid.appendChild(createBillingField(field.label, value));
+    });
+    card.append(title, grid);
+    fragment.appendChild(card);
+  });
+  billingRecordsList.replaceChildren(fragment);
+  renderBillingRecordPager();
+}
+
+function renderBillingService(data: BillingCenterData) {
+  const service = data.service;
+  billingServiceStatusBadge.textContent = service.accountStatus || '未知';
+  billingServiceStatusBadge.className = `billing-state-badge ${service.accountStatus === '正常' ? 'success' : service.accountStatus ? 'warning' : 'neutral'}`;
+  billingServiceReason.textContent = service.statusReason || service.packageDetail || '报停、复通、套餐预约与消费保护。';
+  billingServicePackage.textContent = service.currentPackage || '--';
+  billingServiceSettlement.textContent = service.nextSettlementDate || '--';
+  billingServiceSpend.textContent = service.currentCycleSpend || '--';
+  billingServiceLimit.textContent = service.consumeLimit || '--';
+  btnBillingStopNow.disabled = !service.canStopNow;
+  btnBillingStopScheduled.disabled = !service.canStopScheduled;
+  btnBillingReopenNow.disabled = !service.canReopenNow;
+  btnBillingReopenScheduled.disabled = !service.canReopenScheduled;
+  btnBillingCancelStop.hidden = !service.stopScheduled;
+  btnBillingCancelReopen.hidden = !service.reopenScheduled;
+  btnBillingCancelPackage.hidden = !service.packageScheduled;
+  btnBillingConsumeLimit.disabled = false;
+
+  selectedBillingPackageId = '';
+  if (service.packageOptions.length === 0) {
+    billingPackageOptions.replaceChildren(createBillingEmpty('当前没有可预约套餐'));
+    btnBillingPackage.disabled = true;
+  } else {
+    const fragment = document.createDocumentFragment();
+    service.packageOptions.forEach(option => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'billing-package-option';
+      button.dataset.packageId = option.id;
+      const name = document.createElement('strong');
+      name.textContent = option.name;
+      const description = document.createElement('span');
+      description.textContent = option.description || '计费系统未提供套餐说明';
+      button.append(name, description);
+      fragment.appendChild(button);
+    });
+    billingPackageOptions.replaceChildren(fragment);
+    btnBillingPackage.disabled = true;
+  }
+}
+
+function renderBillingDevices(data: BillingCenterData) {
+  billingDeviceCount.textContent = String(data.devices.total);
+  btnBillingBindMac.disabled = false;
+  if (data.devices.rows.length === 0) {
+    billingDeviceList.replaceChildren(createBillingEmpty('暂无已绑定设备'));
+  } else {
+    const fragment = document.createDocumentFragment();
+    data.devices.rows.forEach(row => {
+      const mac = billingRowValue(row, ['mac', '1']);
+      const card = document.createElement('article');
+      card.className = 'billing-record-card';
+      const header = document.createElement('div');
+      header.className = 'billing-record-header';
+      const title = document.createElement('strong');
+      title.textContent = mac;
+      const unbind = document.createElement('button');
+      unbind.type = 'button';
+      unbind.className = 'btn btn-danger btn-sm action-billing-unbind-mac';
+      unbind.dataset.mac = mac;
+      unbind.textContent = '解除绑定';
+      header.append(title, unbind);
+      const grid = document.createElement('div');
+      grid.className = 'billing-record-grid';
+      grid.append(
+        createBillingField('在线状态', billingRowValue(row, ['online', '0']) === '0' ? '离线' : '在线'),
+        createBillingField('终端信息', billingRowValue(row, ['device', '2'])),
+        createBillingField('最近登录', billingRowValue(row, ['lastLoginAt', '3'])),
+        createBillingField('最近 IP', billingRowValue(row, ['lastIp', '4'])),
+      );
+      card.append(header, grid);
+      fragment.appendChild(card);
+    });
+    billingDeviceList.replaceChildren(fragment);
+  }
+
+  if (data.tariffGroups.rows.length === 0) {
+    billingTariffList.replaceChildren(createBillingEmpty('暂无资费介绍'));
+  } else {
+    const fragment = document.createDocumentFragment();
+    data.tariffGroups.rows.forEach(row => {
+      const item = document.createElement('article');
+      item.className = 'billing-package-option billing-tariff-card';
+      const name = document.createElement('strong');
+      name.textContent = billingRowValue(row, ['defaultName']);
+      const description = document.createElement('span');
+      description.textContent = billingRowValue(row, ['extend']);
+      item.append(name, description);
+      fragment.appendChild(item);
+    });
+    billingTariffList.replaceChildren(fragment);
+  }
+  billingRechargeState.textContent = data.rechargeAvailable
+    ? '计费系统已向当前账号开放在线充值入口。'
+    : '计费系统当前未向该账号开放在线充值；充值明细仍可在上方查询。';
+}
+
+function renderBillingSecurity(data: BillingCenterData) {
+  const policy = data.passwordPolicy;
+  const requirements = [
+    `${policy.minLength}–${policy.maxLength} 位`,
+    policy.requireUppercase ? '大写字母' : '',
+    policy.requireLowercase ? '小写字母' : '',
+    policy.requireDigit ? '数字' : '',
+    policy.requireSpecial ? '特殊字符 !@#$%^&*()' : '',
+  ].filter(Boolean);
+  billingPasswordPolicy.textContent = `密码要求：${requirements.join('、')}`;
+  [billingOldPassword, billingNewPassword, billingConfirmPassword].forEach(input => {
+    input.maxLength = policy.maxLength || 16;
+  });
+  btnBillingPassword.disabled = false;
+  const questionOptions = data.securityQuestions.map(question => ({ value: question.id, text: question.text }));
+  billingQuestionSelects.forEach((select, index) => {
+    select.setOptions(questionOptions.map(option => ({ ...option })));
+    select.setValue('');
+    select.triggerSpan.textContent = `选择问题${['一', '二', '三'][index]}`;
+  });
+  btnBillingQuestions.disabled = questionOptions.length === 0;
+}
+
+function renderBillingCenterData(data: BillingCenterData) {
+  billingCenterData = data;
+  initializeBillingRecordQueryStates(data);
+  syncBillingRecordControls();
+  renderBillingRecords();
+  renderBillingService(data);
+  renderBillingDevices(data);
+  renderBillingSecurity(data);
+  const messages = [
+    currentUserInfo?.billingError,
+    ...(currentUserInfo?.billingWarnings || []),
+    ...data.warnings,
+  ].filter(Boolean) as string[];
+  billingCenterMessage.textContent = messages.join('\n');
+  billingCenterMessage.hidden = messages.length === 0;
+  renderIcons(document.getElementById('billing-center')!);
+}
+
+async function refreshBillingCenterData() {
+  if (billingRecordQueryBusy) return;
+  btnRefreshBillingCenter.disabled = true;
+  const original = btnRefreshBillingCenter.innerHTML;
+  setBillingRecordQueryBusy(true);
+  btnRefreshBillingCenter.textContent = '读取完整数据…';
+  try {
+    const data = await invoke<BillingCenterData>('get_billing_center');
+    renderBillingCenterData(data);
+  } catch (error) {
+    billingCenterMessage.textContent = `完整计费数据读取失败：${String(error)}`;
+    billingCenterMessage.hidden = false;
+  } finally {
+    btnRefreshBillingCenter.disabled = false;
+    btnRefreshBillingCenter.innerHTML = original;
+    setBillingRecordQueryBusy(false);
+    renderIcons(btnRefreshBillingCenter);
+  }
+}
+
+function buildBillingCsv(
+  table: BillingTable,
+  definition: typeof billingRecordDefinitions[BillingRecordKind],
+): string {
+  const safeCell = (raw: string) => {
+    const value = /^[=+\-@]/.test(raw.trimStart()) ? `'${raw}` : raw;
+    return `"${value.replaceAll('"', '""')}"`;
+  };
+  const columns = definition.fields;
+  const lines = [
+    columns.map(column => safeCell(column.label)).join(','),
+    ...table.rows.map(row => columns.map(column => {
+      let value = billingRowValue(row, column.keys);
+      if (column.format) value = column.format(value);
+      return safeCell(value);
+    }).join(',')),
+  ];
+  return `\uFEFF${lines.join('\r\n')}`;
+}
+
+async function saveBillingCsv(kind: BillingRecordKind, title: string, csv: string) {
+  if ((window as any).__TAURI__) {
+    const destination = await invoke<string>('export_billing_csv', { kind, csv });
+    const androidBridge = (window as any).AndroidBridge;
+    if (IS_ANDROID && androidBridge?.shareExportFile) {
+      const launched = Boolean(androidBridge.shareExportFile(destination, `BJUT-AL ${title}`));
+      if (!launched) throw new Error('系统分享窗口启动失败');
+      return;
+    }
+    await customAlert(`CSV 已导出到：\n${destination}`, '导出完成');
+    return;
+  }
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `BJUT-AL-${title}-${new Date().toISOString().slice(0, 10)}.csv`;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportBillingRecords(all: boolean) {
+  const selection = currentBillingRecordSelection();
+  if (!selection || (all ? selection.table.total === 0 : selection.table.rows.length === 0)) return;
+  const button = all ? btnExportAllBillingRecords : btnExportBillingRecords;
+  const original = button.innerHTML;
+  setBillingRecordQueryBusy(true);
+  button.textContent = all ? '读取全部…' : '导出中…';
+  try {
+    let table = selection.table;
+    if (all) {
+      const query = readBillingRecordQuery(1, true);
+      if (!query) return;
+      const result = await invoke<BillingRecordResult>('query_billing_records', { query });
+      if (result.kind !== selection.kind) throw new Error('计费记录类型与请求不一致');
+      table = result.table;
+    }
+    const csv = buildBillingCsv(table, selection.definition);
+    await saveBillingCsv(selection.kind, selection.definition.title, csv);
+  } catch (error) {
+    await customAlert(`导出账单记录失败：${String(error)}`);
+  } finally {
+    button.innerHTML = original;
+    setBillingRecordQueryBusy(false);
+    renderIcons(button);
+  }
+}
+
+function syncDashboardFromBillingCenter() {
+  if (!currentUserInfo || !billingCenterData) return;
+  const service = billingCenterData.service;
+  currentUserInfo.status = service.accountStatus || currentUserInfo.status;
+  currentUserInfo.statusReason = service.statusReason || null;
+  currentUserInfo.package = service.currentPackage || currentUserInfo.package;
+  currentUserInfo.packageDetail = service.packageDetail || currentUserInfo.packageDetail;
+  currentUserInfo.balance = service.balance || currentUserInfo.balance;
+  currentUserInfo.updatedAt = billingCenterData.fetchedAt;
+  renderBillingInfo(currentUserInfo);
+  renderBillingCenter(currentUserInfo);
+}
+
+function clearBillingSecretInputs() {
+  billingOldPassword.value = '';
+  billingNewPassword.value = '';
+  billingConfirmPassword.value = '';
+  billingQuestionPassword.value = '';
+  [1, 2, 3].forEach(index => {
+    const answer = document.getElementById(`billing-answer-${index}`) as HTMLInputElement;
+    answer.value = '';
+  });
+}
+
+async function performConfirmedBillingAction(
+  request: BillingActionRequest,
+  title: string,
+  confirmation: string,
+  button: HTMLButtonElement,
+) {
+  if (!await customConfirm(confirmation, title)) return;
+  const original = button.textContent;
+  const wasDisabled = button.disabled;
+  button.disabled = true;
+  button.textContent = '处理中…';
+  try {
+    const result = await invoke<BillingActionResult>('perform_billing_action', { request });
+    clearBillingSecretInputs();
+    if (result.passwordChanged) {
+      await loadConfigFromRust();
+      renderAccounts();
+    }
+    await refreshBillingCenterData();
+    syncDashboardFromBillingCenter();
+    await customAlert(result.message, '操作完成');
+  } catch (error) {
+    clearBillingSecretInputs();
+    await customAlert(`操作失败：${String(error)}`, title);
+  } finally {
+    button.textContent = original;
+    if (billingCenterData) {
+      renderBillingService(billingCenterData);
+      renderBillingDevices(billingCenterData);
+      renderBillingSecurity(billingCenterData);
+    } else {
+      button.disabled = wasDisabled;
+    }
+  }
+}
+
+function normalizeBillingMac(value: string): string {
+  return value.replace(/[^0-9a-f]/gi, '').toUpperCase();
+}
+
+function billingQuestionAnswers(): BillingQuestionAnswer[] | null {
+  const values = billingQuestionSelects.map(select => select.value);
+  const answers = [1, 2, 3].map(index =>
+    (document.getElementById(`billing-answer-${index}`) as HTMLInputElement).value.trim(),
+  );
+  if (values.some(value => !value) || new Set(values).size !== 3) {
+    void customAlert('请选择三个互不重复的密码保护问题。');
+    return null;
+  }
+  if (answers.some(answer => answer.length < 1 || answer.length > 16)) {
+    void customAlert('每个密码保护答案必须为 1–16 个字符。');
+    return null;
+  }
+  return values.map((questionId, index) => ({ questionId, answer: answers[index] }));
+}
+
+function renderBillingCenter(info: UserInfo | null) {
+  billingCenterAccount.textContent = info?.account || '--';
+  billingCenterBalance.textContent = info?.balance || '--';
+  billingCenterFlow.textContent = info?.flow || '--';
+  billingCenterStatus.textContent = info?.status || '--';
+  billingCenterStatus.className = info?.status === '正常' ? 'success' : info?.status ? 'error' : '';
+
+  const messages = [
+    info?.billingError,
+    ...(info?.billingWarnings || []),
+    ...(billingCenterData?.warnings || []),
+  ].filter(Boolean) as string[];
+  billingCenterMessage.textContent = messages.join('\n');
+  billingCenterMessage.hidden = messages.length === 0;
+
+  const mauthKnown = info?.source === 'billing' && typeof info.mauthEnabled === 'boolean';
+  billingMauthBadge.className = `billing-state-badge ${mauthKnown ? (info!.mauthEnabled ? 'success' : 'warning') : 'neutral'}`;
+  billingMauthBadge.textContent = mauthKnown ? (info!.mauthEnabled ? '已开启' : '已关闭') : '未知';
+  btnToggleBillingMauth.disabled = !mauthKnown;
+  btnToggleBillingMauth.textContent = mauthKnown ? (info!.mauthEnabled ? '关闭无感认证' : '开启无感认证') : '状态未知';
+
+  renderBillingOnlineSessions(info?.source === 'billing' ? (info.onlineSessions || []) : []);
+  renderBillingHistory(info?.source === 'billing' ? (info.loginHistory || []) : []);
+  renderIcons(document.getElementById('billing-center')!);
+}
+
+async function disconnectBillingSession(button: HTMLButtonElement) {
+  const sessionId = button.dataset.sessionId;
+  const ip = button.dataset.ip;
+  const mac = button.dataset.mac;
+  if (!sessionId || !ip || mac === undefined) {
+    await customAlert('在线会话信息不完整，请刷新后重试。');
+    return;
+  }
+  const tip = currentUserInfo?.offlineTip || '注销会话会中断对应设备的校园网连接；无感认证设备可能还需要解绑 MAC。';
+  const confirmed = await customConfirm(`${tip}\n\n设备 IP：${ip}\n设备 MAC：${mac || '--'}`, '确认注销在线会话');
+  if (!confirmed) return;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = '注销中…';
+  try {
+    const message = await invoke<string>('disconnect_billing_session', { sessionId, ip, mac });
+    await updateUserInfo(true);
+    await customAlert(message, '操作完成');
+  } catch (error) {
+    await customAlert(`注销失败：${String(error)}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+async function toggleBillingMauth() {
+  const current = currentUserInfo?.mauthEnabled;
+  if (typeof current !== 'boolean') {
+    await customAlert('无感认证状态尚未读取，请刷新后重试。');
+    return;
+  }
+  const enabled = !current;
+  const text = enabled
+    ? '确认开启无感认证吗？计费系统将按已绑定设备识别校园网会话。'
+    : '关闭无感认证可能导致当前设备下线，确认继续吗？';
+  if (!await customConfirm(text, enabled ? '开启无感认证' : '关闭无感认证')) return;
+  btnToggleBillingMauth.disabled = true;
+  try {
+    const message = await invoke<string>('set_billing_mauth', { enabled });
+    await updateUserInfo(true);
+    await customAlert(message, '操作完成');
+  } catch (error) {
+    await customAlert(`修改失败：${String(error)}`);
+  } finally {
+    btnToggleBillingMauth.disabled = !(
+      currentUserInfo?.source === 'billing' && typeof currentUserInfo.mauthEnabled === 'boolean'
+    );
+  }
+}
+
+function renderBillingInfo(info: UserInfo | null) {
+  currentUserInfo = info;
+  renderBillingCenter(info);
+  if (!info) {
+    billingDetails.hidden = true;
+    infoAccountLabel.textContent = '当前登录账号';
+    return;
+  }
+
+  billingDetails.hidden = false;
+  billingSource.className = 'billing-source';
+  if (info.source === 'billing') {
+    billingSource.textContent = '计费系统';
+    infoAccountLabel.textContent = '计费账号';
+  } else if (info.source === 'portal') {
+    billingSource.textContent = info.billingError ? '门户回退数据' : '门户数据';
+    billingSource.classList.add('fallback');
+    infoAccountLabel.textContent = '当前登录账号';
+  } else {
+    billingSource.textContent = '暂不可用';
+    billingSource.classList.add('unavailable');
+    infoAccountLabel.textContent = '计费账号';
+  }
+
+  billingStatus.textContent = info.status || '--';
+  billingStatus.className = info.status === '正常' ? 'success' : info.status ? 'error' : '';
+  billingStatus.title = info.statusReason || '';
+  billingPackage.textContent = info.package || '--';
+  billingPackageDetail.textContent = info.packageDetail || '';
+  billingUsedFlow.textContent = info.usedFlow || '--';
+  billingCycle.textContent = info.billingCycle || '--';
+  billingUpdatedAt.textContent = info.updatedAt || '--';
+  const billingMessages = [info.billingError, ...(info.billingWarnings || [])].filter(Boolean) as string[];
+  billingMessage.textContent = billingMessages.join('\n');
+  billingMessage.hidden = billingMessages.length === 0;
+  renderIcons(billingDetails);
+}
+
+async function updateUserInfo(force = false) {
+  const requestId = ++userInfoRequestId;
+  const refreshButtons = [btnRefreshBilling, btnRefreshBillingCenter];
+  const refreshIcons = refreshButtons
+    .map(button => button.querySelector('svg, i') as HTMLElement | null)
+    .filter((icon): icon is HTMLElement => Boolean(icon));
+  if (force) {
+    refreshButtons.forEach(button => { button.disabled = true; });
+    refreshIcons.forEach(icon => { icon.style.animation = 'spin 0.8s linear infinite'; });
+  }
+  try {
+    const info: UserInfo | null = await invoke('get_user_info', {
+      localIp: lastKnownIp || null,
+      force,
+    });
+    if (requestId !== userInfoRequestId) return;
+    if (info) {
+      infoAccount.textContent = info.account || '--';
+      infoBalance.textContent = info.balance || '--';
+      infoFlow.textContent = info.flow || '--';
+      renderBillingInfo(info);
+    } else {
+      infoAccount.textContent = '--';
+      infoBalance.textContent = '--';
+      infoFlow.textContent = '--';
+      renderBillingInfo(null);
+    }
+  } catch (error) {
+    if (requestId !== userInfoRequestId) return;
+    console.error('Failed to refresh billing information:', error);
+    billingDetails.hidden = false;
+    billingSource.textContent = '刷新失败';
+    billingSource.className = 'billing-source unavailable';
+    billingMessage.textContent = `无法读取计费信息：${String(error)}`;
+    billingMessage.hidden = false;
+  } finally {
+    if (force) {
+      refreshButtons.forEach(button => { button.disabled = false; });
+      refreshIcons.forEach(icon => { icon.style.animation = ''; });
+    }
   }
 }
 
@@ -3247,7 +4550,7 @@ async function manualLogin() {
     }
     btnLogin.innerHTML = '<i data-lucide="check"></i> 已连接';
     updateNetworkStatus(NetworkState.Online);
-    setTimeout(updateUserInfo, 2000);
+    setTimeout(() => void updateUserInfo(true), 2000);
   } catch (error) {
     log('登录', `登录请求失败: ${String(error)}`, 'error');
     btnLogin.disabled = false;

@@ -342,18 +342,32 @@ class MainActivity : TauriActivity() {
         val exportDirectory = File(activity.cacheDir, "exports").apply { mkdirs() }
         val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val destination = File(exportDirectory, "BJUT-AL-logs-$timestamp.log")
-        destination.outputStream().buffered().use { output ->
-          if (source.isFile && source.length() > 0L) {
-            source.inputStream().buffered().use { it.copyTo(output) }
-            output.write('\n'.code)
+        val timestampPattern = Regex("^\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})]")
+        val indexedLines = mutableListOf<Pair<String, Int>>()
+        val seenLines = HashSet<String>()
+        val sources = (listOf(source) + serviceLogs)
+          .filter { it.isFile && it.length() > 0L }
+          .distinctBy { it.absolutePath }
+        var lineIndex = 0
+        // The foreground service keeps writing while the WebView/Rust process
+        // is absent. Merge every source chronologically and suppress exact
+        // duplicates left by a crash during journal import.
+        for (logFile in sources) {
+          logFile.bufferedReader(Charsets.UTF_8).useLines { lines ->
+            lines.forEach { line ->
+              if (line.isNotBlank() && seenLines.add(line)) {
+                indexedLines.add(line to lineIndex++)
+              }
+            }
           }
-          // The foreground service keeps writing a separate journal while the
-          // WebView/Rust process is absent. Include current and crash-recovery
-          // import files so the shared export is never limited to the 5000 UI rows.
-          for (serviceLog in serviceLogs) {
-            serviceLog.inputStream().buffered().use { it.copyTo(output) }
-            output.write('\n'.code)
-          }
+        }
+        indexedLines.sortWith(
+          compareBy<Pair<String, Int>> {
+            timestampPattern.find(it.first)?.groupValues?.get(1) ?: "9999-99-99 99:99:99"
+          }.thenBy { it.second }
+        )
+        destination.bufferedWriter(Charsets.UTF_8).use { writer ->
+          indexedLines.forEach { (line, _) -> writer.appendLine(line) }
         }
         val uri = FileProvider.getUriForFile(
           activity,
@@ -384,6 +398,52 @@ class MainActivity : TauriActivity() {
         false
       } catch (error: Exception) {
         KeepAliveJournal.append(activity, "导出日志失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
+        false
+      }
+    }
+
+    @JavascriptInterface
+    fun shareExportFile(path: String, subject: String): Boolean {
+      return try {
+        val exportDirectory = File(activity.cacheDir, "exports").canonicalFile
+        val destination = File(path).canonicalFile
+        if (
+          destination.parentFile != exportDirectory ||
+          !destination.isFile ||
+          !destination.name.endsWith(".csv", ignoreCase = true) ||
+          destination.length() <= 0L ||
+          destination.length() > 32L * 1024L * 1024L
+        ) return false
+
+        val uri = FileProvider.getUriForFile(
+          activity,
+          "${activity.packageName}.fileprovider",
+          destination
+        )
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+          type = "text/csv"
+          putExtra(Intent.EXTRA_STREAM, uri)
+          putExtra(Intent.EXTRA_SUBJECT, subject.take(80))
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val completed = java.util.concurrent.CountDownLatch(1)
+        var launched = false
+        activity.runOnUiThread {
+          try {
+            activity.startActivity(Intent.createChooser(shareIntent, "导出账单记录"))
+            launched = true
+          } catch (error: Exception) {
+            KeepAliveJournal.append(activity, "启动账单分享窗口失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
+          } finally {
+            completed.countDown()
+          }
+        }
+        completed.await(3, java.util.concurrent.TimeUnit.SECONDS) && launched
+      } catch (error: InterruptedException) {
+        Thread.currentThread().interrupt()
+        false
+      } catch (error: Exception) {
+        KeepAliveJournal.append(activity, "导出账单失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
         false
       }
     }

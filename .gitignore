@@ -12,6 +12,8 @@ dist
 dist-ssr
 **/target/
 **/.kotlin/
+**/__pycache__/
+*.pyc
 *.local
 
 # Editor directories and files
@@ -30,3 +32,6 @@ dist-ssr
 *.jpg
 *.dmg
 src-tauri/.keys/
+
+# Private reverse-engineering captures (may contain account/billing data)
+/billing-capture.local/

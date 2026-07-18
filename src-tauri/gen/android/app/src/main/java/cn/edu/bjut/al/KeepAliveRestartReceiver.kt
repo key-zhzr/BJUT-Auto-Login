@@ -18,16 +18,24 @@ class KeepAliveRestartReceiver : BroadcastReceiver() {
         // Keep a one-shot watchdog armed even when an OEM kills the process without
         // delivering Service.onDestroy. The service refreshes this alarm while alive.
         KeepAliveRestartScheduler.scheduleWatchdog(appContext)
+        var reason = "系统广播=${intent?.action ?: "unknown"}"
         if (intent?.action == KeepAliveRestartScheduler.ACTION_RESTART) {
             val heartbeat = appContext.getSharedPreferences("service_state", Context.MODE_PRIVATE)
                 .getLong("service_heartbeat", 0L)
-            if (heartbeat > 0L && System.currentTimeMillis() - heartbeat < 90_000L) {
+            val now = System.currentTimeMillis()
+            val heartbeatAge = if (heartbeat in 1..now) now - heartbeat else null
+            if (heartbeatAge != null && heartbeatAge < 90_000L) {
                 return
+            }
+            reason = if (heartbeatAge == null) {
+                "看门狗未找到有效服务心跳"
+            } else {
+                "看门狗检测到服务心跳已过期 ${heartbeatAge / 1000} 秒"
             }
         }
         try {
             ContextCompat.startForegroundService(appContext, Intent(appContext, KeepAliveService::class.java))
-            KeepAliveJournal.append(appContext, "后台保活恢复广播已拉起前台服务（${intent?.action ?: "unknown"}）")
+            KeepAliveJournal.append(appContext, "后台保活恢复广播已请求启动或唤醒前台服务（$reason）")
         } catch (error: Exception) {
             KeepAliveJournal.append(
                 appContext,

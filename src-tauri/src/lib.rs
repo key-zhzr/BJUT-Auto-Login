@@ -1,4 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod billing;
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -530,11 +531,34 @@ struct ManualLoginResult {
     message: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 struct UserInfo {
     account: String,
     balance: String,
     flow: String,
+    source: String,
+    status: Option<String>,
+    status_reason: Option<String>,
+    package: Option<String>,
+    package_detail: Option<String>,
+    used_flow: Option<String>,
+    billing_cycle: Option<String>,
+    updated_at: String,
+    billing_error: Option<String>,
+    login_history: Vec<billing::BillingLoginRecord>,
+    online_sessions: Vec<billing::BillingOnlineSession>,
+    offline_tip: Option<String>,
+    mauth_enabled: Option<bool>,
+    billing_warnings: Vec<String>,
+}
+
+#[derive(Clone)]
+struct BillingCacheEntry {
+    account: String,
+    compatibility: VpnCompatibility,
+    expires_at: std::time::Instant,
+    result: Result<UserInfo, String>,
 }
 
 #[derive(serde::Serialize)]
@@ -699,6 +723,8 @@ struct AppState {
     last_network_state: Mutex<serde_json::Value>,
     auto_login_paused_until: std::sync::atomic::AtomicI64,
     usage_alert_history: Mutex<HashMap<String, String>>,
+    billing_cache: Mutex<Option<BillingCacheEntry>>,
+    billing_fetch_lock: tokio::sync::Mutex<()>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1532,7 +1558,7 @@ fn redact_request_error(error: reqwest::Error) -> String {
     error.without_url().to_string()
 }
 
-async fn fetch_user_info_rust(local_ip: Option<&str>) -> Option<UserInfo> {
+async fn fetch_portal_user_info(local_ip: Option<&str>) -> Option<UserInfo> {
     if let Some(ip) = local_ip {
         if !ip.starts_with("10.") && !ip.starts_with("172.") {
             return None;
@@ -1584,6 +1610,20 @@ async fn fetch_user_info_rust(local_ip: Option<&str>) -> Option<UserInfo> {
         account: info.get("account").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         balance: info.get("balance").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         flow: total_flow.map(|total| format!("{:.2} GB", total - used)).unwrap_or_else(|| "无限".to_string()),
+        source: "portal".to_string(),
+        status: None,
+        status_reason: None,
+        package: (!package_name.is_empty()).then(|| package_name.to_string()),
+        package_detail: None,
+        used_flow: Some(used_raw.to_string()),
+        billing_cycle: None,
+        updated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        billing_error: None,
+        login_history: Vec::new(),
+        online_sessions: Vec::new(),
+        offline_tip: None,
+        mauth_enabled: None,
+        billing_warnings: Vec::new(),
     })
 }
 
@@ -2441,6 +2481,9 @@ fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig)
         let mut state_cfg = state.config.write().unwrap();
         *state_cfg = new_cfg.clone();
     }
+    // Account order and credentials both affect which billing session is used.
+    // Never reuse a result after any persisted configuration update.
+    *state.billing_cache.lock().unwrap() = None;
     reconcile_account_health_after_config_save(app, state, &previous_cfg, &new_cfg);
     #[cfg(desktop)]
     refresh_tray_menu(app, state);
@@ -3155,6 +3198,49 @@ fn export_logs(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn export_billing_csv(app: tauri::AppHandle, kind: String, csv: String) -> Result<String, String> {
+    let stem = match kind.as_str() {
+        "usage" => "usage",
+        "monthly" => "monthly",
+        "payments" => "payments",
+        "operations" => "operations",
+        "stopLogs" => "stop-logs",
+        "reopenLogs" => "reopen-logs",
+        "packageLogs" => "package-logs",
+        _ => return Err("不支持的账单导出类型".to_string()),
+    };
+    if csv.trim().is_empty() {
+        return Err("当前没有可导出的账单记录".to_string());
+    }
+    if csv.len() > 32 * 1024 * 1024 {
+        return Err("账单导出内容超过 32 MiB，请缩小查询日期范围".to_string());
+    }
+
+    #[cfg(target_os = "android")]
+    let directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("无法定位导出缓存目录：{error}"))?
+        .join("exports");
+    #[cfg(not(target_os = "android"))]
+    let directory = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().document_dir())
+        .map_err(|error| format!("无法定位导出目录：{error}"))?;
+
+    std::fs::create_dir_all(&directory).map_err(|error| format!("无法创建导出目录：{error}"))?;
+    let filename = format!(
+        "BJUT-AL-billing-{stem}-{}.csv",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    );
+    let destination = directory.join(filename);
+    std::fs::write(&destination, csv.as_bytes())
+        .map_err(|error| format!("写入账单 CSV 失败：{error}"))?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn clear_all_logs(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) {
     state.logs.lock().unwrap().clear();
     let p = get_log_path(&app);
@@ -3354,17 +3440,368 @@ fn evaluate_usage_alerts(app: &tauri::AppHandle, state: &AppState, info: &UserIn
     }
 }
 
+fn preferred_billing_account(config: &AppConfig) -> Option<Account> {
+    config
+        .accounts
+        .iter()
+        .filter(|account| !account.is_disabled.unwrap_or(false) && !account.user.trim().is_empty())
+        .find(|account| account.is_default)
+        .or_else(|| {
+            config.accounts.iter().find(|account| {
+                !account.is_disabled.unwrap_or(false) && !account.user.trim().is_empty()
+            })
+        })
+        .cloned()
+}
+
+fn billing_snapshot_to_user_info(snapshot: billing::BillingSnapshot) -> UserInfo {
+    UserInfo {
+        account: snapshot.account,
+        balance: snapshot.balance,
+        flow: snapshot.remaining_flow,
+        source: "billing".to_string(),
+        status: snapshot.status,
+        status_reason: snapshot.status_reason,
+        package: snapshot.package,
+        package_detail: snapshot.package_detail,
+        used_flow: snapshot.used_flow,
+        billing_cycle: snapshot.billing_cycle,
+        updated_at: snapshot.updated_at,
+        billing_error: None,
+        login_history: snapshot.login_history,
+        online_sessions: snapshot.online_sessions,
+        offline_tip: snapshot.offline_tip,
+        mauth_enabled: snapshot.mauth_enabled,
+        billing_warnings: snapshot.warnings,
+    }
+}
+
+fn cached_billing_result(
+    state: &AppState,
+    account: &str,
+    compatibility: VpnCompatibility,
+) -> Option<Result<UserInfo, String>> {
+    let cache = state.billing_cache.lock().unwrap();
+    cache
+        .as_ref()
+        .filter(|entry| {
+            entry.account == account
+                && entry.compatibility == compatibility
+                && std::time::Instant::now() < entry.expires_at
+        })
+        .map(|entry| entry.result.clone())
+}
+
+async fn fetch_billing_cached(
+    state: &AppState,
+    account: &Account,
+    compatibility: VpnCompatibility,
+    force: bool,
+) -> (Result<UserInfo, String>, bool) {
+    if !force {
+        if let Some(result) = cached_billing_result(state, &account.user, compatibility) {
+            return (result, false);
+        }
+    }
+
+    let _fetch_guard = state.billing_fetch_lock.lock().await;
+    if !force {
+        if let Some(result) = cached_billing_result(state, &account.user, compatibility) {
+            return (result, false);
+        }
+    }
+
+    let fetched = billing::fetch(&account.user, &account.pass, compatibility).await;
+    let (result, duration) = match fetched {
+        Ok(snapshot) => (
+            Ok(billing_snapshot_to_user_info(snapshot)),
+            std::time::Duration::from_secs(10 * 60),
+        ),
+        Err(error) => {
+            let duration = error.cache_duration();
+            (Err(error.user_message()), duration)
+        }
+    };
+    *state.billing_cache.lock().unwrap() = Some(BillingCacheEntry {
+        account: account.user.clone(),
+        compatibility,
+        expires_at: std::time::Instant::now() + duration,
+        result: result.clone(),
+    });
+    (result, true)
+}
+
+fn unavailable_billing_info(account: &str, error: String) -> UserInfo {
+    UserInfo {
+        account: account.to_string(),
+        balance: "--".to_string(),
+        flow: "--".to_string(),
+        source: "unavailable".to_string(),
+        status: None,
+        status_reason: None,
+        package: None,
+        package_detail: None,
+        used_flow: None,
+        billing_cycle: None,
+        updated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        billing_error: Some(error),
+        login_history: Vec::new(),
+        online_sessions: Vec::new(),
+        offline_tip: None,
+        mauth_enabled: None,
+        billing_warnings: Vec::new(),
+    }
+}
+
 #[tauri::command]
 async fn get_user_info(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     local_ip: Option<String>,
+    force: Option<bool>,
 ) -> Result<Option<UserInfo>, String> {
-    let info = fetch_user_info_rust(local_ip.as_deref()).await;
+    let (account, compatibility) = {
+        let config = state.config.read().unwrap();
+        (
+            preferred_billing_account(&config),
+            VpnCompatibility::from_config(&config.vpn_compatibility),
+        )
+    };
+    let mobile_data = is_mobile_data_network(&state.last_network_state.lock().unwrap());
+    let billing_result = if let Some(account) = account.as_ref() {
+        if mobile_data {
+            cached_billing_result(&state, &account.user, compatibility)
+                .or_else(|| Some(Err("Android 移动数据网络下已暂停计费系统刷新".to_string())))
+        } else {
+            let (result, fetched_now) =
+                fetch_billing_cached(&state, account, compatibility, force.unwrap_or(false)).await;
+            if fetched_now {
+                match &result {
+                    Ok(_) => rust_log(&app, &state, "计费", "计费系统数据已安全更新", "debug"),
+                    Err(error) => rust_log(&app, &state, "计费", error, "info"),
+                }
+            }
+            Some(result)
+        }
+    } else {
+        None
+    };
+
+    let info = match billing_result {
+        Some(Ok(info)) => Some(info),
+        Some(Err(error)) => {
+            if let Some(mut fallback) = fetch_portal_user_info(local_ip.as_deref()).await {
+                fallback.billing_error = Some(error);
+                Some(fallback)
+            } else {
+                account
+                    .as_ref()
+                    .map(|account| unavailable_billing_info(&account.user, error))
+            }
+        }
+        None => fetch_portal_user_info(local_ip.as_deref()).await,
+    };
     if let Some(info) = info.as_ref() {
         evaluate_usage_alerts(&app, &state, info);
     }
     Ok(info)
+}
+
+#[tauri::command]
+async fn get_billing_center(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<billing::BillingCenterData, String> {
+    let (account, compatibility) = billing_action_target(&state)?;
+    let _fetch_guard = state.billing_fetch_lock.lock().await;
+    let result = billing::fetch_center(&account.user, &account.pass, compatibility)
+        .await
+        .map_err(|error| error.user_message());
+    match &result {
+        Ok(data) => rust_log(
+            &app,
+            &state,
+            "计费",
+            &format!("计费中心完整数据已更新（{} 条警告）", data.warnings.len()),
+            "debug",
+        ),
+        Err(error) => rust_log(&app, &state, "计费", error, "error"),
+    }
+    result
+}
+
+#[tauri::command]
+async fn query_billing_records(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    query: billing::BillingRecordQuery,
+) -> Result<billing::BillingRecordResult, String> {
+    let (account, compatibility) = billing_action_target(&state)?;
+    let kind = query.kind.clone();
+    let page = query.page;
+    let all = query.all;
+    let _fetch_guard = state.billing_fetch_lock.lock().await;
+    let result = billing::query_records(&account.user, &account.pass, compatibility, &query)
+        .await
+        .map_err(|error| error.user_message());
+    match &result {
+        Ok(data) => rust_log(
+            &app,
+            &state,
+            "计费",
+            &format!(
+                "计费记录已读取（类型={kind}，页码={}，返回={}，总数={}）",
+                if all { 0 } else { page },
+                data.table.rows.len(),
+                data.table.total
+            ),
+            "debug",
+        ),
+        Err(error) => rust_log(&app, &state, "计费", error, "error"),
+    }
+    result
+}
+
+#[tauri::command]
+async fn perform_billing_action(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    request: billing::BillingActionRequest,
+) -> Result<billing::BillingActionResult, String> {
+    let (account, compatibility) = billing_action_target(&state)?;
+    let action = request.action.clone();
+    let new_password = request.new_password.clone();
+    let _fetch_guard = state.billing_fetch_lock.lock().await;
+    let mut result = billing::perform_action(
+        &account.user,
+        &account.pass,
+        compatibility,
+        &request,
+    )
+    .await
+    .map_err(|error| error.user_message())?;
+
+    if result.password_changed {
+        let replacement = new_password
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "计费密码已修改，但新密码没有返回到安全存储流程".to_string())?;
+        let mut config = state.config.read().unwrap().clone();
+        let saved = config
+            .accounts
+            .iter_mut()
+            .find(|saved| saved.user == account.user)
+            .ok_or_else(|| "计费密码已修改，但 App 中已找不到对应账号，请立即重新添加账号".to_string())?;
+        saved.pass = replacement;
+        save_config(&app, &state, config).map_err(|error| {
+            format!("计费密码已修改，但 App 安全存储同步失败：{error}。请立即在账号管理中更新密码")
+        })?;
+        result.message = format!("{}；App 中的账号密码已同步更新", result.message);
+    }
+
+    *state.billing_cache.lock().unwrap() = None;
+    let action_label = match action.as_str() {
+        "stopNow" => "立即报停",
+        "stopScheduled" => "预约报停",
+        "cancelStop" => "取消预约报停",
+        "reopenNow" => "立即复通",
+        "reopenScheduled" => "预约复通",
+        "cancelReopen" => "取消预约复通",
+        "schedulePackage" => "预约套餐",
+        "cancelPackage" => "取消套餐预约",
+        "setConsumeLimit" => "修改消费保护",
+        "bindMac" => "绑定设备",
+        "unbindMac" => "解绑设备",
+        "changePassword" => "修改计费密码",
+        "updateQuestions" => "修改密码保护",
+        _ => "计费操作",
+    };
+    rust_log(
+        &app,
+        &state,
+        "计费",
+        &format!("用户已确认执行：{action_label}"),
+        "success",
+    );
+    Ok(result)
+}
+
+fn billing_action_target(state: &AppState) -> Result<(Account, VpnCompatibility), String> {
+    if is_mobile_data_network(&state.last_network_state.lock().unwrap()) {
+        return Err("Android 移动数据网络下不能访问校园网计费系统".to_string());
+    }
+    let config = state.config.read().unwrap();
+    let account = preferred_billing_account(&config)
+        .ok_or_else(|| "没有可用于计费系统的已启用账号".to_string())?;
+    if account.pass.is_empty() {
+        return Err("计费账号缺少已保存的密码".to_string());
+    }
+    Ok((
+        account,
+        VpnCompatibility::from_config(&config.vpn_compatibility),
+    ))
+}
+
+#[tauri::command]
+async fn disconnect_billing_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    ip: String,
+    mac: String,
+) -> Result<String, String> {
+    let (account, compatibility) = billing_action_target(&state)?;
+    let _fetch_guard = state.billing_fetch_lock.lock().await;
+    let result = billing::disconnect_session(
+        &account.user,
+        &account.pass,
+        compatibility,
+        &session_id,
+        &ip,
+        &mac,
+    )
+    .await
+    .map_err(|error| error.user_message());
+    match &result {
+        Ok(_) => {
+            *state.billing_cache.lock().unwrap() = None;
+            rust_log(
+                &app,
+                &state,
+                "计费",
+                "用户已确认注销一条在线会话",
+                "success",
+            );
+        }
+        Err(error) => rust_log(&app, &state, "计费", error, "error"),
+    }
+    result
+}
+
+#[tauri::command]
+async fn set_billing_mauth(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    enabled: bool,
+) -> Result<String, String> {
+    let (account, compatibility) = billing_action_target(&state)?;
+    let _fetch_guard = state.billing_fetch_lock.lock().await;
+    let result = billing::set_mauth_enabled(&account.user, &account.pass, compatibility, enabled)
+        .await
+        .map_err(|error| error.user_message());
+    match &result {
+        Ok(_) => {
+            *state.billing_cache.lock().unwrap() = None;
+            rust_log(
+                &app,
+                &state,
+                "计费",
+                "用户已确认修改无感认证状态",
+                "success",
+            );
+        }
+        Err(error) => rust_log(&app, &state, "计费", error, "error"),
+    }
+    result
 }
 
 #[tauri::command]
@@ -3594,6 +4031,8 @@ pub fn run() {
                 })),
                 auto_login_paused_until: std::sync::atomic::AtomicI64::new(0),
                 usage_alert_history: Mutex::new(HashMap::new()),
+                billing_cache: Mutex::new(None),
+                billing_fetch_lock: tokio::sync::Mutex::new(()),
             });
             _app.manage(app_state.clone());
 
@@ -3874,11 +4313,17 @@ pub fn run() {
             get_logs,
             get_log_text,
             export_logs,
+            export_billing_csv,
             clear_all_logs,
             get_countdown_status,
             trigger_manual_check,
             manual_login,
             get_user_info,
+            get_billing_center,
+            query_billing_records,
+            perform_billing_action,
+            disconnect_billing_session,
+            set_billing_mauth,
             notify_network_change,
             set_auto_login_pause,
             get_update_target,
