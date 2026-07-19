@@ -1,4 +1,3 @@
-use super::redact_request_error;
 use reqwest::header::{
     HeaderMap, ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, REFERER, SET_COOKIE,
 };
@@ -6,6 +5,7 @@ use reqwest::{Client, Response, Url};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::error::Error as StdError;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -17,8 +17,7 @@ const YD_HOST: &str = "ydapp.bjut.edu.cn";
 const UC_ORIGIN: &str = "https://uc.bjut.edu.cn";
 const YD_ORIGIN: &str = "https://ydapp.bjut.edu.cn";
 const UC_LOGIN_TARGET: &str = "https://uc.bjut.edu.cn/#/user/login";
-const UC_LOGIN_ENTRY: &str =
-    "https://uc.bjut.edu.cn/api/login?target=https%3A%2F%2Fuc.bjut.edu.cn%2F%23%2Fuser%2Flogin";
+const CAS_LOGIN_ENTRY: &str = "https://cas.bjut.edu.cn/login?service=https%3A%2F%2Fuc.bjut.edu.cn%2Fapi%2Flogin%3Ftarget%3Dhttps%253A%252F%252Fuc.bjut.edu.cn%252F%2523%252Fuser%252Flogin";
 const YD_ENTRY: &str = "https://ydapp.bjut.edu.cn/openV8HomePage";
 const YD_APP_ID: &str = "200220816093810809";
 const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 13; M2102K1C Build/TKQ1.220829.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36 XWEB/1160065 MMWEBSDK/20231202 MicroMessenger/8.0.47.2560(0x28002F30) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64";
@@ -30,8 +29,11 @@ static CONFIRMATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 pub(crate) struct CampusServiceError(String);
 
 impl CampusServiceError {
-    fn network(error: reqwest::Error) -> Self {
-        Self(format!("校园服务暂不可达：{}", redact_request_error(error)))
+    fn network(stage: &str, error: reqwest::Error) -> Self {
+        Self(format!(
+            "校园服务暂不可达（{stage}）：{}",
+            classify_network_error(&error)
+        ))
     }
 
     fn protocol(message: impl Into<String>) -> Self {
@@ -44,6 +46,76 @@ impl CampusServiceError {
 
     pub(crate) fn user_message(self) -> String {
         self.0
+    }
+}
+
+fn classify_network_error(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        return "请求超时，请检查 VPN 路由或稍后重试";
+    }
+
+    let mut chain = String::new();
+    let mut source = error.source();
+    for _ in 0..6 {
+        let Some(current) = source else { break };
+        chain.push(' ');
+        chain.push_str(&current.to_string().to_ascii_lowercase());
+        source = current.source();
+    }
+
+    if chain.contains("dns")
+        || chain.contains("name resolution")
+        || chain.contains("failed to lookup")
+        || chain.contains("no such host")
+    {
+        "DNS 解析失败，请检查 VPN、私人 DNS 或网络设置"
+    } else if chain.contains("certificate")
+        || chain.contains("unknownissuer")
+        || chain.contains("invalid peer")
+        || chain.contains("tls")
+        || chain.contains("ssl")
+    {
+        "TLS 握手或证书验证失败，请检查系统时间和 VPN HTTPS 代理"
+    } else if chain.contains("network is unreachable") || chain.contains("no route to host") {
+        "系统没有到目标服务的可用路由，请检查 VPN 分流规则"
+    } else if chain.contains("connection refused") {
+        "目标服务拒绝连接"
+    } else if chain.contains("connection reset")
+        || chain.contains("broken pipe")
+        || chain.contains("unexpected eof")
+    {
+        "连接被中途断开，请检查 VPN 或网络稳定性"
+    } else if error.is_connect() {
+        "连接失败，请检查 VPN 分流、DNS 和系统网络权限"
+    } else if error.is_builder() {
+        "请求构建失败"
+    } else if error.is_body() {
+        "响应传输中断"
+    } else if error.is_decode() {
+        "响应内容无法解码"
+    } else {
+        "请求发送失败，请检查 VPN 和网络连接"
+    }
+}
+
+fn request_stage(url: &Url) -> &'static str {
+    match (url.host_str(), url.path()) {
+        (Some(CAS_HOST), "/login") => "打开 CAS 登录页",
+        (Some(UC_HOST), "/api/login") => "进入统一认证",
+        (Some(UC_HOST), "/api/uc/status") => "校验统一认证会话",
+        (Some(UC_HOST), "/api/uc/password") => "提交统一认证密码修改",
+        (Some(ITS_HOST), "/uc/api/oauth/index") => "通过移动门户 OAuth 中转",
+        (Some(YD_HOST), "/openV8HomePage") => "进入移动门户",
+        (Some(YD_HOST), "/netpay/openNetPay") => "读取校园卡充值入口",
+        (Some(YD_HOST), "/channel/queryNetAccBalance")
+        | (Some(YD_HOST), "/channel/get085Detail") => "查询目标网费账户",
+        (Some(YD_HOST), "/netpay/createPreThirdTrade") => "创建充值订单",
+        (Some(YD_HOST), "/netpay/consumeFromYktToNet") => "提交校园卡扣费",
+        (Some(CAS_HOST), _) => "访问 CAS",
+        (Some(UC_HOST), _) => "访问统一认证",
+        (Some(ITS_HOST), _) => "访问移动门户 OAuth 中转",
+        (Some(YD_HOST), _) => "访问移动门户",
+        _ => "访问校园服务",
     }
 }
 
@@ -433,18 +505,13 @@ async fn authenticate(account: &str, password: &str) -> Result<CampusSession, Ca
         .user_agent(WECHAT_USER_AGENT)
         .default_headers(headers)
         .build()
-        .map_err(CampusServiceError::network)?;
+        .map_err(|error| CampusServiceError::network("初始化 HTTPS 客户端", error))?;
     let mut session = CampusSession {
         client,
         cookies: DomainCookies::default(),
     };
-    let (login_url, login_html) = get_follow_text(
-        &mut session,
-        parse_url(UC_LOGIN_ENTRY)?,
-        &[UC_HOST, CAS_HOST],
-        None,
-    )
-    .await?;
+    let (login_url, login_html) =
+        get_follow_text(&mut session, parse_url(CAS_LOGIN_ENTRY)?, &[CAS_HOST], None).await?;
     if login_url.host_str() != Some(CAS_HOST) || login_url.path() != "/login" {
         return Err(CampusServiceError::protocol(
             "统一认证入口没有到达 CAS 登录页",
@@ -638,7 +705,11 @@ async fn get_follow_text(
         if let Some(value) = current_referer.as_deref() {
             request = request.header(REFERER, value);
         }
-        let response = request.send().await.map_err(CampusServiceError::network)?;
+        let stage = request_stage(&url);
+        let response = request
+            .send()
+            .await
+            .map_err(|error| CampusServiceError::network(stage, error))?;
         session.cookies.absorb(&url, response.headers());
         if response.status().is_redirection() {
             let next = redirect_target(&url, &response, allowed_hosts)?;
@@ -654,7 +725,10 @@ async fn get_follow_text(
                 response.status().as_u16()
             )));
         }
-        let text = response.text().await.map_err(CampusServiceError::network)?;
+        let text = response
+            .text()
+            .await
+            .map_err(|error| CampusServiceError::network(stage, error))?;
         if url.host_str() == Some(ITS_HOST) && url.path() == "/uc/api/oauth/index" {
             let next = solve_its_challenge(&url, &text)?;
             current_referer = Some(url.to_string());
@@ -686,9 +760,13 @@ async fn get_json(
     if let Some(cookie) = session.cookies.header(&url) {
         request = request.header(COOKIE, cookie);
     }
-    let response = request.send().await.map_err(CampusServiceError::network)?;
+    let stage = request_stage(&url);
+    let response = request
+        .send()
+        .await
+        .map_err(|error| CampusServiceError::network(stage, error))?;
     session.cookies.absorb(&url, response.headers());
-    response_json(response).await
+    response_json(response, stage).await
 }
 
 async fn post_json(
@@ -721,12 +799,16 @@ async fn post_json(
     if let Some(cookie) = session.cookies.header(&url) {
         request = request.header(COOKIE, cookie);
     }
-    let response = request.send().await.map_err(CampusServiceError::network)?;
+    let stage = request_stage(&url);
+    let response = request
+        .send()
+        .await
+        .map_err(|error| CampusServiceError::network(stage, error))?;
     session.cookies.absorb(&url, response.headers());
-    response_json(response).await
+    response_json(response, stage).await
 }
 
-async fn response_json(response: Response) -> Result<Value, CampusServiceError> {
+async fn response_json(response: Response, stage: &str) -> Result<Value, CampusServiceError> {
     let status = response.status();
     if !status.is_success() {
         return Err(CampusServiceError::protocol(format!(
@@ -734,10 +816,13 @@ async fn response_json(response: Response) -> Result<Value, CampusServiceError> 
             status.as_u16()
         )));
     }
-    response
-        .json::<Value>()
-        .await
-        .map_err(|_| CampusServiceError::protocol("接口没有返回有效 JSON"))
+    match response.json::<Value>().await {
+        Ok(value) => Ok(value),
+        Err(error) if error.is_decode() => {
+            Err(CampusServiceError::protocol("接口没有返回有效 JSON"))
+        }
+        Err(error) => Err(CampusServiceError::network(stage, error)),
+    }
 }
 
 async fn send_form(
@@ -766,7 +851,10 @@ async fn send_form(
     if let Some(cookie) = session.cookies.header(&url) {
         request = request.header(COOKIE, cookie);
     }
-    let response = request.send().await.map_err(CampusServiceError::network)?;
+    let response = request
+        .send()
+        .await
+        .map_err(|error| CampusServiceError::network("提交 CAS 登录", error))?;
     session.cookies.absorb(&url, response.headers());
     Ok(response)
 }
@@ -1359,6 +1447,8 @@ mod tests {
         );
         assert_eq!(fields.get("username").map(String::as_str), Some("student"));
         assert_eq!(fields.get("password").map(String::as_str), Some("secret"));
+        assert_eq!(request_stage(&url), "打开 CAS 登录页");
+        assert!(validate_cas_action(&Url::parse(CAS_LOGIN_ENTRY).unwrap()).is_ok());
     }
 
     #[test]

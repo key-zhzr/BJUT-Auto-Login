@@ -3879,6 +3879,32 @@ async fn prepare_network_recharge(
         "正在通过统一认证核对校园卡与目标网费账户",
         "info",
     );
+    #[cfg(target_os = "android")]
+    {
+        let (transport, validated) = {
+            let network = state.last_network_state.lock().unwrap();
+            (
+                network
+                    .get("transport")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                network
+                    .get("validated")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            )
+        };
+        rust_log(
+            &app,
+            &state,
+            "计费",
+            &format!(
+                "统一认证网络上下文: transport={transport}, systemValidated={validated}"
+            ),
+            "debug",
+        );
+    }
     let prepared = tokio::time::timeout(
         std::time::Duration::from_secs(60),
         campus_services::prepare_recharge(
