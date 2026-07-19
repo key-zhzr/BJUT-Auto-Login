@@ -15,6 +15,7 @@ umask 077
 
 readonly CAS_HOST="cas.bjut.edu.cn"
 readonly UC_HOST="uc.bjut.edu.cn"
+readonly ITS_HOST="itsapp.bjut.edu.cn"
 readonly YD_HOST="ydapp.bjut.edu.cn"
 readonly CAS_LOGIN_URL="https://${CAS_HOST}/login?service=https%3A%2F%2F${UC_HOST}%2F"
 readonly YD_ENTRY_URL="https://${YD_HOST}/openV8HomePage"
@@ -406,7 +407,7 @@ fi
 printf '5/7 Entering the mobile portal with the existing CAS session...\n'
 YD_EFFECTIVE=""
 if [[ "${LOGIN_OUTCOME}" == "authenticated" ]]; then
-  if follow_get "20-yd-entry" "${YD_ENTRY_URL}" "${CAS_HOST},${YD_HOST}" \
+  if follow_get "20-yd-entry" "${YD_ENTRY_URL}" "${CAS_HOST},${ITS_HOST},${YD_HOST}" \
       "${UC_EFFECTIVE}" "html"; then
     YD_EFFECTIVE="$(meta_value url_effective "${RAW_DIR}/20-yd-entry.meta")"
     case "${YD_EFFECTIVE}" in

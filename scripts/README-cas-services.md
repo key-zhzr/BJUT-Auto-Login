@@ -4,6 +4,7 @@
 
 - `cas.bjut.edu.cn`：统一认证登录页、一次登录请求及受控重定向；
 - `uc.bjut.edu.cn`：修改密码前端、密码规则、用户状态与公共配置；
+- `itsapp.bjut.edu.cn`：移动门户进入 `ydapp` 时使用的可信 OAuth 中转；
 - `ydapp.bjut.edu.cn`：`openV8HomePage` 跳转、`openid` 路由形态，以及网费充值
   页面依赖的前端资源。
 
@@ -44,7 +45,8 @@ chmod +x scripts/capture-cas-services.sh
 1. 读取 CAS 登录页并校验表单、动态 `execution` 和验证码状态；
 2. 保存 CAS 同源 JS/CSS；
 3. 向经过校验的 CAS 表单提交一次登录；
-4. 逐跳校验 HTTPS 重定向，只允许 CAS→UC 或 CAS→移动门户的已知域名；
+4. 逐跳校验 HTTPS 重定向：UC 登录只允许 CAS 与 UC；移动门户流程只允许
+   CAS、`itsapp.bjut.edu.cn` 与 `ydapp.bjut.edu.cn`；
 5. 读取 UC 的以下只读接口：
    - `/api/register/rules`
    - `/api/uc/status`

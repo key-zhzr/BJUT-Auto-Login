@@ -22,8 +22,9 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 
 CAS_HOST = "cas.bjut.edu.cn"
 UC_HOST = "uc.bjut.edu.cn"
+ITS_HOST = "itsapp.bjut.edu.cn"
 YD_HOST = "ydapp.bjut.edu.cn"
-ALLOWED_HOSTS = {CAS_HOST, UC_HOST, YD_HOST}
+ALLOWED_HOSTS = {CAS_HOST, UC_HOST, ITS_HOST, YD_HOST}
 UC_SERVICE_URL = "https://uc.bjut.edu.cn/"
 TEXT_SUFFIXES = {
     ".css",
@@ -81,7 +82,7 @@ OPENID_PARAMETER = re.compile(
     r"(?i)(?:[?&#]|&amp;)openid=([^&#\s\"'<>]+)"
 )
 ABSOLUTE_URL = re.compile(
-    r"https://(?:cas|uc|ydapp)\.bjut\.edu\.cn/[^\s\"'<>\\)]*",
+    r"https://(?:cas|uc|itsapp|ydapp)\.bjut\.edu\.cn/[^\s\"'<>\\)]*",
     re.I,
 )
 RELATIVE_ENDPOINT = re.compile(
@@ -534,6 +535,7 @@ def sanitize(args: argparse.Namespace) -> int:
         "targets": [
             "https://cas.bjut.edu.cn",
             "https://uc.bjut.edu.cn",
+            "https://itsapp.bjut.edu.cn",
             "https://ydapp.bjut.edu.cn",
         ],
         "privacy": {

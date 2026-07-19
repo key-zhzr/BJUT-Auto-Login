@@ -122,6 +122,32 @@ class CasServicesCaptureTests(unittest.TestCase):
                         {capture.CAS_HOST, capture.UC_HOST},
                     )
 
+    def test_mobile_portal_allows_the_known_itsapp_oauth_hop_only_when_selected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            headers = Path(directory) / "headers.txt"
+            oauth_url = (
+                "https://itsapp.bjut.edu.cn/uc/api/oauth/index?"
+                "redirect=https%3A%2F%2Fydapp.bjut.edu.cn%2FopenV8HomePage&"
+                "appid=200220816093810809&state=V8YKT&qrcode=1"
+            )
+            headers.write_text(
+                f"HTTP/2 302\r\nLocation: {oauth_url}\r\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                capture.extract_safe_redirect(
+                    headers,
+                    "https://ydapp.bjut.edu.cn/openV8HomePage",
+                    {capture.CAS_HOST, capture.ITS_HOST, capture.YD_HOST},
+                ),
+                oauth_url,
+            )
+            with self.assertRaises(ValueError):
+                capture.extract_safe_redirect(
+                    headers,
+                    "https://ydapp.bjut.edu.cn/openV8HomePage",
+                    {capture.CAS_HOST, capture.YD_HOST},
+                )
+
     def test_collects_prefetched_and_literal_same_origin_assets_only(self):
         with tempfile.TemporaryDirectory() as directory:
             page = Path(directory) / "index.html"
@@ -330,6 +356,14 @@ elif "uc.bjut.edu.cn/api/" in url:
 elif "uc.bjut.edu.cn" in url:
     body = '<html><script>fetch("/api/reset/rules")</script></html>'
 elif url == "https://ydapp.bjut.edu.cn/openV8HomePage":
+    status = "302"
+    body = ""
+    location = (
+        "https://itsapp.bjut.edu.cn/uc/api/oauth/index?"
+        "redirect=https%3A%2F%2Fydapp.bjut.edu.cn%2FopenV8HomePage&"
+        "appid=200220816093810809&state=V8YKT&qrcode=1"
+    )
+elif "itsapp.bjut.edu.cn/uc/api/oauth/index" in url:
     status = "302"
     body = ""
     location = (
