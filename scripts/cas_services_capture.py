@@ -450,8 +450,16 @@ def yd_balance_body(open_response: Path) -> str:
     idserial = card_pay.get("idserial") if isinstance(card_pay, dict) else None
     if not isinstance(idserial, str) or not re.fullmatch(r"[A-Za-z0-9._-]{3,64}", idserial):
         raise ValueError("openNetPay did not return a valid campus-card account")
+    route = response.get("url")
+    factories = {
+        "/pages/recharge/networkFeeCharge/networkFeeCharge": "N003",
+        "/pages/recharge/networkFeeCharge/networkFeeChargeNew": "N006",
+    }
+    factorycode = factories.get(route)
+    if factorycode is None:
+        raise ValueError("openNetPay returned an unknown network-fee route")
     return json.dumps(
-        {"idserial": idserial, "netaccno": idserial, "factorycode": "N006"},
+        {"idserial": idserial, "netaccno": idserial, "factorycode": factorycode},
         separators=(",", ":"),
     )
 

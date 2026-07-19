@@ -263,6 +263,7 @@ class CasServicesCaptureTests(unittest.TestCase):
                 json.dumps(
                     {
                         "success": True,
+                        "url": "/pages/recharge/networkFeeCharge/networkFeeChargeNew",
                         "data": {"cardPay": {"idserial": "25000000"}},
                     }
                 ),
@@ -275,6 +276,20 @@ class CasServicesCaptureTests(unittest.TestCase):
                     "netaccno": "25000000",
                     "factorycode": "N006",
                 },
+            )
+            response.write_text(
+                json.dumps(
+                    {
+                        "success": True,
+                        "url": "/pages/recharge/networkFeeCharge/networkFeeCharge",
+                        "data": {"cardPay": {"idserial": "25000000"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                json.loads(capture.yd_balance_body(response))["factorycode"],
+                "N003",
             )
 
     def test_redaction_removes_all_authentication_and_personal_values(self):
@@ -454,7 +469,8 @@ elif is_post and url.endswith("/netpay/openNetPay"):
         raise SystemExit(72)
     content_type = "application/json"
     body = (
-        '{"success":true,"data":{"cardPay":'
+        '{"success":true,"url":"/pages/recharge/networkFeeCharge/'
+        'networkFeeChargeNew","data":{"cardPay":'
         '{"idserial":"25000000","cardbal":"12.34"}}}'
     )
 elif is_post and url.endswith("/channel/queryNetAccBalance"):

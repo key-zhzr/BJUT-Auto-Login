@@ -59,7 +59,8 @@ chmod +x scripts/capture-cas-services.sh
 6. 复用同一临时 CAS 会话访问 `ydapp.bjut.edu.cn/openV8HomePage`；
 7. 使用页面取得的 `openid` 调用充值页面自身的两个只读初始化查询：
    `/netpay/openNetPay` 与 `/channel/queryNetAccBalance`，只采集校园卡余额、网费
-   账号状态等响应形状；不会创建订单或扣费；
+   账号状态等响应形状；脚本会按 `openNetPay` 实际返回的新旧页面选择对应的
+   `N006` 或 `N003` 通道，不会创建订单或扣费；
 8. 保存 UC、移动门户 HTML 直接引用的同源 JS/CSS，并从移动门户 Webpack 清单中
    只重建网费充值新旧页面及其共享代码块的带哈希部署文件；不会把 UniApp bundle
    中未部署的设备、媒体、定位等源码模块名误当成静态文件。少量真正失效的引用会
