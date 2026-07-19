@@ -1,7 +1,7 @@
 use reqwest::header::{
     HeaderMap, ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, REFERER, SET_COOKIE,
 };
-use reqwest::{Client, Request, Response, Url};
+use reqwest::{Client, Response, Url};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -20,7 +20,6 @@ const UC_LOGIN_TARGET: &str = "https://uc.bjut.edu.cn/#/user/login";
 const CAS_LOGIN_ENTRY: &str = "https://cas.bjut.edu.cn/login?service=https%3A%2F%2Fuc.bjut.edu.cn%2Fapi%2Flogin%3Ftarget%3Dhttps%253A%252F%252Fuc.bjut.edu.cn%252F%2523%252Fuser%252Flogin";
 const YD_ENTRY: &str = "https://ydapp.bjut.edu.cn/openV8HomePage";
 const YD_APP_ID: &str = "200220816093810809";
-const YD_ANDROID_FALLBACK_IPV4: [u8; 4] = [114, 251, 253, 210];
 const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 13; M2102K1C Build/TKQ1.220829.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36 XWEB/1160065 MMWEBSDK/20231202 MicroMessenger/8.0.47.2560(0x28002F30) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64";
 const MAX_REDIRECTS: usize = 12;
 const CONFIRMATION_LIFETIME: Duration = Duration::from_secs(120);
@@ -249,54 +248,7 @@ fn cookie_path_matches(request: &str, cookie: &str) -> bool {
 #[derive(Clone, Debug)]
 struct CampusSession {
     client: Client,
-    android_yd_dns_fallback: Option<Client>,
-    using_android_yd_dns_fallback: bool,
     cookies: DomainCookies,
-}
-
-impl CampusSession {
-    async fn execute(
-        &mut self,
-        url: &Url,
-        request: Request,
-        stage: &str,
-    ) -> Result<Response, CampusServiceError> {
-        if self.using_android_yd_dns_fallback && url.host_str() == Some(YD_HOST) {
-            return self
-                .android_yd_dns_fallback
-                .as_ref()
-                .expect("Android ydapp fallback client must exist when selected")
-                .execute(request)
-                .await
-                .map_err(|error| CampusServiceError::network(stage, error));
-        }
-
-        let retry = request.try_clone();
-        match self.client.execute(request).await {
-            Ok(response) => Ok(response),
-            Err(error)
-                if cfg!(target_os = "android")
-                    && url.host_str() == Some(YD_HOST)
-                    && error.is_connect()
-                    && retry.is_some()
-                    && self.android_yd_dns_fallback.is_some() =>
-            {
-                let retry_stage = format!("{stage}（Android VPN DNS 回退）");
-                let response = self
-                    .android_yd_dns_fallback
-                    .as_ref()
-                    .expect("checked above")
-                    .execute(retry.expect("checked above"))
-                    .await
-                    .map_err(|retry_error| {
-                        CampusServiceError::network(&retry_stage, retry_error)
-                    })?;
-                self.using_android_yd_dns_fallback = true;
-                Ok(response)
-            }
-            Err(error) => Err(CampusServiceError::network(stage, error)),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -546,16 +498,9 @@ async fn authenticate(account: &str, password: &str) -> Result<CampusSession, Ca
     }
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9".parse().unwrap());
-    let client = build_client(headers.clone(), false)?;
-    let android_yd_dns_fallback = if cfg!(target_os = "android") {
-        Some(build_client(headers, true)?)
-    } else {
-        None
-    };
+    let client = build_client(headers)?;
     let mut session = CampusSession {
         client,
-        android_yd_dns_fallback,
-        using_android_yd_dns_fallback: false,
         cookies: DomainCookies::default(),
     };
     let (login_url, login_html) =
@@ -602,23 +547,16 @@ async fn authenticate(account: &str, password: &str) -> Result<CampusSession, Ca
     Ok(session)
 }
 
-fn build_client(
-    headers: HeaderMap,
-    use_android_yd_dns_fallback: bool,
-) -> Result<Client, CampusServiceError> {
-    let mut builder = Client::builder()
+fn build_client(headers: HeaderMap) -> Result<Client, CampusServiceError> {
+    Client::builder()
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(12))
         .redirect(reqwest::redirect::Policy::none())
+        .use_native_tls()
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
+        .max_tls_version(reqwest::tls::Version::TLS_1_2)
         .user_agent(WECHAT_USER_AGENT)
-        .default_headers(headers);
-    if use_android_yd_dns_fallback {
-        builder = builder.resolve(
-            YD_HOST,
-            std::net::SocketAddr::from((YD_ANDROID_FALLBACK_IPV4, 443)),
-        );
-    }
-    builder
+        .default_headers(headers)
         .build()
         .map_err(|error| CampusServiceError::network("初始化 HTTPS 客户端", error))
 }
@@ -776,9 +714,9 @@ async fn get_follow_text(
         }
         let stage = request_stage(&url);
         let response = request
-            .build()
+            .send()
+            .await
             .map_err(|error| CampusServiceError::network(stage, error))?;
-        let response = session.execute(&url, response, stage).await?;
         session.cookies.absorb(&url, response.headers());
         if response.status().is_redirection() {
             let next = redirect_target(&url, &response, allowed_hosts)?;
@@ -833,9 +771,9 @@ async fn get_json(
     }
     let stage = request_stage(&url);
     let response = request
-        .build()
+        .send()
+        .await
         .map_err(|error| CampusServiceError::network(stage, error))?;
-    let response = session.execute(&url, response, stage).await?;
     session.cookies.absorb(&url, response.headers());
     response_json(response, stage).await
 }
@@ -872,9 +810,9 @@ async fn post_json(
     }
     let stage = request_stage(&url);
     let response = request
-        .build()
+        .send()
+        .await
         .map_err(|error| CampusServiceError::network(stage, error))?;
-    let response = session.execute(&url, response, stage).await?;
     session.cookies.absorb(&url, response.headers());
     response_json(response, stage).await
 }
@@ -923,9 +861,9 @@ async fn send_form(
         request = request.header(COOKIE, cookie);
     }
     let response = request
-        .build()
+        .send()
+        .await
         .map_err(|error| CampusServiceError::network("提交 CAS 登录", error))?;
-    let response = session.execute(&url, response, "提交 CAS 登录").await?;
     session.cookies.absorb(&url, response.headers());
     Ok(response)
 }
