@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod billing;
+mod campus_services;
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -725,6 +726,8 @@ struct AppState {
     usage_alert_history: Mutex<HashMap<String, String>>,
     billing_cache: Mutex<Option<BillingCacheEntry>>,
     billing_fetch_lock: tokio::sync::Mutex<()>,
+    campus_service_lock: tokio::sync::Mutex<()>,
+    campus_recharge_pending: tokio::sync::Mutex<Option<campus_services::PendingRecharge>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3755,32 +3758,74 @@ async fn perform_billing_action(
     state: tauri::State<'_, Arc<AppState>>,
     request: billing::BillingActionRequest,
 ) -> Result<billing::BillingActionResult, String> {
-    let (account, compatibility) = billing_action_target(&state)?;
     let action = request.action.clone();
+    let (account, compatibility) = if action == "changePassword" {
+        (campus_service_target(&state)?, None)
+    } else {
+        let (account, compatibility) = billing_action_target(&state)?;
+        (account, Some(compatibility))
+    };
     let new_password = request.new_password.clone();
     let _fetch_guard = state.billing_fetch_lock.lock().await;
-    let mut result = billing::perform_action(
-        &account.user,
-        &account.pass,
-        compatibility,
-        &request,
-    )
-    .await
-    .map_err(|error| error.user_message())?;
+    let mut result = if action == "changePassword" {
+        let supplied_password = request
+            .old_password
+            .as_deref()
+            .ok_or_else(|| "请输入当前统一认证密码".to_string())?;
+        let replacement = request
+            .new_password
+            .as_deref()
+            .ok_or_else(|| "请输入新统一认证密码".to_string())?;
+        let _campus_guard = state.campus_service_lock.lock().await;
+        rust_log(
+            &app,
+            &state,
+            "计费",
+            "正在通过统一认证修改密码",
+            "info",
+        );
+        let changed = campus_services::change_password(
+            &account.user,
+            &account.pass,
+            supplied_password,
+            replacement,
+        )
+        .await
+        .map_err(campus_services::CampusServiceError::user_message);
+        if let Err(error) = &changed {
+            rust_log(&app, &state, "计费", error, "error");
+        }
+        let message = changed?;
+        billing::BillingActionResult {
+            message,
+            password_changed: true,
+        }
+    } else {
+        let compatibility = compatibility
+            .ok_or_else(|| "计费操作缺少 VPN 兼容配置".to_string())?;
+        billing::perform_action(
+            &account.user,
+            &account.pass,
+            compatibility,
+            &request,
+        )
+        .await
+        .map_err(|error| error.user_message())?
+    };
 
     if result.password_changed {
         let replacement = new_password
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| "计费密码已修改，但新密码没有返回到安全存储流程".to_string())?;
+            .ok_or_else(|| "统一认证密码已修改，但新密码没有返回到安全存储流程".to_string())?;
         let mut config = state.config.read().unwrap().clone();
         let saved = config
             .accounts
             .iter_mut()
             .find(|saved| saved.user == account.user)
-            .ok_or_else(|| "计费密码已修改，但 App 中已找不到对应账号，请立即重新添加账号".to_string())?;
+            .ok_or_else(|| "统一认证密码已修改，但 App 中已找不到对应账号，请立即重新添加账号".to_string())?;
         saved.pass = replacement;
         save_config(&app, &state, config).map_err(|error| {
-            format!("计费密码已修改，但 App 安全存储同步失败：{error}。请立即在账号管理中更新密码")
+            format!("统一认证密码已修改，但 App 安全存储同步失败：{error}。请立即在账号管理中更新密码")
         })?;
         result.message = format!("{}；App 中的账号密码已同步更新", result.message);
     }
@@ -3794,7 +3839,7 @@ async fn perform_billing_action(
         "setConsumeLimit" => "修改消费保护",
         "bindMac" => "绑定设备",
         "unbindMac" => "解绑设备",
-        "changePassword" => "修改计费密码",
+        "changePassword" => "修改统一认证密码",
         "updateQuestions" => "修改密码保护",
         _ => "计费操作",
     };
@@ -3806,6 +3851,128 @@ async fn perform_billing_action(
         "success",
     );
     Ok(result)
+}
+
+fn campus_service_target(state: &AppState) -> Result<Account, String> {
+    let config = state.config.read().unwrap();
+    let account = preferred_billing_account(&config)
+        .ok_or_else(|| "没有可用于统一认证的已启用账号".to_string())?;
+    if account.pass.is_empty() {
+        return Err("统一认证账号缺少已保存的密码".to_string());
+    }
+    Ok(account)
+}
+
+#[tauri::command]
+async fn prepare_network_recharge(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    target_account: String,
+    amount: String,
+) -> Result<campus_services::RechargePreview, String> {
+    let account = campus_service_target(&state)?;
+    let _service_guard = state.campus_service_lock.lock().await;
+    rust_log(
+        &app,
+        &state,
+        "计费",
+        "正在通过统一认证核对校园卡与目标网费账户",
+        "info",
+    );
+    let prepared = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        campus_services::prepare_recharge(
+            &account.user,
+            &account.pass,
+            &target_account,
+            &amount,
+        ),
+    )
+    .await
+    .map_err(|_| "充值信息核对超过 60 秒，已取消本次请求".to_string())?
+    .map_err(campus_services::CampusServiceError::user_message);
+    match prepared {
+        Ok((pending, preview)) => {
+            *state.campus_recharge_pending.lock().await = Some(pending);
+            rust_log(
+                &app,
+                &state,
+                "计费",
+                "校园卡与目标网费账户核对完成，等待用户确认",
+                "debug",
+            );
+            Ok(preview)
+        }
+        Err(error) => {
+            *state.campus_recharge_pending.lock().await = None;
+            rust_log(&app, &state, "计费", &error, "error");
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+async fn confirm_network_recharge(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    confirmation_id: String,
+) -> Result<campus_services::RechargeResult, String> {
+    let _service_guard = state.campus_service_lock.lock().await;
+    let pending = {
+        let mut slot = state.campus_recharge_pending.lock().await;
+        let current = slot
+            .as_ref()
+            .ok_or_else(|| "没有待确认的充值，请先重新核对账户与金额".to_string())?;
+        if current.confirmation_id() != confirmation_id {
+            return Err("充值确认标识不匹配，请重新核对账户与金额".to_string());
+        }
+        if current.expired() {
+            *slot = None;
+            return Err("充值确认已过期，请重新核对账户与金额".to_string());
+        }
+        slot.take()
+            .ok_or_else(|| "待确认的充值状态已失效，请重新核对账户与金额".to_string())?
+    };
+    rust_log(
+        &app,
+        &state,
+        "计费",
+        "用户已二次确认校园卡网费充值，正在提交一次性订单",
+        "info",
+    );
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(45),
+        campus_services::execute_recharge(pending),
+    )
+    .await
+    .map_err(|_| {
+        "充值提交超过 45 秒，结果未知；请先查询校园卡和网费记录，不要立即重复充值"
+            .to_string()
+    })?
+    .map_err(campus_services::CampusServiceError::user_message);
+    match &result {
+        Ok(_) => {
+            *state.billing_cache.lock().unwrap() = None;
+            rust_log(&app, &state, "计费", "校园卡网费充值成功", "success");
+        }
+        Err(error) => rust_log(&app, &state, "计费", error, "error"),
+    }
+    result
+}
+
+#[tauri::command]
+async fn cancel_network_recharge(
+    state: tauri::State<'_, Arc<AppState>>,
+    confirmation_id: String,
+) -> Result<(), String> {
+    let mut slot = state.campus_recharge_pending.lock().await;
+    if slot
+        .as_ref()
+        .is_some_and(|pending| pending.confirmation_id() == confirmation_id)
+    {
+        *slot = None;
+    }
+    Ok(())
 }
 
 fn billing_action_target(state: &AppState) -> Result<(Account, VpnCompatibility), String> {
@@ -4116,6 +4283,8 @@ pub fn run() {
                 usage_alert_history: Mutex::new(HashMap::new()),
                 billing_cache: Mutex::new(None),
                 billing_fetch_lock: tokio::sync::Mutex::new(()),
+                campus_service_lock: tokio::sync::Mutex::new(()),
+                campus_recharge_pending: tokio::sync::Mutex::new(None),
             });
             _app.manage(app_state.clone());
 
@@ -4405,6 +4574,9 @@ pub fn run() {
             get_billing_center,
             query_billing_records,
             perform_billing_action,
+            prepare_network_recharge,
+            confirm_network_recharge,
+            cancel_network_recharge,
             disconnect_billing_session,
             set_billing_mauth,
             notify_network_change,

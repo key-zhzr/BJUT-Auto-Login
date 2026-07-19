@@ -428,7 +428,37 @@
             <div id="billing-device-list" class="billing-record-list">
               <div class="billing-empty">正在读取设备列表…</div>
             </div>
-            <p id="billing-recharge-state" class="billing-inline-note">正在确认在线充值入口…</p>
+          </section>
+
+          <section class="billing-center-panel glass-card" id="billing-recharge-panel">
+            <div class="billing-center-panel-header billing-module-header">
+              <div>
+                <div class="billing-panel-title">
+                  <i data-lucide="wallet-cards"></i>
+                  <h2>校园卡充值网费</h2>
+                </div>
+                <p>通过统一认证，从当前账号的校园卡余额为任意有效学工号充值网费。</p>
+              </div>
+            </div>
+            <p id="billing-recharge-state" class="billing-inline-note">填写目标学工号和金额后，先核对账户再确认扣费。</p>
+            <form id="billing-recharge-form" class="billing-recharge-form" autocomplete="off">
+              <label>
+                <span>目标学工号</span>
+                <input id="billing-recharge-account" inputmode="text" autocomplete="off" maxlength="20" placeholder="需要充值的学工号" required>
+              </label>
+              <label>
+                <span>充值金额（元）</span>
+                <input id="billing-recharge-amount" inputmode="decimal" autocomplete="off" maxlength="6" placeholder="0.01–500" required>
+              </label>
+              <button id="btn-billing-recharge" class="btn btn-primary btn-sm" type="submit">核对充值信息</button>
+            </form>
+            <div id="billing-recharge-preview" class="billing-recharge-preview" hidden aria-live="polite">
+              <div><span>校园卡账号</span><strong id="billing-recharge-payer">--</strong></div>
+              <div><span>校园卡余额</span><strong id="billing-recharge-card-balance">--</strong></div>
+              <div><span>目标账户状态</span><strong id="billing-recharge-target-status">--</strong></div>
+              <div><span>目标网费余额</span><strong id="billing-recharge-target-balance">--</strong></div>
+            </div>
+            <p class="billing-inline-note">创建订单和校园卡扣费均只会在二次确认后执行一次；结果不明确时 App 不会自动重试。</p>
           </section>
 
           <section class="billing-center-panel glass-card" id="billing-security-panel">
@@ -438,18 +468,18 @@
                   <i data-lucide="shield-check"></i>
                   <h2>安全设置</h2>
                 </div>
-                <p>修改密码成功后，会同步更新本 App 中该计费账号的凭据。</p>
+                <p>通过统一认证修改密码；成功后同步更新本 App 中该账号的安全凭据。</p>
               </div>
             </div>
             <form id="billing-password-form" class="billing-security-form" autocomplete="off">
-              <h3>修改密码</h3>
+              <h3>修改统一认证密码</h3>
               <p id="billing-password-policy" class="billing-inline-note">正在读取密码策略…</p>
               <div class="billing-security-fields">
                 <input id="billing-old-password" type="password" autocomplete="current-password" maxlength="16" placeholder="当前密码" required>
                 <input id="billing-new-password" type="password" autocomplete="new-password" maxlength="16" placeholder="新密码" required>
                 <input id="billing-confirm-password" type="password" autocomplete="new-password" maxlength="16" placeholder="确认新密码" required>
               </div>
-              <button id="btn-billing-password" class="btn btn-danger btn-sm" type="submit" disabled>修改并同步密码</button>
+              <button id="btn-billing-password" class="btn btn-danger btn-sm" type="submit" disabled>修改统一认证密码</button>
             </form>
             <form id="billing-questions-form" class="billing-security-form" autocomplete="off">
               <h3>密码保护</h3>

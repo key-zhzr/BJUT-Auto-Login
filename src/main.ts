@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, Download, Edit2, Eye, FileText, GripVertical,
   Fingerprint, History, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power,
   ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
-  WifiOff, X,
+  WalletCards, WifiOff, X,
 } from 'lucide';
 import Sortable from 'sortablejs';
 import { invoke } from '@tauri-apps/api/core';
@@ -18,7 +18,7 @@ const icons = {
   ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, Download, Edit2, Eye, FileText, GripVertical,
   Fingerprint, History, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power,
   ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
-  WifiOff, X,
+  WalletCards, WifiOff, X,
 };
 
 const IS_ANDROID = navigator.userAgent.toLowerCase().includes('android');
@@ -526,6 +526,24 @@ interface BillingActionRequest {
 interface BillingActionResult {
   message: string;
   passwordChanged: boolean;
+}
+
+interface RechargePreview {
+  confirmationId: string;
+  payerAccount: string;
+  cardBalance: string;
+  targetAccount: string;
+  targetBalance: string;
+  targetStatus: string;
+  amount: string;
+  allowedTime: string;
+  expiresInSeconds: number;
+}
+
+interface RechargeResult {
+  message: string;
+  targetAccount: string;
+  amount: string;
 }
 
 type BillingRecordKind = 'usage' | 'monthly' | 'payments' | 'operations' | 'stopLogs' | 'reopenLogs' | 'packageLogs';
@@ -1496,6 +1514,15 @@ const btnBillingConsumeLimit = document.getElementById('btn-billing-consume-limi
 const billingDeviceCount = document.getElementById('billing-device-count')!;
 const billingDeviceList = document.getElementById('billing-device-list')!;
 const billingRechargeState = document.getElementById('billing-recharge-state')!;
+const billingRechargeForm = document.getElementById('billing-recharge-form') as HTMLFormElement;
+const billingRechargeAccount = document.getElementById('billing-recharge-account') as HTMLInputElement;
+const billingRechargeAmount = document.getElementById('billing-recharge-amount') as HTMLInputElement;
+const btnBillingRecharge = document.getElementById('btn-billing-recharge') as HTMLButtonElement;
+const billingRechargePreview = document.getElementById('billing-recharge-preview')!;
+const billingRechargePayer = document.getElementById('billing-recharge-payer')!;
+const billingRechargeCardBalance = document.getElementById('billing-recharge-card-balance')!;
+const billingRechargeTargetStatus = document.getElementById('billing-recharge-target-status')!;
+const billingRechargeTargetBalance = document.getElementById('billing-recharge-target-balance')!;
 const billingBindMac = document.getElementById('billing-bind-mac') as HTMLInputElement;
 const btnBillingBindMac = document.getElementById('btn-billing-bind-mac') as HTMLButtonElement;
 const billingPasswordForm = document.getElementById('billing-password-form') as HTMLFormElement;
@@ -2267,10 +2294,14 @@ function setupEventListeners() {
     }
     void performConfirmedBillingAction(
       { action: 'changePassword', oldPassword, newPassword },
-      '修改计费密码',
-      '修改成功后旧密码会立即失效，App 会同步更新安全存储中的账号密码。确定继续吗？',
+      '修改统一认证密码',
+      '修改成功后旧密码会立即失效，校园网登录和统一认证均会使用新密码；App 会同步更新安全存储。确定继续吗？',
       btnBillingPassword,
     );
+  });
+  billingRechargeForm.addEventListener('submit', event => {
+    event.preventDefault();
+    void prepareAndConfirmNetworkRecharge();
   });
   billingQuestionsForm.addEventListener('submit', event => {
     event.preventDefault();
@@ -4155,9 +4186,10 @@ function renderBillingDevices(data: BillingCenterData) {
     billingDeviceList.replaceChildren(fragment);
   }
 
-  billingRechargeState.textContent = data.rechargeAvailable
-    ? '计费系统已向当前账号开放在线充值入口。'
-    : '计费系统当前未向该账号开放在线充值；充值明细仍可在上方查询。';
+  if (!billingRechargeAccount.value.trim()) {
+    billingRechargeAccount.value = data.account;
+  }
+  billingRechargeState.textContent = '填写目标学工号和金额后，App 将通过统一认证核对校园卡、目标账户与可充值状态。';
 }
 
 function renderBillingSecurity(data: BillingCenterData) {
@@ -4343,6 +4375,76 @@ function clearBillingSecretInputs() {
     const answer = document.getElementById(`billing-answer-${index}`) as HTMLInputElement;
     answer.value = '';
   });
+}
+
+function setRechargeBusy(busy: boolean, label?: string) {
+  btnBillingRecharge.disabled = busy;
+  billingRechargeAccount.disabled = busy;
+  billingRechargeAmount.disabled = busy;
+  btnBillingRecharge.textContent = label || '核对充值信息';
+}
+
+function formatBillingCurrency(value: string) {
+  const normalized = value.trim();
+  return normalized.endsWith('元') ? normalized : `${normalized} 元`;
+}
+
+function renderRechargePreview(preview: RechargePreview) {
+  billingRechargePayer.textContent = preview.payerAccount;
+  billingRechargeCardBalance.textContent = formatBillingCurrency(preview.cardBalance);
+  billingRechargeTargetStatus.textContent = preview.targetStatus;
+  billingRechargeTargetBalance.textContent = formatBillingCurrency(preview.targetBalance);
+  billingRechargePreview.hidden = false;
+  billingRechargeState.textContent = `信息已核对；充值入口开放时间 ${preview.allowedTime}，确认信息将在 ${preview.expiresInSeconds} 秒后失效。`;
+}
+
+async function prepareAndConfirmNetworkRecharge() {
+  if (btnBillingRecharge.disabled) return;
+  const targetAccount = billingRechargeAccount.value.trim();
+  const amount = billingRechargeAmount.value.trim();
+  if (!/^[A-Za-z0-9_-]{5,20}$/.test(targetAccount)) {
+    await customAlert('请输入 5–20 位有效学工号。', '充值网费');
+    return;
+  }
+  if (!/^\d+(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0 || Number(amount) > 500) {
+    await customAlert('充值金额必须大于 0、不超过 500 元，且最多保留两位小数。', '充值网费');
+    return;
+  }
+  billingRechargePreview.hidden = true;
+  billingRechargeState.textContent = '正在通过统一认证核对校园卡和目标网费账户…';
+  setRechargeBusy(true, '正在核对…');
+  try {
+    const preview = await invoke<RechargePreview>('prepare_network_recharge', {
+      targetAccount,
+      amount,
+    });
+    renderRechargePreview(preview);
+    const confirmed = await customConfirm(
+      `付款校园卡：${preview.payerAccount}\n校园卡余额：${formatBillingCurrency(preview.cardBalance)}\n目标学工号：${preview.targetAccount}\n目标网费余额：${formatBillingCurrency(preview.targetBalance)}\n充值金额：${formatBillingCurrency(preview.amount)}\n\n确认后将创建一次订单并从校园卡扣费。`,
+      '确认校园卡充值',
+    );
+    if (!confirmed) {
+      await invoke('cancel_network_recharge', {
+        confirmationId: preview.confirmationId,
+      }).catch(() => undefined);
+      billingRechargeState.textContent = '已取消充值，没有创建订单或扣费。';
+      return;
+    }
+    setRechargeBusy(true, '正在充值…');
+    billingRechargeState.textContent = '正在创建一次性充值订单并确认校园卡扣费，请勿重复操作…';
+    const result = await invoke<RechargeResult>('confirm_network_recharge', {
+      confirmationId: preview.confirmationId,
+    });
+    billingRechargeAmount.value = '';
+    billingRechargeState.textContent = result.message;
+    await customAlert(result.message, '充值完成');
+    await refreshBillingCenterData();
+  } catch (error) {
+    billingRechargeState.textContent = `充值未完成：${String(error)}`;
+    await customAlert(`充值未完成：${String(error)}`, '充值网费');
+  } finally {
+    setRechargeBusy(false);
+  }
 }
 
 async function performConfirmedBillingAction(

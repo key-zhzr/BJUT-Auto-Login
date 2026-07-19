@@ -466,24 +466,10 @@ where
         .await;
 
         progress("正在读取安全设置", 91);
-        let password_html = get_page_bounded(
-            &mut session,
-            "/Self/setting/changePassword",
-            "修改密码页面",
-            &mut warnings,
-        )
-        .await;
         let questions_html = get_page_bounded(
             &mut session,
             "/Self/setting/passwordQuestion",
             "密码保护页面",
-            &mut warnings,
-        )
-        .await;
-        let recharge_html = get_page_bounded(
-            &mut session,
-            "/Self/service/userRecharge",
-            "在线充值页面",
             &mut warnings,
         )
         .await;
@@ -511,9 +497,20 @@ where
                 &package_html,
                 &protect_html,
             ),
-            password_policy: parse_password_policy(&password_html),
+            // Password changes are handled by BJUT unified authentication,
+            // whose currently deployed rule was verified from /api/register/rules.
+            password_policy: BillingPasswordPolicy {
+                min_length: 12,
+                max_length: 16,
+                require_uppercase: true,
+                require_lowercase: true,
+                require_digit: true,
+                require_special: true,
+            },
             security_questions: parse_security_questions(&questions_html),
-            recharge_available: recharge_is_available(&recharge_html),
+            // Recharge is provided through unified authentication and the
+            // mobile portal, not the legacy jfself recharge page.
+            recharge_available: true,
             warnings,
         };
         Ok(data)
@@ -3272,16 +3269,6 @@ fn parse_security_questions(html: &str) -> Vec<BillingSecurityQuestion> {
         })
         .take(100)
         .collect()
-}
-
-fn recharge_is_available(html: &str) -> bool {
-    let visible = html_text(html);
-    visible.contains("在线充值")
-        || visible.contains("充值金额")
-        || tags(html, "form").into_iter().any(|tag| {
-            attribute(tag, "action")
-                .is_some_and(|action| action.to_ascii_lowercase().contains("recharge"))
-        })
 }
 
 fn value_as_i64(value: &serde_json::Value) -> Option<i64> {

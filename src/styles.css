@@ -1048,6 +1048,73 @@ button.billing-package-option:hover,
   flex: 1 1 180px;
 }
 
+.billing-recharge-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr) auto;
+  align-items: end;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.billing-recharge-form label {
+  display: grid;
+  min-width: 0;
+  gap: 0.28rem;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+}
+
+.billing-recharge-form input {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.35rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: var(--text-main);
+  background: rgba(0, 0, 0, 0.16);
+  outline: none;
+}
+
+.billing-recharge-form input:focus {
+  border-color: rgba(59, 130, 246, 0.55);
+}
+
+.billing-recharge-preview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.billing-recharge-preview[hidden] {
+  display: none;
+}
+
+.billing-recharge-preview > div {
+  min-width: 0;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.billing-recharge-preview span,
+.billing-recharge-preview strong {
+  display: block;
+}
+
+.billing-recharge-preview span {
+  margin-bottom: 0.22rem;
+  color: var(--text-muted);
+  font-size: 0.64rem;
+}
+
+.billing-recharge-preview strong {
+  overflow-wrap: anywhere;
+  font-size: 0.76rem;
+}
+
 .billing-question-grid {
   display: grid;
   gap: 0.65rem;
@@ -1674,6 +1741,9 @@ input:checked + .slider:before { transform: translateX(24px); }
   .billing-center-panel { padding: 1rem; }
   .billing-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .billing-service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .billing-recharge-form { grid-template-columns: 1fr; align-items: stretch; }
+  .billing-recharge-form .btn { width: 100%; }
+  .billing-recharge-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 480px) {
