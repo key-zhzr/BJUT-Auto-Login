@@ -275,6 +275,7 @@ capture_assets() {
   local asset_name=""
   local asset_status=""
   local asset_count=0
+  local unavailable_count=0
   local pass=0
 
   mkdir -p "${asset_dir}"
@@ -282,6 +283,7 @@ capture_assets() {
   python3 "${HELPER}" asset-urls --base-url "${base_url}" "$@" > "${queue}"
   : > "${seen}"
   : > "${RAW_DIR}/assets/${scope}.tsv"
+  : > "${RAW_DIR}/assets/${scope}-unavailable.tsv"
 
   for ((pass = 1; pass <= 4; pass++)); do
     [[ -s "${queue}" ]] || break
@@ -307,12 +309,14 @@ capture_assets() {
           --output "${asset_dir}/${asset_name}" \
           --write-out '%{http_code}' \
           "${asset_url}")"; then
-        printf 'Warning: failed to fetch asset %s\n' "${asset_url}" >&2
+        unavailable_count=$((unavailable_count + 1))
+        printf 'network-error\t%s\n' "${asset_url}" >> "${RAW_DIR}/assets/${scope}-unavailable.tsv"
         rm -f "${asset_dir}/${asset_name}"
         continue
       fi
       if [[ "${asset_status}" != "200" ]]; then
-        printf 'Warning: asset returned HTTP %s: %s\n' "${asset_status}" "${asset_url}" >&2
+        unavailable_count=$((unavailable_count + 1))
+        printf 'HTTP-%s\t%s\n' "${asset_status}" "${asset_url}" >> "${RAW_DIR}/assets/${scope}-unavailable.tsv"
         rm -f "${asset_dir}/${asset_name}"
         continue
       fi
@@ -323,6 +327,12 @@ capture_assets() {
     done < "${queue}"
     sort -u "${next_queue}" > "${queue}"
   done
+  if ((unavailable_count > 0)); then
+    printf 'Warning: %s skipped %s unavailable referenced asset(s); details were saved in the capture package\n' \
+      "${scope}" "${unavailable_count}" >&2
+  else
+    rm -f "${RAW_DIR}/assets/${scope}-unavailable.tsv"
+  fi
 }
 
 printf '1/7 Fetching the CAS login page...\n'

@@ -56,8 +56,10 @@ chmod +x scripts/capture-cas-services.sh
    - `/api/uc/userinfo`
    - `/api/uc/commonConfig`
 6. 复用同一临时 CAS 会话访问 `ydapp.bjut.edu.cn/openV8HomePage`；
-7. 保存 UC、移动门户页面直接引用以及最多四层字面引用的同源 JS/CSS，供离线
-   查找改密与充值接口、参数和响应结构。
+7. 保存 UC、移动门户 HTML 直接引用的同源 JS/CSS，并从移动门户 Webpack 清单中
+   只重建网费充值新旧页面及其共享代码块的带哈希部署文件；不会把 UniApp bundle
+   中未部署的设备、媒体、定位等源码模块名误当成静态文件。少量真正失效的引用会
+   汇总为一条警告，并写入 `assets/*-unavailable.tsv`。
 
 脚本不会执行：
 

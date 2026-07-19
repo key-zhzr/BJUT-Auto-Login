@@ -102,6 +102,11 @@ LITERAL_ASSET = re.compile(
     r'''[A-Za-z0-9_./-]+)\.(?:js|css)(?:\?[^"']*)?)(?P=quote)''',
     re.I,
 )
+WEBPACK_STRING_PAIR = re.compile(
+    r'''["'](?P<key>[A-Za-z0-9_~-]{1,300})["']\s*:\s*'''
+    r'''["'](?P<value>[A-Za-z0-9_~-]{1,300})["']'''
+)
+NETWORK_FEE_CHUNK_PREFIX = "pages-recharge-networkFeeCharge-"
 ITSAPP_JS_CHALLENGE = re.compile(
     r'''window\.location\.href\s*=\s*(["'])(.*?)\1\s*\+\s*'''
     r'''md5\s*\(\s*(["'])(.*?)\3\s*\)''',
@@ -337,17 +342,52 @@ def asset_urls(paths: list[Path], base_url: str) -> list[str]:
         if not path.is_file():
             continue
         source = path.read_text(encoding="utf-8", errors="replace")
-        parser = CasPageParser(base_url)
-        parser.feed(source)
-        result.update(parser.assets)
+        if path.suffix.lower() in {".htm", ".html"}:
+            parser = CasPageParser(base_url)
+            parser.feed(source)
+            result.update(parser.assets)
         for match in LITERAL_ASSET.finditer(source):
             literal = unescape(match.group("url"))
             if literal.startswith("//"):
                 literal = f"https:{literal}"
             resolved = urljoin(base_url, literal)
-            if same_origin(base_url, resolved):
+            if same_origin(base_url, resolved) and is_hashed_deployment_asset(resolved):
                 result.add(resolved)
+        result.update(network_fee_chunk_urls(source, base_url))
     return sorted(result)
+
+
+def is_hashed_deployment_asset(url: str) -> bool:
+    """Exclude source-module names that a bundle mentions but never deploys."""
+    filename = Path(urlparse(url).path).name
+    return bool(re.search(r"[._-][0-9a-f]{8,64}\.(?:js|css)$", filename, re.I))
+
+
+def network_fee_chunk_urls(source: str, base_url: str) -> set[str]:
+    """Reconstruct only the two network-fee pages' deployed Webpack chunks."""
+    parsed = urlparse(base_url)
+    if (parsed.hostname or "").lower() != YD_HOST:
+        return set()
+    names: dict[str, str] = {}
+    hashes: dict[str, str] = {}
+    for match in WEBPACK_STRING_PAIR.finditer(source):
+        key = match.group("key")
+        value = match.group("value")
+        if not key.startswith(NETWORK_FEE_CHUNK_PREFIX):
+            continue
+        if re.fullmatch(r"[0-9a-f]{8,64}", value, re.I):
+            hashes[key] = value.lower()
+        else:
+            names[key] = value
+
+    origin = f"https://{YD_HOST}/"
+    urls: set[str] = set()
+    for key, digest in hashes.items():
+        stem = names.get(key, key)
+        if not re.fullmatch(r"[A-Za-z0-9_~-]{1,300}", stem):
+            continue
+        urls.add(urljoin(origin, f"static/js/{stem}.{digest}.js"))
+    return urls
 
 
 def asset_name(index: int, url: str) -> str:

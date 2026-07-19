@@ -190,7 +190,7 @@ class CasServicesCaptureTests(unittest.TestCase):
                 '<link rel="prefetch" href="/static/js/password.abc.js">'
                 '<link rel="stylesheet" href="/static/css/app.css?v=1">'
                 '<script src="https://example.com/foreign.js"></script>'
-                '<script>const lazy="/static/js/recharge.def.js";</script>',
+                '<script>const lazy="/static/js/recharge.0123abcd.js";</script>',
                 encoding="utf-8",
             )
             self.assertEqual(
@@ -198,7 +198,38 @@ class CasServicesCaptureTests(unittest.TestCase):
                 [
                     "https://uc.bjut.edu.cn/static/css/app.css?v=1",
                     "https://uc.bjut.edu.cn/static/js/password.abc.js",
-                    "https://uc.bjut.edu.cn/static/js/recharge.def.js",
+                    "https://uc.bjut.edu.cn/static/js/recharge.0123abcd.js",
+                ],
+            )
+
+    def test_reconstructs_only_deployed_network_fee_chunks_from_web_pack_runtime(self):
+        source = (
+            'const source="/static/js/device/accelerometer.js";'
+            'const other="/static/js/media/choose-image.js";'
+            '({"pages-recharge-networkFeeCharge-networkFeeCharge~'
+            'pages-recharge-networkFeeCharge-networkFeeChargeNew":"pages-recharge-'
+            'networkFeeCharge-networkFeeCharge~pages-recharge-networkFeeCharge-'
+            'networkFeeChargeNew","pages-recharge-networkFeeCharge-networkFeeCharge":'
+            '"pages-recharge-networkFeeCharge-networkFeeCharge","pages-recharge-'
+            'networkFeeCharge-networkFeeChargeNew":"pages-recharge-networkFeeCharge-'
+            'networkFeeChargeNew"}[e]||e)+"."+{"pages-recharge-networkFeeCharge-'
+            'networkFeeCharge~pages-recharge-networkFeeCharge-networkFeeChargeNew":'
+            '"71c23382","pages-recharge-networkFeeCharge-networkFeeCharge":'
+            '"78229315","pages-recharge-networkFeeCharge-networkFeeChargeNew":'
+            '"7f97a2a1","pages-recharge-cardrecharge-cardrecharge":"3ab57a45"}[e]+".js"'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "index.js"
+            runtime.write_text(source, encoding="utf-8")
+            self.assertEqual(
+                capture.asset_urls(
+                    [runtime],
+                    "https://ydapp.bjut.edu.cn/static/js/index.733fe17b.js",
+                ),
+                [
+                    "https://ydapp.bjut.edu.cn/static/js/pages-recharge-networkFeeCharge-networkFeeCharge.78229315.js",
+                    "https://ydapp.bjut.edu.cn/static/js/pages-recharge-networkFeeCharge-networkFeeChargeNew.7f97a2a1.js",
+                    "https://ydapp.bjut.edu.cn/static/js/pages-recharge-networkFeeCharge-networkFeeCharge~pages-recharge-networkFeeCharge-networkFeeChargeNew.71c23382.js",
                 ],
             )
 
