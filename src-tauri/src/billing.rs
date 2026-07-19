@@ -105,12 +105,14 @@ pub(crate) struct BillingSecurityQuestion {
 pub(crate) struct BillingServiceState {
     pub account_status: Option<String>,
     pub status_reason: Option<String>,
+    pub current_package_id: Option<String>,
     pub current_package: Option<String>,
     pub package_detail: Option<String>,
     pub next_settlement_date: Option<String>,
     pub can_stop_now: bool,
     pub can_reopen_now: bool,
     pub package_scheduled: bool,
+    pub scheduled_package: Option<String>,
     pub consume_limit: Option<String>,
     pub current_cycle_spend: Option<String>,
     pub balance: Option<String>,
@@ -298,6 +300,7 @@ struct DashboardUser {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardService {
+    id: Option<i64>,
     default_name: Option<String>,
     extend: Option<String>,
 }
@@ -367,8 +370,6 @@ const PACKAGE_LOG_FIELDS: &[&str] = &[
     "fldstatedate",
     "fldextend",
 ];
-const TARIFF_GROUP_FIELDS: &[&str] = &["defaultName", "extend"];
-
 #[derive(Clone, Debug)]
 struct ValidatedBillingRecordQuery {
     kind: BillingRecordKind,
@@ -398,12 +399,12 @@ pub(crate) async fn fetch_center<F>(
     progress: F,
 ) -> Result<BillingCenterData, BillingError>
 where
-    F: Fn(&str) + Send + Sync + 'static,
+    F: Fn(&str, u8) + Send + Sync + 'static,
 {
-    progress("正在连接并登录计费系统");
+    progress("正在连接并登录计费系统", 5);
     let mut session = authenticate(account, password, compatibility).await?;
     let result = async {
-        progress("登录成功，正在解析账户概览");
+        progress("登录成功，正在解析账户概览", 18);
         let mut overview = parse_dashboard_bounded(&session.dashboard_html, account).await?;
         populate_dashboard_details(&mut session, &mut overview, &progress).await;
         let end_date = chrono::Local::now().date_naive();
@@ -412,97 +413,39 @@ where
         let query_end_date = end_date.format("%Y-%m-%d").to_string();
         let query_year = end_date.format("%Y").to_string();
         let mut warnings = Vec::new();
-
-        let common_page = [("pageSize", "10"), ("pageNumber", "1"), ("searchText", "")];
-        let usage_params = [
-            common_page[0],
-            common_page[1],
-            common_page[2],
-            ("sortName", "loginTime"),
-            ("sortOrder", "DESC"),
-            ("startTime", query_start_date.as_str()),
-            ("endTime", query_end_date.as_str()),
-        ];
-        let monthly_params = [
-            common_page[0],
-            common_page[1],
-            common_page[2],
-            ("sortName", "0"),
-            ("sortOrder", "DESC"),
-            ("year", query_year.as_str()),
-        ];
-        let payment_params = [
-            common_page[0],
-            common_page[1],
-            common_page[2],
-            ("sortName", "0"),
-            ("sortOrder", "DESC"),
-            ("startTime", query_start_date.as_str()),
-            ("endTime", query_end_date.as_str()),
-        ];
-        let operation_params = payment_params;
-
-        // Keep authenticated requests sequential. The Dr.COM service (and
-        // some off-campus VPN proxies in front of it) can stall when one
-        // session sends multiple module requests concurrently.
-        progress("正在读取上网记录与账单");
-        let (_, usage_records) = fetch_page_table_bounded(
+        // The seven potentially large bill and operation tables are queried
+        // only after the user presses "查询". A center refresh reads the
+        // compact service pages needed to render controls and status.
+        progress("正在读取账号服务", 68);
+        let stop_html = get_page_bounded(
             &mut session,
-            "/Self/bill/userOnlineLog",
-            "/Self/bill/getUserOnlineLog",
-            &usage_params,
-            USAGE_RECORD_FIELDS,
-            "上网记录",
+            "/Self/service/goStop",
+            "报停页面",
             &mut warnings,
         )
         .await;
-        let (_, monthly_bills) = fetch_page_table_bounded(
+        let reopen_html = get_page_bounded(
             &mut session,
-            "/Self/bill/monthPay",
-            "/Self/bill/getMonthPay",
-            &monthly_params,
-            &[
-                "startAt",
-                "endAt",
-                "package",
-                "baseFee",
-                "usageFee",
-                "durationMinutes",
-                "flowMb",
-                "billedAt",
-            ],
-            "历史账单",
+            "/Self/service/goReopen",
+            "复通页面",
             &mut warnings,
         )
         .await;
-        let (_, payments) = fetch_page_table_bounded(
+        let package_html = get_page_bounded(
             &mut session,
-            "/Self/bill/payMent",
-            "/Self/bill/getPayMent",
-            &payment_params,
-            &["paidAt", "type", "amount", "terminal", "note"],
-            "充值明细",
+            "/Self/service/package",
+            "预约套餐页面",
             &mut warnings,
         )
         .await;
-        let (_, operations) = fetch_page_table_bounded(
+        let protect_html = get_page_bounded(
             &mut session,
-            "/Self/bill/operatorLog",
-            "/Self/bill/getOperatorLog",
-            &operation_params,
-            &["operatedAt", "description", "terminal", "unused", "note"],
-            "业务办理记录",
+            "/Self/service/consumeProtect",
+            "消费保护页面",
             &mut warnings,
         )
         .await;
 
-        let package_params = [
-            common_page[0],
-            common_page[1],
-            common_page[2],
-            ("sortName", "fldchangedate"),
-            ("sortOrder", "DESC"),
-        ];
         let device_params = [
             ("pageSize", "100"),
             ("pageNumber", "1"),
@@ -510,43 +453,7 @@ where
             ("sortName", "2"),
             ("sortOrder", "DESC"),
         ];
-        let tariff_params = [
-            ("pageSize", "100"),
-            ("pageNumber", "1"),
-            ("sortOrder", "asc"),
-        ];
-
-        progress("正在读取账号服务与设备");
-        let (stop_html, stop_logs) = fetch_page_table_bounded(
-            &mut session,
-            "/Self/service/goStop",
-            "/Self/service/getStopLog",
-            &common_page,
-            STOP_LOG_FIELDS,
-            "报停记录",
-            &mut warnings,
-        )
-        .await;
-        let (reopen_html, reopen_logs) = fetch_page_table_bounded(
-            &mut session,
-            "/Self/service/goReopen",
-            "/Self/service/goReopenLog",
-            &common_page,
-            REOPEN_LOG_FIELDS,
-            "复通记录",
-            &mut warnings,
-        )
-        .await;
-        let (package_html, package_logs) = fetch_page_table_bounded(
-            &mut session,
-            "/Self/service/package",
-            "/Self/service/packageLog",
-            &package_params,
-            PACKAGE_LOG_FIELDS,
-            "预约套餐记录",
-            &mut warnings,
-        )
-        .await;
+        progress("正在读取已绑定设备", 82);
         let (_, devices) = fetch_page_table_bounded(
             &mut session,
             "/Self/service/myMac",
@@ -557,25 +464,8 @@ where
             &mut warnings,
         )
         .await;
-        let (_, tariff_groups) = fetch_page_table_bounded(
-            &mut session,
-            "/Self/service/userGroups",
-            "/Self/service/getUserGroups",
-            &tariff_params,
-            TARIFF_GROUP_FIELDS,
-            "资费列表",
-            &mut warnings,
-        )
-        .await;
 
-        progress("正在读取安全设置");
-        let protect_html = get_page_bounded(
-            &mut session,
-            "/Self/service/consumeProtect",
-            "消费保护页面",
-            &mut warnings,
-        )
-        .await;
+        progress("正在读取安全设置", 91);
         let password_html = get_page_bounded(
             &mut session,
             "/Self/setting/changePassword",
@@ -605,15 +495,15 @@ where
             query_start_date,
             query_end_date,
             query_year,
-            usage_records,
-            monthly_bills,
-            payments,
-            operations,
-            stop_logs,
-            reopen_logs,
-            package_logs,
+            usage_records: BillingTable::default(),
+            monthly_bills: BillingTable::default(),
+            payments: BillingTable::default(),
+            operations: BillingTable::default(),
+            stop_logs: BillingTable::default(),
+            reopen_logs: BillingTable::default(),
+            package_logs: BillingTable::default(),
             devices,
-            tariff_groups,
+            tariff_groups: BillingTable::default(),
             service: parse_service_state(
                 &session.dashboard_html,
                 &stop_html,
@@ -631,7 +521,7 @@ where
     .await;
     logout(&mut session).await;
     if result.is_ok() {
-        progress("计费中心数据读取完成");
+        progress("计费中心数据读取完成", 100);
     }
     result
 }
@@ -1130,12 +1020,39 @@ async fn bind_mac(
         "/Self/service/bindMac",
         "/Self/service/myMac",
         vec![
-            ("macAddress".to_string(), mac),
+            ("macAddress".to_string(), mac.clone()),
             ("macType".to_string(), "0".to_string()),
         ],
         true,
     )
     .await?;
+    let params = [
+        ("pageSize", "100"),
+        ("pageNumber", "1"),
+        ("sortName", "2"),
+        ("sortOrder", "DESC"),
+    ];
+    if let Ok(after) = get_ajax_text(
+        session,
+        "/Self/service/getMacList",
+        &params,
+        "/Self/service/myMac",
+    )
+    .await
+    .and_then(|body| {
+        parse_billing_table(
+            &body,
+            &["online", "mac", "device", "lastLoginAt", "lastIp"],
+            "设备列表",
+        )
+    }) {
+        if table_contains_mac(&after, &mac) {
+            return Ok(BillingActionResult {
+                message: "MAC 已绑定".to_string(),
+                password_changed: false,
+            });
+        }
+    }
     Ok(BillingActionResult {
         message: parse_action_response(&text, "MAC 已绑定")?,
         password_changed: false,
@@ -2077,12 +1994,12 @@ async fn populate_dashboard_details<P>(
     snapshot: &mut BillingSnapshot,
     progress: &P,
 ) where
-    P: Fn(&str) + Send + Sync,
+    P: Fn(&str, u8) + Send + Sync,
 {
     // These endpoints are quick in normal operation, but must remain
     // sequential for the same authenticated Dr.COM session. Bound every
     // optional request so one unavailable endpoint cannot block the overview.
-    progress("账户概览已读取，正在读取近期上网记录");
+    progress("账户概览已读取，正在读取近期上网记录", 28);
     let login_history = match tokio::time::timeout(Duration::from_secs(6), async {
         get_dashboard_text(
             session,
@@ -2099,7 +2016,7 @@ async fn populate_dashboard_details<P>(
             "最近上网记录请求超过 6 秒".to_string(),
         )),
     };
-    progress("正在读取当前在线会话");
+    progress("正在读取当前在线会话", 38);
     let online_sessions = match tokio::time::timeout(Duration::from_secs(6), async {
         get_dashboard_text(
             session,
@@ -2114,7 +2031,7 @@ async fn populate_dashboard_details<P>(
         Ok(result) => result,
         Err(_) => Err(BillingError::Network("在线会话请求超过 6 秒".to_string())),
     };
-    progress("正在读取会话注销提示");
+    progress("正在读取会话注销提示", 48);
     let offline_tip = match tokio::time::timeout(Duration::from_secs(6), async {
         get_dashboard_text(
             session,
@@ -2129,7 +2046,7 @@ async fn populate_dashboard_details<P>(
         Ok(result) => result,
         Err(_) => Err(BillingError::Network("注销提示请求超过 6 秒".to_string())),
     };
-    progress("正在读取无感认证状态");
+    progress("正在读取无感认证状态", 58);
     let mauth_enabled =
         match tokio::time::timeout(Duration::from_secs(6), fetch_mauth_state(session)).await {
             Ok(result) => result,
@@ -2967,9 +2884,9 @@ fn parse_mauth_state(text: &str) -> Result<bool, BillingError> {
     let html = serde_json::from_str::<String>(trimmed).unwrap_or_else(|_| trimmed.to_string());
     let action = html_text(&html);
     if action.contains("开启") {
-        Ok(false)
-    } else if action.contains("关闭") {
         Ok(true)
+    } else if action.contains("关闭") {
+        Ok(false)
     } else {
         Err(BillingError::Protocol(
             "无感认证状态内容无法识别".to_string(),
@@ -3145,6 +3062,22 @@ fn parse_service_state(
     user.use_money = user.use_money.or(protect_user.use_money);
     user.left_money = user.left_money.or(protect_user.left_money);
     let service = user.service_default.clone().unwrap_or_default();
+    let current_package_id = service.id.map(|id| id.to_string());
+    let current_package = service.default_name.clone();
+    let package_detail = service.extend.clone();
+    let mut package_options = parse_package_options(package_html);
+    if let (Some(id), Some(name)) = (current_package_id.as_ref(), current_package.as_ref()) {
+        if !package_options.iter().any(|option| option.id == *id) {
+            package_options.insert(
+                0,
+                BillingPackageOption {
+                    id: id.clone(),
+                    name: name.clone(),
+                    description: package_detail.clone().unwrap_or_default(),
+                },
+            );
+        }
+    }
     let stopped = user.use_flag == Some(0) || user.stop_reason.is_some();
     let can_stop_now = user.use_flag == Some(1) && has_enabled_element_id(stop_html, "stopNow");
     let can_reopen_now = stopped && has_enabled_element_id(reopen_html, "reOpenNow");
@@ -3157,12 +3090,14 @@ fn parse_service_state(
             }
         }),
         status_reason: user.stop_reason.clone(),
-        current_package: service.default_name,
-        package_detail: service.extend,
+        current_package_id,
+        current_package,
+        package_detail,
         next_settlement_date: date_near_label(stop_html, "下次结算日期"),
         can_stop_now,
         can_reopen_now,
         package_scheduled: has_tag_attribute(package_html, "data-toggle", "undoPackage"),
+        scheduled_package: scheduled_package_name(package_html),
         consume_limit: user.installment_flag.map(|value| {
             if (value - 999_999.0).abs() < f64::EPSILON {
                 "不限制".to_string()
@@ -3176,7 +3111,7 @@ fn parse_service_state(
         balance: user
             .left_money
             .map(|value| format!("{} 元", compact_decimal(value, 4))),
-        package_options: parse_package_options(package_html),
+        package_options,
     }
 }
 
@@ -3192,6 +3127,48 @@ fn has_tag_attribute(html: &str, name: &str, value: &str) -> bool {
         .into_iter()
         .flat_map(|tag_name| tags(html, tag_name))
         .any(|tag| attribute(tag, name).as_deref() == Some(value))
+}
+
+fn scheduled_package_name(html: &str) -> Option<String> {
+    let tag = ["a", "button", "input"]
+        .into_iter()
+        .flat_map(|tag_name| tags(html, tag_name))
+        .find(|tag| attribute(tag, "data-toggle").as_deref() == Some("undoPackage"))?;
+    for name in ["data-package-name", "data-name", "title"] {
+        if let Some(value) = attribute(tag, name).map(|value| normalize_text(&value)) {
+            if !value.is_empty() && !value.contains("取消") && value.chars().count() <= 80 {
+                return Some(value);
+            }
+        }
+    }
+
+    let tag_start = html.find(tag)?;
+    let mut start = tag_start.saturating_sub(1_200);
+    while start < tag_start && !html.is_char_boundary(start) {
+        start += 1;
+    }
+    let end = tag_start.saturating_add(1_200).min(html.len());
+    let mut end = end;
+    while end > tag_start && !html.is_char_boundary(end) {
+        end -= 1;
+    }
+    let text = html_text(&html[start..end]);
+    for marker in ["下一周期套餐：", "预约套餐：", "新套餐："] {
+        let Some((_, tail)) = text.rsplit_once(marker) else {
+            continue;
+        };
+        let name = tail
+            .split(['；', '。', '，'])
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .trim_end_matches("取消套餐预约")
+            .trim();
+        if !name.is_empty() && name.chars().count() <= 80 {
+            return Some(name.to_string());
+        }
+    }
+    None
 }
 
 fn has_enabled_element_id(html: &str, id: &str) -> bool {
@@ -3723,8 +3700,8 @@ mod tests {
 
     #[test]
     fn derives_mauth_current_state_from_server_action_label() {
-        assert!(!parse_mauth_state(r#""<a data-toggle='oprateMauth'>开启</a>""#).unwrap());
-        assert!(parse_mauth_state(r#""<a data-toggle='oprateMauth'>关闭</a>""#).unwrap());
+        assert!(parse_mauth_state(r#""<a data-toggle='oprateMauth'>开启</a>""#).unwrap());
+        assert!(!parse_mauth_state(r#""<a data-toggle='oprateMauth'>关闭</a>""#).unwrap());
         assert!(parse_mauth_state(r#""unknown""#).is_err());
     }
 
@@ -3813,7 +3790,7 @@ mod tests {
             <a class="pick-card" data-package="6">
               <span>套餐： 测试套餐</span><span>描述： 每月测试流量</span>
             </a>
-            <button data-toggle="undoPackage">取消预约</button>
+            <button data-toggle="undoPackage" data-package-name="下周期测试套餐">取消预约</button>
         "#;
         let options = parse_package_options(package_html);
         assert_eq!(options.len(), 1);
@@ -3825,6 +3802,10 @@ mod tests {
             "data-toggle",
             "undoPackage"
         ));
+        assert_eq!(
+            scheduled_package_name(package_html).as_deref(),
+            Some("下周期测试套餐")
+        );
 
         let policy = parse_password_policy(
             r#"<script>var passwordPolicy = JSON.parse('{"FLDMINLENGTH":10,"FLDREQUIREUPPER":1,"FLDREQUIRELOWER":1,"FLDREQUIREDIGIT":1,"FLDREQUIRESPECIAL":1}');</script>"#,
@@ -3844,7 +3825,7 @@ mod tests {
     #[test]
     fn derives_service_state_without_treating_script_selectors_as_schedules() {
         let dashboard = r#"
-          <script>(function(user){window.user=user;})({"leftMoney":3.5,"installmentFlag":999999,"useMoney":1.25,"useFlag":0,"stopReason":"余额不足","serviceDefault":{"defaultName":"测试套餐","extend":"测试说明"}});</script>
+          <script>(function(user){window.user=user;})({"leftMoney":3.5,"installmentFlag":999999,"useMoney":1.25,"useFlag":0,"stopReason":"余额不足","serviceDefault":{"id":7,"defaultName":"测试套餐","extend":"测试说明"}});</script>
         "#;
         let stop =
             r#"<p>下次结算日期：2026-08-01</p><script>$('[data-toggle="undoPreStop"]')</script>"#;
@@ -3856,6 +3837,9 @@ mod tests {
         assert!(!state.can_stop_now);
         assert_eq!(state.consume_limit.as_deref(), Some("不限制"));
         assert_eq!(state.next_settlement_date.as_deref(), Some("2026-08-01"));
+        assert_eq!(state.current_package_id.as_deref(), Some("7"));
+        assert_eq!(state.package_options[0].id, "7");
+        assert_eq!(state.package_options[0].name, "测试套餐");
         assert!(!has_enabled_element_id(
             r#"<button id="stopNow" disabled>报停</button>"#,
             "stopNow"
@@ -3912,7 +3896,7 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].billing_mode, "包月");
 
-        assert!(!parse_mauth_state("<a data-toggle='oprateMauth'>开启</a>").unwrap());
+        assert!(parse_mauth_state("<a data-toggle='oprateMauth'>开启</a>").unwrap());
         assert!(parse_billing_table("null", USAGE_RECORD_FIELDS, "上网记录")
             .unwrap()
             .rows

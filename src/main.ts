@@ -471,12 +471,14 @@ interface BillingSecurityQuestion {
 interface BillingServiceState {
   accountStatus?: string | null;
   statusReason?: string | null;
+  currentPackageId?: string | null;
   currentPackage?: string | null;
   packageDetail?: string | null;
   nextSettlementDate?: string | null;
   canStopNow: boolean;
   canReopenNow: boolean;
   packageScheduled: boolean;
+  scheduledPackage?: string | null;
   consumeLimit?: string | null;
   currentCycleSpend?: string | null;
   balance?: string | null;
@@ -555,6 +557,7 @@ interface BillingRecordQueryState {
   startDate: string;
   endDate: string;
   year: string;
+  queried: boolean;
 }
 
 interface PermissionHealthItem {
@@ -924,11 +927,11 @@ async function listenToRustEvents() {
       updateUpdateProgress(event.payload);
     });
 
-    listen<{ message: string }>('billing-center-progress', event => {
+    listen<{ message: string; percent?: number }>('billing-center-progress', event => {
       if (!billingCenterLoading) return;
       const message = event.payload?.message?.trim();
       if (!message) return;
-      btnRefreshBillingCenter.textContent = `${message}…`;
+      updateBillingRefreshProgress(event.payload.percent ?? 0, true);
       billingCenterMessage.textContent = message;
       billingCenterMessage.hidden = false;
     });
@@ -1448,6 +1451,7 @@ const btnRefreshBilling = document.getElementById('btn-refresh-billing') as HTML
 const btnOpenBilling = document.getElementById('btn-open-billing') as HTMLButtonElement;
 const btnCloseBilling = document.getElementById('btn-close-billing') as HTMLButtonElement;
 const btnRefreshBillingCenter = document.getElementById('btn-refresh-billing-center') as HTMLButtonElement;
+const billingRefreshLabel = document.getElementById('billing-refresh-label')!;
 const btnToggleBillingMauth = document.getElementById('btn-toggle-billing-mauth') as HTMLButtonElement;
 const billingCenterMessage = document.getElementById('billing-center-message')!;
 const billingCenterAccount = document.getElementById('billing-center-account')!;
@@ -1459,6 +1463,7 @@ const billingOnlineCount = document.getElementById('billing-online-count')!;
 const billingOnlineList = document.getElementById('billing-online-list')!;
 const billingHistoryCount = document.getElementById('billing-history-count')!;
 const billingHistoryList = document.getElementById('billing-history-list')!;
+const billingHistoryPanel = document.getElementById('billing-history-panel') as HTMLDetailsElement;
 const billingRecordTotal = document.getElementById('billing-record-total')!;
 const billingRecordRange = document.getElementById('billing-record-range')!;
 const billingRecordSummary = document.getElementById('billing-record-summary')!;
@@ -1482,13 +1487,14 @@ const billingServiceLimit = document.getElementById('billing-service-limit')!;
 const btnBillingStopNow = document.getElementById('btn-billing-stop-now') as HTMLButtonElement;
 const btnBillingReopenNow = document.getElementById('btn-billing-reopen-now') as HTMLButtonElement;
 const billingPackageOptions = document.getElementById('billing-package-options')!;
+const billingPackageCurrent = document.getElementById('billing-package-current')!;
+const billingPackageNext = document.getElementById('billing-package-next')!;
 const btnBillingPackage = document.getElementById('btn-billing-package') as HTMLButtonElement;
 const btnBillingCancelPackage = document.getElementById('btn-billing-cancel-package') as HTMLButtonElement;
 const billingConsumeLimit = document.getElementById('billing-consume-limit') as HTMLInputElement;
 const btnBillingConsumeLimit = document.getElementById('btn-billing-consume-limit') as HTMLButtonElement;
 const billingDeviceCount = document.getElementById('billing-device-count')!;
 const billingDeviceList = document.getElementById('billing-device-list')!;
-const billingTariffList = document.getElementById('billing-tariff-list')!;
 const billingRechargeState = document.getElementById('billing-recharge-state')!;
 const billingBindMac = document.getElementById('billing-bind-mac') as HTMLInputElement;
 const btnBillingBindMac = document.getElementById('btn-billing-bind-mac') as HTMLButtonElement;
@@ -1613,7 +1619,11 @@ async function init() {
     renderBillingRecords();
   });
   billingRecordPageSizeSelect.addEventListener('change', () => {
-    if (billingCenterData) void queryBillingRecords(1);
+    if (!billingCenterData) return;
+    const state = currentBillingRecordQueryState();
+    state.pageSize = Number.parseInt(billingRecordPageSizeSelect.value || '10', 10);
+    if (state.queried) void queryBillingRecords(1);
+    else renderBillingRecords();
   });
 
   renderIcons();
@@ -2181,8 +2191,10 @@ function setupEventListeners() {
     selectedBillingPackageId = option.dataset.packageId || '';
     billingPackageOptions.querySelectorAll('.billing-package-option').forEach(element => {
       element.classList.toggle('selected', element === option);
+      element.setAttribute('aria-pressed', String(element === option));
     });
-    btnBillingPackage.disabled = !selectedBillingPackageId;
+    btnBillingPackage.disabled = !selectedBillingPackageId
+      || selectedBillingPackageId === billingCenterData?.service.currentPackageId;
   });
   btnBillingStopNow.addEventListener('click', () => void performConfirmedBillingAction(
     { action: 'stopNow' },
@@ -3673,6 +3685,7 @@ function renderBillingOnlineSessions(sessions: BillingOnlineSession[]) {
 
 function renderBillingHistory(records: BillingLoginRecord[]) {
   billingHistoryCount.textContent = String(records.length);
+  billingHistoryPanel.open = false;
   if (records.length === 0) {
     billingHistoryList.replaceChildren(createBillingEmpty('暂无近期上网记录'));
     return;
@@ -3825,6 +3838,7 @@ function currentBillingRecordQueryState(kind = activeBillingRecordKind()): Billi
     startDate: billingCenterData?.queryStartDate || '',
     endDate: billingCenterData?.queryEndDate || '',
     year: fallbackYear,
+    queried: false,
   };
   billingRecordQueryStates[kind] = state;
   return state;
@@ -3839,6 +3853,7 @@ function initializeBillingRecordQueryStates(data: BillingCenterData) {
       startDate: data.queryStartDate,
       endDate: data.queryEndDate,
       year: data.queryYear,
+      queried: false,
     };
   });
   billingRecordQueryStates = next;
@@ -3922,6 +3937,10 @@ async function queryBillingRecords(page: number) {
   const query = readBillingRecordQuery(page);
   if (!query) return;
   const queriedKind = query.kind;
+  const scrollContainer = billingRecordsList.closest('main') as HTMLElement | null;
+  const previousScrollTop = scrollContainer?.scrollTop ?? 0;
+  const previousListHeight = billingRecordsList.getBoundingClientRect().height;
+  if (previousListHeight > 0) billingRecordsList.style.minHeight = `${previousListHeight}px`;
   const original = btnQueryBillingRecords.innerHTML;
   setBillingRecordQueryBusy(true);
   btnQueryBillingRecords.textContent = '查询中…';
@@ -3938,6 +3957,7 @@ async function queryBillingRecords(page: number) {
       startDate: result.startDate || query.startDate || '',
       endDate: result.endDate || query.endDate || '',
       year: result.year || query.year || billingCenterData.queryYear,
+      queried: true,
     };
     if (activeBillingRecordKind() === queriedKind) {
       syncBillingRecordControls();
@@ -3949,6 +3969,13 @@ async function queryBillingRecords(page: number) {
     btnQueryBillingRecords.innerHTML = original;
     setBillingRecordQueryBusy(false);
     renderIcons(btnQueryBillingRecords);
+    requestAnimationFrame(() => {
+      if (scrollContainer) scrollContainer.scrollTop = previousScrollTop;
+      billingRecordsList.style.removeProperty('min-height');
+      requestAnimationFrame(() => {
+        if (scrollContainer) scrollContainer.scrollTop = previousScrollTop;
+      });
+    });
   }
 }
 
@@ -3968,6 +3995,12 @@ function renderBillingRecordPager() {
     return;
   }
   const state = currentBillingRecordQueryState(selection.kind);
+  if (!state.queried) {
+    billingRecordPageLabel.textContent = '尚未查询';
+    btnBillingRecordPrev.disabled = true;
+    btnBillingRecordNext.disabled = true;
+    return;
+  }
   const pages = Math.max(1, Math.ceil(selection.table.total / state.pageSize));
   billingRecordPageLabel.textContent = `第 ${state.page} / ${pages} 页`;
   btnBillingRecordPrev.disabled = billingRecordQueryBusy || state.page <= 1;
@@ -3987,6 +4020,15 @@ function renderBillingRecords() {
   }
   const { kind, definition, table } = selection;
   const queryState = currentBillingRecordQueryState(kind);
+  if (!queryState.queried) {
+    billingRecordTotal.textContent = '0';
+    billingRecordSummary.replaceChildren();
+    billingRecordsList.replaceChildren(createBillingEmpty(`点击“查询”读取${definition.title}`));
+    btnExportBillingRecords.disabled = true;
+    btnExportAllBillingRecords.disabled = true;
+    renderBillingRecordPager();
+    return;
+  }
   billingRecordTotal.textContent = String(table.total);
   btnExportBillingRecords.disabled = billingRecordQueryBusy || table.rows.length === 0;
   btnExportAllBillingRecords.disabled = billingRecordQueryBusy || table.total === 0;
@@ -4036,12 +4078,16 @@ function renderBillingService(data: BillingCenterData) {
   billingServiceSettlement.textContent = service.nextSettlementDate || '--';
   billingServiceSpend.textContent = service.currentCycleSpend || '--';
   billingServiceLimit.textContent = service.consumeLimit || '--';
+  billingPackageCurrent.textContent = service.currentPackage || '--';
+  billingPackageNext.textContent = service.packageScheduled
+    ? (service.scheduledPackage || '已预约，计费系统未返回套餐名称')
+    : '未预约';
   btnBillingStopNow.disabled = !service.canStopNow;
   btnBillingReopenNow.disabled = !service.canReopenNow;
   btnBillingCancelPackage.hidden = !service.packageScheduled;
   btnBillingConsumeLimit.disabled = false;
 
-  selectedBillingPackageId = '';
+  selectedBillingPackageId = service.currentPackageId || '';
   if (service.packageOptions.length === 0) {
     billingPackageOptions.replaceChildren(createBillingEmpty('当前没有可预约套餐'));
     btnBillingPackage.disabled = true;
@@ -4052,15 +4098,25 @@ function renderBillingService(data: BillingCenterData) {
       button.type = 'button';
       button.className = 'billing-package-option';
       button.dataset.packageId = option.id;
+      const isCurrent = option.id === service.currentPackageId;
+      button.classList.toggle('selected', isCurrent);
+      button.setAttribute('aria-pressed', String(isCurrent));
       const name = document.createElement('strong');
       name.textContent = option.name;
       const description = document.createElement('span');
       description.textContent = option.description || '计费系统未提供套餐说明';
       button.append(name, description);
+      if (isCurrent) {
+        const badge = document.createElement('span');
+        badge.className = 'billing-package-badge';
+        badge.textContent = '当前使用';
+        button.appendChild(badge);
+      }
       fragment.appendChild(button);
     });
     billingPackageOptions.replaceChildren(fragment);
-    btnBillingPackage.disabled = true;
+    btnBillingPackage.disabled = !selectedBillingPackageId
+      || selectedBillingPackageId === service.currentPackageId;
   }
 }
 
@@ -4099,22 +4155,6 @@ function renderBillingDevices(data: BillingCenterData) {
     billingDeviceList.replaceChildren(fragment);
   }
 
-  if (data.tariffGroups.rows.length === 0) {
-    billingTariffList.replaceChildren(createBillingEmpty('暂无资费介绍'));
-  } else {
-    const fragment = document.createDocumentFragment();
-    data.tariffGroups.rows.forEach(row => {
-      const item = document.createElement('article');
-      item.className = 'billing-package-option billing-tariff-card';
-      const name = document.createElement('strong');
-      name.textContent = billingRowValue(row, ['defaultName']);
-      const description = document.createElement('span');
-      description.textContent = billingRowValue(row, ['extend']);
-      item.append(name, description);
-      fragment.appendChild(item);
-    });
-    billingTariffList.replaceChildren(fragment);
-  }
   billingRechargeState.textContent = data.rechargeAvailable
     ? '计费系统已向当前账号开放在线充值入口。'
     : '计费系统当前未向该账号开放在线充值；充值明细仍可在上方查询。';
@@ -4165,13 +4205,30 @@ function renderBillingCenterData(data: BillingCenterData) {
   renderIcons(document.getElementById('billing-center')!);
 }
 
+function updateBillingRefreshProgress(percent: number, loading: boolean) {
+  const normalized = Math.max(0, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
+  btnRefreshBillingCenter.style.setProperty('--billing-refresh-progress', `${normalized}%`);
+  btnRefreshBillingCenter.classList.toggle('is-loading', loading);
+  billingRefreshLabel.textContent = loading ? `${normalized}%` : '刷新';
+  if (loading) {
+    btnRefreshBillingCenter.setAttribute('role', 'progressbar');
+    btnRefreshBillingCenter.setAttribute('aria-valuemin', '0');
+    btnRefreshBillingCenter.setAttribute('aria-valuemax', '100');
+    btnRefreshBillingCenter.setAttribute('aria-valuenow', String(normalized));
+  } else {
+    btnRefreshBillingCenter.removeAttribute('role');
+    btnRefreshBillingCenter.removeAttribute('aria-valuemin');
+    btnRefreshBillingCenter.removeAttribute('aria-valuemax');
+    btnRefreshBillingCenter.removeAttribute('aria-valuenow');
+  }
+}
+
 async function refreshBillingCenterData() {
   if (billingRecordQueryBusy || billingCenterLoading) return;
   billingCenterLoading = true;
   btnRefreshBillingCenter.disabled = true;
-  const original = btnRefreshBillingCenter.innerHTML;
   setBillingRecordQueryBusy(true);
-  btnRefreshBillingCenter.textContent = '正在连接计费系统…';
+  updateBillingRefreshProgress(2, true);
   billingCenterMessage.textContent = '正在连接计费系统';
   billingCenterMessage.hidden = false;
   try {
@@ -4182,10 +4239,9 @@ async function refreshBillingCenterData() {
     billingCenterMessage.hidden = false;
   } finally {
     btnRefreshBillingCenter.disabled = false;
-    btnRefreshBillingCenter.innerHTML = original;
+    updateBillingRefreshProgress(0, false);
     setBillingRecordQueryBusy(false);
     billingCenterLoading = false;
-    renderIcons(btnRefreshBillingCenter);
   }
 }
 

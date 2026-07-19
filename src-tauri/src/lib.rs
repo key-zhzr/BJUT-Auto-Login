@@ -3574,11 +3574,12 @@ fn emit_billing_center_progress(
     app: &tauri::AppHandle,
     state: &AppState,
     message: &str,
+    percent: u8,
 ) {
     rust_log(app, state, "计费", message, "info");
     let _ = app.emit(
         "billing-center-progress",
-        serde_json::json!({ "message": message }),
+        serde_json::json!({ "message": message, "percent": percent.min(100) }),
     );
 }
 
@@ -3654,11 +3655,11 @@ async fn get_billing_center(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<billing::BillingCenterData, String> {
     let (account, compatibility) = billing_action_target(&state)?;
-    emit_billing_center_progress(&app, &state, "准备读取计费中心完整数据");
+    emit_billing_center_progress(&app, &state, "准备读取计费中心完整数据", 2);
     let _fetch_guard = match state.billing_fetch_lock.try_lock() {
         Ok(guard) => guard,
         Err(_) => {
-            emit_billing_center_progress(&app, &state, "正在等待已有的计费刷新完成");
+            emit_billing_center_progress(&app, &state, "正在等待已有的计费刷新完成", 3);
             match tokio::time::timeout(
                 std::time::Duration::from_secs(50),
                 state.billing_fetch_lock.lock(),
@@ -3676,8 +3677,8 @@ async fn get_billing_center(
     };
     let progress_app = app.clone();
     let progress_state = state.inner().clone();
-    let emit_progress = move |message: &str| {
-        emit_billing_center_progress(&progress_app, &progress_state, message);
+    let emit_progress = move |message: &str, percent: u8| {
+        emit_billing_center_progress(&progress_app, &progress_state, message, percent);
     };
     let fetched = tokio::time::timeout(
         std::time::Duration::from_secs(75),

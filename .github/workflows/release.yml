@@ -64,9 +64,26 @@ jobs:
       - name: Build Tauri App
         env:
           APPLE_SIGNING_IDENTITY: "-"
+          # Tauri otherwise passes create-dmg --skip-jenkins whenever CI=true,
+          # which copies the background but deliberately omits Finder layout
+          # metadata (.DS_Store) and icon positions.
+          TAURI_BUNDLER_DMG_IGNORE_CI: ${{ matrix.platform == 'macos-latest' && 'true' || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- ${{ matrix.args }}
+
+      - name: Verify macOS DMG layout
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          dmg_path="$(find src-tauri/target -type f -path '*/bundle/dmg/*.dmg' -print -quit)"
+          test -n "$dmg_path"
+          mount_dir="$(mktemp -d)"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg_path"
+          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true; rmdir "$mount_dir" 2>/dev/null || true' EXIT
+          test -f "$mount_dir/.DS_Store"
+          test -f "$mount_dir/.background/dmg-background.png"
+          test -L "$mount_dir/Applications"
 
       - name: Rename and Prepare Assets
         shell: python

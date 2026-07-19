@@ -209,8 +209,8 @@
               <h1>校园网计费中心</h1>
               <p>账户状态、在线会话与近期上网记录</p>
             </div>
-            <button id="btn-refresh-billing-center" class="btn btn-secondary" type="button">
-              <i data-lucide="refresh-cw"></i> 刷新
+            <button id="btn-refresh-billing-center" class="btn btn-secondary billing-refresh-button" type="button" aria-label="刷新计费中心数据">
+              <i data-lucide="refresh-cw"></i><span id="billing-refresh-label">刷新</span>
             </button>
           </header>
 
@@ -243,7 +243,7 @@
                   <h2>无感认证</h2>
                   <span id="billing-mauth-badge" class="billing-state-badge neutral">未知</span>
                 </div>
-                <p>开启后，计费系统可按已绑定设备识别校园网会话。</p>
+                <p>开启后，计费系统可按已绑定设备识别校园网会话；仅适用于 bjut_wifi。</p>
               </div>
               <button id="btn-toggle-billing-mauth" class="btn btn-secondary btn-sm" type="button" disabled>状态未知</button>
             </div>
@@ -265,21 +265,22 @@
             </div>
           </section>
 
-          <section class="billing-center-panel glass-card">
-            <div class="billing-center-panel-header">
+          <details id="billing-history-panel" class="billing-center-panel billing-collapsible-panel glass-card">
+            <summary class="billing-center-panel-header">
               <div>
                 <div class="billing-panel-title">
                   <i data-lucide="history"></i>
                   <h2>近期上网记录</h2>
                   <span id="billing-history-count" class="billing-count-badge">0</span>
                 </div>
-                <p>时间、地址、流量与计费方式均来自计费系统。</p>
+                <p>时间、地址、流量与计费方式均来自计费系统；点击展开。</p>
               </div>
-            </div>
+              <i class="billing-collapse-chevron" data-lucide="chevron-down"></i>
+            </summary>
             <div id="billing-history-list" class="billing-record-list">
               <div class="billing-empty">正在读取上网记录…</div>
             </div>
-          </section>
+          </details>
 
           <section class="billing-center-panel glass-card" id="billing-records-panel">
             <div class="billing-center-panel-header billing-module-header">
@@ -380,19 +381,6 @@
                 <button id="btn-billing-reopen-now" class="btn btn-primary btn-sm" type="button" disabled>立即复通</button>
               </div>
             </div>
-            <div class="billing-action-group billing-package-action">
-              <div class="billing-action-copy">
-                <h3>预约套餐</h3>
-                <p>新套餐通常在下一计费周期生效；停机账号需复通后才会生效。</p>
-              </div>
-              <div id="billing-package-options" class="billing-package-options">
-                <div class="billing-empty">正在读取可预约套餐…</div>
-              </div>
-              <div class="billing-action-controls">
-                <button id="btn-billing-package" class="btn btn-primary btn-sm" type="button" disabled>确认预约套餐</button>
-                <button id="btn-billing-cancel-package" class="btn btn-secondary btn-sm" type="button" hidden>取消套餐预约</button>
-              </div>
-            </div>
             <div class="billing-action-group">
               <div class="billing-action-copy">
                 <h3>消费保护</h3>
@@ -403,6 +391,23 @@
                 <button id="btn-billing-consume-limit" class="btn btn-primary btn-sm" type="button" disabled>更新限额</button>
               </div>
             </div>
+            <div class="billing-action-group billing-package-action">
+              <div class="billing-action-copy">
+                <h3>预约套餐</h3>
+                <p>新套餐通常在下一计费周期生效；停机账号需复通后才会生效。</p>
+              </div>
+              <div class="billing-package-context" aria-live="polite">
+                <div><span>当前套餐</span><strong id="billing-package-current">--</strong></div>
+                <div><span>下一周期</span><strong id="billing-package-next">未预约</strong></div>
+              </div>
+              <div id="billing-package-options" class="billing-package-options">
+                <div class="billing-empty">正在读取可预约套餐…</div>
+              </div>
+              <div class="billing-action-controls">
+                <button id="btn-billing-package" class="btn btn-primary btn-sm" type="button" disabled>确认预约套餐</button>
+                <button id="btn-billing-cancel-package" class="btn btn-secondary btn-sm" type="button" hidden>取消套餐预约</button>
+              </div>
+            </div>
           </section>
 
           <section class="billing-center-panel glass-card" id="billing-devices-panel">
@@ -410,10 +415,10 @@
               <div>
                 <div class="billing-panel-title">
                   <i data-lucide="monitor-smartphone"></i>
-                  <h2>设备与资费</h2>
+                  <h2>设备管理</h2>
                   <span id="billing-device-count" class="billing-count-badge">0</span>
                 </div>
-                <p>查看、绑定或解绑 MAC，并查看计费系统当前公布的资费。</p>
+                <p>查看、绑定或解绑用于无感认证的 MAC 地址。</p>
               </div>
             </div>
             <div class="billing-action-controls billing-bind-mac">
@@ -422,10 +427,6 @@
             </div>
             <div id="billing-device-list" class="billing-record-list">
               <div class="billing-empty">正在读取设备列表…</div>
-            </div>
-            <h3 class="billing-subsection-title">资费介绍</h3>
-            <div id="billing-tariff-list" class="billing-package-options">
-              <div class="billing-empty">正在读取资费列表…</div>
             </div>
             <p id="billing-recharge-state" class="billing-inline-note">正在确认在线充值入口…</p>
           </section>
