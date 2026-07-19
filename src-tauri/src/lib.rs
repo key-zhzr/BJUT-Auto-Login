@@ -1017,6 +1017,7 @@ async fn check_internet_rust() -> bool {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(1800))
         .redirect(reqwest::redirect::Policy::none())
+        .use_rustls_tls()
         .build()
     {
         Ok(client) => client,
@@ -1157,7 +1158,8 @@ async fn portal_client(
 ) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
         .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::none());
+        .redirect(reqwest::redirect::Policy::none())
+        .use_rustls_tls();
     let hosts: Vec<(&str, Vec<std::net::Ipv4Addr>)> = match login_type {
         LoginType::Type2 => vec![(WLGN_HOST, vec![std::net::Ipv4Addr::new(10, 21, 251, 3)])],
         LoginType::Type3 => vec![
@@ -1570,6 +1572,7 @@ async fn fetch_portal_user_info(local_ip: Option<&str>) -> Option<UserInfo> {
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(1500))
+        .use_rustls_tls()
         .build()
         .ok()?;
     let nanos = std::time::SystemTime::now()
@@ -1734,6 +1737,7 @@ async fn download_and_install_update(
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
         .timeout(std::time::Duration::from_secs(600))
+        .use_rustls_tls()
         .build()
         .map_err(|e| e.to_string())?;
     let response = client.get(parsed).send().await.map_err(|e| e.to_string())?;
@@ -4791,6 +4795,7 @@ mod tests {
         let error = runtime.block_on(async {
             reqwest::Client::builder()
                 .timeout(std::time::Duration::from_millis(100))
+                .use_rustls_tls()
                 .build()
                 .unwrap()
                 .get("http://127.0.0.1:0/login?user=student&password=top-secret")

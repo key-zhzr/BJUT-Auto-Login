@@ -2128,6 +2128,7 @@ async fn build_client(compatibility: VpnCompatibility) -> Result<Client, Billing
         .timeout(Duration::from_secs(15))
         .connect_timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
+        .use_rustls_tls()
         .user_agent(BILLING_USER_AGENT)
         .default_headers(headers);
 
