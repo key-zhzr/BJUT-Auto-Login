@@ -206,6 +206,23 @@ follow_get() {
         )
         ;;
       *)
+        if [[ "${status}" == "200" && "${current_url}" == "https://${ITS_HOST}/uc/api/oauth/index"* ]]; then
+          if next_url="$(python3 "${HELPER}" itsapp-js-challenge \
+              --base-url "${current_url}" \
+              "${step_body}" 2>/dev/null)"; then
+            cp "${step_body}" "${RAW_DIR}/${capture_id}.challenge-${step}.html"
+            cp "${step_meta}" "${RAW_DIR}/${capture_id}.challenge-${step}.meta"
+            referer_url="${current_url}"
+            current_url="${next_url}"
+            request_args=(
+              --header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+              --header "Sec-Fetch-Dest: document"
+              --header "Sec-Fetch-Mode: navigate"
+              --header "Upgrade-Insecure-Requests: 1"
+            )
+            continue
+          fi
+        fi
         cp "${step_body}" "${RAW_DIR}/${capture_id}.${extension}"
         cp "${step_meta}" "${RAW_DIR}/${capture_id}.meta"
         printf 'redirect_hops=%s\n' "$((step - 1))" >> "${RAW_DIR}/${capture_id}.meta"

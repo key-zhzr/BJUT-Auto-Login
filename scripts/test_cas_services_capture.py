@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import hashlib
 import io
 import json
 import os
@@ -11,7 +12,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 
 MODULE_PATH = Path(__file__).with_name("cas_services_capture.py")
@@ -148,6 +149,40 @@ class CasServicesCaptureTests(unittest.TestCase):
                     {capture.CAS_HOST, capture.YD_HOST},
                 )
 
+    def test_solves_only_the_bounded_itsapp_md5_navigation_challenge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            page = Path(directory) / "challenge.html"
+            page.write_text(
+                '<script src="/a155a53cde0f5585235d18ab56219d67.js"></script>'
+                '<script>window.location.href="?redirect=https%3A%2F%2F'
+                'ydapp.bjut.edu.cn%2FopenV8HomePage&appid=200220816093810809&'
+                'state=V8YKT&qrcode=1&a17f5f4fdictkey="+'
+                'md5("192.0.2.42");</script>',
+                encoding="utf-8",
+            )
+            base = (
+                "https://itsapp.bjut.edu.cn/uc/api/oauth/index?"
+                "redirect=https%3A%2F%2Fydapp.bjut.edu.cn%2FopenV8HomePage&"
+                "appid=200220816093810809&state=V8YKT&qrcode=1"
+            )
+            solved = capture.solve_itsapp_js_challenge(page, base)
+            values = parse_qs(urlparse(solved).query, keep_blank_values=True)
+            self.assertEqual(values["redirect"], [capture.YD_ENTRY_URL])
+            self.assertEqual(values["appid"], [capture.YD_APP_ID])
+            self.assertEqual(
+                values["a17f5f4fdictkey"],
+                [hashlib.md5(b"192.0.2.42").hexdigest()],
+            )
+
+            page.write_text(
+                '<script>window.location.href="?redirect=https%3A%2F%2F'
+                'example.com%2F&appid=200220816093810809&state=V8YKT&qrcode=1&'
+                'a17f5f4fdictkey="+md5("192.0.2.42");</script>',
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                capture.solve_itsapp_js_challenge(page, base)
+
     def test_collects_prefetched_and_literal_same_origin_assets_only(self):
         with tempfile.TemporaryDirectory() as directory:
             page = Path(directory) / "index.html"
@@ -185,7 +220,9 @@ class CasServicesCaptureTests(unittest.TestCase):
             "Location: https://uc.bjut.edu.cn/?ticket=ST-123-private\n"
             '<input name="execution" value="private-execution">'
             '{"openid":"private-openid","realName":"Example Student",'
-            '"mobile":"13800138000","endpoint":"/api/reset/rules"}'
+            '"mobile":"13800138000","endpoint":"/api/reset/rules",'
+            '"clientIp":"192.0.2.42",'
+            '"appid":"200220816093810809"}'
         )
         result = capture.redact_text(
             source,
@@ -199,9 +236,11 @@ class CasServicesCaptureTests(unittest.TestCase):
             "private-openid",
             "Example Student",
             "13800138000",
+            "192.0.2.42",
         ):
             self.assertNotIn(secret, result)
         self.assertIn("/api/reset/rules", result)
+        self.assertIn("200220816093810809", result)
 
     def test_share_package_contains_no_known_secret(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -364,12 +403,21 @@ elif url == "https://ydapp.bjut.edu.cn/openV8HomePage":
         "appid=200220816093810809&state=V8YKT&qrcode=1"
     )
 elif "itsapp.bjut.edu.cn/uc/api/oauth/index" in url:
-    status = "302"
-    body = ""
-    location = (
-        "https://ydapp.bjut.edu.cn/#/pages/homepage/index/index?"
-        "openid=private-openid-value"
-    )
+    if "a17f5f4fdictkey=" in url:
+        status = "302"
+        body = ""
+        location = (
+            "https://ydapp.bjut.edu.cn/#/pages/homepage/index/index?"
+            "openid=private-openid-value"
+        )
+    else:
+        body = (
+            '<script src="/a155a53cde0f5585235d18ab56219d67.js"></script>'
+            '<script>window.location.href="?redirect=https%3A%2F%2F'
+            'ydapp.bjut.edu.cn%2FopenV8HomePage&appid=200220816093810809&'
+            'state=V8YKT&qrcode=1&a17f5f4fdictkey="+'
+            'md5("192.0.2.42");</script>'
+        )
 elif "ydapp.bjut.edu.cn" in url:
     body = '<html><script>const api="/api/recharge/query";</script></html>'
 
@@ -494,8 +542,11 @@ elif write_out:
                 "private-openid-value",
                 "TGT-private-cookie",
                 "Example Student",
+                "192.0.2.42",
             ):
                 self.assertNotIn(secret, combined)
+            report = json.loads((shares[0] / "report.json").read_text(encoding="utf-8"))
+            self.assertTrue(report["itsappJsChallengeDetected"])
 
 
 if __name__ == "__main__":

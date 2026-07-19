@@ -12,12 +12,13 @@ import argparse
 from html import escape, unescape
 from html.parser import HTMLParser
 import hashlib
+import ipaddress
 import json
 from pathlib import Path
 import re
 import sys
 from typing import Iterable
-from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urljoin, urlparse
 
 
 CAS_HOST = "cas.bjut.edu.cn"
@@ -26,6 +27,8 @@ ITS_HOST = "itsapp.bjut.edu.cn"
 YD_HOST = "ydapp.bjut.edu.cn"
 ALLOWED_HOSTS = {CAS_HOST, UC_HOST, ITS_HOST, YD_HOST}
 UC_SERVICE_URL = "https://uc.bjut.edu.cn/"
+YD_ENTRY_URL = "https://ydapp.bjut.edu.cn/openV8HomePage"
+YD_APP_ID = "200220816093810809"
 TEXT_SUFFIXES = {
     ".css",
     ".headers",
@@ -46,6 +49,10 @@ SENSITIVE_HEADER = re.compile(
 PHONE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 IDENTITY = re.compile(r"(?<![0-9A-Za-z])\d{17}[0-9Xx](?![0-9A-Za-z])")
 EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?![\w.-])")
+IPV4 = re.compile(
+    r"(?<![0-9.])(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+    r"(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}(?![0-9.])"
+)
 CAS_TICKET = re.compile(r"(?<![A-Za-z0-9])(?:ST|TGT)-[A-Za-z0-9._~-]{8,}")
 HTML_INPUT_TAG = re.compile(r"<input\b[^>]*>", re.I | re.S)
 HTML_SENSITIVE_NAME = re.compile(
@@ -94,6 +101,11 @@ LITERAL_ASSET = re.compile(
     r'''(?P<quote>["'])(?P<url>(?:(?:https:)?//[^"']+|(?:\.{0,2}/)?'''
     r'''[A-Za-z0-9_./-]+)\.(?:js|css)(?:\?[^"']*)?)(?P=quote)''',
     re.I,
+)
+ITSAPP_JS_CHALLENGE = re.compile(
+    r'''window\.location\.href\s*=\s*(["'])(.*?)\1\s*\+\s*'''
+    r'''md5\s*\(\s*(["'])(.*?)\3\s*\)''',
+    re.I | re.S,
 )
 
 
@@ -260,6 +272,64 @@ def extract_safe_redirect(path: Path, base_url: str, allowed_hosts: set[str]) ->
     return normalized_https_url(urljoin(base_url, location), allowed_hosts)
 
 
+def solve_itsapp_js_challenge(path: Path, base_url: str) -> str:
+    """Solve the narrowly validated read-only OAuth navigation challenge.
+
+    itsapp occasionally returns a 200 HTML page instead of an HTTP redirect.
+    The page concatenates md5(the literal client IP supplied by the server) to
+    one `*dictkey` query field. We reproduce only that exact expression and do
+    not evaluate arbitrary JavaScript.
+    """
+    parsed_base = urlparse(normalized_https_url(base_url, {ITS_HOST}))
+    if parsed_base.path != "/uc/api/oauth/index":
+        raise ValueError("itsapp challenge appeared on an unexpected path")
+
+    source = path.read_text(encoding="utf-8", errors="replace")
+    match = ITSAPP_JS_CHALLENGE.search(source)
+    if not match:
+        raise ValueError("validated itsapp JavaScript challenge was not found")
+    target_literal = unescape(match.group(2)).strip()
+    subject = unescape(match.group(4)).strip()
+    if not target_literal.startswith("?") or "\\" in target_literal:
+        raise ValueError("itsapp challenge target is not a relative query")
+    try:
+        address = ipaddress.ip_address(subject)
+    except ValueError as error:
+        raise ValueError("itsapp challenge subject is not an IP address") from error
+    if address.version != 4:
+        raise ValueError("itsapp challenge subject is not IPv4")
+
+    target = urljoin(base_url, target_literal)
+    parsed_target = urlparse(normalized_https_url(target, {ITS_HOST}))
+    if parsed_target.path != "/uc/api/oauth/index":
+        raise ValueError("itsapp challenge target path changed")
+    pairs = parse_qsl(parsed_target.query, keep_blank_values=True)
+    values: dict[str, list[str]] = {}
+    for key, value in pairs:
+        values.setdefault(key, []).append(value)
+    dict_keys = [key for key in values if re.fullmatch(r"[A-Za-z0-9]{8,64}dictkey", key)]
+    if len(dict_keys) != 1:
+        raise ValueError("itsapp challenge dictkey field is missing or ambiguous")
+    dict_key = dict_keys[0]
+    expected_keys = {"redirect", "appid", "state", "qrcode", dict_key}
+    if set(values) != expected_keys or any(len(items) != 1 for items in values.values()):
+        raise ValueError("itsapp challenge query fields are unexpected")
+    if (
+        values["redirect"] != [YD_ENTRY_URL]
+        or values["appid"] != [YD_APP_ID]
+        or values["state"] != ["V8YKT"]
+        or values["qrcode"] != ["1"]
+        or values[dict_key] != [""]
+    ):
+        raise ValueError("itsapp challenge contains unexpected OAuth values")
+
+    # MD5 is required by this server navigation challenge; it is not used for
+    # password storage, signatures or any other security decision.
+    digest = hashlib.md5(subject.encode("ascii")).hexdigest()
+    solved_pairs = [(key, digest if key == dict_key else value) for key, value in pairs]
+    return parsed_target._replace(query=urlencode(solved_pairs)).geturl()
+
+
 def asset_urls(paths: list[Path], base_url: str) -> list[str]:
     normalized_https_url(base_url, ALLOWED_HOSTS)
     result: set[str] = set()
@@ -334,6 +404,8 @@ def redact_text(source: str, secrets: Iterable[str], *, headers: bool = False) -
             )
         redacted = "\n".join(lines) + ("\n" if source.endswith("\n") else "")
 
+    app_id_placeholder = "__BJUT_YD_PUBLIC_APP_ID__"
+    redacted = redacted.replace(YD_APP_ID, app_id_placeholder)
     for secret in sorted(secret_variants(secrets), key=len, reverse=True):
         redacted = redacted.replace(secret, "[REDACTED]")
 
@@ -359,8 +431,9 @@ def redact_text(source: str, secrets: Iterable[str], *, headers: bool = False) -
     redacted = CAS_TICKET.sub("[REDACTED_CAS_TICKET]", redacted)
     redacted = PHONE.sub("[REDACTED_PHONE]", redacted)
     redacted = IDENTITY.sub("[REDACTED_ID]", redacted)
+    redacted = IPV4.sub("[REDACTED_IP]", redacted)
     redacted = EMAIL.sub("[REDACTED_EMAIL]", redacted)
-    return redacted
+    return redacted.replace(app_id_placeholder, YD_APP_ID)
 
 
 PRIVATE_KEYS = {
@@ -555,6 +628,7 @@ def sanitize(args: argparse.Namespace) -> int:
         "loginOutcome": args.login_outcome,
         "openidDetected": bool(openid),
         "openidLength": len(openid) if openid else None,
+        "itsappJsChallengeDetected": any(raw_dir.glob("*.challenge-*.html")),
         "rechargeRouteTemplate": (
             "#/pages/recharge/networkFeeCharge/networkFeeChargeNew?"
             "openid=[REDACTED]&displayflag=1&id=20220719101102"
@@ -600,6 +674,10 @@ def build_parser() -> argparse.ArgumentParser:
     redirect.add_argument("--allowed-hosts", required=True)
     redirect.add_argument("headers", type=Path)
 
+    challenge = commands.add_parser("itsapp-js-challenge")
+    challenge.add_argument("--base-url", required=True)
+    challenge.add_argument("html", type=Path)
+
     assets = commands.add_parser("asset-urls")
     assets.add_argument("--base-url", required=True)
     assets.add_argument("files", nargs="+", type=Path)
@@ -639,6 +717,9 @@ def main() -> int:
         if not hosts or not hosts.issubset(ALLOWED_HOSTS):
             raise ValueError("redirect host allowlist is invalid")
         print(extract_safe_redirect(args.headers, args.base_url, hosts))
+        return 0
+    if args.command == "itsapp-js-challenge":
+        print(solve_itsapp_js_challenge(args.html, args.base_url))
         return 0
     if args.command == "asset-urls":
         for url in asset_urls(args.files, args.base_url):

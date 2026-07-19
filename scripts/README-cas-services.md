@@ -47,6 +47,8 @@ chmod +x scripts/capture-cas-services.sh
 3. 向经过校验的 CAS 表单提交一次登录；
 4. 逐跳校验 HTTPS 重定向：UC 登录只允许 CAS 与 UC；移动门户流程只允许
    CAS、`itsapp.bjut.edu.cn` 与 `ydapp.bjut.edu.cn`；
+   若 `itsapp` 返回已知的 `window.location + md5(服务端给定 IPv4)` 导航挑战，
+   脚本只解析这一种受限表达式并以 GET 继续，不执行任意 JavaScript；
 5. 读取 UC 的以下只读接口：
    - `/api/register/rules`
    - `/api/uc/status`
@@ -78,7 +80,8 @@ chmod +x scripts/capture-cas-services.sh
 - `cas-services-*.share.zip`（或 `.tar.gz`）：检查后发送给 Codex 的文件。
 
 分享包会移除输入的账号和密码、Cookie/会话标识、CAS `ST`/`TGT`、动态
-`execution`、`openid`、常见令牌、姓名、学号/卡号、手机号、身份证号和邮箱。
+`execution`、`openid`、常见令牌、姓名、学号/卡号、手机号、身份证号、IP 地址
+和邮箱。移动门户公开的固定 `appid` 会保留，以便离线分析协议。
 `report.json` 只保留响应形状、端点候选、`openid` 是否出现及其长度，不保留原值。
 尽管如此，发送前仍应人工打开 `report.json` 与 `sanitized/` 检查一次。
 
