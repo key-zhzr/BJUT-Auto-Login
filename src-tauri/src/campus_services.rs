@@ -1,7 +1,7 @@
 use reqwest::header::{
     HeaderMap, ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, REFERER, SET_COOKIE,
 };
-use reqwest::{Client, Response, Url};
+use reqwest::{Client, Request, Response, Url};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -20,6 +20,7 @@ const UC_LOGIN_TARGET: &str = "https://uc.bjut.edu.cn/#/user/login";
 const CAS_LOGIN_ENTRY: &str = "https://cas.bjut.edu.cn/login?service=https%3A%2F%2Fuc.bjut.edu.cn%2Fapi%2Flogin%3Ftarget%3Dhttps%253A%252F%252Fuc.bjut.edu.cn%252F%2523%252Fuser%252Flogin";
 const YD_ENTRY: &str = "https://ydapp.bjut.edu.cn/openV8HomePage";
 const YD_APP_ID: &str = "200220816093810809";
+const YD_ANDROID_FALLBACK_IPV4: [u8; 4] = [114, 251, 253, 210];
 const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 13; M2102K1C Build/TKQ1.220829.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36 XWEB/1160065 MMWEBSDK/20231202 MicroMessenger/8.0.47.2560(0x28002F30) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64";
 const MAX_REDIRECTS: usize = 12;
 const CONFIRMATION_LIFETIME: Duration = Duration::from_secs(120);
@@ -248,7 +249,54 @@ fn cookie_path_matches(request: &str, cookie: &str) -> bool {
 #[derive(Clone, Debug)]
 struct CampusSession {
     client: Client,
+    android_yd_dns_fallback: Option<Client>,
+    using_android_yd_dns_fallback: bool,
     cookies: DomainCookies,
+}
+
+impl CampusSession {
+    async fn execute(
+        &mut self,
+        url: &Url,
+        request: Request,
+        stage: &str,
+    ) -> Result<Response, CampusServiceError> {
+        if self.using_android_yd_dns_fallback && url.host_str() == Some(YD_HOST) {
+            return self
+                .android_yd_dns_fallback
+                .as_ref()
+                .expect("Android ydapp fallback client must exist when selected")
+                .execute(request)
+                .await
+                .map_err(|error| CampusServiceError::network(stage, error));
+        }
+
+        let retry = request.try_clone();
+        match self.client.execute(request).await {
+            Ok(response) => Ok(response),
+            Err(error)
+                if cfg!(target_os = "android")
+                    && url.host_str() == Some(YD_HOST)
+                    && error.is_connect()
+                    && retry.is_some()
+                    && self.android_yd_dns_fallback.is_some() =>
+            {
+                let retry_stage = format!("{stage}（Android VPN DNS 回退）");
+                let response = self
+                    .android_yd_dns_fallback
+                    .as_ref()
+                    .expect("checked above")
+                    .execute(retry.expect("checked above"))
+                    .await
+                    .map_err(|retry_error| {
+                        CampusServiceError::network(&retry_stage, retry_error)
+                    })?;
+                self.using_android_yd_dns_fallback = true;
+                Ok(response)
+            }
+            Err(error) => Err(CampusServiceError::network(stage, error)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -498,16 +546,16 @@ async fn authenticate(account: &str, password: &str) -> Result<CampusSession, Ca
     }
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9".parse().unwrap());
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .connect_timeout(Duration::from_secs(12))
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent(WECHAT_USER_AGENT)
-        .default_headers(headers)
-        .build()
-        .map_err(|error| CampusServiceError::network("初始化 HTTPS 客户端", error))?;
+    let client = build_client(headers.clone(), false)?;
+    let android_yd_dns_fallback = if cfg!(target_os = "android") {
+        Some(build_client(headers, true)?)
+    } else {
+        None
+    };
     let mut session = CampusSession {
         client,
+        android_yd_dns_fallback,
+        using_android_yd_dns_fallback: false,
         cookies: DomainCookies::default(),
     };
     let (login_url, login_html) =
@@ -552,6 +600,27 @@ async fn authenticate(account: &str, password: &str) -> Result<CampusSession, Ca
     .await?;
     ensure_code_zero(&status, "统一认证会话校验")?;
     Ok(session)
+}
+
+fn build_client(
+    headers: HeaderMap,
+    use_android_yd_dns_fallback: bool,
+) -> Result<Client, CampusServiceError> {
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(WECHAT_USER_AGENT)
+        .default_headers(headers);
+    if use_android_yd_dns_fallback {
+        builder = builder.resolve(
+            YD_HOST,
+            std::net::SocketAddr::from((YD_ANDROID_FALLBACK_IPV4, 443)),
+        );
+    }
+    builder
+        .build()
+        .map_err(|error| CampusServiceError::network("初始化 HTTPS 客户端", error))
 }
 
 async fn enter_recharge(
@@ -707,9 +776,9 @@ async fn get_follow_text(
         }
         let stage = request_stage(&url);
         let response = request
-            .send()
-            .await
+            .build()
             .map_err(|error| CampusServiceError::network(stage, error))?;
+        let response = session.execute(&url, response, stage).await?;
         session.cookies.absorb(&url, response.headers());
         if response.status().is_redirection() {
             let next = redirect_target(&url, &response, allowed_hosts)?;
@@ -729,7 +798,9 @@ async fn get_follow_text(
             .text()
             .await
             .map_err(|error| CampusServiceError::network(stage, error))?;
-        if url.host_str() == Some(ITS_HOST) && url.path() == "/uc/api/oauth/index" {
+        if url.host_str() == Some(ITS_HOST)
+            && matches!(url.path(), "/uc/api/oauth/index" | "/a_bjut/api/sso/index")
+        {
             let next = solve_its_challenge(&url, &text)?;
             current_referer = Some(url.to_string());
             url = next;
@@ -762,9 +833,9 @@ async fn get_json(
     }
     let stage = request_stage(&url);
     let response = request
-        .send()
-        .await
+        .build()
         .map_err(|error| CampusServiceError::network(stage, error))?;
+    let response = session.execute(&url, response, stage).await?;
     session.cookies.absorb(&url, response.headers());
     response_json(response, stage).await
 }
@@ -801,9 +872,9 @@ async fn post_json(
     }
     let stage = request_stage(&url);
     let response = request
-        .send()
-        .await
+        .build()
         .map_err(|error| CampusServiceError::network(stage, error))?;
+    let response = session.execute(&url, response, stage).await?;
     session.cookies.absorb(&url, response.headers());
     response_json(response, stage).await
 }
@@ -852,9 +923,9 @@ async fn send_form(
         request = request.header(COOKIE, cookie);
     }
     let response = request
-        .send()
-        .await
+        .build()
         .map_err(|error| CampusServiceError::network("提交 CAS 登录", error))?;
+    let response = session.execute(&url, response, "提交 CAS 登录").await?;
     session.cookies.absorb(&url, response.headers());
     Ok(response)
 }
@@ -1013,43 +1084,53 @@ fn solve_its_challenge(current: &Url, html: &str) -> Result<Url, CampusServiceEr
         .join(&literal)
         .map_err(|_| CampusServiceError::protocol("itsapp 导航地址无效"))?;
     validate_url(&target, &[ITS_HOST])?;
+    if target.path() != current.path() {
+        return Err(CampusServiceError::protocol("itsapp 挑战目标路径发生变化"));
+    }
     let pairs = target
         .query_pairs()
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
         .collect::<Vec<_>>();
     let dict_keys = pairs
         .iter()
-        .filter(|(key, _)| key.ends_with("dictkey") && key.len() >= 15)
+        .filter(|(key, _)| is_its_dict_key(key))
         .map(|(key, _)| key.clone())
         .collect::<Vec<_>>();
     if dict_keys.len() != 1 {
         return Err(CampusServiceError::protocol("itsapp dictkey 不唯一"));
     }
     let dict_key = &dict_keys[0];
-    let mut redirect = None;
-    let mut appid = None;
-    let mut state = None;
-    let mut qrcode = None;
-    for (key, value) in &pairs {
-        match key.as_str() {
-            "redirect" => redirect = Some(value.as_str()),
-            "appid" => appid = Some(value.as_str()),
-            "state" => state = Some(value.as_str()),
-            "qrcode" => qrcode = Some(value.as_str()),
-            key if key == dict_key => {
-                if !value.is_empty() {
-                    return Err(CampusServiceError::protocol("itsapp dictkey 已包含未知值"));
-                }
-            }
-            _ => return Err(CampusServiceError::protocol("itsapp 导航出现未知参数")),
-        }
+    let mut target_values = unique_query_values(&target)?;
+    if target_values.remove(dict_key).as_deref() != Some("") {
+        return Err(CampusServiceError::protocol("itsapp dictkey 已包含未知值"));
     }
-    if redirect != Some(YD_ENTRY)
-        || appid != Some(YD_APP_ID)
-        || state != Some("V8YKT")
-        || qrcode != Some("1")
-    {
-        return Err(CampusServiceError::protocol("itsapp 导航参数发生变化"));
+    match current.path() {
+        "/uc/api/oauth/index" => validate_its_oauth_values(&target_values)?,
+        "/a_bjut/api/sso/index" => {
+            let current_values = unique_query_values(current)?;
+            if target_values != current_values
+                || current_values.len() != 3
+                || current_values.get("from").map(String::as_str) != Some("wap")
+                || current_values.get("ticket").is_none_or(String::is_empty)
+            {
+                return Err(CampusServiceError::protocol("itsapp SSO 挑战参数发生变化"));
+            }
+            let oauth = parse_url(
+                current_values
+                    .get("redirect")
+                    .ok_or_else(|| CampusServiceError::protocol("itsapp SSO 缺少回跳地址"))?,
+            )?;
+            validate_url(&oauth, &[ITS_HOST])?;
+            if oauth.path() != "/uc/api/oauth/index" {
+                return Err(CampusServiceError::protocol(
+                    "itsapp SSO 没有回到 OAuth 入口",
+                ));
+            }
+            validate_its_oauth_values(&unique_query_values(&oauth)?)?;
+        }
+        _ => {
+            return Err(CampusServiceError::protocol("itsapp 挑战出现在未知路径"));
+        }
     }
     let digest = format!("{:x}", md5::compute(subject.as_bytes()));
     target.set_query(None);
@@ -1060,6 +1141,37 @@ fn solve_its_challenge(current: &Url, html: &str) -> Result<Url, CampusServiceEr
         }
     }
     Ok(target)
+}
+
+fn is_its_dict_key(key: &str) -> bool {
+    key.strip_suffix("dictkey").is_some_and(|prefix| {
+        (8..=64).contains(&prefix.len()) && prefix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+
+fn unique_query_values(url: &Url) -> Result<BTreeMap<String, String>, CampusServiceError> {
+    let mut values = BTreeMap::new();
+    for (key, value) in url.query_pairs() {
+        if values
+            .insert(key.into_owned(), value.into_owned())
+            .is_some()
+        {
+            return Err(CampusServiceError::protocol("itsapp 导航参数重复"));
+        }
+    }
+    Ok(values)
+}
+
+fn validate_its_oauth_values(values: &BTreeMap<String, String>) -> Result<(), CampusServiceError> {
+    if values.len() != 4
+        || values.get("redirect").map(String::as_str) != Some(YD_ENTRY)
+        || values.get("appid").map(String::as_str) != Some(YD_APP_ID)
+        || values.get("state").map(String::as_str) != Some("V8YKT")
+        || values.get("qrcode").map(String::as_str) != Some("1")
+    {
+        return Err(CampusServiceError::protocol("itsapp OAuth 参数发生变化"));
+    }
+    Ok(())
 }
 
 fn redirect_target(
@@ -1488,6 +1600,40 @@ mod tests {
                 .get("abcdefghijklmnopdictkey")
                 .map(|value| value.as_ref()),
             Some(expected_digest.as_str())
+        );
+    }
+
+    #[test]
+    fn solves_itsapp_sso_md5_challenge_from_browser_flow() {
+        let oauth = Url::parse(
+            "https://itsapp.bjut.edu.cn/uc/api/oauth/index?redirect=https%3A%2F%2Fydapp.bjut.edu.cn%2FopenV8HomePage&appid=200220816093810809&state=V8YKT&qrcode=1",
+        )
+        .unwrap();
+        let mut current = Url::parse("https://itsapp.bjut.edu.cn/a_bjut/api/sso/index").unwrap();
+        current
+            .query_pairs_mut()
+            .append_pair("redirect", oauth.as_str())
+            .append_pair("from", "wap")
+            .append_pair("ticket", "ST-redacted-test-ticket");
+        let literal = format!(
+            "?{}&a17f5f4fdictkey=",
+            current.query().expect("test URL has a query")
+        );
+        let html = format!(
+            r#"<script src="/a155a53cde0f5585235d18ab56219d67.js"></script>
+              <script>window.location.href="{literal}"+md5("192.0.2.9");</script>"#
+        );
+
+        let solved = solve_its_challenge(&current, &html).unwrap();
+        let pairs = solved.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            pairs.get("ticket").map(|value| value.as_ref()),
+            Some("ST-redacted-test-ticket")
+        );
+        assert_eq!(pairs.get("from").map(|value| value.as_ref()), Some("wap"));
+        assert_eq!(
+            pairs.get("a17f5f4fdictkey").map(|value| value.as_ref()),
+            Some(format!("{:x}", md5::compute(b"192.0.2.9")).as_str())
         );
     }
 }
