@@ -26,7 +26,11 @@ UC_HOST = "uc.bjut.edu.cn"
 ITS_HOST = "itsapp.bjut.edu.cn"
 YD_HOST = "ydapp.bjut.edu.cn"
 ALLOWED_HOSTS = {CAS_HOST, UC_HOST, ITS_HOST, YD_HOST}
-UC_SERVICE_URL = "https://uc.bjut.edu.cn/"
+UC_LOGIN_TARGET = "https://uc.bjut.edu.cn/#/user/login"
+UC_LOGIN_ENTRY_URL = (
+    "https://uc.bjut.edu.cn/api/login?"
+    "target=https%3A%2F%2Fuc.bjut.edu.cn%2F%23%2Fuser%2Flogin"
+)
 YD_ENTRY_URL = "https://ydapp.bjut.edu.cn/openV8HomePage"
 YD_APP_ID = "200220816093810809"
 TEXT_SUFFIXES = {
@@ -73,12 +77,14 @@ FORM_SECRET = re.compile(
 )
 QUOTED_PRIVATE_FIELD = re.compile(
     r'''(?i)(["'](?:username|userName|account|studentNo|studentId|xh|realName|name|'''
-    r'''mobile|phone|email|idCard|identityNumber|campusCardNo|cardNo|openid|openId|'''
+    r'''mobile|phone|email|idCard|identityNumber|campusCardNo|cardNo|idserial|'''
+    r'''netaccno|cardbal|netaccbal|netbalance|pcode|openid|openId|'''
     r'''ticket|execution|accessToken|refreshToken|csrfToken|token|password|passwd|pwd)'''
     r'''["']\s*:\s*)(["'])(.*?)(\2)'''
 )
 NUMERIC_PRIVATE_FIELD = re.compile(
-    r'''(?i)(["'](?:studentNo|studentId|xh|idCard|identityNumber|campusCardNo|cardNo)'''
+    r'''(?i)(["'](?:studentNo|studentId|xh|idCard|identityNumber|campusCardNo|cardNo|'''
+    r'''idserial|netaccno)'''
     r'''["']\s*:\s*)-?\d+'''
 )
 COOKIE_VALUE = re.compile(
@@ -222,8 +228,15 @@ def select_login_form(path: Path, base_url: str) -> tuple[CasPageParser, dict[st
             unknown = set(query) - {"service"}
             if unknown:
                 raise ValueError("CAS login form action has unexpected query fields")
-            if "service" in query and query["service"] != [UC_SERVICE_URL]:
-                raise ValueError("CAS login form targets an unexpected service")
+            services = query.get("service", [])
+            if len(services) != 1:
+                raise ValueError("CAS login form is missing its UC service")
+            service = urlparse(normalized_https_url(services[0], {UC_HOST}))
+            if service.path != "/api/login":
+                raise ValueError("CAS login form targets an unexpected UC path")
+            service_query = parse_qs(service.query, keep_blank_values=True)
+            if service_query != {"target": [UC_LOGIN_TARGET]}:
+                raise ValueError("CAS login form targets an unexpected UC page")
             return parser, form
     raise ValueError("CAS username/password login form was not found")
 
@@ -412,6 +425,37 @@ def extract_openid(files: list[Path]) -> str | None:
     return None
 
 
+def validated_openid(files: list[Path]) -> str:
+    value = extract_openid(files)
+    if not value:
+        raise ValueError("mobile-portal openid was not found")
+    if not re.fullmatch(r"[A-Za-z0-9._~-]{8,128}", value):
+        raise ValueError("mobile-portal openid has an unexpected format")
+    return value
+
+
+def yd_open_body(files: list[Path]) -> str:
+    return json.dumps({"openid": validated_openid(files)}, separators=(",", ":"))
+
+
+def yd_balance_body(open_response: Path) -> str:
+    try:
+        response = json.loads(open_response.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("openNetPay did not return valid JSON") from error
+    if not isinstance(response, dict) or response.get("success") is not True:
+        raise ValueError("openNetPay did not return a successful result")
+    data = response.get("data")
+    card_pay = data.get("cardPay") if isinstance(data, dict) else None
+    idserial = card_pay.get("idserial") if isinstance(card_pay, dict) else None
+    if not isinstance(idserial, str) or not re.fullmatch(r"[A-Za-z0-9._-]{3,64}", idserial):
+        raise ValueError("openNetPay did not return a valid campus-card account")
+    return json.dumps(
+        {"idserial": idserial, "netaccno": idserial, "factorycode": "N006"},
+        separators=(",", ":"),
+    )
+
+
 def secret_variants(secrets: Iterable[str]) -> set[str]:
     variants: set[str] = set()
     for secret in secrets:
@@ -495,6 +539,12 @@ PRIVATE_KEYS = {
     "identitynumber",
     "campuscardno",
     "cardno",
+    "idserial",
+    "netaccno",
+    "cardbal",
+    "netaccbal",
+    "netbalance",
+    "pcode",
     "openid",
     "open_id",
     "ticket",
@@ -660,7 +710,18 @@ def sanitize(args: argparse.Namespace) -> int:
         },
         "safety": {
             "loginPosts": 1,
-            "otherRequests": "credential-free read-only GET requests",
+            "otherRequests": (
+                "credential-free read-only GET requests and up to two "
+                "validated read-only POST queries"
+            ),
+            "readOnlyPostQueries": sum(
+                1
+                for name in (
+                    "22-yd-open-net-pay.json",
+                    "23-yd-net-account-balance.json",
+                )
+                if (raw_dir / name).is_file()
+            ),
             "passwordChanges": 0,
             "recharges": 0,
             "otherStateChanges": 0,
@@ -729,6 +790,12 @@ def build_parser() -> argparse.ArgumentParser:
     openid = commands.add_parser("openid-state")
     openid.add_argument("files", nargs="+", type=Path)
 
+    yd_open = commands.add_parser("yd-open-body")
+    yd_open.add_argument("files", nargs="+", type=Path)
+
+    yd_balance = commands.add_parser("yd-balance-body")
+    yd_balance.add_argument("response", type=Path)
+
     scrub = commands.add_parser("sanitize")
     scrub.add_argument("--raw-dir", required=True)
     scrub.add_argument("--share-dir", required=True)
@@ -771,6 +838,12 @@ def main() -> int:
     if args.command == "openid-state":
         value = extract_openid(args.files)
         print(f"present:{len(value)}" if value else "missing")
+        return 0
+    if args.command == "yd-open-body":
+        print(yd_open_body(args.files))
+        return 0
+    if args.command == "yd-balance-body":
+        print(yd_balance_body(args.response))
         return 0
     if args.command == "sanitize":
         return sanitize(args)

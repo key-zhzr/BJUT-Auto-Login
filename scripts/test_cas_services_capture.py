@@ -12,7 +12,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 
 MODULE_PATH = Path(__file__).with_name("cas_services_capture.py")
@@ -24,7 +24,7 @@ SPEC.loader.exec_module(capture)
 
 LOGIN_URL = (
     "https://cas.bjut.edu.cn/login?"
-    "service=https%3A%2F%2Fuc.bjut.edu.cn%2F"
+    f"service={quote(capture.UC_LOGIN_ENTRY_URL, safe='')}"
 )
 
 
@@ -245,6 +245,38 @@ class CasServicesCaptureTests(unittest.TestCase):
                 capture.extract_openid([headers]), "private-openid-value"
             )
 
+    def test_builds_only_the_two_validated_read_only_ydapp_queries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            redirect = root / "redirect.headers"
+            redirect.write_text(
+                "Location: https://ydapp.bjut.edu.cn/#/pages/home?"
+                "openid=private-openid-value\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                json.loads(capture.yd_open_body([redirect])),
+                {"openid": "private-openid-value"},
+            )
+            response = root / "open.json"
+            response.write_text(
+                json.dumps(
+                    {
+                        "success": True,
+                        "data": {"cardPay": {"idserial": "25000000"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                json.loads(capture.yd_balance_body(response)),
+                {
+                    "idserial": "25000000",
+                    "netaccno": "25000000",
+                    "factorycode": "N006",
+                },
+            )
+
     def test_redaction_removes_all_authentication_and_personal_values(self):
         source = (
             "Set-Cookie: CASTGC=TGT-secret-cookie\n"
@@ -253,6 +285,7 @@ class CasServicesCaptureTests(unittest.TestCase):
             '{"openid":"private-openid","realName":"Example Student",'
             '"mobile":"13800138000","endpoint":"/api/reset/rules",'
             '"clientIp":"192.0.2.42",'
+            '"idserial":"25000000","netaccno":"25000000",'
             '"appid":"200220816093810809"}'
         )
         result = capture.redact_text(
@@ -268,6 +301,7 @@ class CasServicesCaptureTests(unittest.TestCase):
             "Example Student",
             "13800138000",
             "192.0.2.42",
+            "25000000",
         ):
             self.assertNotIn(secret, result)
         self.assertIn("/api/reset/rules", result)
@@ -404,13 +438,46 @@ location = ""
 effective = url
 
 is_post = "--data-binary" in args
-if is_post:
+if is_post and "cas.bjut.edu.cn/login" in url:
     posted = sys.stdin.read()
     if "username=25000000" not in posted or "password=%21example+secret%21" not in posted:
         raise SystemExit(71)
     status = "302"
     body = ""
-    location = "https://uc.bjut.edu.cn/?ticket=ST-1-private-ticket"
+    location = (
+        "https://uc.bjut.edu.cn/api/login?target=https%3A%2F%2F"
+        "uc.bjut.edu.cn%2F%23%2Fuser%2Flogin&ticket=ST-1-private-ticket"
+    )
+elif is_post and url.endswith("/netpay/openNetPay"):
+    posted = sys.stdin.read()
+    if "private-openid-value" not in posted:
+        raise SystemExit(72)
+    content_type = "application/json"
+    body = (
+        '{"success":true,"data":{"cardPay":'
+        '{"idserial":"25000000","cardbal":"12.34"}}}'
+    )
+elif is_post and url.endswith("/channel/queryNetAccBalance"):
+    posted = sys.stdin.read()
+    if '"factorycode":"N006"' not in posted:
+        raise SystemExit(73)
+    content_type = "application/json"
+    body = '{"success":true,"resultData":{"netaccbal":"1|12.34"}}'
+elif url == (
+    "https://uc.bjut.edu.cn/api/login?target=https%3A%2F%2F"
+    "uc.bjut.edu.cn%2F%23%2Fuser%2Flogin"
+):
+    status = "302"
+    body = ""
+    location = (
+        "https://cas.bjut.edu.cn/login?service=https%3A%2F%2F"
+        "uc.bjut.edu.cn%2Fapi%2Flogin%3Ftarget%3Dhttps%253A%252F%252F"
+        "uc.bjut.edu.cn%252F%2523%252Fuser%252Flogin"
+    )
+elif "uc.bjut.edu.cn/api/login" in url and "ticket=" in url:
+    status = "302"
+    body = ""
+    location = "https://uc.bjut.edu.cn/#/user/login"
 elif "cas.bjut.edu.cn/login" in url:
     body = (
         '<form method="post" action="">'
@@ -458,7 +525,7 @@ if headers:
     header = f"HTTP/2 {status}\n"
     if location:
         header += f"Location: {location}\n"
-    if is_post:
+    if is_post and "cas.bjut.edu.cn/login" in url:
         header += "Set-Cookie: CASTGC=TGT-private-cookie\n"
     pathlib.Path(headers).write_text(header, encoding="utf-8")
 
@@ -574,6 +641,7 @@ elif write_out:
                 "TGT-private-cookie",
                 "Example Student",
                 "192.0.2.42",
+                "12.34",
             ):
                 self.assertNotIn(secret, combined)
             report = json.loads((shares[0] / "report.json").read_text(encoding="utf-8"))

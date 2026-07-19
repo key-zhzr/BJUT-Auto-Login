@@ -9,7 +9,7 @@
   页面依赖的前端资源。
 
 脚本使用项目指定的微信浏览器 UA。每次运行只发送一次携带账号密码的 CAS
-登录 POST；此后的请求均为只读 GET。它不会提交修改密码、充值、付款、用户资料
+登录 POST；此后的请求均为只读查询。它不会提交修改密码、充值、付款、用户资料
 修改或任何其他状态变更请求。
 
 ## 使用
@@ -42,7 +42,8 @@ chmod +x scripts/capture-cas-services.sh
 
 脚本会执行：
 
-1. 读取 CAS 登录页并校验表单、动态 `execution` 和验证码状态；
+1. 从 UC 的 `/api/login?target=…` 入口进入 CAS，读取登录页并校验表单、动态
+   `execution`、受信任的 UC service 和验证码状态；
 2. 保存 CAS 同源 JS/CSS；
 3. 向经过校验的 CAS 表单提交一次登录；
 4. 逐跳校验 HTTPS 重定向：UC 登录只允许 CAS 与 UC；移动门户流程只允许
@@ -56,7 +57,10 @@ chmod +x scripts/capture-cas-services.sh
    - `/api/uc/userinfo`
    - `/api/uc/commonConfig`
 6. 复用同一临时 CAS 会话访问 `ydapp.bjut.edu.cn/openV8HomePage`；
-7. 保存 UC、移动门户 HTML 直接引用的同源 JS/CSS，并从移动门户 Webpack 清单中
+7. 使用页面取得的 `openid` 调用充值页面自身的两个只读初始化查询：
+   `/netpay/openNetPay` 与 `/channel/queryNetAccBalance`，只采集校园卡余额、网费
+   账号状态等响应形状；不会创建订单或扣费；
+8. 保存 UC、移动门户 HTML 直接引用的同源 JS/CSS，并从移动门户 Webpack 清单中
    只重建网费充值新旧页面及其共享代码块的带哈希部署文件；不会把 UniApp bundle
    中未部署的设备、媒体、定位等源码模块名误当成静态文件。少量真正失效的引用会
    汇总为一条警告，并写入 `assets/*-unavailable.tsv`。

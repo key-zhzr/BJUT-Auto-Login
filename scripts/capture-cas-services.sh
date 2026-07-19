@@ -17,7 +17,7 @@ readonly CAS_HOST="cas.bjut.edu.cn"
 readonly UC_HOST="uc.bjut.edu.cn"
 readonly ITS_HOST="itsapp.bjut.edu.cn"
 readonly YD_HOST="ydapp.bjut.edu.cn"
-readonly CAS_LOGIN_URL="https://${CAS_HOST}/login?service=https%3A%2F%2F${UC_HOST}%2F"
+readonly UC_LOGIN_ENTRY_URL="https://${UC_HOST}/api/login?target=https%3A%2F%2F${UC_HOST}%2F%23%2Fuser%2Flogin"
 readonly YD_ENTRY_URL="https://${YD_HOST}/openV8HomePage"
 readonly WECHAT_UA="Mozilla/5.0 (Linux; Android 13; M2102K1C Build/TKQ1.220829.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36 XWEB/1160065 MMWEBSDK/20231202 MicroMessenger/8.0.47.2560(0x28002F30) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64"
 readonly META_FORMAT=$'http_code=%{http_code}\nurl_effective=%{url_effective}\nremote_ip=%{remote_ip}\ncontent_type=%{content_type}\nnum_redirects=%{num_redirects}\nssl_verify_result=%{ssl_verify_result}\ntime_total=%{time_total}\n'
@@ -260,6 +260,38 @@ fetch_readonly_api() {
   esac
 }
 
+fetch_readonly_json_post() {
+  local capture_id="$1"
+  local url="$2"
+  local referer_url="$3"
+  if ! curl "${CURL_COMMON[@]}" \
+      --header "Accept: application/json, text/plain, */*" \
+      --header "Content-Type: application/json" \
+      --header "X-Requested-With: XMLHttpRequest" \
+      --header "session-type: uniapp" \
+      --header "isWechatApp: true" \
+      --header "orgid: 2" \
+      --header "Origin: https://${YD_HOST}" \
+      --header "Sec-Fetch-Dest: empty" \
+      --header "Sec-Fetch-Mode: cors" \
+      --header "Sec-Fetch-Site: same-origin" \
+      --referer "${referer_url}" \
+      --data-binary @- \
+      --dump-header "${RAW_DIR}/${capture_id}.headers" \
+      --output "${RAW_DIR}/${capture_id}.json" \
+      --write-out "${META_FORMAT}" \
+      "${url}" > "${RAW_DIR}/${capture_id}.meta"; then
+    printf 'Warning: read-only query %s could not be captured\n' "${capture_id}" >&2
+    return 1
+  fi
+  local status
+  status="$(meta_value http_code "${RAW_DIR}/${capture_id}.meta")"
+  if [[ "${status}" != "200" ]]; then
+    printf 'Warning: %s returned HTTP %s\n' "${capture_id}" "${status:-unknown}" >&2
+    return 1
+  fi
+}
+
 # Fetch the assets linked by an HTML document, then follow literal same-origin
 # JS/CSS references for a few bounded passes. This captures lazy chunks without
 # executing the application or invoking its state-changing actions.
@@ -336,7 +368,7 @@ capture_assets() {
 }
 
 printf '1/7 Fetching the CAS login page...\n'
-follow_get "00-cas-login" "${CAS_LOGIN_URL}" "${CAS_HOST}" "" "html" \
+follow_get "00-cas-login" "${UC_LOGIN_ENTRY_URL}" "${CAS_HOST},${UC_HOST}" "" "html" \
   || die "could not fetch the trusted CAS login page"
 CAS_LOGIN_EFFECTIVE="$(meta_value url_effective "${RAW_DIR}/00-cas-login.meta")"
 case "${CAS_LOGIN_EFFECTIVE}" in
@@ -464,6 +496,27 @@ if [[ -n "${YD_EFFECTIVE}" ]]; then
     "${RAW_DIR}/20-yd-entry.meta" \
     "${RAW_DIR}/20-yd-entry.html")"
   printf 'Mobile-portal openid: %s\n' "${OPENID_STATE%%:*}" >&2
+  if [[ "${OPENID_STATE%%:*}" == "present" ]]; then
+    if YD_OPEN_BODY="$(python3 "${HELPER}" yd-open-body \
+        "${RAW_DIR}/20-yd-entry.headers" \
+        "${RAW_DIR}/20-yd-entry.meta" \
+        "${RAW_DIR}/20-yd-entry.html")"; then
+      if printf '%s' "${YD_OPEN_BODY}" | fetch_readonly_json_post \
+          "22-yd-open-net-pay" "https://${YD_HOST}/netpay/openNetPay" "${YD_EFFECTIVE}"; then
+        if YD_BALANCE_BODY="$(python3 "${HELPER}" yd-balance-body \
+            "${RAW_DIR}/22-yd-open-net-pay.json" 2>/dev/null)"; then
+          printf '%s' "${YD_BALANCE_BODY}" | fetch_readonly_json_post \
+            "23-yd-net-account-balance" \
+            "https://${YD_HOST}/channel/queryNetAccBalance" \
+            "${YD_EFFECTIVE}" || true
+          YD_BALANCE_BODY=""
+        else
+          printf 'Warning: the read-only network-balance query could not be derived from openNetPay\n' >&2
+        fi
+      fi
+      YD_OPEN_BODY=""
+    fi
+  fi
 else
   printf 'Warning: mobile-portal asset capture was skipped\n' >&2
 fi
@@ -496,7 +549,7 @@ fi
 printf '\nCapture complete.\n'
 printf 'Private raw data (do not share): %s\n' "${RAW_DIR}"
 printf 'Redacted archive to inspect and send: %s\n' "${ARCHIVE}"
-printf 'The script sent one CAS login POST and only read-only GET requests afterward.\n'
+printf 'The script sent one CAS login POST and only read-only queries afterward.\n'
 printf 'No password change, recharge, payment, or other state-changing request was sent.\n'
 if [[ "${LOGIN_OUTCOME}" != "authenticated" ]]; then
   printf 'Warning: CAS login outcome was %s; do not retry automatically.\n' "${LOGIN_OUTCOME}" >&2
