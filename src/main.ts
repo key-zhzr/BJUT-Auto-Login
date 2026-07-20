@@ -1534,6 +1534,17 @@ const btnBillingPassword = document.getElementById('btn-billing-password') as HT
 const billingQuestionsForm = document.getElementById('billing-questions-form') as HTMLFormElement;
 const billingQuestionPassword = document.getElementById('billing-question-password') as HTMLInputElement;
 const btnBillingQuestions = document.getElementById('btn-billing-questions') as HTMLButtonElement;
+type BillingWorkbenchSection = 'overview' | 'records' | 'services' | 'recharge' | 'devices';
+const billingWorkbenchSections: BillingWorkbenchSection[] = ['overview', 'records', 'services', 'recharge', 'devices'];
+const billingSectionNavButtons = Array.from(
+  document.querySelectorAll<HTMLButtonElement>('[data-billing-section-target]'),
+);
+const billingSectionShortcuts = Array.from(
+  document.querySelectorAll<HTMLButtonElement>('[data-billing-section-shortcut]'),
+);
+const billingSectionPanels = Array.from(
+  document.querySelectorAll<HTMLElement>('[data-billing-section]'),
+);
 const accountsList = document.getElementById('accounts-list')!;
 const addAccountForm = document.getElementById('add-account-form') as HTMLFormElement;
 const logsContent = document.getElementById('logs-content')!;
@@ -1579,6 +1590,7 @@ let billingRecordQueryStates: Partial<Record<BillingRecordKind, BillingRecordQue
 let billingRecordQueryBusy = false;
 let billingCenterLoading = false;
 let selectedBillingPackageId = '';
+let activeBillingWorkbenchSection: BillingWorkbenchSection = 'overview';
 
 // Add Modal
 const addModal = document.getElementById('add-modal')!;
@@ -2168,6 +2180,22 @@ async function refreshPermissionHealth() {
 }
 
 // Navigation
+function activateBillingWorkbenchSection(section: string, resetScroll = false) {
+  if (!billingWorkbenchSections.includes(section as BillingWorkbenchSection)) return;
+  activeBillingWorkbenchSection = section as BillingWorkbenchSection;
+  billingSectionPanels.forEach(panel => {
+    panel.hidden = panel.dataset.billingSection !== activeBillingWorkbenchSection;
+  });
+  billingSectionNavButtons.forEach(button => {
+    const active = button.dataset.billingSectionTarget === activeBillingWorkbenchSection;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  if (resetScroll) {
+    document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, behavior: 'auto' });
+  }
+}
+
 function activatePage(target: string, navTarget = target) {
   navItems.forEach(item => {
     item.classList.toggle('active', item.getAttribute('data-target') === navTarget);
@@ -2178,7 +2206,10 @@ function activatePage(target: string, navTarget = target) {
   }
   if (target === 'logs' && logsDirty) renderFilteredLogs();
   if (target === 'settings') void refreshPermissionHealth();
-  if (target === 'billing-center') renderBillingCenter(currentUserInfo);
+  if (target === 'billing-center') {
+    activateBillingWorkbenchSection(activeBillingWorkbenchSection);
+    renderBillingCenter(currentUserInfo);
+  }
 }
 
 function setupNavigation() {
@@ -2197,9 +2228,32 @@ function setupEventListeners() {
   btnRefreshBillingCenter.addEventListener('click', () => void refreshBillingCenterData());
   btnOpenBilling.addEventListener('click', () => {
     activatePage('billing-center', 'dashboard');
+    document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, behavior: 'auto' });
     if (!billingCenterData) void refreshBillingCenterData();
   });
   btnCloseBilling.addEventListener('click', () => activatePage('dashboard'));
+  billingSectionNavButtons.forEach((button, index) => {
+    button.addEventListener('click', () => {
+      activateBillingWorkbenchSection(button.dataset.billingSectionTarget || '', true);
+    });
+    button.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      event.preventDefault();
+      const backwards = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
+      const nextIndex = (index + (backwards ? -1 : 1) + billingSectionNavButtons.length)
+        % billingSectionNavButtons.length;
+      const nextButton = billingSectionNavButtons[nextIndex];
+      nextButton.focus();
+      activateBillingWorkbenchSection(nextButton.dataset.billingSectionTarget || '', true);
+    });
+  });
+  billingSectionShortcuts.forEach(button => {
+    button.addEventListener('click', () => {
+      const section = button.dataset.billingSectionShortcut || '';
+      activateBillingWorkbenchSection(section, true);
+      billingSectionNavButtons.find(item => item.dataset.billingSectionTarget === section)?.focus();
+    });
+  });
   btnToggleBillingMauth.addEventListener('click', () => void toggleBillingMauth());
   btnExportBillingRecords.addEventListener('click', () => void exportBillingRecords(false));
   btnExportAllBillingRecords.addEventListener('click', () => void exportBillingRecords(true));

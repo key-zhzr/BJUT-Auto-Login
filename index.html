@@ -216,7 +216,28 @@
 
           <div id="billing-center-message" class="billing-center-message" hidden aria-live="polite"></div>
 
-          <div class="billing-center-summary">
+          <div class="billing-workbench">
+            <nav class="billing-workbench-nav" aria-label="计费中心功能" role="tablist">
+              <span class="billing-workbench-nav-label">功能</span>
+              <button class="btn btn-secondary billing-section-nav-button active" type="button" role="tab" aria-selected="true" data-billing-section-target="overview">
+                <i data-lucide="layout-dashboard"></i><span>概览</span>
+              </button>
+              <button class="btn btn-secondary billing-section-nav-button" type="button" role="tab" aria-selected="false" data-billing-section-target="records">
+                <i data-lucide="bar-chart-2"></i><span>用量与账单</span>
+              </button>
+              <button class="btn btn-secondary billing-section-nav-button" type="button" role="tab" aria-selected="false" data-billing-section-target="services">
+                <i data-lucide="power"></i><span>账户服务</span>
+              </button>
+              <button class="btn btn-secondary billing-section-nav-button" type="button" role="tab" aria-selected="false" data-billing-section-target="recharge">
+                <i data-lucide="wallet-cards"></i><span>充值</span>
+              </button>
+              <button class="btn btn-secondary billing-section-nav-button" type="button" role="tab" aria-selected="false" data-billing-section-target="devices">
+                <i data-lucide="shield-check"></i><span>设备与安全</span>
+              </button>
+            </nav>
+
+            <div class="billing-workbench-content">
+          <div class="billing-center-summary" data-billing-section="overview">
             <article class="billing-summary-card glass-card">
               <span>计费账号</span>
               <strong id="billing-center-account">--</strong>
@@ -235,7 +256,7 @@
             </article>
           </div>
 
-          <section class="billing-center-panel glass-card">
+          <section class="billing-center-panel glass-card" data-billing-section="overview">
             <div class="billing-center-panel-header">
               <div>
                 <div class="billing-panel-title">
@@ -249,7 +270,7 @@
             </div>
           </section>
 
-          <section class="billing-center-panel glass-card">
+          <section class="billing-center-panel glass-card" data-billing-section="overview">
             <div class="billing-center-panel-header">
               <div>
                 <div class="billing-panel-title">
@@ -265,7 +286,7 @@
             </div>
           </section>
 
-          <details id="billing-history-panel" class="billing-center-panel billing-collapsible-panel glass-card">
+          <details id="billing-history-panel" class="billing-center-panel billing-collapsible-panel glass-card" data-billing-section="overview">
             <summary class="billing-center-panel-header">
               <div>
                 <div class="billing-panel-title">
@@ -282,7 +303,19 @@
             </div>
           </details>
 
-          <section class="billing-center-panel glass-card" id="billing-records-panel">
+          <div class="billing-overview-actions" data-billing-section="overview" aria-label="计费中心快捷入口">
+            <button class="btn btn-secondary" type="button" data-billing-section-shortcut="records">
+              <i data-lucide="bar-chart-2"></i> 查询账单
+            </button>
+            <button class="btn btn-secondary" type="button" data-billing-section-shortcut="services">
+              <i data-lucide="power"></i> 办理账户服务
+            </button>
+            <button class="btn btn-primary" type="button" data-billing-section-shortcut="recharge">
+              <i data-lucide="wallet-cards"></i> 充值网费
+            </button>
+          </div>
+
+          <section class="billing-center-panel glass-card" id="billing-records-panel" data-billing-section="records" hidden>
             <div class="billing-center-panel-header billing-module-header">
               <div>
                 <div class="billing-panel-title">
@@ -354,7 +387,7 @@
             </div>
           </section>
 
-          <section class="billing-center-panel glass-card" id="billing-services-panel">
+          <section class="billing-center-panel glass-card" id="billing-services-panel" data-billing-section="services" hidden>
             <div class="billing-center-panel-header billing-module-header">
               <div>
                 <div class="billing-panel-title">
@@ -410,7 +443,7 @@
             </div>
           </section>
 
-          <section class="billing-center-panel glass-card" id="billing-devices-panel">
+          <section class="billing-center-panel glass-card" id="billing-devices-panel" data-billing-section="devices" hidden>
             <div class="billing-center-panel-header billing-module-header">
               <div>
                 <div class="billing-panel-title">
@@ -430,7 +463,7 @@
             </div>
           </section>
 
-          <section class="billing-center-panel glass-card" id="billing-recharge-panel">
+          <section class="billing-center-panel glass-card" id="billing-recharge-panel" data-billing-section="recharge" hidden>
             <div class="billing-center-panel-header billing-module-header">
               <div>
                 <div class="billing-panel-title">
@@ -461,7 +494,7 @@
             <p class="billing-inline-note">创建订单和校园卡扣费均只会在二次确认后执行一次；结果不明确时 App 不会自动重试。</p>
           </section>
 
-          <section class="billing-center-panel glass-card" id="billing-security-panel">
+          <section class="billing-center-panel glass-card" id="billing-security-panel" data-billing-section="devices" hidden>
             <div class="billing-center-panel-header billing-module-header">
               <div>
                 <div class="billing-panel-title">
@@ -511,6 +544,8 @@
               <button id="btn-billing-questions" class="btn btn-danger btn-sm" type="submit" disabled>更新密码保护</button>
             </form>
           </section>
+            </div>
+          </div>
         </section>
 
         <!-- Accounts -->
