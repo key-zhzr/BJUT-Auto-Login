@@ -427,6 +427,7 @@ pub(crate) async fn execute_recharge(
             "netaccno": pending.target_account,
             "factorycode": factory,
             "openid": pending.openid,
+            "orgid": "2",
             "netbalance": format_balance_for_trade(&pending.target_balance),
             "netaccstatus": pending.target_status_code,
             "paytype": "2"
@@ -465,6 +466,7 @@ pub(crate) async fn execute_recharge(
             "paytxamt": pending.amount,
             "payWay": "2",
             "openid": pending.openid,
+            "orgid": "2",
             "idserial": pending.payer_account,
             "netaccno": pending.target_account,
             "payorderno": pay_order_no,

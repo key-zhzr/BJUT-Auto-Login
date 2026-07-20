@@ -920,7 +920,7 @@ async fn schedule_package(
             "套餐列表已经变化，请刷新后重新选择".to_string(),
         ));
     }
-    let csrf = form_csrf_token(&page)?;
+    let csrf = action_csrf_token(&page, "doPackage")?;
     let text = post_form_action(
         session,
         "/Self/service/doPackage",
@@ -1856,6 +1856,37 @@ fn form_csrf_token(html: &str) -> Result<String, BillingError> {
     Ok(token)
 }
 
+fn action_csrf_token(html: &str, action: &str) -> Result<String, BillingError> {
+    if action.is_empty()
+        || action.len() > 64
+        || !action
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(BillingError::Protocol("套餐操作入口无效".to_string()));
+    }
+    let lower = html.to_ascii_lowercase();
+    let action = action.to_ascii_lowercase();
+    for quote in ['\'', '"'] {
+        let marker = format!("post({quote}{action}{quote}");
+        let mut cursor = 0usize;
+        while let Some(relative) = lower[cursor..].find(&marker) {
+            let start = cursor + relative;
+            let mut end = start.saturating_add(1_024).min(html.len());
+            while end > start && !html.is_char_boundary(end) {
+                end -= 1;
+            }
+            if let Some(token) = extract_literal_token(&html[start..end], "csrftoken") {
+                return Ok(token);
+            }
+            cursor = start + marker.len();
+        }
+    }
+    Err(BillingError::Protocol(
+        "套餐操作入口缺少有效的专用安全令牌".to_string(),
+    ))
+}
+
 fn validate_consume_limit(value: Option<&str>) -> Result<String, BillingError> {
     let value = value
         .map(str::trim)
@@ -2443,10 +2474,17 @@ async fn fetch_page_csrf_token(
 }
 
 fn extract_ajax_csrf_token(source: &str) -> Option<String> {
+    extract_literal_token(source, "ajaxcsrftoken")
+}
+
+fn extract_literal_token(source: &str, needle: &str) -> Option<String> {
+    if needle.is_empty() || !needle.is_ascii() {
+        return None;
+    }
     let lower = source.to_ascii_lowercase();
-    let needle = "ajaxcsrftoken";
+    let needle = needle.to_ascii_lowercase();
     let mut cursor = 0usize;
-    while let Some(relative) = lower[cursor..].find(needle) {
+    while let Some(relative) = lower[cursor..].find(&needle) {
         let start = cursor + relative;
         let bytes = source.as_bytes();
         let before_ok =
@@ -3873,6 +3911,10 @@ mod tests {
           <script>$.post("doPackage", { csrftoken: 'action-token', serid: id });</script>
         "#;
         assert_eq!(form_csrf_token(html).unwrap(), "form-token");
+        assert_eq!(
+            action_csrf_token(html, "doPackage").unwrap(),
+            "action-token"
+        );
     }
 
     #[test]
