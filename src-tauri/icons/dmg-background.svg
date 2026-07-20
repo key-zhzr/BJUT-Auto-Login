@@ -12,6 +12,9 @@
     <filter id="blur" x="-60%" y="-60%" width="220%" height="220%">
       <feGaussianBlur stdDeviation="45"/>
     </filter>
+    <filter id="label-shadow" x="-20%" y="-40%" width="140%" height="180%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#020617" flood-opacity="0.32"/>
+    </filter>
   </defs>
   <rect width="660" height="400" fill="url(#background)"/>
   <circle cx="86" cy="62" r="115" fill="#2563eb" opacity="0.18" filter="url(#blur)"/>
@@ -23,5 +26,7 @@
   <path d="M369 171 L387 185 L369 199" fill="none" stroke="#d6a34e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="180" cy="185" r="63" fill="#ffffff" opacity="0.045" stroke="#ffffff" stroke-opacity="0.12"/>
   <circle cx="480" cy="185" r="63" fill="#ffffff" opacity="0.045" stroke="#ffffff" stroke-opacity="0.12"/>
+  <rect x="82" y="268" width="196" height="48" rx="16" fill="#ffffff" opacity="0.94" filter="url(#label-shadow)"/>
+  <rect x="396" y="268" width="168" height="48" rx="16" fill="#ffffff" opacity="0.94" filter="url(#label-shadow)"/>
   <text x="330" y="352" text-anchor="middle" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11">BJUT-AL · Campus network companion</text>
 </svg>

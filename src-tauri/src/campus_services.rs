@@ -20,6 +20,10 @@ const UC_LOGIN_TARGET: &str = "https://uc.bjut.edu.cn/#/user/login";
 const CAS_LOGIN_ENTRY: &str = "https://cas.bjut.edu.cn/login?service=https%3A%2F%2Fuc.bjut.edu.cn%2Fapi%2Flogin%3Ftarget%3Dhttps%253A%252F%252Fuc.bjut.edu.cn%252F%2523%252Fuser%252Flogin";
 const YD_ENTRY: &str = "https://ydapp.bjut.edu.cn/openV8HomePage";
 const YD_APP_ID: &str = "200220816093810809";
+const ALIPAY_GATEWAY_HOST: &str = "openapi.alipay.com";
+const ALIPAY_APP_ID: &str = "2021003142658367";
+const ALIPAY_NOTIFY_URL: &str = "https://alipay.bjut.edu.cn/PayPreService/aliPayWapBackResNotify";
+const ALIPAY_RETURN_URL: &str = "https://alipay.bjut.edu.cn/PayPreService/aliPayWapBackResReturn";
 const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 13; M2102K1C Build/TKQ1.220829.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36 XWEB/1160065 MMWEBSDK/20231202 MicroMessenger/8.0.47.2560(0x28002F30) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64";
 const MAX_REDIRECTS: usize = 12;
 const CONFIRMATION_LIFETIME: Duration = Duration::from_secs(120);
@@ -327,6 +331,45 @@ pub(crate) struct RechargeResult {
     pub amount: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct PendingAlipayRecharge {
+    confirmation_id: String,
+    created_at: Instant,
+    session: CampusSession,
+    payer_account: String,
+    amount: String,
+    openid: String,
+}
+
+impl PendingAlipayRecharge {
+    pub(crate) fn confirmation_id(&self) -> &str {
+        &self.confirmation_id
+    }
+
+    pub(crate) fn expired(&self) -> bool {
+        self.created_at.elapsed() > CONFIRMATION_LIFETIME
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AlipayRechargePreview {
+    pub confirmation_id: String,
+    pub payer_account: String,
+    pub card_balance: String,
+    pub amount: String,
+    pub expires_in_seconds: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AlipayRechargeResult {
+    pub message: String,
+    pub payer_account: String,
+    pub amount: String,
+    pub payment_url: String,
+}
+
 pub(crate) async fn change_password(
     account: &str,
     saved_password: &str,
@@ -490,6 +533,87 @@ pub(crate) async fn execute_recharge(
     })
 }
 
+pub(crate) async fn prepare_alipay_card_recharge(
+    account: &str,
+    password: &str,
+    amount: &str,
+) -> Result<(PendingAlipayRecharge, AlipayRechargePreview), CampusServiceError> {
+    let amount = canonical_amount(amount)?;
+    let mut session = authenticate(account, password).await?;
+    let context = enter_recharge(&mut session).await?;
+    let opened = yd_post(
+        &mut session,
+        "/cardpay/openCardPay",
+        json!({"openid": context.openid}),
+    )
+    .await?;
+    ensure_success(&opened, "打开校园卡支付宝充值")?;
+
+    let confirmation_id = confirmation_id();
+    let preview = AlipayRechargePreview {
+        confirmation_id: confirmation_id.clone(),
+        payer_account: context.payer_account.clone(),
+        card_balance: context.card_balance.clone(),
+        amount: amount.clone(),
+        expires_in_seconds: CONFIRMATION_LIFETIME.as_secs(),
+    };
+    let pending = PendingAlipayRecharge {
+        confirmation_id,
+        created_at: Instant::now(),
+        session,
+        payer_account: context.payer_account,
+        amount,
+        openid: context.openid,
+    };
+    Ok((pending, preview))
+}
+
+pub(crate) async fn execute_alipay_card_recharge(
+    mut pending: PendingAlipayRecharge,
+) -> Result<AlipayRechargeResult, CampusServiceError> {
+    if pending.expired() {
+        return Err(CampusServiceError::rejected(
+            "支付宝充值确认已过期，请重新核对校园卡与金额",
+        ));
+    }
+    let html = yd_post_text(
+        &mut pending.session,
+        "/alipay/transferFromAlipay2Card",
+        json!({
+            "idserial": pending.payer_account,
+            "txamt": pending.amount,
+            "payway": 4,
+            "openid": pending.openid,
+            "payWay": 4,
+            "tradetype": "WAP",
+            "usertype": "1",
+            "orgid": "2"
+        }),
+    )
+    .await
+    .map_err(|error| {
+        CampusServiceError::rejected(format!(
+            "支付宝订单创建结果未能确认：{}。请先检查校园卡充值记录，不要立即重复操作",
+            error.user_message()
+        ))
+    })?;
+    let payment_url = alipay_gateway_url(&html, &pending.amount).map_err(|error| {
+        CampusServiceError::rejected(format!(
+            "支付宝订单已被校园支付平台接受，但支付入口无法安全打开：{}。请先检查校园卡充值记录，不要立即重复操作",
+            error.user_message()
+        ))
+    })?;
+    Ok(AlipayRechargeResult {
+        message: format!(
+            "已为校园卡 {} 创建 {} 元支付宝充值订单",
+            pending.payer_account, pending.amount
+        ),
+        payer_account: pending.payer_account,
+        amount: pending.amount,
+        payment_url,
+    })
+}
+
 async fn authenticate(account: &str, password: &str) -> Result<CampusSession, CampusServiceError> {
     if account.trim().is_empty() || password.is_empty() {
         return Err(CampusServiceError::rejected(
@@ -648,6 +772,62 @@ async fn yd_post(
         true,
     )
     .await
+}
+
+async fn yd_post_text(
+    session: &mut CampusSession,
+    path: &str,
+    body: Value,
+) -> Result<String, CampusServiceError> {
+    let url = parse_url(&format!("{YD_ORIGIN}{path}"))?;
+    validate_url(&url, &[YD_HOST])?;
+    let mut request = session
+        .client
+        .post(url.clone())
+        .header(
+            ACCEPT,
+            "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        )
+        .header(CONTENT_TYPE, "application/json")
+        .header(ORIGIN, YD_ORIGIN)
+        .header(REFERER, "https://ydapp.bjut.edu.cn/")
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header("Sec-Fetch-Dest", "empty")
+        .header("Sec-Fetch-Mode", "cors")
+        .header("Sec-Fetch-Site", "same-origin")
+        .header("session-type", "uniapp")
+        .header("isWechatApp", "true")
+        .header("orgid", "2")
+        .json(&body);
+    if let Some(cookie) = session.cookies.header(&url) {
+        request = request.header(COOKIE, cookie);
+    }
+    let stage = request_stage(&url);
+    let response = request
+        .send()
+        .await
+        .map_err(|error| CampusServiceError::network(stage, error))?;
+    session.cookies.absorb(&url, response.headers());
+    if !response.status().is_success() {
+        return Err(CampusServiceError::protocol(format!(
+            "接口返回 HTTP {}",
+            response.status().as_u16()
+        )));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > 128 * 1024)
+    {
+        return Err(CampusServiceError::protocol("支付入口响应体过大"));
+    }
+    let text = response
+        .text()
+        .await
+        .map_err(|error| CampusServiceError::network(stage, error))?;
+    if text.len() > 128 * 1024 {
+        return Err(CampusServiceError::protocol("支付入口响应体过大"));
+    }
+    Ok(text)
 }
 
 async fn get_follow_text(
@@ -829,6 +1009,135 @@ async fn send_form(
         .map_err(|error| CampusServiceError::network("提交 CAS 登录", error))?;
     session.cookies.absorb(&url, response.headers());
     Ok(response)
+}
+
+fn alipay_gateway_url(html: &str, expected_amount: &str) -> Result<String, CampusServiceError> {
+    let lower = html.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    while let Some(relative) = lower[cursor..].find("<form") {
+        let start = cursor + relative;
+        let Some(open_end_relative) = html[start..].find('>') else {
+            break;
+        };
+        let open_end = start + open_end_relative + 1;
+        let Some(close_relative) = lower[open_end..].find("</form>") else {
+            break;
+        };
+        let close = open_end + close_relative;
+        let opening = &html[start..open_end];
+        let action_value = decode_html_entities(&attribute(opening, "action").unwrap_or_default());
+        let Ok(mut action) = Url::parse(&action_value) else {
+            cursor = close + 7;
+            continue;
+        };
+        if action.host_str() != Some(ALIPAY_GATEWAY_HOST) || action.path() != "/gateway.do" {
+            cursor = close + 7;
+            continue;
+        }
+        validate_url(&action, &[ALIPAY_GATEWAY_HOST])?;
+        if action.fragment().is_some()
+            || !attribute(opening, "method")
+                .unwrap_or_else(|| "get".to_string())
+                .eq_ignore_ascii_case("post")
+        {
+            return Err(CampusServiceError::protocol(
+                "支付宝支付表单不是受支持的 HTTPS POST",
+            ));
+        }
+
+        let values = unique_query_values(&action)?;
+        let expected_keys = [
+            "alipay_sdk",
+            "app_id",
+            "charset",
+            "format",
+            "method",
+            "notify_url",
+            "return_url",
+            "sign",
+            "sign_type",
+            "timestamp",
+            "version",
+        ];
+        if values.len() != expected_keys.len()
+            || !expected_keys.iter().all(|key| values.contains_key(*key))
+            || values.get("app_id").map(String::as_str) != Some(ALIPAY_APP_ID)
+            || values.get("method").map(String::as_str) != Some("alipay.trade.wap.pay")
+            || values.get("format").map(String::as_str) != Some("json")
+            || values.get("charset").map(String::as_str) != Some("UTF-8")
+            || values.get("sign_type").map(String::as_str) != Some("RSA2")
+            || values.get("version").map(String::as_str) != Some("1.0")
+            || values.get("notify_url").map(String::as_str) != Some(ALIPAY_NOTIFY_URL)
+            || values.get("return_url").map(String::as_str) != Some(ALIPAY_RETURN_URL)
+            || values
+                .get("sign")
+                .is_none_or(|value| !(32..=1024).contains(&value.len()))
+            || values.get("timestamp").is_none_or(String::is_empty)
+        {
+            return Err(CampusServiceError::protocol(
+                "支付宝网关签名参数与已验证流程不一致",
+            ));
+        }
+
+        let body = &html[open_end..close];
+        let mut form_fields = BTreeMap::<String, String>::new();
+        for tag in tags(body, "input") {
+            let Some(name) = attribute(tag, "name") else {
+                continue;
+            };
+            let input_type = attribute(tag, "type")
+                .unwrap_or_else(|| "text".to_string())
+                .to_ascii_lowercase();
+            if matches!(input_type.as_str(), "button" | "file" | "reset" | "submit") {
+                continue;
+            }
+            let value = decode_html_entities(&attribute(tag, "value").unwrap_or_default());
+            if form_fields.insert(name, value).is_some() {
+                return Err(CampusServiceError::protocol("支付宝支付表单字段重复"));
+            }
+        }
+        if form_fields.len() != 1 || !form_fields.contains_key("biz_content") {
+            return Err(CampusServiceError::protocol("支付宝支付表单字段发生变化"));
+        }
+        let mut biz_content = form_fields.remove("biz_content").unwrap_or_default();
+        if biz_content.starts_with("%7B") || biz_content.starts_with("%7b") {
+            let decoder = Url::parse(&format!("https://placeholder.invalid/?value={biz_content}"))
+                .map_err(|_| CampusServiceError::protocol("支付宝订单参数编码无效"))?;
+            biz_content = decoder
+                .query_pairs()
+                .find(|(key, _)| key == "value")
+                .map(|(_, value)| value.into_owned())
+                .ok_or_else(|| CampusServiceError::protocol("支付宝订单参数编码无效"))?;
+        }
+        let order: Value = serde_json::from_str(&biz_content)
+            .map_err(|_| CampusServiceError::protocol("支付宝订单参数不是有效 JSON"))?;
+        let order = order
+            .as_object()
+            .ok_or_else(|| CampusServiceError::protocol("支付宝订单参数格式无效"))?;
+        if order.len() != 4
+            || required_json_string(order.get("total_amount"), "total_amount")? != expected_amount
+            || order.get("subject").and_then(Value::as_str) != Some("支付宝充值校园卡")
+            || order.get("product_code").and_then(Value::as_str) != Some("QUICK_WAP_WAY")
+            || required_json_string(order.get("out_trade_no"), "out_trade_no")?
+                .bytes()
+                .any(|byte| !byte.is_ascii_digit())
+        {
+            return Err(CampusServiceError::protocol(
+                "支付宝订单内容与本次确认不一致",
+            ));
+        }
+        action
+            .query_pairs_mut()
+            .append_pair("biz_content", &biz_content);
+        let payment_url: String = action.into();
+        if payment_url.len() > 8192 {
+            return Err(CampusServiceError::protocol("支付宝支付地址过长"));
+        }
+        return Ok(payment_url);
+    }
+    Err(CampusServiceError::protocol(
+        "没有找到受信任的支付宝支付表单",
+    ))
 }
 
 fn cas_login_form(
@@ -1384,6 +1693,33 @@ fn decode_html_entities(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn alipay_form(app_id: &str) -> String {
+        format!(
+            r#"<html><body><form method="post" action="https://openapi.alipay.com/gateway.do?alipay_sdk=alipay-sdk-java-dynamicVersionNo&amp;app_id={app_id}&amp;charset=UTF-8&amp;format=json&amp;method=alipay.trade.wap.pay&amp;notify_url=https%3A%2F%2Falipay.bjut.edu.cn%2FPayPreService%2FaliPayWapBackResNotify&amp;return_url=https%3A%2F%2Falipay.bjut.edu.cn%2FPayPreService%2FaliPayWapBackResReturn&amp;sign=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN&amp;sign_type=RSA2&amp;timestamp=2026-01-01+00%3A00%3A00&amp;version=1.0"><input type="hidden" name="biz_content" value="{{&quot;out_trade_no&quot;:&quot;12345678901234567890&quot;,&quot;total_amount&quot;:&quot;0.01&quot;,&quot;subject&quot;:&quot;支付宝充值校园卡&quot;,&quot;product_code&quot;:&quot;QUICK_WAP_WAY&quot;}}"></form></body></html>"#
+        )
+    }
+
+    #[test]
+    fn builds_gettable_alipay_gateway_url_from_captured_form_shape() {
+        let url = alipay_gateway_url(&alipay_form(ALIPAY_APP_ID), "0.01").unwrap();
+        let parsed = Url::parse(&url).unwrap();
+        assert_eq!(parsed.host_str(), Some(ALIPAY_GATEWAY_HOST));
+        assert_eq!(parsed.path(), "/gateway.do");
+        let values = unique_query_values(&parsed).unwrap();
+        assert_eq!(
+            values.get("method").map(String::as_str),
+            Some("alipay.trade.wap.pay")
+        );
+        assert!(values
+            .get("biz_content")
+            .is_some_and(|value| value.contains("支付宝充值校园卡")));
+    }
+
+    #[test]
+    fn rejects_alipay_form_for_a_different_merchant() {
+        assert!(alipay_gateway_url(&alipay_form("0000000000000000"), "0.01").is_err());
+    }
 
     #[test]
     fn validates_password_policy_from_captured_uc_rule() {

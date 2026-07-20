@@ -1,7 +1,7 @@
 import {
-  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, Download, Edit2, Eye, FileText, GripVertical,
-  Fingerprint, History, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power,
+  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, Eye, FileText, GripVertical,
+  Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
   ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
   WalletCards, WifiOff, X,
 } from 'lucide';
@@ -14,9 +14,9 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 const icons = {
-  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, Download, Edit2, Eye, FileText, GripVertical,
-  Fingerprint, History, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power,
+  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Download, Edit2, Eye, FileText, GripVertical,
+  Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
   ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
   WalletCards, WifiOff, X,
 };
@@ -29,6 +29,8 @@ function renderIcons(root: Element | Document | DocumentFragment = document) {
 
 if (IS_ANDROID) {
   document.body.classList.add('is-android');
+} else {
+  document.body.classList.add('is-desktop');
 }
 
 let loadingMaskTimer: number | null = null;
@@ -544,6 +546,21 @@ interface RechargeResult {
   message: string;
   targetAccount: string;
   amount: string;
+}
+
+interface AlipayRechargePreview {
+  confirmationId: string;
+  payerAccount: string;
+  cardBalance: string;
+  amount: string;
+  expiresInSeconds: number;
+}
+
+interface AlipayRechargeResult {
+  message: string;
+  payerAccount: string;
+  amount: string;
+  paymentUrl: string;
 }
 
 type BillingRecordKind = 'usage' | 'monthly' | 'payments' | 'operations' | 'stopLogs' | 'reopenLogs' | 'packageLogs';
@@ -1447,6 +1464,7 @@ class CustomSelect {
 
 // UI Elements
 const navItems = document.querySelectorAll('.nav-item');
+const navPageLinks = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-nav-page-target]'));
 const pages = document.querySelectorAll('.page');
 const networkStatus = document.getElementById('network-status')!;
 const networkDetail = document.getElementById('network-detail')!;
@@ -1472,6 +1490,7 @@ const btnRefreshBillingCenter = document.getElementById('btn-refresh-billing-cen
 const billingRefreshLabel = document.getElementById('billing-refresh-label')!;
 const btnToggleBillingMauth = document.getElementById('btn-toggle-billing-mauth') as HTMLButtonElement;
 const billingCenterMessage = document.getElementById('billing-center-message')!;
+const billingCenterSubtitle = document.getElementById('billing-center-subtitle')!;
 const billingCenterAccount = document.getElementById('billing-center-account')!;
 const billingCenterBalance = document.getElementById('billing-center-balance')!;
 const billingCenterFlow = document.getElementById('billing-center-flow')!;
@@ -1523,6 +1542,24 @@ const billingRechargePayer = document.getElementById('billing-recharge-payer')!;
 const billingRechargeCardBalance = document.getElementById('billing-recharge-card-balance')!;
 const billingRechargeTargetStatus = document.getElementById('billing-recharge-target-status')!;
 const billingRechargeTargetBalance = document.getElementById('billing-recharge-target-balance')!;
+type RechargeMethod = 'campus-card' | 'alipay';
+const billingRechargeMethodButtons = Array.from(
+  document.querySelectorAll<HTMLButtonElement>('[data-recharge-method-target]'),
+);
+const billingRechargeMethodPanels = Array.from(
+  document.querySelectorAll<HTMLElement>('[data-recharge-method]'),
+);
+const billingAlipayState = document.getElementById('billing-alipay-state')!;
+const billingAlipayForm = document.getElementById('billing-alipay-form') as HTMLFormElement;
+const billingAlipayTargetAccount = document.getElementById('billing-alipay-target-account') as HTMLInputElement;
+const billingAlipayAmount = document.getElementById('billing-alipay-amount') as HTMLInputElement;
+const btnBillingAlipay = document.getElementById('btn-billing-alipay') as HTMLButtonElement;
+const billingAlipayPreview = document.getElementById('billing-alipay-preview')!;
+const billingAlipayPayer = document.getElementById('billing-alipay-payer')!;
+const billingAlipayCardBalance = document.getElementById('billing-alipay-card-balance')!;
+const billingAlipayPreviewAmount = document.getElementById('billing-alipay-preview-amount')!;
+const billingAlipayPreviewTarget = document.getElementById('billing-alipay-preview-target')!;
+const btnBillingAlipayContinue = document.getElementById('btn-billing-alipay-continue') as HTMLButtonElement;
 const billingBindMac = document.getElementById('billing-bind-mac') as HTMLInputElement;
 const btnBillingBindMac = document.getElementById('btn-billing-bind-mac') as HTMLButtonElement;
 const billingPasswordForm = document.getElementById('billing-password-form') as HTMLFormElement;
@@ -1536,6 +1573,13 @@ const billingQuestionPassword = document.getElementById('billing-question-passwo
 const btnBillingQuestions = document.getElementById('btn-billing-questions') as HTMLButtonElement;
 type BillingWorkbenchSection = 'overview' | 'records' | 'services' | 'recharge' | 'devices';
 const billingWorkbenchSections: BillingWorkbenchSection[] = ['overview', 'records', 'services', 'recharge', 'devices'];
+const billingWorkbenchSectionSubtitles: Record<BillingWorkbenchSection, string> = {
+  overview: '账户状态、在线会话与近期上网记录',
+  records: '用量、账单与各类业务办理记录',
+  services: '停复机、消费保护与套餐预约',
+  recharge: '校园卡转入与支付宝充值',
+  devices: '无感认证设备与统一认证安全设置',
+};
 const billingSectionNavButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('[data-billing-section-target]'),
 );
@@ -2180,17 +2224,34 @@ async function refreshPermissionHealth() {
 }
 
 // Navigation
+let billingSectionAnimationTimer: number | null = null;
+
 function activateBillingWorkbenchSection(section: string, resetScroll = false) {
   if (!billingWorkbenchSections.includes(section as BillingWorkbenchSection)) return;
+  const changed = activeBillingWorkbenchSection !== section;
   activeBillingWorkbenchSection = section as BillingWorkbenchSection;
+  billingCenterSubtitle.textContent = billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
   billingSectionPanels.forEach(panel => {
-    panel.hidden = panel.dataset.billingSection !== activeBillingWorkbenchSection;
+    const active = panel.dataset.billingSection === activeBillingWorkbenchSection;
+    panel.hidden = !active;
+    panel.classList.remove('billing-section-enter');
+    if (active && changed) {
+      void panel.offsetWidth;
+      panel.classList.add('billing-section-enter');
+    }
   });
   billingSectionNavButtons.forEach(button => {
     const active = button.dataset.billingSectionTarget === activeBillingWorkbenchSection;
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
   });
+  if (billingSectionAnimationTimer !== null) window.clearTimeout(billingSectionAnimationTimer);
+  if (changed) {
+    billingSectionAnimationTimer = window.setTimeout(() => {
+      billingSectionPanels.forEach(panel => panel.classList.remove('billing-section-enter'));
+      billingSectionAnimationTimer = null;
+    }, 260);
+  }
   if (resetScroll) {
     document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, behavior: 'auto' });
   }
@@ -2198,8 +2259,15 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
 
 function activatePage(target: string, navTarget = target) {
   navItems.forEach(item => {
-    item.classList.toggle('active', item.getAttribute('data-target') === navTarget);
+    const itemTarget = item.getAttribute('data-target');
+    const active = itemTarget === navTarget
+      || (itemTarget === 'dashboard' && target === 'billing-center');
+    item.classList.toggle('active', active);
   });
+  navPageLinks.forEach(link => {
+    link.classList.toggle('active', link.dataset.navPageTarget === target);
+  });
+  document.getElementById('nav')?.classList.toggle('billing-active', target === 'billing-center');
   pages.forEach(page => page.classList.toggle('active', page.id === target));
   if (target === 'diagnostics') {
     void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
@@ -2219,6 +2287,19 @@ function setupNavigation() {
       if (target) activatePage(target);
     });
   });
+  navPageLinks.forEach(link => {
+    link.addEventListener('click', () => {
+      const target = link.dataset.navPageTarget;
+      if (!target) return;
+      if (target === 'billing-center') {
+        activateBillingWorkbenchSection('overview', true);
+        activatePage(target, 'dashboard');
+        if (!billingCenterData) void refreshBillingCenterData();
+      } else {
+        activatePage(target);
+      }
+    });
+  });
 }
 
 // Event Listeners
@@ -2232,17 +2313,26 @@ function setupEventListeners() {
     if (!billingCenterData) void refreshBillingCenterData();
   });
   btnCloseBilling.addEventListener('click', () => activatePage('dashboard'));
-  billingSectionNavButtons.forEach((button, index) => {
+  billingSectionNavButtons.forEach(button => {
     button.addEventListener('click', () => {
+      if (button.closest('.nav-billing-tree')) {
+        activatePage('billing-center', 'dashboard');
+        if (!billingCenterData) void refreshBillingCenterData();
+      }
       activateBillingWorkbenchSection(button.dataset.billingSectionTarget || '', true);
     });
     button.addEventListener('keydown', event => {
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
       event.preventDefault();
+      const group = button.closest('.nav-billing-tree, .billing-mobile-nav');
+      const groupButtons = Array.from(
+        group?.querySelectorAll<HTMLButtonElement>('[data-billing-section-target]') || [],
+      );
+      const index = groupButtons.indexOf(button);
+      if (index < 0 || groupButtons.length === 0) return;
       const backwards = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
-      const nextIndex = (index + (backwards ? -1 : 1) + billingSectionNavButtons.length)
-        % billingSectionNavButtons.length;
-      const nextButton = billingSectionNavButtons[nextIndex];
+      const nextIndex = (index + (backwards ? -1 : 1) + groupButtons.length) % groupButtons.length;
+      const nextButton = groupButtons[nextIndex];
       nextButton.focus();
       activateBillingWorkbenchSection(nextButton.dataset.billingSectionTarget || '', true);
     });
@@ -2251,7 +2341,9 @@ function setupEventListeners() {
     button.addEventListener('click', () => {
       const section = button.dataset.billingSectionShortcut || '';
       activateBillingWorkbenchSection(section, true);
-      billingSectionNavButtons.find(item => item.dataset.billingSectionTarget === section)?.focus();
+      billingSectionNavButtons.find(item => (
+        item.dataset.billingSectionTarget === section && item.offsetParent !== null
+      ))?.focus();
     });
   });
   btnToggleBillingMauth.addEventListener('click', () => void toggleBillingMauth());
@@ -2356,6 +2448,22 @@ function setupEventListeners() {
   billingRechargeForm.addEventListener('submit', event => {
     event.preventDefault();
     void prepareAndConfirmNetworkRecharge();
+  });
+  billingRechargeMethodButtons.forEach(button => {
+    button.addEventListener('click', () => {
+      activateRechargeMethod((button.dataset.rechargeMethodTarget || '') as RechargeMethod);
+    });
+  });
+  billingAlipayForm.addEventListener('submit', event => {
+    event.preventDefault();
+    void prepareAndOpenAlipayRecharge();
+  });
+  btnBillingAlipayContinue.addEventListener('click', () => {
+    billingRechargeAccount.value = billingAlipayTargetAccount.value.trim();
+    billingRechargeAmount.value = billingAlipayAmount.value.trim();
+    activateRechargeMethod('campus-card');
+    billingRechargeState.textContent = '请确认支付宝充值已经到账，再核对目标网费账户并从校园卡转入。';
+    btnBillingRecharge.focus();
   });
   billingQuestionsForm.addEventListener('submit', event => {
     event.preventDefault();
@@ -4243,6 +4351,9 @@ function renderBillingDevices(data: BillingCenterData) {
   if (!billingRechargeAccount.value.trim()) {
     billingRechargeAccount.value = data.account;
   }
+  if (!billingAlipayTargetAccount.value.trim()) {
+    billingAlipayTargetAccount.value = data.account;
+  }
   billingRechargeState.textContent = '填写目标学工号和金额后，App 将通过统一认证核对校园卡、目标账户与可充值状态。';
 }
 
@@ -4431,11 +4542,38 @@ function clearBillingSecretInputs() {
   });
 }
 
+function activateRechargeMethod(method: RechargeMethod) {
+  if (!['campus-card', 'alipay'].includes(method)) return;
+  billingRechargeMethodButtons.forEach(button => {
+    const active = button.dataset.rechargeMethodTarget === method;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  billingRechargeMethodPanels.forEach(panel => {
+    const active = panel.dataset.rechargeMethod === method;
+    panel.hidden = !active;
+    panel.classList.remove('is-entering');
+    if (active) {
+      void panel.offsetWidth;
+      panel.classList.add('is-entering');
+      window.setTimeout(() => panel.classList.remove('is-entering'), 220);
+    }
+  });
+}
+
 function setRechargeBusy(busy: boolean, label?: string) {
   btnBillingRecharge.disabled = busy;
   billingRechargeAccount.disabled = busy;
   billingRechargeAmount.disabled = busy;
   btnBillingRecharge.textContent = label || '核对充值信息';
+}
+
+function setAlipayRechargeBusy(busy: boolean, label?: string) {
+  btnBillingAlipay.disabled = busy;
+  billingAlipayTargetAccount.disabled = busy;
+  billingAlipayAmount.disabled = busy;
+  billingRechargeMethodButtons.forEach(button => { button.disabled = busy; });
+  btnBillingAlipay.textContent = label || '核对并前往支付宝';
 }
 
 function formatBillingCurrency(value: string) {
@@ -4498,6 +4636,68 @@ async function prepareAndConfirmNetworkRecharge() {
     await customAlert(`充值未完成：${String(error)}`, '充值网费');
   } finally {
     setRechargeBusy(false);
+  }
+}
+
+async function prepareAndOpenAlipayRecharge() {
+  if (btnBillingAlipay.disabled) return;
+  const targetAccount = billingAlipayTargetAccount.value.trim();
+  const amount = billingAlipayAmount.value.trim();
+  if (!/^[A-Za-z0-9_-]{5,20}$/.test(targetAccount)) {
+    await customAlert('请输入 5–20 位有效学工号。', '支付宝充值');
+    return;
+  }
+  if (!/^\d+(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0 || Number(amount) > 500) {
+    await customAlert('充值金额必须大于 0、不超过 500 元，且最多保留两位小数。', '支付宝充值');
+    return;
+  }
+  billingAlipayPreview.hidden = true;
+  btnBillingAlipayContinue.hidden = true;
+  billingAlipayState.textContent = '正在通过统一认证核对当前校园卡…';
+  setAlipayRechargeBusy(true, '正在核对…');
+  try {
+    const preview = await invoke<AlipayRechargePreview>('prepare_alipay_card_recharge', { amount });
+    billingAlipayPayer.textContent = preview.payerAccount;
+    billingAlipayCardBalance.textContent = formatBillingCurrency(preview.cardBalance);
+    billingAlipayPreviewAmount.textContent = formatBillingCurrency(preview.amount);
+    billingAlipayPreviewTarget.textContent = targetAccount;
+    billingAlipayPreview.hidden = false;
+    billingAlipayState.textContent = `校园卡信息已核对；确认信息将在 ${preview.expiresInSeconds} 秒后失效。`;
+    const confirmed = await customConfirm(
+      `充值校园卡账号：${preview.payerAccount}\n支付宝金额：${formatBillingCurrency(preview.amount)}\n后续网费目标：${targetAccount}\n\n本次只会创建“支付宝 → 当前校园卡”订单，不会直接增加网费余额。支付宝到账后，请返回 App 再从校园卡转入目标网费账户。`,
+      '确认前往支付宝',
+    );
+    if (!confirmed) {
+      await invoke('cancel_alipay_card_recharge', {
+        confirmationId: preview.confirmationId,
+      }).catch(() => undefined);
+      billingAlipayState.textContent = '已取消，没有创建支付宝订单。';
+      return;
+    }
+    setAlipayRechargeBusy(true, '正在创建订单…');
+    billingAlipayState.textContent = '正在创建一次性支付宝订单，请勿重复操作…';
+    const result = await invoke<AlipayRechargeResult>('confirm_alipay_card_recharge', {
+      confirmationId: preview.confirmationId,
+    });
+    if (!result.paymentUrl.startsWith('https://openapi.alipay.com/gateway.do?')) {
+      billingAlipayState.textContent = '支付宝订单已经创建，但支付平台返回了不受信任的跳转地址。请勿立即重复创建订单。';
+      throw new Error('支付平台返回了不受信任的跳转地址');
+    }
+    try {
+      await openUrl(result.paymentUrl);
+    } catch (error) {
+      billingAlipayState.textContent = '支付宝订单已经创建，但系统浏览器未能打开。请勿立即重复创建订单。';
+      throw new Error(`支付宝订单已经创建，但系统浏览器未能打开：${String(error)}`);
+    }
+    billingAlipayState.textContent = `${result.message}。付款到账后，返回 App 继续从校园卡转入网费。`;
+    btnBillingAlipayContinue.hidden = false;
+  } catch (error) {
+    if (!billingAlipayState.textContent.includes('订单已经创建')) {
+      billingAlipayState.textContent = `支付宝充值未开始：${String(error)}`;
+    }
+    await customAlert(billingAlipayState.textContent, '支付宝充值');
+  } finally {
+    setAlipayRechargeBusy(false);
   }
 }
 

@@ -728,6 +728,7 @@ struct AppState {
     billing_fetch_lock: tokio::sync::Mutex<()>,
     campus_service_lock: tokio::sync::Mutex<()>,
     campus_recharge_pending: tokio::sync::Mutex<Option<campus_services::PendingRecharge>>,
+    campus_alipay_recharge_pending: tokio::sync::Mutex<Option<campus_services::PendingAlipayRecharge>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4005,6 +4006,108 @@ async fn cancel_network_recharge(
     Ok(())
 }
 
+#[tauri::command]
+async fn prepare_alipay_card_recharge(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    amount: String,
+) -> Result<campus_services::AlipayRechargePreview, String> {
+    let account = campus_service_target(&state)?;
+    let _service_guard = state.campus_service_lock.lock().await;
+    rust_log(
+        &app,
+        &state,
+        "计费",
+        "正在通过统一认证核对支付宝充值所用校园卡",
+        "info",
+    );
+    let prepared = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        campus_services::prepare_alipay_card_recharge(&account.user, &account.pass, &amount),
+    )
+    .await
+    .map_err(|_| "支付宝充值信息核对超过 60 秒，已取消本次请求".to_string())?
+    .map_err(campus_services::CampusServiceError::user_message);
+    match prepared {
+        Ok((pending, preview)) => {
+            *state.campus_alipay_recharge_pending.lock().await = Some(pending);
+            rust_log(
+                &app,
+                &state,
+                "计费",
+                "支付宝充值校园卡信息核对完成，等待用户确认",
+                "debug",
+            );
+            Ok(preview)
+        }
+        Err(error) => {
+            *state.campus_alipay_recharge_pending.lock().await = None;
+            rust_log(&app, &state, "计费", &error, "error");
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+async fn confirm_alipay_card_recharge(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    confirmation_id: String,
+) -> Result<campus_services::AlipayRechargeResult, String> {
+    let _service_guard = state.campus_service_lock.lock().await;
+    let pending = {
+        let mut slot = state.campus_alipay_recharge_pending.lock().await;
+        let current = slot
+            .as_ref()
+            .ok_or_else(|| "没有待确认的支付宝充值，请先重新核对校园卡与金额".to_string())?;
+        if current.confirmation_id() != confirmation_id {
+            return Err("支付宝充值确认标识不匹配，请重新核对校园卡与金额".to_string());
+        }
+        if current.expired() {
+            *slot = None;
+            return Err("支付宝充值确认已过期，请重新核对校园卡与金额".to_string());
+        }
+        slot.take()
+            .ok_or_else(|| "待确认的支付宝充值状态已失效，请重新核对".to_string())?
+    };
+    rust_log(
+        &app,
+        &state,
+        "计费",
+        "用户已二次确认支付宝充值校园卡，正在创建一次性支付订单",
+        "info",
+    );
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(45),
+        campus_services::execute_alipay_card_recharge(pending),
+    )
+    .await
+    .map_err(|_| {
+        "支付宝订单创建超过 45 秒，结果未知；请先检查校园卡充值记录，不要立即重复操作".to_string()
+    })?
+    .map_err(campus_services::CampusServiceError::user_message);
+    match &result {
+        Ok(_) => rust_log(&app, &state, "计费", "支付宝支付入口已安全生成", "success"),
+        Err(error) => rust_log(&app, &state, "计费", error, "error"),
+    }
+    result
+}
+
+#[tauri::command]
+async fn cancel_alipay_card_recharge(
+    state: tauri::State<'_, Arc<AppState>>,
+    confirmation_id: String,
+) -> Result<(), String> {
+    let mut slot = state.campus_alipay_recharge_pending.lock().await;
+    if slot
+        .as_ref()
+        .is_some_and(|pending| pending.confirmation_id() == confirmation_id)
+    {
+        *slot = None;
+    }
+    Ok(())
+}
+
 fn billing_action_target(state: &AppState) -> Result<(Account, VpnCompatibility), String> {
     if is_mobile_data_network(&state.last_network_state.lock().unwrap()) {
         return Err("Android 移动数据网络下不能访问校园网计费系统".to_string());
@@ -4315,6 +4418,7 @@ pub fn run() {
                 billing_fetch_lock: tokio::sync::Mutex::new(()),
                 campus_service_lock: tokio::sync::Mutex::new(()),
                 campus_recharge_pending: tokio::sync::Mutex::new(None),
+                campus_alipay_recharge_pending: tokio::sync::Mutex::new(None),
             });
             _app.manage(app_state.clone());
 
@@ -4607,6 +4711,9 @@ pub fn run() {
             prepare_network_recharge,
             confirm_network_recharge,
             cancel_network_recharge,
+            prepare_alipay_card_recharge,
+            confirm_alipay_card_recharge,
+            cancel_alipay_card_recharge,
             disconnect_billing_session,
             set_billing_mauth,
             notify_network_change,
