@@ -30,24 +30,26 @@
     
     <div id="app" class="app-container">
       <!-- Sidebar / Bottom Navigation (Responsive) -->
-      <nav id="nav">
+      <nav id="nav" class="dashboard-expanded">
         <div class="nav-brand">
           <div class="logo"></div>
           <h2>BJUT-AL</h2>
         </div>
         <ul class="nav-items">
           <li class="nav-dashboard-group">
-            <div class="nav-item nav-dashboard-parent active" data-target="dashboard">
+            <div class="nav-item nav-dashboard-parent active" data-target="dashboard" role="button" aria-expanded="true" aria-controls="nav-dashboard-children">
               <i data-lucide="layout-dashboard"></i> <span>控制台</span>
+              <i class="nav-tree-chevron" data-lucide="chevron-down" aria-hidden="true"></i>
             </div>
-            <div class="nav-dashboard-children" aria-label="控制台功能">
+            <div id="nav-dashboard-children" class="nav-dashboard-children" aria-label="控制台功能" aria-hidden="false">
               <button class="nav-tree-link nav-page-link active" type="button" data-nav-page-target="dashboard">
                 <i data-lucide="home"></i><span>首页</span>
               </button>
-              <button class="nav-tree-link nav-page-link" type="button" data-nav-page-target="billing-center">
+              <button class="nav-tree-link nav-page-link" type="button" data-nav-page-target="billing-center" aria-expanded="false" aria-controls="nav-billing-tree">
                 <i data-lucide="receipt-text"></i><span>计费系统</span>
+                <i class="nav-tree-chevron" data-lucide="chevron-down" aria-hidden="true"></i>
               </button>
-              <div class="nav-billing-tree" aria-label="计费系统功能">
+              <div id="nav-billing-tree" class="nav-billing-tree" aria-label="计费系统功能" aria-hidden="true">
                 <span class="nav-tree-label">功能</span>
                 <button class="nav-tree-link nav-billing-link active" type="button" data-billing-section-target="overview">
                   <i data-lucide="layout-dashboard"></i><span>概览</span>
@@ -536,7 +538,7 @@
 
             <div class="billing-payment-panel" data-recharge-method="alipay" hidden>
               <h3>支付宝充值校园卡</h3>
-              <p id="billing-alipay-state" class="billing-inline-note">支付宝只能先充值当前账号的校园卡；付款到账后，再将同一金额转入目标网费账户。</p>
+              <p id="billing-alipay-state" class="billing-inline-note">支付宝会先充值当前账号的校园卡；支付完成后 App 会在当前流程检测到账，再将同一金额转入目标网费账户。</p>
               <form id="billing-alipay-form" class="billing-recharge-form" autocomplete="off">
                 <label>
                   <span>最终网费目标学工号</span>
@@ -558,11 +560,11 @@
                 <button id="btn-billing-alipay-show-payment" class="btn btn-secondary btn-sm" type="button" hidden>
                   <i data-lucide="qr-code"></i> 显示支付二维码
                 </button>
-                <button id="btn-billing-alipay-continue" class="btn btn-secondary btn-sm" type="button" hidden>
-                  <i data-lucide="arrow-right"></i> 校园卡已到账，继续转入网费
+                <button id="btn-billing-alipay-continue" class="btn btn-primary btn-sm" type="button" hidden>
+                  <i data-lucide="check-circle"></i> 检测到账并转入网费
                 </button>
               </div>
-              <p class="billing-inline-note">支付宝页面由北京工业大学支付平台与支付宝提供；App 不读取支付密码，也不会自动判断是否已付款。</p>
+              <p class="billing-inline-note">支付宝页面由北京工业大学支付平台与支付宝提供；App 不读取支付密码，只通过校园卡余额变化核对到账，并在转入网费前再次确认。</p>
             </div>
           </section>
 
@@ -1158,7 +1160,7 @@
             <span class="alipay-payment-modal-icon"><i data-lucide="qr-code"></i></span>
             <div>
               <h3 id="alipay-payment-modal-title">支付宝订单已创建</h3>
-              <p>使用手机支付宝扫码，或在当前设备打开支付页面。</p>
+              <p>扫码或打开支付页面；返回 App 后会自动检测校园卡到账。</p>
             </div>
           </div>
           <button id="btn-alipay-payment-close-icon" class="btn-icon" type="button" aria-label="关闭支付窗口">
@@ -1181,7 +1183,7 @@
             <div><span>充值校园卡</span><strong id="alipay-payment-payer">--</strong></div>
             <div><span>支付金额</span><strong id="alipay-payment-amount">--</strong></div>
             <div><span>后续网费目标</span><strong id="alipay-payment-target">--</strong></div>
-            <p>支付链接包含本次订单的签名信息，请勿公开分享，也不要在结果不明确时重复创建订单。</p>
+            <p>支付链接包含本次订单的签名信息，请勿公开分享。完成支付后可直接检测到账并转入网费，无需切换充值方式。</p>
           </div>
         </div>
         <p id="alipay-payment-modal-status" class="alipay-payment-modal-status" aria-live="polite">等待扫码或选择其他支付方式。</p>
@@ -1190,8 +1192,11 @@
           <button type="button" class="btn btn-secondary" id="btn-alipay-payment-copy">
             <i data-lucide="copy"></i><span>复制支付链接</span>
           </button>
-          <button type="button" class="btn btn-primary" id="btn-alipay-payment-open">
+          <button type="button" class="btn btn-secondary" id="btn-alipay-payment-open">
             <i data-lucide="external-link"></i><span>打开支付页面</span>
+          </button>
+          <button type="button" class="btn btn-primary" id="btn-alipay-payment-complete">
+            <i data-lucide="check-circle"></i><span>检测到账并转入网费</span>
           </button>
         </div>
       </div>

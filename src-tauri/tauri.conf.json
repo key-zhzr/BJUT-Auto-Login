@@ -56,7 +56,7 @@
     ],
     "macOS": {
       "dmg": {
-        "background": "icons/dmg-background.png",
+        "background": "icons/dmg-background.tiff",
         "windowPosition": {
           "x": 200,
           "y": 120

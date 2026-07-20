@@ -160,9 +160,44 @@ nav {
 .nav-dashboard-children {
   display: grid;
   gap: 0.18rem;
-  margin: 0.28rem 0 0.42rem 1.55rem;
+  max-height: 0;
+  margin: 0 0 0 1.55rem;
   padding-left: 0.6rem;
-  border-left: 1px solid rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  border-left: 1px solid transparent;
+  transition:
+    max-height 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms ease,
+    border-color 160ms ease,
+    visibility 0s linear 320ms;
+}
+
+#nav.dashboard-expanded .nav-dashboard-children {
+  max-height: 30rem;
+  margin: 0.28rem 0 0.42rem 1.55rem;
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  border-left-color: rgba(148, 163, 184, 0.18);
+  transition-delay: 0s;
+}
+
+.nav-tree-chevron {
+  width: 13px !important;
+  height: 13px !important;
+  margin-left: auto;
+  opacity: 0.72;
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease;
+}
+
+#nav.dashboard-expanded .nav-dashboard-parent > .nav-tree-chevron,
+#nav.billing-active .nav-page-link[data-nav-page-target="billing-center"] > .nav-tree-chevron {
+  transform: rotate(180deg);
+  opacity: 1;
 }
 
 .nav-tree-link {
@@ -207,9 +242,30 @@ nav {
 .nav-billing-tree {
   display: grid;
   gap: 0.12rem;
-  margin: 0.18rem 0 0.12rem 0.42rem;
+  max-height: 0;
+  margin: 0 0 0 0.42rem;
   padding-left: 0.48rem;
-  border-left: 1px solid rgba(59, 130, 246, 0.18);
+  overflow: hidden;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  border-left: 1px solid transparent;
+  transition:
+    max-height 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 150ms ease,
+    border-color 150ms ease,
+    visibility 0s linear 300ms;
+}
+
+#nav.billing-active .nav-billing-tree {
+  max-height: 18rem;
+  margin: 0.18rem 0 0.12rem 0.42rem;
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  border-left-color: rgba(59, 130, 246, 0.18);
+  transition-delay: 0s;
 }
 
 .nav-tree-label {
@@ -1890,6 +1946,7 @@ input:checked + .slider:before { transform: translateX(24px); }
   }
   .nav-dashboard-group { display: contents; }
   .nav-dashboard-children { display: none; }
+  .nav-tree-chevron { display: none; }
   .nav-item span { display: none; }
   .nav-item { padding: 0.5rem; }
   main {
@@ -2123,6 +2180,7 @@ input:checked + .slider:before { transform: translateX(24px); }
   }
   body.is-desktop .nav-dashboard-group { display: block; }
   body.is-desktop .nav-dashboard-children { display: grid; }
+  body.is-desktop .nav-tree-chevron { display: block; }
   body.is-desktop .nav-item {
     flex: none;
     justify-content: flex-start;
@@ -2140,6 +2198,10 @@ input:checked + .slider:before { transform: translateX(24px); }
 @media (prefers-reduced-motion: reduce) {
   .billing-section-enter,
   .billing-payment-panel.is-entering { animation: none; }
+
+  .nav-dashboard-children,
+  .nav-billing-tree,
+  .nav-tree-chevron { transition: none; }
 }
 
 /* Android WebView: approximate the desktop glass with layered translucent
@@ -2415,6 +2477,10 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
   min-width: 0;
 }
 
+#btn-alipay-payment-complete {
+  flex: 1 1 100%;
+}
+
 @media (max-width: 560px), (max-height: 610px) {
   .alipay-payment-modal-content {
     padding: 1rem;
@@ -2493,7 +2559,8 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
     font-size: 0.78rem;
   }
 
-  #btn-alipay-payment-open {
+  #btn-alipay-payment-open,
+  #btn-alipay-payment-complete {
     grid-column: 1 / -1;
   }
 }

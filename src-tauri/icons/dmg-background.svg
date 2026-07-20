@@ -26,7 +26,7 @@
   <path d="M369 171 L387 185 L369 199" fill="none" stroke="#d6a34e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="180" cy="185" r="63" fill="#ffffff" opacity="0.045" stroke="#ffffff" stroke-opacity="0.12"/>
   <circle cx="480" cy="185" r="63" fill="#ffffff" opacity="0.045" stroke="#ffffff" stroke-opacity="0.12"/>
-  <rect x="82" y="268" width="196" height="48" rx="16" fill="#ffffff" opacity="0.94" filter="url(#label-shadow)"/>
-  <rect x="396" y="268" width="168" height="48" rx="16" fill="#ffffff" opacity="0.94" filter="url(#label-shadow)"/>
+  <rect x="82" y="250" width="196" height="44" rx="15" fill="#ffffff" opacity="0.94" filter="url(#label-shadow)"/>
+  <rect x="396" y="250" width="168" height="44" rx="15" fill="#ffffff" opacity="0.94" filter="url(#label-shadow)"/>
   <text x="330" y="352" text-anchor="middle" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11">BJUT-AL · Campus network companion</text>
 </svg>
