@@ -686,6 +686,14 @@ struct AppConfig {
     balance_alert_threshold: f64,
     #[serde(default = "default_flow_alert_threshold")]
     flow_alert_threshold: f64,
+    #[serde(default = "default_android_notification_mode", alias = "androidNotificationMode")]
+    android_notification_mode: String,
+    #[serde(default = "default_true", alias = "androidNotifyNetworkStatus")]
+    android_notify_network_status: bool,
+    #[serde(default = "default_true", alias = "androidNotifyLoginResults")]
+    android_notify_login_results: bool,
+    #[serde(default = "default_true", alias = "androidNotifyBackgroundErrors")]
+    android_notify_background_errors: bool,
 }
 
 fn default_auto_login() -> bool { false }
@@ -699,6 +707,7 @@ fn default_profile_login_type() -> String { "auto".to_string() }
 fn default_usage_alerts() -> bool { true }
 fn default_balance_alert_threshold() -> f64 { 10.0 }
 fn default_flow_alert_threshold() -> f64 { 5.0 }
+fn default_android_notification_mode() -> String { "combined".to_string() }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct LogEntry {
@@ -1401,6 +1410,7 @@ async fn run_headless_network_check(
         );
         return serde_json::json!({
             "status": if validated { "online" } else { "cellular" },
+            "notification_category": "network",
             "notification": if validated { "移动数据已连接，校园网探测已暂停" } else { "移动数据尚未通过系统验证" },
             "logs": logs,
         });
@@ -1410,6 +1420,7 @@ async fn run_headless_network_check(
         headless_log(&mut logs, "网络", "无界面检测完成：互联网已连通", "info");
         return serde_json::json!({
             "status": "online",
+            "notification_category": "network",
             "notification": "后台检测正常，互联网已连接",
             "logs": logs,
         });
@@ -1424,6 +1435,7 @@ async fn run_headless_network_check(
         headless_log(&mut logs, "网络", "无界面检测未找到可访问的校园网认证网关", "info");
         return serde_json::json!({
             "status": "offline",
+            "notification_category": "network",
             "notification": "网络离线或不在校园网环境",
             "logs": logs,
         });
@@ -1433,6 +1445,7 @@ async fn run_headless_network_check(
         headless_log(&mut logs, "网络", "已检测到校园网认证网关，但当前协议的自动登录已停用", "info");
         return serde_json::json!({
             "status": "campus",
+            "notification_category": "network",
             "notification": "校园网需要认证，自动登录已停用",
             "logs": logs,
         });
@@ -1449,6 +1462,7 @@ async fn run_headless_network_check(
         headless_log(&mut logs, "安全", format!("无界面自动登录已阻止：{reason}"), "error");
         return serde_json::json!({
             "status": "blocked",
+            "notification_category": "login",
             "notification": "校园网登录被安全策略阻止",
             "logs": logs,
         });
@@ -1459,6 +1473,7 @@ async fn run_headless_network_check(
         headless_log(&mut logs, "网络", "没有可供无界面自动登录使用的已保存账号", "error");
         return serde_json::json!({
             "status": "campus",
+            "notification_category": "login",
             "notification": "校园网需要认证，但没有可用账号",
             "logs": logs,
         });
@@ -1487,6 +1502,7 @@ async fn run_headless_network_check(
                 );
                 return serde_json::json!({
                     "status": "login_success",
+                    "notification_category": "login",
                     "notification": format!("校园网自动登录成功：{}", account.user),
                     "logs": logs,
                 });
@@ -1513,6 +1529,7 @@ async fn run_headless_network_check(
     }
     serde_json::json!({
         "status": "login_failed",
+        "notification_category": "login",
         "notification": format!("校园网自动登录失败：{last_message}"),
         "logs": logs,
     })
@@ -1544,6 +1561,7 @@ pub extern "system" fn Java_cn_edu_bjut_al_NativeKeepAlive_runHeadlessCheck(
     })().unwrap_or_else(|error| {
         serde_json::json!({
             "status": "error",
+            "notification_category": "background",
             "notification": "后台检测核心启动失败",
             "logs": [{
                 "module": "Android后台",
@@ -1829,6 +1847,18 @@ fn show_native_notification(app: &tauri::AppHandle, title: &str, body: &str) -> 
         .body(body)
         .show()
         .map_err(|e| e.to_string())
+}
+
+fn automatic_login_result_notifications_enabled(state: &AppState) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        state.config.read().unwrap().android_notify_login_results
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = state;
+        true
+    }
 }
 
 fn get_config_path(app: &tauri::AppHandle) -> std::path::PathBuf {
@@ -2460,6 +2490,9 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
 }
 
 fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig) -> Result<(), String> {
+    if new_cfg.android_notification_mode != "separate" {
+        new_cfg.android_notification_mode = default_android_notification_mode();
+    }
     let previous_cfg = {
         let state_cfg = state.config.read().unwrap();
         fill_missing_passwords(&mut new_cfg, &state_cfg);
@@ -2778,7 +2811,9 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                     Ok((true, msg)) => {
                                         record_account_success(&app, &state, &acc.user);
                                         rust_log(&app, &state, "网络", &format!("登录成功: {}", msg), "success");
-                                        let _ = show_native_notification(&app, "自动登录成功", &format!("账号: {}", acc.user));
+                                        if automatic_login_result_notifications_enabled(&state) {
+                                            let _ = show_native_notification(&app, "自动登录成功", &format!("账号: {}", acc.user));
+                                        }
                                         success = true;
                                         login_succeeded = true;
                                         break;
@@ -4394,6 +4429,10 @@ pub fn run() {
                     usage_alerts: true,
                     balance_alert_threshold: default_balance_alert_threshold(),
                     flow_alert_threshold: default_flow_alert_threshold(),
+                    android_notification_mode: default_android_notification_mode(),
+                    android_notify_network_status: true,
+                    android_notify_login_results: true,
+                    android_notify_background_errors: true,
                 }),
                 credential_storage_status: Mutex::new("unknown".to_string()),
                 account_health: Mutex::new(load_account_health(_app.handle())),
@@ -4811,10 +4850,27 @@ mod tests {
             usage_alerts: true,
             balance_alert_threshold: default_balance_alert_threshold(),
             flow_alert_threshold: default_flow_alert_threshold(),
+            android_notification_mode: default_android_notification_mode(),
+            android_notify_network_status: true,
+            android_notify_login_results: true,
+            android_notify_background_errors: true,
         };
         let serialized = serde_json::to_string(&public_config(&config)).unwrap();
         assert!(!serialized.contains("secret"));
         assert_eq!(public_config(&config).accounts[0].pass, "");
+    }
+
+    #[test]
+    fn legacy_config_uses_compatible_android_notification_defaults() {
+        let config: AppConfig = serde_json::from_str(r#"{
+            "accounts":[],
+            "autoLogin":true
+        }"#).unwrap();
+
+        assert_eq!(config.android_notification_mode, "combined");
+        assert!(config.android_notify_network_status);
+        assert!(config.android_notify_login_results);
+        assert!(config.android_notify_background_errors);
     }
 
     #[test]

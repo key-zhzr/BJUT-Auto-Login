@@ -764,6 +764,38 @@ function saveSetting(key: string, value: string) {
   });
 }
 
+function renderAndroidNotificationModeDescription() {
+  const separated = settingAndroidNotificationMode?.value === 'separate';
+  androidNotificationModeDescription.textContent = separated
+    ? '常驻通知只负责保活且不再更新；状态与结果改用可清除的独立通知'
+    : '常驻通知同时显示后台检测与自动登录状态';
+}
+
+function refreshAndroidNotificationSettings() {
+  if (!IS_ANDROID) return;
+  try {
+    (window as any).AndroidBridge?.refreshNotificationSettings?.();
+  } catch (error) {
+    console.error('Failed to refresh Android notification settings:', error);
+  }
+}
+
+function saveAndroidNotificationSetting(key: string, value: string) {
+  localStorage.setItem(key, value);
+  void syncConfigToRust()
+    .then(refreshAndroidNotificationSettings)
+    .catch(error => {
+      console.error(`Failed to persist Android notification setting ${key}:`, error);
+      void customAlert(`通知设置保存失败：${String(error)}`);
+    });
+}
+
+function saveUsageAlertSetting(enabled: boolean) {
+  settingUsageAlerts.checked = enabled;
+  settingAndroidNotifyUsageAlerts.checked = enabled;
+  saveAndroidNotificationSetting('bjut_usage_alerts', String(enabled));
+}
+
 function syncConfigToRust(): Promise<void> {
   if (!(window as any).__TAURI__) return Promise.resolve();
   const balanceThreshold = parseFloat(localStorage.getItem('bjut_balance_alert_threshold') || '10');
@@ -784,6 +816,10 @@ function syncConfigToRust(): Promise<void> {
     usage_alerts: localStorage.getItem('bjut_usage_alerts') !== 'false',
     balance_alert_threshold: Number.isFinite(balanceThreshold) ? balanceThreshold : 10,
     flow_alert_threshold: Number.isFinite(flowThreshold) ? flowThreshold : 5,
+    android_notification_mode: localStorage.getItem('bjut_android_notification_mode') === 'separate' ? 'separate' : 'combined',
+    android_notify_network_status: localStorage.getItem('bjut_android_notify_network_status') !== 'false',
+    android_notify_login_results: localStorage.getItem('bjut_android_notify_login_results') !== 'false',
+    android_notify_background_errors: localStorage.getItem('bjut_android_notify_background_errors') !== 'false',
   };
   const operation = configSyncQueue
     .catch(() => {})
@@ -843,6 +879,11 @@ async function loadConfigFromRust() {
     localStorage.setItem('bjut_usage_alerts', String(config.usage_alerts !== false));
     localStorage.setItem('bjut_balance_alert_threshold', String(config.balance_alert_threshold ?? 10));
     localStorage.setItem('bjut_flow_alert_threshold', String(config.flow_alert_threshold ?? 5));
+    const androidNotificationMode = config.android_notification_mode === 'separate' ? 'separate' : 'combined';
+    localStorage.setItem('bjut_android_notification_mode', androidNotificationMode);
+    localStorage.setItem('bjut_android_notify_network_status', String(config.android_notify_network_status !== false));
+    localStorage.setItem('bjut_android_notify_login_results', String(config.android_notify_login_results !== false));
+    localStorage.setItem('bjut_android_notify_background_errors', String(config.android_notify_background_errors !== false));
     
     autoLoginEnabled = config.auto_login;
     checkInterval = config.check_interval;
@@ -854,8 +895,14 @@ async function loadConfigFromRust() {
     settingLogLevel.value = config.log_level;
     settingVpnCompatibility.value = config.vpn_compatibility || 'high';
     settingUsageAlerts.checked = config.usage_alerts !== false;
+    settingAndroidNotifyUsageAlerts.checked = config.usage_alerts !== false;
     settingBalanceThreshold.value = String(config.balance_alert_threshold ?? 10);
     settingFlowThreshold.value = String(config.flow_alert_threshold ?? 5);
+    settingAndroidNotificationMode.value = androidNotificationMode;
+    settingAndroidNotifyNetworkStatus.checked = config.android_notify_network_status !== false;
+    settingAndroidNotifyLoginResults.checked = config.android_notify_login_results !== false;
+    settingAndroidNotifyBackgroundErrors.checked = config.android_notify_background_errors !== false;
+    renderAndroidNotificationModeDescription();
     renderNetworkProfiles();
     
     const settingCheckIntervalBg = document.getElementById('setting-check-interval-bg') as HTMLInputElement;
@@ -1635,6 +1682,11 @@ const networkProfileForm = document.getElementById('network-profile-form') as HT
 const settingUsageAlerts = document.getElementById('setting-usage-alerts') as HTMLInputElement;
 const settingBalanceThreshold = document.getElementById('setting-balance-threshold') as HTMLInputElement;
 const settingFlowThreshold = document.getElementById('setting-flow-threshold') as HTMLInputElement;
+const settingAndroidNotifyNetworkStatus = document.getElementById('setting-android-notify-network-status') as HTMLInputElement;
+const settingAndroidNotifyLoginResults = document.getElementById('setting-android-notify-login-results') as HTMLInputElement;
+const settingAndroidNotifyUsageAlerts = document.getElementById('setting-android-notify-usage-alerts') as HTMLInputElement;
+const settingAndroidNotifyBackgroundErrors = document.getElementById('setting-android-notify-background-errors') as HTMLInputElement;
+const androidNotificationModeDescription = document.getElementById('android-notification-mode-description')!;
 const permissionHealthGroup = document.getElementById('permission-health-group')!;
 const permissionHealthList = document.getElementById('permission-health-list')!;
 const permissionHealthSummary = document.getElementById('permission-health-summary')!;
@@ -1650,6 +1702,7 @@ let overrideAccountSelect: CustomSelect;
 let overrideMethodSelect: CustomSelect;
 let settingUpdateChannel: CustomSelect;
 let settingVpnCompatibility: CustomSelect;
+let settingAndroidNotificationMode: CustomSelect;
 let logSessionFilter: CustomSelect;
 let logLevelFilter: CustomSelect;
 let networkProfileProtocolSelect: CustomSelect;
@@ -1718,6 +1771,7 @@ async function init() {
   settingUpdateChannel = new CustomSelect('setting-update-channel');
   settingLogLevel = new CustomSelect('setting-log-level');
   settingVpnCompatibility = new CustomSelect('setting-vpn-compatibility');
+  settingAndroidNotificationMode = new CustomSelect('setting-android-notification-mode');
   logSessionFilter = new CustomSelect('log-session-filter');
   logLevelFilter = new CustomSelect('log-level-filter');
   networkProfileProtocolSelect = new CustomSelect('network-profile-protocol');
@@ -2691,7 +2745,24 @@ function setupEventListeners() {
     await persistNetworkProfiles().catch(error => customAlert(`保存失败：${String(error)}`));
   });
 
-  settingUsageAlerts.addEventListener('change', () => saveSetting('bjut_usage_alerts', String(settingUsageAlerts.checked)));
+  settingAndroidNotificationMode.addEventListener('change', () => {
+    renderAndroidNotificationModeDescription();
+    saveAndroidNotificationSetting(
+      'bjut_android_notification_mode',
+      settingAndroidNotificationMode.value === 'separate' ? 'separate' : 'combined',
+    );
+  });
+  settingAndroidNotifyNetworkStatus.addEventListener('change', () => {
+    saveAndroidNotificationSetting('bjut_android_notify_network_status', String(settingAndroidNotifyNetworkStatus.checked));
+  });
+  settingAndroidNotifyLoginResults.addEventListener('change', () => {
+    saveAndroidNotificationSetting('bjut_android_notify_login_results', String(settingAndroidNotifyLoginResults.checked));
+  });
+  settingAndroidNotifyBackgroundErrors.addEventListener('change', () => {
+    saveAndroidNotificationSetting('bjut_android_notify_background_errors', String(settingAndroidNotifyBackgroundErrors.checked));
+  });
+  settingUsageAlerts.addEventListener('change', () => saveUsageAlertSetting(settingUsageAlerts.checked));
+  settingAndroidNotifyUsageAlerts.addEventListener('change', () => saveUsageAlertSetting(settingAndroidNotifyUsageAlerts.checked));
   settingVpnCompatibility.addEventListener('change', () => {
     const value = settingVpnCompatibility.value || 'high';
     saveSetting('bjut_vpn_compatibility', value);
@@ -3168,6 +3239,10 @@ function setupEventListeners() {
           balanceAlertThreshold: localStorage.getItem('bjut_balance_alert_threshold'),
           flowAlertThreshold: localStorage.getItem('bjut_flow_alert_threshold'),
           vpnCompatibility: localStorage.getItem('bjut_vpn_compatibility'),
+          androidNotificationMode: localStorage.getItem('bjut_android_notification_mode'),
+          androidNotifyNetworkStatus: localStorage.getItem('bjut_android_notify_network_status'),
+          androidNotifyLoginResults: localStorage.getItem('bjut_android_notify_login_results'),
+          androidNotifyBackgroundErrors: localStorage.getItem('bjut_android_notify_background_errors'),
         };
         const encrypted = await encryptExport(config, passphrase);
         await writeTextToClipboard(encrypted);
@@ -3208,6 +3283,10 @@ function setupEventListeners() {
         if (config.balanceAlertThreshold !== undefined && config.balanceAlertThreshold !== null) localStorage.setItem('bjut_balance_alert_threshold', config.balanceAlertThreshold);
         if (config.flowAlertThreshold !== undefined && config.flowAlertThreshold !== null) localStorage.setItem('bjut_flow_alert_threshold', config.flowAlertThreshold);
         if (config.vpnCompatibility !== undefined && config.vpnCompatibility !== null) localStorage.setItem('bjut_vpn_compatibility', config.vpnCompatibility);
+        if (config.androidNotificationMode !== undefined && config.androidNotificationMode !== null) localStorage.setItem('bjut_android_notification_mode', config.androidNotificationMode);
+        if (config.androidNotifyNetworkStatus !== undefined && config.androidNotifyNetworkStatus !== null) localStorage.setItem('bjut_android_notify_network_status', config.androidNotifyNetworkStatus);
+        if (config.androidNotifyLoginResults !== undefined && config.androidNotifyLoginResults !== null) localStorage.setItem('bjut_android_notify_login_results', config.androidNotifyLoginResults);
+        if (config.androidNotifyBackgroundErrors !== undefined && config.androidNotifyBackgroundErrors !== null) localStorage.setItem('bjut_android_notify_background_errors', config.androidNotifyBackgroundErrors);
         
         syncConfigToRust().then(() => {
           customAlert('导入成功，请刷新以应用更改！');

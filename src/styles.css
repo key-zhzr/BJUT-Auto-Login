@@ -1683,6 +1683,23 @@ input:checked + .slider:before { transform: translateX(24px); }
   min-width: 230px;
   max-width: 100%;
 }
+.android-only { display: none; }
+.setting-item-notification-mode #setting-android-notification-mode {
+  flex: 0 1 330px;
+  width: min(42vw, 330px);
+  min-width: 240px;
+  max-width: 100%;
+}
+.notification-category-note {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(59, 130, 246, 0.16);
+  border-radius: 9px;
+  color: var(--text-muted);
+  background: rgba(59, 130, 246, 0.07);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
 .setting-item .switch,
 .setting-item input,
 .setting-item select,
@@ -2079,6 +2096,17 @@ input:checked + .slider:before { transform: translateX(24px); }
     overflow-wrap: break-word;
     line-height: 1.4;
   }
+  .setting-item-notification-mode {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .setting-item-notification-mode .setting-info,
+  .setting-item-notification-mode #setting-android-notification-mode {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+  .setting-item-notification-mode #setting-android-notification-mode { flex-basis: auto; }
   .profile-form-grid { grid-template-columns: 1fr; }
   .network-profile-row { align-items: flex-start; flex-direction: column; }
   .network-profile-actions { width: 100%; }
@@ -2316,6 +2344,8 @@ body.is-android .glass-card {
     0 4px 10px rgba(0, 0, 0, 0.14),
     inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
+body.is-android .android-only { display: block; }
+body.is-android .usage-alert-master-setting { display: none; }
 body.is-android .modal-overlay,
 body.is-android .custom-select-options {
   -webkit-backdrop-filter: blur(4px) !important;

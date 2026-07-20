@@ -198,7 +198,25 @@ class MainActivity : TauriActivity() {
       }
       true
     } catch (error: Exception) {
-      KeepAliveJournal.append(this, "更新常驻通知失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
+      KeepAliveJournal.append(this, "更新通知状态失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
+      false
+    }
+  }
+
+  private fun refreshNotificationSettingsInternal(): Boolean {
+    val preferences = getSharedPreferences("service_state", Context.MODE_PRIVATE)
+    if (!preferences.getBoolean("auto_login_enabled", false)) return false
+    return try {
+      val serviceIntent = Intent(this, KeepAliveService::class.java)
+        .setAction(KeepAliveService.ACTION_REFRESH_NOTIFICATION_SETTINGS)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        startForegroundService(serviceIntent)
+      } else {
+        startService(serviceIntent)
+      }
+      true
+    } catch (error: Exception) {
+      KeepAliveJournal.append(this, "应用 Android 通知设置失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
       false
     }
   }
@@ -302,6 +320,10 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun updateKeepAliveStatus(status: String): Boolean =
       activity.updateKeepAliveStatusInternal(status)
+
+    @JavascriptInterface
+    fun refreshNotificationSettings(): Boolean =
+      activity.refreshNotificationSettingsInternal()
 
     @JavascriptInterface
     fun requestBatteryOptimizations() {

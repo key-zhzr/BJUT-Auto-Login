@@ -17,10 +17,20 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
+
+private data class AndroidNotificationSettings(
+    val mode: String = "combined",
+    val networkStatus: Boolean = true,
+    val loginResults: Boolean = true,
+    val backgroundErrors: Boolean = true
+) {
+    val separated: Boolean get() = mode == "separate"
+}
 
 class KeepAliveService : Service() {
     companion object {
@@ -31,12 +41,20 @@ class KeepAliveService : Service() {
         const val COMMAND_PAUSE = "pause"
         const val COMMAND_RESUME = "resume"
         const val ACTION_UPDATE_STATUS = "cn.edu.bjut.al.action.UPDATE_STATUS"
+        const val ACTION_REFRESH_NOTIFICATION_SETTINGS = "cn.edu.bjut.al.action.REFRESH_NOTIFICATION_SETTINGS"
         const val EXTRA_STATUS_TEXT = "status_text"
         private const val ACTION_CHECK = "cn.edu.bjut.al.action.CHECK"
         private const val ACTION_PAUSE = "cn.edu.bjut.al.action.PAUSE"
         private const val ACTION_RESUME = "cn.edu.bjut.al.action.RESUME"
+        private const val ACTION_TOGGLE_PAUSE = "cn.edu.bjut.al.action.TOGGLE_PAUSE"
         private const val CHANNEL_ID = "keep_alive_channel"
+        private const val NETWORK_CHANNEL_ID = "network_status_channel"
+        private const val LOGIN_CHANNEL_ID = "login_result_channel"
+        private const val BACKGROUND_CHANNEL_ID = "background_error_channel"
         private const val NOTIFICATION_ID = 1
+        private const val NETWORK_NOTIFICATION_ID = 101
+        private const val LOGIN_NOTIFICATION_ID = 102
+        private const val BACKGROUND_NOTIFICATION_ID = 103
         private const val ENGINE_HEARTBEAT_MAX_AGE = 35_000L
         private const val IP_POLL_INTERVAL = 3_000L
         private const val SERVICE_HEARTBEAT_INTERVAL = 30_000L
@@ -53,6 +71,9 @@ class KeepAliveService : Service() {
     private var lastNetworkSignature = ""
     private var lastNetworkEventAt = 0L
     private var lastLocalIp = ""
+    @Volatile private var notificationSettings = AndroidNotificationSettings()
+    private val lastEventMessages = ConcurrentHashMap<String, String>()
+    @Volatile private var lastStatusCategory = "network"
     @Volatile private var destroyed = false
     @Volatile private var statusText = "正在初始化后台检测引擎"
 
@@ -119,7 +140,8 @@ class KeepAliveService : Service() {
         KeepAliveRestartScheduler.cancel(this)
         KeepAliveRestartScheduler.scheduleWatchdog(this)
         KeepAliveJournal.append(this, "Android 前台保活服务已创建，Rust 无界面检测核心待命")
-        createNotificationChannel()
+        notificationSettings = loadNotificationSettings()
+        createNotificationChannels()
         startAsForeground()
         lastLocalIp = NetworkHelper.getLocalIpAddress()
         preferences.edit().putString("last_physical_ip", lastLocalIp).apply()
@@ -139,10 +161,10 @@ class KeepAliveService : Service() {
             ACTION_UPDATE_STATUS -> {
                 val message = intent.getStringExtra(EXTRA_STATUS_TEXT)?.trim().orEmpty().take(80)
                 if (message.isNotEmpty()) {
-                    statusText = message
-                    updateNotification()
+                    publishStatus("network", message)
                 }
             }
+            ACTION_REFRESH_NOTIFICATION_SETTINGS -> refreshNotificationSettings()
             ACTION_CHECK -> {
                 val useInterfaceEngine = interfaceIsForeground()
                 KeepAliveJournal.append(
@@ -151,27 +173,32 @@ class KeepAliveService : Service() {
                 )
                 if (useInterfaceEngine) sendCommand(COMMAND_CHECK) else performHeadlessCheck("通知栏立即检测", true)
             }
-            ACTION_PAUSE -> {
-                pausedUntil = System.currentTimeMillis() + 60 * 60 * 1000L
-                persistPauseState()
-                statusText = "自动登录已暂停一小时"
-                if (interfaceIsForeground()) sendCommand(COMMAND_PAUSE)
-                KeepAliveJournal.append(this, "用户通过常驻通知暂停自动登录一小时")
-                updateNotification()
-                scheduleAutomaticResume()
-            }
-            ACTION_RESUME -> {
-                pausedUntil = 0L
-                persistPauseState()
-                statusText = "自动登录已恢复"
-                if (interfaceIsForeground()) sendCommand(COMMAND_RESUME) else performHeadlessCheck("通知栏恢复", true)
-                KeepAliveJournal.append(this, "用户通过常驻通知恢复自动登录")
-                updateNotification()
-                scheduleAutomaticResume()
-                schedulePeriodicCheck(5_000L)
-            }
+            ACTION_PAUSE -> pauseAutomaticLogin()
+            ACTION_RESUME -> resumeAutomaticLogin()
+            ACTION_TOGGLE_PAUSE -> if (isPaused()) resumeAutomaticLogin() else pauseAutomaticLogin()
         }
         return START_STICKY
+    }
+
+    private fun pauseAutomaticLogin() {
+        pausedUntil = System.currentTimeMillis() + 60 * 60 * 1000L
+        persistPauseState()
+        statusText = "自动登录已暂停一小时"
+        if (interfaceIsForeground()) sendCommand(COMMAND_PAUSE)
+        KeepAliveJournal.append(this, "用户通过常驻通知暂停自动登录一小时")
+        updateNotification()
+        scheduleAutomaticResume()
+    }
+
+    private fun resumeAutomaticLogin() {
+        pausedUntil = 0L
+        persistPauseState()
+        statusText = "自动登录已恢复"
+        if (interfaceIsForeground()) sendCommand(COMMAND_RESUME) else performHeadlessCheck("通知栏恢复", true)
+        KeepAliveJournal.append(this, "用户通过常驻通知恢复自动登录")
+        updateNotification()
+        scheduleAutomaticResume()
+        schedulePeriodicCheck(5_000L)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -219,6 +246,7 @@ class KeepAliveService : Service() {
 
     private fun buildNotification(): Notification {
         val paused = isPaused()
+        val separated = notificationSettings.separated
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -230,7 +258,11 @@ class KeepAliveService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("BJUT Auto Login")
-            .setContentText(if (paused) "自动登录已暂停" else statusText)
+            .setContentText(
+                if (separated) "后台自动登录保活服务正在运行"
+                else if (paused) "自动登录已暂停"
+                else statusText
+            )
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(openPendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -240,7 +272,11 @@ class KeepAliveService : Service() {
             .setUsesChronometer(false)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .addAction(0, "立即检测", servicePendingIntent(11, ACTION_CHECK))
-            .addAction(0, if (paused) "恢复" else "暂停一小时", servicePendingIntent(12, if (paused) ACTION_RESUME else ACTION_PAUSE))
+            .addAction(
+                0,
+                if (separated) "暂停/恢复" else if (paused) "恢复" else "暂停一小时",
+                servicePendingIntent(12, if (separated) ACTION_TOGGLE_PAUSE else if (paused) ACTION_RESUME else ACTION_PAUSE)
+            )
             .build()
     }
 
@@ -253,7 +289,119 @@ class KeepAliveService : Service() {
         )
 
     private fun updateNotification() {
+        if (notificationSettings.separated) return
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun loadNotificationSettings(): AndroidNotificationSettings {
+        return try {
+            val config = JSONObject(NetworkHelper.getSecureConfig(this))
+            AndroidNotificationSettings(
+                mode = if (config.optString("android_notification_mode") == "separate") "separate" else "combined",
+                networkStatus = config.optBoolean("android_notify_network_status", true),
+                loginResults = config.optBoolean("android_notify_login_results", true),
+                backgroundErrors = config.optBoolean("android_notify_background_errors", true)
+            )
+        } catch (error: Exception) {
+            KeepAliveJournal.append(
+                this,
+                "读取 Android 通知设置失败，沿用兼容模式：${error.javaClass.simpleName}",
+                "error"
+            )
+            AndroidNotificationSettings()
+        }
+    }
+
+    private fun refreshNotificationSettings() {
+        val previous = notificationSettings
+        val updated = loadNotificationSettings()
+        notificationSettings = updated
+        val manager = getSystemService(NotificationManager::class.java)
+        if (previous.networkStatus != updated.networkStatus) lastEventMessages.remove("network")
+        if (previous.loginResults != updated.loginResults) lastEventMessages.remove("login")
+        if (previous.backgroundErrors != updated.backgroundErrors) lastEventMessages.remove("background")
+        if (!updated.networkStatus || !updated.separated) manager.cancel(NETWORK_NOTIFICATION_ID)
+        if (!updated.loginResults || !updated.separated) manager.cancel(LOGIN_NOTIFICATION_ID)
+        if (!updated.backgroundErrors || !updated.separated) manager.cancel(BACKGROUND_NOTIFICATION_ID)
+        if (previous.mode != updated.mode) {
+            lastEventMessages.clear()
+            manager.notify(NOTIFICATION_ID, buildNotification())
+            KeepAliveJournal.append(
+                this,
+                if (updated.separated) "通知方式已切换为保活与信息分离；常驻通知后续不再更新"
+                else "通知方式已切换为保活与信息共存"
+            )
+        } else if (!updated.separated && !notificationCategoryEnabled(lastStatusCategory)) {
+            statusText = "后台自动登录保活服务正在运行"
+            manager.notify(NOTIFICATION_ID, buildNotification())
+        }
+    }
+
+    private fun notificationCategoryEnabled(category: String): Boolean = when (category) {
+        "login" -> notificationSettings.loginResults
+        "background" -> notificationSettings.backgroundErrors
+        else -> notificationSettings.networkStatus
+    }
+
+    private fun publishStatus(category: String, message: String) {
+        lastStatusCategory = category
+        statusText = message.take(80)
+        if (!notificationCategoryEnabled(category)) return
+        if (notificationSettings.separated) showEventNotification(category, statusText)
+        else updateNotification()
+    }
+
+    private fun showEventNotification(category: String, message: String) {
+        if (lastEventMessages[category] == message) return
+        val channelId: String
+        val notificationId: Int
+        val title: String
+        val priority: Int
+        when (category) {
+            "login" -> {
+                channelId = LOGIN_CHANNEL_ID
+                notificationId = LOGIN_NOTIFICATION_ID
+                title = "校园网自动登录"
+                priority = NotificationCompat.PRIORITY_DEFAULT
+            }
+            "background" -> {
+                channelId = BACKGROUND_CHANNEL_ID
+                notificationId = BACKGROUND_NOTIFICATION_ID
+                title = "后台检测异常"
+                priority = NotificationCompat.PRIORITY_DEFAULT
+            }
+            else -> {
+                channelId = NETWORK_CHANNEL_ID
+                notificationId = NETWORK_NOTIFICATION_ID
+                title = "校园网网络状态"
+                priority = NotificationCompat.PRIORITY_LOW
+            }
+        }
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openPendingIntent = PendingIntent.getActivity(
+            this,
+            20 + notificationId,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(openPendingIntent)
+            .setPriority(priority)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(false)
+            .setCategory(
+                if (category == "background") NotificationCompat.CATEGORY_ERROR
+                else NotificationCompat.CATEGORY_STATUS
+            )
+            .build()
+        getSystemService(NotificationManager::class.java).notify(notificationId, notification)
+        lastEventMessages[category] = message
     }
 
     private fun isPaused(): Boolean = pausedUntil > System.currentTimeMillis()
@@ -367,13 +515,14 @@ class KeepAliveService : Service() {
                             )
                         }
                     }
+                    val notificationCategory = result.optString("notification_category", "network")
                     statusText = result.optString("notification", "后台检测已完成").take(80)
                     preferences.edit()
                         .putLong("last_headless_check", System.currentTimeMillis())
                         .putString("last_headless_status", result.optString("status", "unknown"))
                         .putString("last_headless_message", statusText)
                         .apply()
-                    if (!destroyed) updateNotification()
+                    if (!destroyed) publishStatus(notificationCategory, statusText)
                 } catch (error: Throwable) {
                     statusText = "后台检测失败，打开应用查看日志"
                     preferences.edit()
@@ -386,7 +535,7 @@ class KeepAliveService : Service() {
                         "Rust 无界面检测失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}",
                         "error"
                     )
-                    if (!destroyed) updateNotification()
+                    if (!destroyed) publishStatus("background", statusText)
                 } finally {
                     checkInProgress.set(false)
                     if (!destroyed) handler.post { schedulePeriodicCheck() }
@@ -422,17 +571,43 @@ class KeepAliveService : Service() {
         }
     }
 
-    private fun createNotificationChannel() {
+    private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "校园网后台连接",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "监听网络切换，并在界面进程退出后由 Rust 无界面核心继续检测与登录"
-                setShowBadge(false)
-            }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            val channels = listOf(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "校园网后台连接",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "维持校园网后台检测服务；分离模式下该通知保持静态"
+                    setShowBadge(false)
+                },
+                NotificationChannel(
+                    NETWORK_CHANNEL_ID,
+                    "校园网网络状态",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "联网、离线、移动数据及校园网待认证状态"
+                    setShowBadge(false)
+                },
+                NotificationChannel(
+                    LOGIN_CHANNEL_ID,
+                    "校园网自动登录结果",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    description = "自动登录成功、失败、安全阻止及账号不可用"
+                    setShowBadge(false)
+                },
+                NotificationChannel(
+                    BACKGROUND_CHANNEL_ID,
+                    "校园网后台异常",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    description = "后台检测核心或保活服务运行异常"
+                    setShowBadge(false)
+                }
+            )
+            getSystemService(NotificationManager::class.java).createNotificationChannels(channels)
         }
     }
 }

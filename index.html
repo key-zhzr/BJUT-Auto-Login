@@ -916,6 +916,67 @@
               </div>
             </div>
 
+            <div class="settings-group glass-card android-only android-notification-settings" style="margin-top: 1rem;">
+              <h3>Android 通知</h3>
+              <div class="setting-item setting-item-notification-mode">
+                <div class="setting-info">
+                  <h4>通知方式</h4>
+                  <p id="android-notification-mode-description">常驻通知同时显示后台检测与自动登录状态</p>
+                </div>
+                <div class="custom-select" id="setting-android-notification-mode" aria-label="Android 通知方式">
+                  <div class="custom-select-trigger" tabindex="0">
+                    <span>保活与信息共存</span>
+                    <i data-lucide="chevron-down"></i>
+                  </div>
+                  <div class="custom-select-options">
+                    <div class="custom-option selected" data-value="combined">保活与信息共存</div>
+                    <div class="custom-option" data-value="separate">保活与信息分离（静态常驻）</div>
+                  </div>
+                </div>
+              </div>
+              <div class="notification-category-note">以下类别可分别关闭；分离模式下，启用的类别会作为可清除通知单独发送。</div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>网络状态</h4>
+                  <p>联网、离线、移动数据及校园网待认证状态</p>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="setting-android-notify-network-status" checked>
+                  <span class="slider round"></span>
+                </label>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>自动登录结果</h4>
+                  <p>登录成功、失败、安全阻止及没有可用账号</p>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="setting-android-notify-login-results" checked>
+                  <span class="slider round"></span>
+                </label>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>余额与流量提醒</h4>
+                  <p>余额或剩余套餐流量低于提醒线</p>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="setting-android-notify-usage-alerts" checked>
+                  <span class="slider round"></span>
+                </label>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>后台异常</h4>
+                  <p>无界面检测核心或后台服务运行失败</p>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="setting-android-notify-background-errors" checked>
+                  <span class="slider round"></span>
+                </label>
+              </div>
+            </div>
+
             <div class="settings-group glass-card" style="margin-top: 1rem;" id="permission-health-group">
               <div class="setting-group-heading">
                 <div>
@@ -949,7 +1010,7 @@
 
             <div class="settings-group glass-card" style="margin-top: 1rem;">
               <h3>流量与余额提醒</h3>
-              <div class="setting-item">
+              <div class="setting-item usage-alert-master-setting">
                 <div class="setting-info">
                   <h4>启用用量提醒</h4>
                   <p>余额或剩余套餐流量低于提醒线时每天通知一次</p>
