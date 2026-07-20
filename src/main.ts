@@ -1,8 +1,8 @@
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, Eye, FileText, GripVertical,
+  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
   Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
-  ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
+  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
   WalletCards, WifiOff, X,
 } from 'lucide';
 import Sortable from 'sortablejs';
@@ -15,9 +15,9 @@ import DOMPurify from 'dompurify';
 
 const icons = {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
-  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Download, Edit2, Eye, FileText, GripVertical,
+  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
   Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
-  ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
+  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
   WalletCards, WifiOff, X,
 };
 
@@ -561,6 +561,13 @@ interface AlipayRechargeResult {
   payerAccount: string;
   amount: string;
   paymentUrl: string;
+}
+
+interface ActiveAlipayPayment {
+  paymentUrl: string;
+  payerAccount: string;
+  amount: string;
+  targetAccount: string;
 }
 
 type BillingRecordKind = 'usage' | 'monthly' | 'payments' | 'operations' | 'stopLogs' | 'reopenLogs' | 'packageLogs';
@@ -1559,7 +1566,20 @@ const billingAlipayPayer = document.getElementById('billing-alipay-payer')!;
 const billingAlipayCardBalance = document.getElementById('billing-alipay-card-balance')!;
 const billingAlipayPreviewAmount = document.getElementById('billing-alipay-preview-amount')!;
 const billingAlipayPreviewTarget = document.getElementById('billing-alipay-preview-target')!;
+const btnBillingAlipayShowPayment = document.getElementById('btn-billing-alipay-show-payment') as HTMLButtonElement;
 const btnBillingAlipayContinue = document.getElementById('btn-billing-alipay-continue') as HTMLButtonElement;
+const alipayPaymentModal = document.getElementById('alipay-payment-modal')!;
+const alipayPaymentQr = document.getElementById('alipay-payment-qr') as HTMLCanvasElement;
+const alipayPaymentQrShell = document.getElementById('alipay-payment-qr-shell')!;
+const alipayPaymentQrFallback = document.getElementById('alipay-payment-qr-fallback')!;
+const alipayPaymentPayer = document.getElementById('alipay-payment-payer')!;
+const alipayPaymentAmount = document.getElementById('alipay-payment-amount')!;
+const alipayPaymentTarget = document.getElementById('alipay-payment-target')!;
+const alipayPaymentModalStatus = document.getElementById('alipay-payment-modal-status')!;
+const btnAlipayPaymentClose = document.getElementById('btn-alipay-payment-close') as HTMLButtonElement;
+const btnAlipayPaymentCloseIcon = document.getElementById('btn-alipay-payment-close-icon') as HTMLButtonElement;
+const btnAlipayPaymentCopy = document.getElementById('btn-alipay-payment-copy') as HTMLButtonElement;
+const btnAlipayPaymentOpen = document.getElementById('btn-alipay-payment-open') as HTMLButtonElement;
 const billingBindMac = document.getElementById('billing-bind-mac') as HTMLInputElement;
 const btnBillingBindMac = document.getElementById('btn-billing-bind-mac') as HTMLButtonElement;
 const billingPasswordForm = document.getElementById('billing-password-form') as HTMLFormElement;
@@ -1630,6 +1650,8 @@ let billingRecordYearSelect: CustomSelect;
 let billingRecordPageSizeSelect: CustomSelect;
 let billingQuestionSelects: CustomSelect[] = [];
 let billingCenterData: BillingCenterData | null = null;
+let activeAlipayPayment: ActiveAlipayPayment | null = null;
+let alipayPaymentModalReturnFocus: HTMLElement | null = null;
 let billingRecordQueryStates: Partial<Record<BillingRecordKind, BillingRecordQueryState>> = {};
 let billingRecordQueryBusy = false;
 let billingCenterLoading = false;
@@ -2458,9 +2480,26 @@ function setupEventListeners() {
     event.preventDefault();
     void prepareAndOpenAlipayRecharge();
   });
+  btnBillingAlipayShowPayment.addEventListener('click', () => {
+    void showAlipayPaymentModal(btnBillingAlipayShowPayment);
+  });
+  btnAlipayPaymentOpen.addEventListener('click', () => void openActiveAlipayPayment());
+  btnAlipayPaymentCopy.addEventListener('click', () => void copyActiveAlipayPayment());
+  btnAlipayPaymentClose.addEventListener('click', closeAlipayPaymentModal);
+  btnAlipayPaymentCloseIcon.addEventListener('click', closeAlipayPaymentModal);
+  alipayPaymentModal.addEventListener('click', event => {
+    if (event.target === alipayPaymentModal) closeAlipayPaymentModal();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !alipayPaymentModal.classList.contains('hidden')) {
+      event.preventDefault();
+      closeAlipayPaymentModal();
+    }
+  });
   btnBillingAlipayContinue.addEventListener('click', () => {
     billingRechargeAccount.value = billingAlipayTargetAccount.value.trim();
     billingRechargeAmount.value = billingAlipayAmount.value.trim();
+    clearActiveAlipayPayment();
     activateRechargeMethod('campus-card');
     billingRechargeState.textContent = '请确认支付宝充值已经到账，再核对目标网费账户并从校园卡转入。';
     btnBillingRecharge.focus();
@@ -4639,6 +4678,116 @@ async function prepareAndConfirmNetworkRecharge() {
   }
 }
 
+function isTrustedAlipayPaymentUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:'
+      && url.hostname === 'openapi.alipay.com'
+      && url.pathname === '/gateway.do'
+      && url.searchParams.get('method') === 'alipay.trade.wap.pay'
+      && url.searchParams.get('sign_type') === 'RSA2';
+  } catch {
+    return false;
+  }
+}
+
+function closeAlipayPaymentModal() {
+  alipayPaymentModal.classList.add('hidden');
+  alipayPaymentModal.setAttribute('aria-hidden', 'true');
+  const returnFocus = alipayPaymentModalReturnFocus;
+  alipayPaymentModalReturnFocus = null;
+  if (returnFocus?.isConnected) {
+    window.setTimeout(() => returnFocus.focus(), 0);
+  }
+}
+
+function clearActiveAlipayPayment() {
+  activeAlipayPayment = null;
+  btnBillingAlipayShowPayment.hidden = true;
+  btnBillingAlipayContinue.hidden = true;
+  closeAlipayPaymentModal();
+  alipayPaymentQrShell.classList.remove('has-error');
+  alipayPaymentQrFallback.hidden = true;
+  const context = alipayPaymentQr.getContext('2d');
+  context?.clearRect(0, 0, alipayPaymentQr.width, alipayPaymentQr.height);
+}
+
+function rememberActiveAlipayPayment(payment: ActiveAlipayPayment) {
+  activeAlipayPayment = payment;
+  btnBillingAlipayShowPayment.hidden = IS_ANDROID;
+  btnBillingAlipayContinue.hidden = false;
+}
+
+async function showAlipayPaymentModal(returnFocus?: HTMLElement) {
+  const payment = activeAlipayPayment;
+  if (!payment || !isTrustedAlipayPaymentUrl(payment.paymentUrl)) {
+    await customAlert('当前没有可用的支付宝支付入口，请重新核对充值信息。', '支付宝充值');
+    return;
+  }
+
+  alipayPaymentModalReturnFocus = returnFocus
+    || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  alipayPaymentPayer.textContent = payment.payerAccount;
+  alipayPaymentAmount.textContent = formatBillingCurrency(payment.amount);
+  alipayPaymentTarget.textContent = payment.targetAccount;
+  alipayPaymentQrShell.classList.remove('has-error');
+  alipayPaymentQrFallback.hidden = true;
+  alipayPaymentModalStatus.textContent = '正在本机生成支付二维码…';
+  alipayPaymentModal.classList.remove('hidden');
+  alipayPaymentModal.setAttribute('aria-hidden', 'false');
+  btnAlipayPaymentCloseIcon.focus();
+
+  try {
+    const QRCode = await import('qrcode');
+    await QRCode.toCanvas(alipayPaymentQr, payment.paymentUrl, {
+      errorCorrectionLevel: 'L',
+      margin: 2,
+      width: 360,
+      color: {
+        dark: '#0f172a',
+        light: '#ffffff',
+      },
+    });
+    if (activeAlipayPayment !== payment) return;
+    alipayPaymentModalStatus.textContent = '二维码已在本机生成；支付链接未上传到任何二维码服务。';
+  } catch {
+    if (activeAlipayPayment !== payment) return;
+    alipayPaymentQrShell.classList.add('has-error');
+    alipayPaymentQrFallback.hidden = false;
+    alipayPaymentModalStatus.textContent = '二维码生成失败，仍可打开或复制本次支付链接。';
+  }
+}
+
+async function copyActiveAlipayPayment() {
+  const payment = activeAlipayPayment;
+  if (!payment || !isTrustedAlipayPaymentUrl(payment.paymentUrl)) {
+    alipayPaymentModalStatus.textContent = '当前支付链接已经失效，请重新核对充值信息。';
+    return;
+  }
+  try {
+    await writeTextToClipboard(payment.paymentUrl);
+    alipayPaymentModalStatus.textContent = '支付链接已复制。请仅发送到自己的手机，并尽快完成支付。';
+  } catch (error) {
+    alipayPaymentModalStatus.textContent = `复制失败：${String(error)}`;
+  }
+}
+
+async function openActiveAlipayPayment() {
+  const payment = activeAlipayPayment;
+  if (!payment || !isTrustedAlipayPaymentUrl(payment.paymentUrl)) {
+    alipayPaymentModalStatus.textContent = '当前支付链接已经失效，请重新核对充值信息。';
+    return false;
+  }
+  try {
+    await openUrl(payment.paymentUrl);
+    alipayPaymentModalStatus.textContent = '支付页面已交给系统浏览器打开；完成后请返回 App。';
+    return true;
+  } catch (error) {
+    alipayPaymentModalStatus.textContent = `系统浏览器打开失败：${String(error)}。可复制支付链接后手动打开。`;
+    return false;
+  }
+}
+
 async function prepareAndOpenAlipayRecharge() {
   if (btnBillingAlipay.disabled) return;
   const targetAccount = billingAlipayTargetAccount.value.trim();
@@ -4651,8 +4800,32 @@ async function prepareAndOpenAlipayRecharge() {
     await customAlert('充值金额必须大于 0、不超过 500 元，且最多保留两位小数。', '支付宝充值');
     return;
   }
+
+  if (activeAlipayPayment) {
+    const sameOrder = activeAlipayPayment.targetAccount === targetAccount
+      && Number(activeAlipayPayment.amount) === Number(amount);
+    const replace = await customConfirm(
+      sameOrder
+        ? '当前仍保留着相同金额和目标的支付宝支付入口。仅在原入口已经失效或确定不再支付时才应创建新订单。\n\n选择“取消”将继续使用原支付入口，选择“确定”将创建新订单。'
+        : '当前仍保留着另一个支付宝支付入口。仅在确认原订单不再支付时才应创建新订单。\n\n选择“取消”将继续使用原支付入口，选择“确定”将替换它。',
+      '替换现有支付订单',
+    );
+    if (!replace) {
+      if (IS_ANDROID) {
+        const opened = await openActiveAlipayPayment();
+        if (!opened) {
+          btnBillingAlipayShowPayment.hidden = false;
+          await showAlipayPaymentModal(btnBillingAlipay);
+        }
+      } else {
+        await showAlipayPaymentModal(btnBillingAlipay);
+      }
+      return;
+    }
+  }
+
+  clearActiveAlipayPayment();
   billingAlipayPreview.hidden = true;
-  btnBillingAlipayContinue.hidden = true;
   billingAlipayState.textContent = '正在通过统一认证核对当前校园卡…';
   setAlipayRechargeBusy(true, '正在核对…');
   try {
@@ -4679,18 +4852,26 @@ async function prepareAndOpenAlipayRecharge() {
     const result = await invoke<AlipayRechargeResult>('confirm_alipay_card_recharge', {
       confirmationId: preview.confirmationId,
     });
-    if (!result.paymentUrl.startsWith('https://openapi.alipay.com/gateway.do?')) {
+    if (!isTrustedAlipayPaymentUrl(result.paymentUrl)) {
       billingAlipayState.textContent = '支付宝订单已经创建，但支付平台返回了不受信任的跳转地址。请勿立即重复创建订单。';
       throw new Error('支付平台返回了不受信任的跳转地址');
     }
-    try {
-      await openUrl(result.paymentUrl);
-    } catch (error) {
-      billingAlipayState.textContent = '支付宝订单已经创建，但系统浏览器未能打开。请勿立即重复创建订单。';
-      throw new Error(`支付宝订单已经创建，但系统浏览器未能打开：${String(error)}`);
-    }
+    rememberActiveAlipayPayment({
+      paymentUrl: result.paymentUrl,
+      payerAccount: result.payerAccount,
+      amount: result.amount,
+      targetAccount,
+    });
     billingAlipayState.textContent = `${result.message}。付款到账后，返回 App 继续从校园卡转入网费。`;
-    btnBillingAlipayContinue.hidden = false;
+    if (IS_ANDROID) {
+      const opened = await openActiveAlipayPayment();
+      if (!opened) {
+        btnBillingAlipayShowPayment.hidden = false;
+        await showAlipayPaymentModal(btnBillingAlipay);
+      }
+    } else {
+      await showAlipayPaymentModal(btnBillingAlipay);
+    }
   } catch (error) {
     if (!billingAlipayState.textContent.includes('订单已经创建')) {
       billingAlipayState.textContent = `支付宝充值未开始：${String(error)}`;

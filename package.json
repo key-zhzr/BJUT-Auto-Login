@@ -19,10 +19,12 @@
     "dompurify": "^3.4.11",
     "lucide": "^1.22.0",
     "marked": "^18.0.6",
+    "qrcode": "^1.5.4",
     "sortablejs": "^1.15.7"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/qrcode": "^1.5.5",
     "@types/sortablejs": "^1.15.9",
     "typescript": "~5.6.2",
     "vite": "^6.4.3"

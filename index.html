@@ -554,9 +554,14 @@
                 <div><span>支付宝金额</span><strong id="billing-alipay-preview-amount">--</strong></div>
                 <div><span>后续网费目标</span><strong id="billing-alipay-preview-target">--</strong></div>
               </div>
-              <button id="btn-billing-alipay-continue" class="btn btn-secondary btn-sm billing-alipay-continue" type="button" hidden>
-                <i data-lucide="arrow-right"></i> 校园卡已到账，继续转入网费
-              </button>
+              <div class="billing-alipay-result-actions">
+                <button id="btn-billing-alipay-show-payment" class="btn btn-secondary btn-sm" type="button" hidden>
+                  <i data-lucide="qr-code"></i> 显示支付二维码
+                </button>
+                <button id="btn-billing-alipay-continue" class="btn btn-secondary btn-sm" type="button" hidden>
+                  <i data-lucide="arrow-right"></i> 校园卡已到账，继续转入网费
+                </button>
+              </div>
               <p class="billing-inline-note">支付宝页面由北京工业大学支付平台与支付宝提供；App 不读取支付密码，也不会自动判断是否已付款。</p>
             </div>
           </section>
@@ -1141,6 +1146,53 @@
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" id="btn-confirm-cancel">取消</button>
           <button type="button" class="btn btn-primary" id="btn-confirm-ok">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Desktop Alipay Payment Modal -->
+    <div id="alipay-payment-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="alipay-payment-modal-title" aria-hidden="true">
+      <div class="modal-content glass-card alipay-payment-modal-content">
+        <div class="alipay-payment-modal-header">
+          <div class="alipay-payment-modal-title">
+            <span class="alipay-payment-modal-icon"><i data-lucide="qr-code"></i></span>
+            <div>
+              <h3 id="alipay-payment-modal-title">支付宝订单已创建</h3>
+              <p>使用手机支付宝扫码，或在当前设备打开支付页面。</p>
+            </div>
+          </div>
+          <button id="btn-alipay-payment-close-icon" class="btn-icon" type="button" aria-label="关闭支付窗口">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="alipay-payment-modal-body">
+          <div class="alipay-payment-qr-column">
+            <div id="alipay-payment-qr-shell" class="alipay-payment-qr-shell">
+              <canvas id="alipay-payment-qr" role="img" aria-label="支付宝支付二维码"></canvas>
+              <div id="alipay-payment-qr-fallback" class="alipay-payment-qr-fallback" hidden>
+                <i data-lucide="alert-circle"></i>
+                <span>二维码生成失败，请打开或复制支付链接</span>
+              </div>
+            </div>
+            <strong>手机支付宝扫一扫</strong>
+            <small>二维码完全在本机生成</small>
+          </div>
+          <div class="alipay-payment-order-card">
+            <div><span>充值校园卡</span><strong id="alipay-payment-payer">--</strong></div>
+            <div><span>支付金额</span><strong id="alipay-payment-amount">--</strong></div>
+            <div><span>后续网费目标</span><strong id="alipay-payment-target">--</strong></div>
+            <p>支付链接包含本次订单的签名信息，请勿公开分享，也不要在结果不明确时重复创建订单。</p>
+          </div>
+        </div>
+        <p id="alipay-payment-modal-status" class="alipay-payment-modal-status" aria-live="polite">等待扫码或选择其他支付方式。</p>
+        <div class="modal-actions alipay-payment-modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-alipay-payment-close">稍后支付</button>
+          <button type="button" class="btn btn-secondary" id="btn-alipay-payment-copy">
+            <i data-lucide="copy"></i><span>复制支付链接</span>
+          </button>
+          <button type="button" class="btn btn-primary" id="btn-alipay-payment-open">
+            <i data-lucide="external-link"></i><span>打开支付页面</span>
+          </button>
         </div>
       </div>
     </div>

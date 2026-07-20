@@ -1283,8 +1283,15 @@ button.billing-package-option:hover,
   font-size: 0.88rem;
 }
 
-.billing-alipay-continue {
+.billing-alipay-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
   margin-top: 0.75rem;
+}
+
+.billing-alipay-result-actions .btn {
+  min-width: 0;
 }
 
 .billing-recharge-form {
@@ -2237,6 +2244,259 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
 }
 .modal-content h3 { margin-bottom: 1rem; }
 .modal-actions { display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1.5rem; }
+
+.alipay-payment-modal-content {
+  width: min(92%, 650px);
+  max-width: 650px;
+  max-height: min(90dvh, 700px);
+  overflow-y: auto;
+}
+
+.alipay-payment-modal-header,
+.alipay-payment-modal-title {
+  display: flex;
+  align-items: flex-start;
+}
+
+.alipay-payment-modal-header {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.alipay-payment-modal-title {
+  min-width: 0;
+  gap: 0.75rem;
+}
+
+.alipay-payment-modal-title h3 {
+  margin-bottom: 0.25rem;
+}
+
+.alipay-payment-modal-title p {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.alipay-payment-modal-icon {
+  display: grid;
+  place-items: center;
+  width: 2.45rem;
+  height: 2.45rem;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  color: #60a5fa;
+  background: rgba(37, 99, 235, 0.15);
+}
+
+.alipay-payment-modal-header > .btn-icon {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+}
+
+.alipay-payment-modal-body {
+  display: grid;
+  grid-template-columns: minmax(205px, 0.92fr) minmax(0, 1.08fr);
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.1rem;
+}
+
+.alipay-payment-qr-column {
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.alipay-payment-qr-column > strong {
+  font-size: 0.88rem;
+}
+
+.alipay-payment-qr-column > small {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.alipay-payment-qr-shell {
+  display: grid;
+  place-items: center;
+  width: min(100%, 250px);
+  aspect-ratio: 1;
+  padding: 0.6rem;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(2, 6, 23, 0.28);
+}
+
+.alipay-payment-qr-shell canvas {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
+}
+
+.alipay-payment-qr-shell.has-error canvas {
+  display: none;
+}
+
+.alipay-payment-qr-fallback {
+  display: grid;
+  justify-items: center;
+  gap: 0.55rem;
+  padding: 1rem;
+  color: #475569;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.alipay-payment-qr-fallback[hidden] {
+  display: none;
+}
+
+.alipay-payment-qr-fallback svg {
+  width: 2rem;
+  height: 2rem;
+  color: #f59e0b;
+}
+
+.alipay-payment-order-card {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.13);
+}
+
+.alipay-payment-order-card > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.alipay-payment-order-card span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.alipay-payment-order-card strong {
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.alipay-payment-order-card p {
+  padding-top: 0.65rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  color: #fbbf24;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.alipay-payment-modal-status {
+  min-height: 1.3rem;
+  margin-top: 0.9rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.alipay-payment-modal-actions {
+  flex-wrap: wrap;
+  margin-top: 0.8rem;
+}
+
+.alipay-payment-modal-actions .btn {
+  min-width: 0;
+}
+
+@media (max-width: 560px), (max-height: 610px) {
+  .alipay-payment-modal-content {
+    padding: 1rem;
+  }
+
+  .alipay-payment-modal-body {
+    grid-template-columns: minmax(155px, 0.8fr) minmax(0, 1.2fr);
+    gap: 0.75rem;
+  }
+
+  .alipay-payment-qr-shell {
+    width: min(100%, 190px);
+    padding: 0.45rem;
+  }
+
+  .alipay-payment-modal-actions {
+    gap: 0.55rem;
+  }
+
+  .alipay-payment-modal-actions .btn {
+    flex: 1 1 9rem;
+    padding: 0.65rem 0.75rem;
+  }
+}
+
+@media (max-width: 430px) {
+  .alipay-payment-modal-content {
+    max-height: calc(100dvh - 1.25rem);
+    padding: 0.85rem;
+  }
+
+  .alipay-payment-modal-title {
+    gap: 0.55rem;
+  }
+
+  .alipay-payment-modal-title p {
+    font-size: 0.74rem;
+  }
+
+  .alipay-payment-modal-body {
+    grid-template-columns: 1fr;
+    gap: 0.55rem;
+    margin-top: 0.7rem;
+  }
+
+  .alipay-payment-qr-shell {
+    width: min(100%, 165px);
+  }
+
+  .alipay-payment-qr-column {
+    gap: 0.2rem;
+  }
+
+  .alipay-payment-order-card {
+    gap: 0.4rem;
+    padding: 0.65rem;
+  }
+
+  .alipay-payment-order-card p {
+    padding-top: 0.45rem;
+  }
+
+  .alipay-payment-modal-status {
+    margin-top: 0.55rem;
+    line-height: 1.35;
+  }
+
+  .alipay-payment-modal-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 0.55rem;
+  }
+
+  .alipay-payment-modal-actions .btn {
+    width: 100%;
+    font-size: 0.78rem;
+  }
+
+  #btn-alipay-payment-open {
+    grid-column: 1 / -1;
+  }
+}
 
 .update-modal-content {
   max-width: 720px;
