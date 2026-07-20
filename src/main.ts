@@ -1635,8 +1635,11 @@ const networkProfileForm = document.getElementById('network-profile-form') as HT
 const settingUsageAlerts = document.getElementById('setting-usage-alerts') as HTMLInputElement;
 const settingBalanceThreshold = document.getElementById('setting-balance-threshold') as HTMLInputElement;
 const settingFlowThreshold = document.getElementById('setting-flow-threshold') as HTMLInputElement;
+const permissionHealthGroup = document.getElementById('permission-health-group')!;
 const permissionHealthList = document.getElementById('permission-health-list')!;
 const permissionHealthSummary = document.getElementById('permission-health-summary')!;
+const btnTogglePermissions = document.getElementById('btn-toggle-permissions') as HTMLButtonElement;
+const permissionHealthToggleLabel = document.getElementById('permission-health-toggle-label')!;
 const btnRefreshPermissions = document.getElementById('btn-refresh-permissions') as HTMLButtonElement;
 const settingAutoLogin = document.getElementById('setting-auto-login') as HTMLInputElement;
 const settingWifiChangeDetect = document.getElementById('setting-wifi-change-detect') as HTMLInputElement;
@@ -2218,6 +2221,13 @@ async function readPermissionHealth(): Promise<PermissionHealthItem[]> {
   return items;
 }
 
+function setPermissionHealthCollapsed(collapsed: boolean) {
+  permissionHealthGroup.classList.toggle('is-collapsed', collapsed);
+  btnTogglePermissions.setAttribute('aria-expanded', String(!collapsed));
+  permissionHealthList.setAttribute('aria-hidden', String(collapsed));
+  permissionHealthToggleLabel.textContent = collapsed ? '展开详情' : '收起详情';
+}
+
 async function refreshPermissionHealth() {
   btnRefreshPermissions.disabled = true;
   permissionHealthSummary.textContent = '正在检查系统权限…';
@@ -2226,12 +2236,15 @@ async function refreshPermissionHealth() {
     permissionHealthList.innerHTML = '';
     const missingRequired = items.filter(item => item.required && !item.granted).length;
     const missingOptional = items.filter(item => !item.required && !item.granted).length;
-    permissionHealthSummary.className = `permission-health-summary ${missingRequired ? 'error' : missingOptional ? 'warning' : 'success'}`;
-    permissionHealthSummary.textContent = missingRequired
-      ? `${missingRequired} 项必要权限需要处理`
-      : missingOptional
-        ? `必要权限正常，${missingOptional} 项增强权限未开启`
-        : '所有权限状态正常';
+    const allGranted = items.length > 0 && missingRequired === 0 && missingOptional === 0;
+    permissionHealthSummary.className = `permission-health-summary ${missingRequired ? 'error' : missingOptional || !items.length ? 'warning' : 'success'}`;
+    permissionHealthSummary.textContent = !items.length
+      ? '未获取到权限状态，请重新检查'
+      : missingRequired
+        ? `${missingRequired} 项必要权限需要处理`
+        : missingOptional
+          ? `必要权限正常，${missingOptional} 项增强权限未开启`
+          : '所有权限状态正常';
     items.forEach(item => {
       const row = document.createElement('div');
       row.className = 'permission-health-row';
@@ -2257,9 +2270,11 @@ async function refreshPermissionHealth() {
       row.append(info, actions);
       permissionHealthList.appendChild(row);
     });
+    setPermissionHealthCollapsed(allGranted);
   } catch (error) {
     permissionHealthSummary.className = 'permission-health-summary error';
     permissionHealthSummary.textContent = `权限检查失败：${String(error)}`;
+    setPermissionHealthCollapsed(false);
   } finally {
     btnRefreshPermissions.disabled = false;
   }
@@ -2551,6 +2566,9 @@ function setupEventListeners() {
     if (button) void disconnectBillingSession(button);
   });
 
+  btnTogglePermissions.addEventListener('click', () => {
+    setPermissionHealthCollapsed(!permissionHealthGroup.classList.contains('is-collapsed'));
+  });
   btnRefreshPermissions.addEventListener('click', () => void refreshPermissionHealth());
   permissionHealthList.addEventListener('click', async event => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.action-permission-settings');

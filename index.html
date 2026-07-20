@@ -922,10 +922,16 @@
                   <h3>权限健康中心</h3>
                   <p>集中检查网络识别、后台运行、通知与应用更新所需权限</p>
                 </div>
-                <button class="btn btn-secondary btn-sm" id="btn-refresh-permissions">重新检查</button>
+                <div class="setting-group-actions">
+                  <button class="btn btn-secondary btn-sm permission-health-toggle" id="btn-toggle-permissions" type="button" aria-expanded="true" aria-controls="permission-health-list">
+                    <i data-lucide="chevron-up" aria-hidden="true"></i>
+                    <span id="permission-health-toggle-label">收起详情</span>
+                  </button>
+                  <button class="btn btn-secondary btn-sm" id="btn-refresh-permissions" type="button">重新检查</button>
+                </div>
               </div>
               <div id="permission-health-summary" class="permission-health-summary">正在检查系统权限…</div>
-              <div id="permission-health-list" class="permission-health-list"></div>
+              <div id="permission-health-list" class="permission-health-list" aria-hidden="false"></div>
             </div>
 
             <div class="settings-group glass-card" style="margin-top: 1rem;">
@@ -1055,7 +1061,7 @@
           <input type="hidden" id="network-profile-index" value="-1">
           <div class="form-group">
             <label for="network-profile-name">档案名称</label>
-            <input id="network-profile-name" required maxlength="40" placeholder="例如：教学区无线">
+            <input id="network-profile-name" type="text" required maxlength="40" placeholder="例如：教学区无线">
           </div>
           <div class="profile-form-grid">
             <div class="form-group">
