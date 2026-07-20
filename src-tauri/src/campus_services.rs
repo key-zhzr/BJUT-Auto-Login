@@ -252,24 +252,22 @@ struct CampusSession {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RechargeChannel {
-    Legacy,
-    Current,
+struct RechargeApi {
+    target_query_path: &'static str,
+    factory_code: &'static str,
 }
 
-impl RechargeChannel {
+impl RechargeApi {
     fn from_route(route: &str) -> Result<Self, CampusServiceError> {
         match route {
-            "/pages/recharge/networkFeeCharge/networkFeeCharge" => Ok(Self::Legacy),
-            "/pages/recharge/networkFeeCharge/networkFeeChargeNew" => Ok(Self::Current),
+            // The current portal still advertises the legacy-named SPA route,
+            // while both captured recharge paths use get085Detail with N006.
+            "/pages/recharge/networkFeeCharge/networkFeeCharge"
+            | "/pages/recharge/networkFeeCharge/networkFeeChargeNew" => Ok(Self {
+                target_query_path: "/channel/get085Detail",
+                factory_code: "N006",
+            }),
             _ => Err(CampusServiceError::protocol("充值入口返回了未知的业务通道")),
-        }
-    }
-
-    fn factory_code(self) -> &'static str {
-        match self {
-            Self::Legacy => "N003",
-            Self::Current => "N006",
         }
     }
 }
@@ -280,7 +278,7 @@ struct RechargeContext {
     card_balance: String,
     allowed_time: String,
     openid: String,
-    channel: RechargeChannel,
+    api: RechargeApi,
 }
 
 #[derive(Debug)]
@@ -294,7 +292,7 @@ pub(crate) struct PendingRecharge {
     target_balance: String,
     target_status_code: String,
     openid: String,
-    channel: RechargeChannel,
+    api: RechargeApi,
 }
 
 impl PendingRecharge {
@@ -404,7 +402,7 @@ pub(crate) async fn prepare_recharge(
         target_balance,
         target_status_code,
         openid: context.openid,
-        channel: context.channel,
+        api: context.api,
     };
     Ok((pending, preview))
 }
@@ -417,7 +415,7 @@ pub(crate) async fn execute_recharge(
             "充值确认已过期，请重新核对账户与金额",
         ));
     }
-    let factory = pending.channel.factory_code();
+    let factory = pending.api.factory_code;
     let create = yd_post(
         &mut pending.session,
         "/netpay/createPreThirdTrade",
@@ -430,7 +428,7 @@ pub(crate) async fn execute_recharge(
             "orgid": "2",
             "netbalance": format_balance_for_trade(&pending.target_balance),
             "netaccstatus": pending.target_status_code,
-            "paytype": "2"
+            "paytype": 2
         }),
     )
     .await
@@ -464,7 +462,7 @@ pub(crate) async fn execute_recharge(
         "/netpay/consumeFromYktToNet",
         json!({
             "paytxamt": pending.amount,
-            "payWay": "2",
+            "payWay": 2,
             "openid": pending.openid,
             "orgid": "2",
             "idserial": pending.payer_account,
@@ -583,7 +581,7 @@ async fn enter_recharge(
         .get("url")
         .and_then(Value::as_str)
         .ok_or_else(|| CampusServiceError::protocol("充值初始化缺少业务通道"))?;
-    let channel = RechargeChannel::from_route(route)?;
+    let api = RechargeApi::from_route(route)?;
     let data = opened
         .get("data")
         .and_then(Value::as_object)
@@ -601,7 +599,7 @@ async fn enter_recharge(
             .unwrap_or("以服务器开放时间为准")
             .to_string(),
         openid,
-        channel,
+        api,
     })
 }
 
@@ -610,66 +608,29 @@ async fn query_target_account(
     context: &RechargeContext,
     target: &str,
 ) -> Result<(String, String, String), CampusServiceError> {
-    match context.channel {
-        RechargeChannel::Legacy => {
-            let response = yd_post(
-                session,
-                "/channel/queryNetAccBalance",
-                json!({
-                    "netaccno": target,
-                    "openid": context.openid,
-                    "factorycode": context.channel.factory_code()
-                }),
-            )
-            .await?;
-            ensure_success(&response, "查询目标网费账户")?;
-            let raw = response
-                .pointer("/resultData/netaccbal")
-                .and_then(Value::as_str)
-                .ok_or_else(|| CampusServiceError::protocol("网费余额缺少 netaccbal"))?;
-            let mut parts = raw.split('|');
-            let status_code = parts.next().unwrap_or_default().trim().to_string();
-            let balance = raw
-                .rsplit('|')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            if balance.is_empty() || status_code.is_empty() {
-                return Err(CampusServiceError::protocol("网费余额格式无效"));
-            }
-            Ok((
-                trim_currency(&balance),
-                status_code.clone(),
-                status_label(&status_code).to_string(),
-            ))
-        }
-        RechargeChannel::Current => {
-            let response = yd_post(
-                session,
-                "/channel/get085Detail",
-                json!({
-                    "idserial": target,
-                    "netaccno": target,
-                    "factorycode": context.channel.factory_code()
-                }),
-            )
-            .await?;
-            ensure_success(&response, "查询目标网费账户")?;
-            let balance = trim_currency(&required_json_string(
-                response.pointer("/resultData/balance"),
-                "balance",
-            )?);
-            let user_type = response
-                .pointer("/resultData/user_type")
-                .and_then(Value::as_str)
-                .unwrap_or("普通账号");
-            if user_type == "经费账号" {
-                return Err(CampusServiceError::rejected("经费账号不能通过校园卡充值"));
-            }
-            Ok((balance, String::new(), "可充值".to_string()))
-        }
+    let response = yd_post(
+        session,
+        context.api.target_query_path,
+        json!({
+            "idserial": target,
+            "netaccno": target,
+            "factorycode": context.api.factory_code
+        }),
+    )
+    .await?;
+    ensure_success(&response, "查询目标网费账户")?;
+    let balance = trim_currency(&required_json_string(
+        response.pointer("/resultData/balance"),
+        "balance",
+    )?);
+    let user_type = response
+        .pointer("/resultData/user_type")
+        .and_then(Value::as_str)
+        .unwrap_or("普通账号");
+    if user_type == "经费账号" {
+        return Err(CampusServiceError::rejected("经费账号不能通过校园卡充值"));
     }
+    Ok((balance, String::new(), "可充值".to_string()))
 }
 
 async fn yd_post(
@@ -1322,15 +1283,6 @@ fn format_balance_for_trade(value: &str) -> String {
     }
 }
 
-fn status_label(code: &str) -> &'static str {
-    match code {
-        "0" => "停机",
-        "1" => "正常",
-        "2" => "欠费停用",
-        _ => "异常",
-    }
-}
-
 fn confirmation_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1504,19 +1456,15 @@ mod tests {
     }
 
     #[test]
-    fn selects_recharge_channel_from_server_route() {
-        assert_eq!(
-            RechargeChannel::from_route("/pages/recharge/networkFeeCharge/networkFeeCharge")
-                .unwrap()
-                .factory_code(),
-            "N003"
-        );
-        assert_eq!(
-            RechargeChannel::from_route("/pages/recharge/networkFeeCharge/networkFeeChargeNew")
-                .unwrap()
-                .factory_code(),
-            "N006"
-        );
+    fn both_recharge_routes_use_the_current_api() {
+        for route in [
+            "/pages/recharge/networkFeeCharge/networkFeeCharge",
+            "/pages/recharge/networkFeeCharge/networkFeeChargeNew",
+        ] {
+            let api = RechargeApi::from_route(route).unwrap();
+            assert_eq!(api.target_query_path, "/channel/get085Detail");
+            assert_eq!(api.factory_code, "N006");
+        }
     }
 
     #[test]
