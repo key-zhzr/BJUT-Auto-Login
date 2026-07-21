@@ -1264,7 +1264,8 @@ button.billing-package-option:hover,
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.7rem;
-  margin-bottom: 1rem;
+  margin-top: 0.8rem;
+  margin-bottom: 0.65rem;
 }
 
 .billing-payment-method {
@@ -1355,11 +1356,14 @@ button.billing-package-option:hover,
 }
 
 .billing-recharge-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr) auto;
-  align-items: end;
-  gap: 0.65rem;
+  display: block;
   margin-top: 0.75rem;
+}
+
+.billing-recharge-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr);
+  gap: 0.65rem;
 }
 
 .billing-recharge-form label {
@@ -1388,7 +1392,45 @@ button.billing-package-option:hover,
 
 .billing-recharge-form > .btn {
   min-height: 2.35rem;
-  align-self: end;
+  margin-top: 0.75rem;
+}
+
+.billing-recharge-progress {
+  margin-top: 0.85rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid rgba(59, 130, 246, 0.24);
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.billing-recharge-progress[hidden] { display: none; }
+
+.billing-recharge-progress-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.billing-recharge-progress-label strong { color: var(--text-main); }
+
+.billing-recharge-progress-track {
+  height: 0.38rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.billing-recharge-progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #3b82f6, #22c55e);
+  transition: width 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .billing-recharge-preview {
@@ -2166,9 +2208,50 @@ input:checked + .slider:before { transform: translateX(24px); }
   .billing-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .billing-service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .billing-recharge-form { grid-template-columns: 1fr; align-items: stretch; }
+  .billing-recharge-fields { grid-template-columns: 1fr; }
   .billing-recharge-form .btn { width: 100%; }
   .billing-recharge-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .billing-payment-methods { grid-template-columns: 1fr; gap: 0.5rem; }
+
+  body.is-android.billing-center-active #nav { display: none; }
+  body.is-android.billing-center-active .billing-mobile-nav {
+    position: fixed;
+    left: 50%;
+    right: auto;
+    top: auto;
+    bottom: max(0.65rem, env(safe-area-inset-bottom));
+    z-index: 810;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    width: min(calc(100% - 1.5rem), 34rem);
+    height: 4.55rem;
+    margin: 0;
+    padding: 0.38rem;
+    border-radius: 18px;
+    transform: translateX(-50%) translateZ(0);
+    background: rgba(15, 23, 42, 0.9);
+    box-shadow: 0 16px 38px rgba(2, 6, 23, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  }
+  body.is-android.billing-center-active .billing-section-nav-button {
+    height: 100%;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.18rem;
+    padding: 0.34rem 0.08rem;
+    border-radius: 13px;
+    font-size: 0.58rem;
+    line-height: 1.05;
+  }
+  body.is-android.billing-center-active .billing-section-nav-button svg {
+    width: 20px;
+    height: 20px;
+  }
+  body.is-android.billing-center-active .billing-section-nav-button span {
+    overflow: hidden;
+    width: 100%;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 @media (max-width: 480px) {
@@ -2211,6 +2294,14 @@ input:checked + .slider:before { transform: translateX(24px); }
   .billing-center-header { grid-template-columns: minmax(0, 1fr) auto; }
   .billing-center-header #btn-refresh-billing-center { width: auto; min-width: 6.6rem; padding-left: 0.65rem; padding-right: 0.65rem; }
   .billing-mobile-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body.is-android.billing-center-active .billing-mobile-nav {
+    bottom: max(0.45rem, env(safe-area-inset-bottom));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    width: calc(100% - 1rem);
+    height: 4.35rem;
+    padding: 0.32rem;
+    border-radius: 16px;
+  }
   .billing-overview-actions { grid-template-columns: 1fr; }
   .billing-center-panel-header { align-items: flex-start; flex-direction: column; }
   .billing-center-panel-header #btn-toggle-billing-mauth { width: 100%; }
@@ -2381,6 +2472,7 @@ body.is-android .permission-health-row {
 }
 body.is-android .page { animation-duration: 0.16s; }
 body.is-android main { contain: layout style; }
+body.is-android.billing-center-active main { contain: style; }
 body.is-android .logs-container { contain: paint style; }
 body.is-android .logs-content { contain: layout paint style; }
 body.is-android .log-entry {

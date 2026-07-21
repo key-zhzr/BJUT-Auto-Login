@@ -502,59 +502,45 @@
                 <p>选择校园卡直接转入网费，或先通过支付宝为当前校园卡充值。</p>
               </div>
             </div>
-            <div class="billing-payment-methods" role="tablist" aria-label="充值方式">
-              <button class="billing-payment-method active" type="button" role="tab" aria-selected="true" data-recharge-method-target="campus-card">
-                <i data-lucide="credit-card"></i>
-                <span><strong>校园卡转入网费</strong><small>即时核对目标账户并扣校园卡余额</small></span>
-              </button>
-              <button class="billing-payment-method" type="button" role="tab" aria-selected="false" data-recharge-method-target="alipay">
-                <i data-lucide="smartphone"></i>
-                <span><strong>支付宝充值</strong><small>先充当前校园卡，到账后再转入网费</small></span>
-              </button>
-            </div>
-
-            <div class="billing-payment-panel" data-recharge-method="campus-card">
-              <h3>从校园卡转入网费</h3>
-              <p id="billing-recharge-state" class="billing-inline-note">填写目标学工号和金额后，先核对账户再确认扣费。</p>
+            <div class="billing-payment-panel">
+              <h3 id="billing-recharge-method-title">从校园卡转入网费</h3>
+              <p id="billing-recharge-state" class="billing-inline-note" aria-live="polite">填写目标学工号和金额后，先核对账户再确认扣费。</p>
               <form id="billing-recharge-form" class="billing-recharge-form" autocomplete="off">
-                <label>
-                  <span>目标学工号</span>
-                  <input id="billing-recharge-account" inputmode="text" autocomplete="off" maxlength="20" placeholder="需要充值的学工号" required>
-                </label>
-                <label>
-                  <span>充值金额（元）</span>
-                  <input id="billing-recharge-amount" inputmode="decimal" autocomplete="off" maxlength="6" placeholder="0.01–500" required>
-                </label>
+                <div class="billing-recharge-fields">
+                  <label>
+                    <span>目标学工号</span>
+                    <input id="billing-recharge-account" inputmode="text" autocomplete="off" maxlength="20" placeholder="需要充值的学工号" required>
+                  </label>
+                  <label>
+                    <span>充值金额（元）</span>
+                    <input id="billing-recharge-amount" inputmode="decimal" autocomplete="off" maxlength="6" placeholder="0.01–500" required>
+                  </label>
+                </div>
+                <div class="billing-payment-methods" role="tablist" aria-label="充值方式">
+                  <button class="billing-payment-method active" type="button" role="tab" aria-selected="true" data-recharge-method-target="campus-card">
+                    <i data-lucide="credit-card"></i>
+                    <span><strong>校园卡转入</strong><small>直接从当前校园卡转入目标网费账户</small></span>
+                  </button>
+                  <button class="billing-payment-method" type="button" role="tab" aria-selected="false" data-recharge-method-target="alipay">
+                    <i data-lucide="smartphone"></i>
+                    <span><strong>支付宝</strong><small>先为当前校园卡充值，再自动衔接网费转入</small></span>
+                  </button>
+                </div>
+                <p id="billing-recharge-method-description" class="billing-inline-note">将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。</p>
                 <button id="btn-billing-recharge" class="btn btn-primary btn-sm" type="submit">核对充值信息</button>
               </form>
+              <div id="billing-recharge-progress" class="billing-recharge-progress" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="billing-recharge-progress-label">
+                  <span id="billing-recharge-progress-text">准备中…</span>
+                  <strong id="billing-recharge-progress-percent">0%</strong>
+                </div>
+                <div class="billing-recharge-progress-track"><span id="billing-recharge-progress-bar"></span></div>
+              </div>
               <div id="billing-recharge-preview" class="billing-recharge-preview" hidden aria-live="polite">
                 <div><span>校园卡账号</span><strong id="billing-recharge-payer">--</strong></div>
                 <div><span>校园卡余额</span><strong id="billing-recharge-card-balance">--</strong></div>
                 <div><span>目标账户状态</span><strong id="billing-recharge-target-status">--</strong></div>
                 <div><span>目标网费余额</span><strong id="billing-recharge-target-balance">--</strong></div>
-              </div>
-              <p class="billing-inline-note">创建订单和校园卡扣费均只会在二次确认后执行一次；结果不明确时 App 不会自动重试。</p>
-            </div>
-
-            <div class="billing-payment-panel" data-recharge-method="alipay" hidden>
-              <h3>支付宝充值校园卡</h3>
-              <p id="billing-alipay-state" class="billing-inline-note">支付宝会先充值当前账号的校园卡；支付完成后 App 会在当前流程检测到账，再将同一金额转入目标网费账户。</p>
-              <form id="billing-alipay-form" class="billing-recharge-form" autocomplete="off">
-                <label>
-                  <span>最终网费目标学工号</span>
-                  <input id="billing-alipay-target-account" inputmode="text" autocomplete="off" maxlength="20" placeholder="付款后转入的学工号" required>
-                </label>
-                <label>
-                  <span>支付宝充值金额（元）</span>
-                  <input id="billing-alipay-amount" inputmode="decimal" autocomplete="off" maxlength="6" placeholder="0.01–500" required>
-                </label>
-                <button id="btn-billing-alipay" class="btn btn-primary btn-sm" type="submit">核对并前往支付宝</button>
-              </form>
-              <div id="billing-alipay-preview" class="billing-recharge-preview" hidden aria-live="polite">
-                <div><span>充值校园卡账号</span><strong id="billing-alipay-payer">--</strong></div>
-                <div><span>当前校园卡余额</span><strong id="billing-alipay-card-balance">--</strong></div>
-                <div><span>支付宝金额</span><strong id="billing-alipay-preview-amount">--</strong></div>
-                <div><span>后续网费目标</span><strong id="billing-alipay-preview-target">--</strong></div>
               </div>
               <div class="billing-alipay-result-actions">
                 <button id="btn-billing-alipay-show-payment" class="btn btn-secondary btn-sm" type="button" hidden>
@@ -564,7 +550,7 @@
                   <i data-lucide="check-circle"></i> 检测到账并转入网费
                 </button>
               </div>
-              <p class="billing-inline-note">支付宝页面由北京工业大学支付平台与支付宝提供；App 不读取支付密码，只通过校园卡余额变化核对到账，并在转入网费前再次确认。</p>
+              <p class="billing-inline-note">任何充值只提交一次；结果不明确时 App 不会自动重试。支付宝由学校支付平台发起，App 不读取支付密码。</p>
             </div>
           </section>
 

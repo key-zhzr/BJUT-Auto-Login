@@ -234,6 +234,61 @@ function saveAccountsInBackground(accs: any[]) {
   });
 }
 
+function scheduleCurrentCampusAccountDiscovery() {
+  if (!(window as any).__TAURI__ || currentNetworkState !== NetworkState.Online) return;
+  if (campusAccountDiscoveryPromise) return;
+  const now = Date.now();
+  if (now - lastCampusAccountDiscoveryAt < 60_000) return;
+  lastCampusAccountDiscoveryAt = now;
+  campusAccountDiscoveryPromise = discoverAndOfferCurrentCampusAccount()
+    .catch(error => console.debug('Current campus account discovery skipped:', error))
+    .finally(() => { campusAccountDiscoveryPromise = null; });
+}
+
+async function discoverAndOfferCurrentCampusAccount() {
+  const candidate = await invoke<DiscoveredCampusAccount | null>('discover_current_campus_account');
+  if (!candidate) return;
+  if (!candidate.user || !candidate.pass) return;
+  if (accountsCache.some(account => account.user === candidate.user)) {
+    localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
+    return;
+  }
+  if (sessionStorage.getItem(DISMISSED_DISCOVERED_ACCOUNT_KEY) === candidate.user) return;
+
+  const firstLaunch = localStorage.getItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY) === 'true';
+  const confirmed = await customConfirm(
+    `${firstLaunch ? '首次联网时' : '本次联网时'}检测到当前已登录的校园网账号 ${candidate.user}，但它不在账号列表中。\n\n是否从当前计费系统会话读取凭据，并保存到 App 的安全凭据存储？`,
+    '添加当前校园网账号',
+  );
+  localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
+  if (!confirmed) {
+    sessionStorage.setItem(DISMISSED_DISCOVERED_ACCOUNT_KEY, candidate.user);
+    return;
+  }
+
+  const previousAccounts = accountsCache.map(account => ({ ...account }));
+  const nextAccounts = [
+    ...previousAccounts,
+    {
+      user: candidate.user,
+      pass: candidate.pass,
+      isDefault: previousAccounts.length === 0,
+      isDisabled: false,
+    },
+  ];
+  try {
+    await saveAccounts(nextAccounts);
+    sessionStorage.removeItem(DISMISSED_DISCOVERED_ACCOUNT_KEY);
+    renderAccounts();
+    await customAlert(`账号 ${candidate.user} 已保存到安全凭据存储。`, '账号已添加');
+  } catch (error) {
+    accountsCache = previousAccounts;
+    await loadConfigFromRust();
+    renderAccounts();
+    await customAlert(`当前账号保存失败，账号列表未更改：${String(error)}`, '添加账号失败');
+  }
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   bytes.forEach(byte => { binary += String.fromCharCode(byte); });
@@ -552,6 +607,14 @@ interface RechargeResult {
   amount: string;
 }
 
+interface RechargeBalanceSnapshot {
+  payerAccount: string;
+  cardBalance: string;
+  targetAccount: string;
+  targetBalance: string;
+  targetStatus: string;
+}
+
 interface AlipayRechargePreview {
   confirmationId: string;
   payerAccount: string;
@@ -573,6 +636,11 @@ interface ActiveAlipayPayment {
   amount: string;
   targetAccount: string;
   cardBalanceBefore: string;
+}
+
+interface DiscoveredCampusAccount {
+  user: string;
+  pass: string;
 }
 
 type BillingRecordKind = 'usage' | 'monthly' | 'payments' | 'operations' | 'stopLogs' | 'reopenLogs' | 'packageLogs';
@@ -996,6 +1064,7 @@ async function listenToRustEvents() {
       isChecking = false;
       if (state === NetworkState.Online) {
         updateUserInfo().catch(() => {});
+        scheduleCurrentCampusAccountDiscovery();
       }
 
       const moreSsid = document.getElementById('more-ssid');
@@ -1027,7 +1096,7 @@ async function listenToRustEvents() {
       if (!message) return;
       updateBillingRefreshProgress(event.payload.percent ?? 0, true);
       billingCenterMessage.textContent = message;
-      billingCenterMessage.hidden = false;
+      syncBillingCenterMessageVisibility();
     });
 
     listen<AccountHealth[]>('account-health-change', event => {
@@ -1068,6 +1137,7 @@ async function listenToRustEvents() {
         updateNetworkStatus(state, loginType);
         if (state === NetworkState.Online) {
           updateUserInfo().catch(() => {});
+          scheduleCurrentCampusAccountDiscovery();
         }
 
         const moreSsid = document.getElementById('more-ssid');
@@ -1592,10 +1662,16 @@ const btnBillingConsumeLimit = document.getElementById('btn-billing-consume-limi
 const billingDeviceCount = document.getElementById('billing-device-count')!;
 const billingDeviceList = document.getElementById('billing-device-list')!;
 const billingRechargeState = document.getElementById('billing-recharge-state')!;
+const billingRechargeMethodTitle = document.getElementById('billing-recharge-method-title')!;
+const billingRechargeMethodDescription = document.getElementById('billing-recharge-method-description')!;
 const billingRechargeForm = document.getElementById('billing-recharge-form') as HTMLFormElement;
 const billingRechargeAccount = document.getElementById('billing-recharge-account') as HTMLInputElement;
 const billingRechargeAmount = document.getElementById('billing-recharge-amount') as HTMLInputElement;
 const btnBillingRecharge = document.getElementById('btn-billing-recharge') as HTMLButtonElement;
+const billingRechargeProgress = document.getElementById('billing-recharge-progress')!;
+const billingRechargeProgressText = document.getElementById('billing-recharge-progress-text')!;
+const billingRechargeProgressPercent = document.getElementById('billing-recharge-progress-percent')!;
+const billingRechargeProgressBar = document.getElementById('billing-recharge-progress-bar')!;
 const billingRechargePreview = document.getElementById('billing-recharge-preview')!;
 const billingRechargePayer = document.getElementById('billing-recharge-payer')!;
 const billingRechargeCardBalance = document.getElementById('billing-recharge-card-balance')!;
@@ -1605,19 +1681,6 @@ type RechargeMethod = 'campus-card' | 'alipay';
 const billingRechargeMethodButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('[data-recharge-method-target]'),
 );
-const billingRechargeMethodPanels = Array.from(
-  document.querySelectorAll<HTMLElement>('[data-recharge-method]'),
-);
-const billingAlipayState = document.getElementById('billing-alipay-state')!;
-const billingAlipayForm = document.getElementById('billing-alipay-form') as HTMLFormElement;
-const billingAlipayTargetAccount = document.getElementById('billing-alipay-target-account') as HTMLInputElement;
-const billingAlipayAmount = document.getElementById('billing-alipay-amount') as HTMLInputElement;
-const btnBillingAlipay = document.getElementById('btn-billing-alipay') as HTMLButtonElement;
-const billingAlipayPreview = document.getElementById('billing-alipay-preview')!;
-const billingAlipayPayer = document.getElementById('billing-alipay-payer')!;
-const billingAlipayCardBalance = document.getElementById('billing-alipay-card-balance')!;
-const billingAlipayPreviewAmount = document.getElementById('billing-alipay-preview-amount')!;
-const billingAlipayPreviewTarget = document.getElementById('billing-alipay-preview-target')!;
 const btnBillingAlipayShowPayment = document.getElementById('btn-billing-alipay-show-payment') as HTMLButtonElement;
 const btnBillingAlipayContinue = document.getElementById('btn-billing-alipay-continue') as HTMLButtonElement;
 const alipayPaymentModal = document.getElementById('alipay-payment-modal')!;
@@ -1712,6 +1775,7 @@ let billingRecordYearSelect: CustomSelect;
 let billingRecordPageSizeSelect: CustomSelect;
 let billingQuestionSelects: CustomSelect[] = [];
 let billingCenterData: BillingCenterData | null = null;
+let activeRechargeMethod: RechargeMethod = 'campus-card';
 let activeAlipayPayment: ActiveAlipayPayment | null = null;
 let alipayPaymentModalReturnFocus: HTMLElement | null = null;
 let alipayCompletionBusy = false;
@@ -1723,6 +1787,10 @@ let billingRecordQueryBusy = false;
 let billingCenterLoading = false;
 let selectedBillingPackageId = '';
 let activeBillingWorkbenchSection: BillingWorkbenchSection = 'overview';
+let campusAccountDiscoveryPromise: Promise<void> | null = null;
+let lastCampusAccountDiscoveryAt = 0;
+const FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY = 'bjut_first_launch_account_discovery_pending';
+const DISMISSED_DISCOVERED_ACCOUNT_KEY = 'bjut_dismissed_discovered_account';
 
 // Add Modal
 const addModal = document.getElementById('add-modal')!;
@@ -1851,6 +1919,7 @@ async function init() {
     
     document.getElementById('btn-tos-agree')!.addEventListener('click', async () => {
       localStorage.setItem('bjut_tos_accepted', 'true');
+      localStorage.setItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY, 'true');
       tosModal.classList.add('hidden');
       log('系统', '已同意用户协议与隐私政策');
       
@@ -2337,6 +2406,11 @@ async function refreshPermissionHealth() {
 // Navigation
 let billingSectionAnimationTimer: number | null = null;
 
+function syncBillingCenterMessageVisibility() {
+  billingCenterMessage.hidden = activeBillingWorkbenchSection === 'recharge'
+    || !billingCenterMessage.textContent?.trim();
+}
+
 function activateBillingWorkbenchSection(section: string, resetScroll = false) {
   if (!billingWorkbenchSections.includes(section as BillingWorkbenchSection)) return;
   const changed = activeBillingWorkbenchSection !== section;
@@ -2356,6 +2430,7 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
   });
+  syncBillingCenterMessageVisibility();
   if (billingSectionAnimationTimer !== null) window.clearTimeout(billingSectionAnimationTimer);
   if (changed) {
     billingSectionAnimationTimer = window.setTimeout(() => {
@@ -2371,6 +2446,7 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
 function activatePage(target: string, navTarget = target) {
   const consoleExpanded = target === 'dashboard' || target === 'billing-center';
   const billingExpanded = target === 'billing-center';
+  document.body.classList.toggle('billing-center-active', IS_ANDROID && billingExpanded);
   navItems.forEach(item => {
     const itemTarget = item.getAttribute('data-target');
     const active = itemTarget === navTarget
@@ -2570,16 +2646,13 @@ function setupEventListeners() {
   });
   billingRechargeForm.addEventListener('submit', event => {
     event.preventDefault();
-    void prepareAndConfirmNetworkRecharge();
+    if (activeRechargeMethod === 'alipay') void prepareAndOpenAlipayRecharge();
+    else void prepareAndConfirmNetworkRecharge();
   });
   billingRechargeMethodButtons.forEach(button => {
     button.addEventListener('click', () => {
       activateRechargeMethod((button.dataset.rechargeMethodTarget || '') as RechargeMethod);
     });
-  });
-  billingAlipayForm.addEventListener('submit', event => {
-    event.preventDefault();
-    void prepareAndOpenAlipayRecharge();
   });
   btnBillingAlipayShowPayment.addEventListener('click', () => {
     void showAlipayPaymentModal(btnBillingAlipayShowPayment);
@@ -2906,7 +2979,7 @@ function setupEventListeners() {
     if ((window as any).__TAURI__) {
       if (autoLoginEnabled) {
         if ((window as any).AndroidBridge) {
-          customAlert('【安卓后台保活提示】\n已开启后台自动登录！应用将请求“始终允许”后台定位权限与通知权限，并拉起后台保活服务，以保证断网自动重连稳定性。\n\n另外，建议您授权“忽略电池优化”。');
+          await customAlert('开启后，App 会申请后台位置与通知权限，并启动前台服务，以便在界面关闭后继续检测校园网。系统还会询问是否忽略电池优化；你可以稍后在权限健康中心调整这些权限。', 'Android 后台自动登录');
           
           try {
             (window as any).AndroidBridge.requestBackgroundPermissions();
@@ -4514,10 +4587,11 @@ function renderBillingDevices(data: BillingCenterData) {
   if (!billingRechargeAccount.value.trim()) {
     billingRechargeAccount.value = data.account;
   }
-  if (!billingAlipayTargetAccount.value.trim()) {
-    billingAlipayTargetAccount.value = data.account;
+  if (!billingRechargeState.textContent?.trim() || billingRechargeState.textContent.includes('正在读取')) {
+    billingRechargeState.textContent = activeRechargeMethod === 'alipay'
+      ? '填写目标学工号和金额后，App 将先核对当前校园卡，再创建支付宝支付入口。'
+      : '填写目标学工号和金额后，App 将通过统一认证核对校园卡、目标账户与可充值状态。';
   }
-  billingRechargeState.textContent = '填写目标学工号和金额后，App 将通过统一认证核对校园卡、目标账户与可充值状态。';
 }
 
 function renderBillingSecurity(data: BillingCenterData) {
@@ -4561,7 +4635,7 @@ function renderBillingCenterData(data: BillingCenterData) {
     ...data.warnings,
   ].filter(Boolean) as string[];
   billingCenterMessage.textContent = messages.join('\n');
-  billingCenterMessage.hidden = messages.length === 0;
+  syncBillingCenterMessageVisibility();
   renderIcons(document.getElementById('billing-center')!);
 }
 
@@ -4590,13 +4664,13 @@ async function refreshBillingCenterData() {
   setBillingRecordQueryBusy(true);
   updateBillingRefreshProgress(2, true);
   billingCenterMessage.textContent = '正在连接计费系统';
-  billingCenterMessage.hidden = false;
+  syncBillingCenterMessageVisibility();
   try {
     const data = await invoke<BillingCenterData>('get_billing_center');
     renderBillingCenterData(data);
   } catch (error) {
     billingCenterMessage.textContent = `完整计费数据读取失败：${String(error)}`;
-    billingCenterMessage.hidden = false;
+    syncBillingCenterMessageVisibility();
   } finally {
     btnRefreshBillingCenter.disabled = false;
     updateBillingRefreshProgress(0, false);
@@ -4707,36 +4781,55 @@ function clearBillingSecretInputs() {
 
 function activateRechargeMethod(method: RechargeMethod) {
   if (!['campus-card', 'alipay'].includes(method)) return;
+  activeRechargeMethod = method;
   billingRechargeMethodButtons.forEach(button => {
     const active = button.dataset.rechargeMethodTarget === method;
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
   });
-  billingRechargeMethodPanels.forEach(panel => {
-    const active = panel.dataset.rechargeMethod === method;
-    panel.hidden = !active;
-    panel.classList.remove('is-entering');
-    if (active) {
-      void panel.offsetWidth;
-      panel.classList.add('is-entering');
-      window.setTimeout(() => panel.classList.remove('is-entering'), 220);
-    }
-  });
+  const alipay = method === 'alipay';
+  billingRechargeMethodTitle.textContent = alipay ? '支付宝充值网费' : '从校园卡转入网费';
+  billingRechargeMethodDescription.textContent = alipay
+    ? '支付宝先为当前校园卡充值，到账后 App 会继续把同一金额转入上方目标网费账户。'
+    : '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。';
+  btnBillingRecharge.textContent = alipay ? '核对并前往支付宝' : '核对充值信息';
+  billingRechargeState.textContent = alipay
+    ? '目标和金额保持不变；确认后 Android 会优先直接打开支付宝，桌面端显示二维码。'
+    : '目标和金额保持不变；确认后从当前账号的校园卡直接转入网费。';
+  if (activeAlipayPayment) {
+    btnBillingAlipayShowPayment.hidden = IS_ANDROID || !alipay;
+    btnBillingAlipayContinue.hidden = !alipay;
+  } else {
+    btnBillingAlipayShowPayment.hidden = true;
+    btnBillingAlipayContinue.hidden = true;
+  }
 }
 
 function setRechargeBusy(busy: boolean, label?: string) {
   btnBillingRecharge.disabled = busy;
   billingRechargeAccount.disabled = busy;
   billingRechargeAmount.disabled = busy;
-  btnBillingRecharge.textContent = label || '核对充值信息';
+  billingRechargeMethodButtons.forEach(button => { button.disabled = busy; });
+  btnBillingRecharge.textContent = label
+    || (activeRechargeMethod === 'alipay' ? '核对并前往支付宝' : '核对充值信息');
 }
 
-function setAlipayRechargeBusy(busy: boolean, label?: string) {
-  btnBillingAlipay.disabled = busy;
-  billingAlipayTargetAccount.disabled = busy;
-  billingAlipayAmount.disabled = busy;
-  billingRechargeMethodButtons.forEach(button => { button.disabled = busy; });
-  btnBillingAlipay.textContent = label || '核对并前往支付宝';
+function updateRechargeProgress(percent: number, text: string, visible = true) {
+  const normalized = Math.max(0, Math.min(100, Math.round(percent)));
+  billingRechargeProgress.hidden = !visible;
+  billingRechargeProgress.setAttribute('aria-valuenow', String(normalized));
+  billingRechargeProgressText.textContent = text;
+  billingRechargeProgressPercent.textContent = `${normalized}%`;
+  billingRechargeProgressBar.style.width = `${normalized}%`;
+}
+
+function finishRechargeProgress(text: string) {
+  updateRechargeProgress(100, text);
+  window.setTimeout(() => {
+    if (billingRechargeProgressText.textContent === text) {
+      billingRechargeProgress.hidden = true;
+    }
+  }, 1800);
 }
 
 function formatBillingCurrency(value: string) {
@@ -4758,6 +4851,27 @@ function renderRechargePreview(preview: RechargePreview) {
   billingRechargeState.textContent = `信息已核对；充值入口开放时间 ${preview.allowedTime}，确认信息将在 ${preview.expiresInSeconds} 秒后失效。`;
 }
 
+function renderRechargeBalances(snapshot: RechargeBalanceSnapshot) {
+  billingRechargePayer.textContent = snapshot.payerAccount;
+  billingRechargeCardBalance.textContent = formatBillingCurrency(snapshot.cardBalance);
+  billingRechargeTargetStatus.textContent = snapshot.targetStatus;
+  billingRechargeTargetBalance.textContent = formatBillingCurrency(snapshot.targetBalance);
+  billingRechargePreview.hidden = false;
+}
+
+async function refreshRechargeBalancesOnce(targetAccount: string): Promise<string | null> {
+  updateRechargeProgress(88, '正在刷新校园卡与目标网费余额…');
+  try {
+    const snapshot = await invoke<RechargeBalanceSnapshot>('get_network_recharge_balances', {
+      targetAccount,
+    });
+    renderRechargeBalances(snapshot);
+    return null;
+  } catch (error) {
+    return String(error);
+  }
+}
+
 async function prepareAndConfirmNetworkRecharge() {
   if (btnBillingRecharge.disabled) return;
   const targetAccount = billingRechargeAccount.value.trim();
@@ -4773,11 +4887,13 @@ async function prepareAndConfirmNetworkRecharge() {
   billingRechargePreview.hidden = true;
   billingRechargeState.textContent = '正在通过统一认证核对校园卡和目标网费账户…';
   setRechargeBusy(true, '正在核对…');
+  updateRechargeProgress(12, '正在登录统一认证并核对账户…');
   try {
     const preview = await invoke<RechargePreview>('prepare_network_recharge', {
       targetAccount,
       amount,
     });
+    updateRechargeProgress(42, '账户与余额核对完成，等待确认…');
     renderRechargePreview(preview);
     const confirmed = await customConfirm(
       `付款校园卡：${preview.payerAccount}\n校园卡余额：${formatBillingCurrency(preview.cardBalance)}\n目标学工号：${preview.targetAccount}\n目标网费余额：${formatBillingCurrency(preview.targetBalance)}\n充值金额：${formatBillingCurrency(preview.amount)}\n\n确认后将创建一次订单并从校园卡扣费。`,
@@ -4788,19 +4904,26 @@ async function prepareAndConfirmNetworkRecharge() {
         confirmationId: preview.confirmationId,
       }).catch(() => undefined);
       billingRechargeState.textContent = '已取消充值，没有创建订单或扣费。';
+      billingRechargeProgress.hidden = true;
       return;
     }
     setRechargeBusy(true, '正在充值…');
     billingRechargeState.textContent = '正在创建一次性充值订单并确认校园卡扣费，请勿重复操作…';
+    updateRechargeProgress(68, '正在创建一次性订单并提交扣费…');
     const result = await invoke<RechargeResult>('confirm_network_recharge', {
       confirmationId: preview.confirmationId,
     });
+    updateRechargeProgress(84, '充值已提交，正在读取最新余额…');
+    const balanceError = await refreshRechargeBalancesOnce(targetAccount);
     billingRechargeAmount.value = '';
-    billingRechargeState.textContent = result.message;
-    await customAlert(result.message, '充值完成');
-    await refreshBillingCenterData();
+    billingRechargeState.textContent = balanceError
+      ? `${result.message}；余额刷新失败：${balanceError}`
+      : `${result.message}；校园卡与目标网费余额已刷新。`;
+    finishRechargeProgress(balanceError ? '充值完成，余额暂未刷新' : '充值与余额刷新完成');
+    await customAlert(billingRechargeState.textContent, '充值完成');
   } catch (error) {
     billingRechargeState.textContent = `充值未完成：${String(error)}`;
+    billingRechargeProgress.hidden = true;
     await customAlert(`充值未完成：${String(error)}`, '充值网费');
   } finally {
     setRechargeBusy(false);
@@ -4862,10 +4985,7 @@ function setAlipayCompletionBusy(busy: boolean) {
   alipayCompletionBusy = busy;
   btnBillingAlipayContinue.disabled = busy;
   btnAlipayPaymentComplete.disabled = busy;
-  btnBillingAlipay.disabled = busy;
-  billingAlipayTargetAccount.disabled = busy;
-  billingAlipayAmount.disabled = busy;
-  billingRechargeMethodButtons.forEach(button => { button.disabled = busy; });
+  setRechargeBusy(busy, busy ? '正在完成充值…' : undefined);
 }
 
 function scheduleAlipayAutomaticCompletionCheck() {
@@ -4944,8 +5064,20 @@ async function openActiveAlipayPayment() {
   alipayExternalHandoffAt = Date.now();
   alipayLastAutomaticCheckAt = 0;
   try {
+    const androidBridge = (window as any).AndroidBridge;
+    if (IS_ANDROID && androidBridge?.openAlipay) {
+      const launched = Boolean(androidBridge.openAlipay(payment.paymentUrl));
+      if (launched) {
+        alipayPaymentModalStatus.textContent = '已直接打开支付宝；支付完成后请返回 App。';
+        billingRechargeState.textContent = '已直接打开支付宝；返回 App 后将自动检测校园卡到账。';
+        return true;
+      }
+    }
     await openUrl(payment.paymentUrl);
-    alipayPaymentModalStatus.textContent = '支付页面已交给系统浏览器打开；完成后请返回 App。';
+    alipayPaymentModalStatus.textContent = IS_ANDROID
+      ? '未检测到可处理该订单的支付宝，已改用系统浏览器；完成后请返回 App。'
+      : '支付页面已交给系统浏览器打开；完成后请返回 App。';
+    billingRechargeState.textContent = alipayPaymentModalStatus.textContent;
     return true;
   } catch (error) {
     alipayExternalHandoffAt = 0;
@@ -4968,8 +5100,9 @@ async function completeAlipayNetworkRecharge(automatic = false) {
   const checkingText = automatic
     ? '已返回 App，正在自动检测校园卡是否到账…'
     : '正在检测校园卡到账并核对目标网费账户…';
-  billingAlipayState.textContent = checkingText;
+  billingRechargeState.textContent = checkingText;
   alipayPaymentModalStatus.textContent = checkingText;
+  updateRechargeProgress(48, checkingText);
 
   try {
     const preview = await invoke<RechargePreview>('prepare_network_recharge', {
@@ -5001,8 +5134,9 @@ async function completeAlipayNetworkRecharge(automatic = false) {
       const message = balanceComparable
         ? `暂未检测到支付宝到账（校园卡余额 ${formatBillingCurrency(preview.cardBalance)}），可稍后点击“检测到账并转入网费”重试。`
         : '暂时无法比较校园卡余额，可稍后点击“检测到账并转入网费”继续核对。';
-      billingAlipayState.textContent = message;
+      billingRechargeState.textContent = message;
       alipayPaymentModalStatus.textContent = message;
+      billingRechargeProgress.hidden = true;
       return;
     }
 
@@ -5017,23 +5151,27 @@ async function completeAlipayNetworkRecharge(automatic = false) {
     if (!confirmed) {
       await invoke('cancel_network_recharge', { confirmationId: preview.confirmationId }).catch(() => undefined);
       preparedConfirmationId = null;
-      billingAlipayState.textContent = '已取消网费转入；支付宝支付入口和订单信息仍保留，可稍后继续核对。';
+      billingRechargeState.textContent = '已取消网费转入；支付宝支付入口和订单信息仍保留，可稍后继续核对。';
+      billingRechargeProgress.hidden = true;
       return;
     }
 
-    billingAlipayState.textContent = '支付宝已到账，正在从校园卡转入目标网费账户，请勿重复操作…';
+    billingRechargeState.textContent = '支付宝已到账，正在从校园卡转入目标网费账户，请勿重复操作…';
+    updateRechargeProgress(72, '支付宝已到账，正在转入目标网费账户…');
     transferSubmitted = true;
     preparedConfirmationId = null;
     const result = await invoke<RechargeResult>('confirm_network_recharge', {
       confirmationId: preview.confirmationId,
     });
+    updateRechargeProgress(84, '网费转入完成，正在刷新双方余额…');
+    const balanceError = await refreshRechargeBalancesOnce(payment.targetAccount);
     clearActiveAlipayPayment();
-    billingAlipayAmount.value = '';
-    billingAlipayState.textContent = `${result.message}。支付宝 → 校园卡 → 网费账户流程已完成。`;
-    await customAlert(billingAlipayState.textContent, '充值完成');
-    await refreshBillingCenterData().catch(error => {
-      console.warn('Failed to refresh billing data after Alipay recharge:', error);
-    });
+    billingRechargeAmount.value = '';
+    billingRechargeState.textContent = balanceError
+      ? `${result.message}。支付宝 → 校园卡 → 网费账户流程已完成；余额刷新失败：${balanceError}`
+      : `${result.message}。支付宝 → 校园卡 → 网费账户流程已完成，最新余额已读取。`;
+    finishRechargeProgress(balanceError ? '充值完成，余额暂未刷新' : '充值与余额刷新完成');
+    await customAlert(billingRechargeState.textContent, '充值完成');
   } catch (error) {
     if (preparedConfirmationId) {
       await invoke('cancel_network_recharge', { confirmationId: preparedConfirmationId }).catch(() => undefined);
@@ -5045,8 +5183,9 @@ async function completeAlipayNetworkRecharge(automatic = false) {
     const message = automatic
       ? `返回 App 后暂未完成到账核对：${detail}。可稍后手动重试。`
       : `到账核对或网费转入未完成：${detail}`;
-    billingAlipayState.textContent = message;
+    billingRechargeState.textContent = message;
     alipayPaymentModalStatus.textContent = message;
+    billingRechargeProgress.hidden = true;
     if (!automatic) await customAlert(message, '支付宝充值');
   } finally {
     setAlipayCompletionBusy(false);
@@ -5054,9 +5193,9 @@ async function completeAlipayNetworkRecharge(automatic = false) {
 }
 
 async function prepareAndOpenAlipayRecharge() {
-  if (btnBillingAlipay.disabled) return;
-  const targetAccount = billingAlipayTargetAccount.value.trim();
-  const amount = billingAlipayAmount.value.trim();
+  if (btnBillingRecharge.disabled) return;
+  const targetAccount = billingRechargeAccount.value.trim();
+  const amount = billingRechargeAmount.value.trim();
   if (!/^[A-Za-z0-9_-]{5,20}$/.test(targetAccount)) {
     await customAlert('请输入 5–20 位有效学工号。', '支付宝充值');
     return;
@@ -5080,27 +5219,29 @@ async function prepareAndOpenAlipayRecharge() {
         const opened = await openActiveAlipayPayment();
         if (!opened) {
           btnBillingAlipayShowPayment.hidden = false;
-          await showAlipayPaymentModal(btnBillingAlipay);
+          await showAlipayPaymentModal(btnBillingRecharge);
         }
       } else {
-        await showAlipayPaymentModal(btnBillingAlipay);
+        await showAlipayPaymentModal(btnBillingRecharge);
       }
       return;
     }
   }
 
   clearActiveAlipayPayment();
-  billingAlipayPreview.hidden = true;
-  billingAlipayState.textContent = '正在通过统一认证核对当前校园卡…';
-  setAlipayRechargeBusy(true, '正在核对…');
+  billingRechargePreview.hidden = true;
+  billingRechargeState.textContent = '正在通过统一认证核对当前校园卡…';
+  setRechargeBusy(true, '正在核对…');
+  updateRechargeProgress(10, '正在登录统一认证并读取校园卡…');
   try {
     const preview = await invoke<AlipayRechargePreview>('prepare_alipay_card_recharge', { amount });
-    billingAlipayPayer.textContent = preview.payerAccount;
-    billingAlipayCardBalance.textContent = formatBillingCurrency(preview.cardBalance);
-    billingAlipayPreviewAmount.textContent = formatBillingCurrency(preview.amount);
-    billingAlipayPreviewTarget.textContent = targetAccount;
-    billingAlipayPreview.hidden = false;
-    billingAlipayState.textContent = `校园卡信息已核对；确认信息将在 ${preview.expiresInSeconds} 秒后失效。`;
+    billingRechargePayer.textContent = preview.payerAccount;
+    billingRechargeCardBalance.textContent = formatBillingCurrency(preview.cardBalance);
+    billingRechargeTargetStatus.textContent = '待支付宝付款';
+    billingRechargeTargetBalance.textContent = '完成后刷新';
+    billingRechargePreview.hidden = false;
+    billingRechargeState.textContent = `校园卡信息已核对；确认信息将在 ${preview.expiresInSeconds} 秒后失效。`;
+    updateRechargeProgress(32, '校园卡已核对，等待确认创建支付订单…');
     const confirmed = await customConfirm(
       `充值校园卡账号：${preview.payerAccount}\n支付宝金额：${formatBillingCurrency(preview.amount)}\n最终网费目标：${targetAccount}\n\nApp 将先创建“支付宝 → 当前校园卡”订单。支付完成并返回 App 后，会自动核对校园卡到账，并在你确认后从当前页面转入目标网费账户。`,
       '确认前往支付宝',
@@ -5109,16 +5250,18 @@ async function prepareAndOpenAlipayRecharge() {
       await invoke('cancel_alipay_card_recharge', {
         confirmationId: preview.confirmationId,
       }).catch(() => undefined);
-      billingAlipayState.textContent = '已取消，没有创建支付宝订单。';
+      billingRechargeState.textContent = '已取消，没有创建支付宝订单。';
+      billingRechargeProgress.hidden = true;
       return;
     }
-    setAlipayRechargeBusy(true, '正在创建订单…');
-    billingAlipayState.textContent = '正在创建一次性支付宝订单，请勿重复操作…';
+    setRechargeBusy(true, '正在创建订单…');
+    billingRechargeState.textContent = '正在创建一次性支付宝订单，请勿重复操作…';
+    updateRechargeProgress(46, '正在创建一次性支付宝订单…');
     const result = await invoke<AlipayRechargeResult>('confirm_alipay_card_recharge', {
       confirmationId: preview.confirmationId,
     });
     if (!isTrustedAlipayPaymentUrl(result.paymentUrl)) {
-      billingAlipayState.textContent = '支付宝订单已经创建，但支付平台返回了不受信任的跳转地址。请勿立即重复创建订单。';
+      billingRechargeState.textContent = '支付宝订单已经创建，但支付平台返回了不受信任的跳转地址。请勿立即重复创建订单。';
       throw new Error('支付平台返回了不受信任的跳转地址');
     }
     rememberActiveAlipayPayment({
@@ -5128,23 +5271,25 @@ async function prepareAndOpenAlipayRecharge() {
       targetAccount,
       cardBalanceBefore: preview.cardBalance,
     });
-    billingAlipayState.textContent = `${result.message}。付款后返回 App，系统会自动检测到账并衔接网费转入。`;
+    billingRechargeState.textContent = `${result.message}。付款后返回 App，系统会自动检测到账并衔接网费转入。`;
+    updateRechargeProgress(55, '支付订单已创建，等待支付宝付款…');
     if (IS_ANDROID) {
       const opened = await openActiveAlipayPayment();
       if (!opened) {
         btnBillingAlipayShowPayment.hidden = false;
-        await showAlipayPaymentModal(btnBillingAlipay);
+        await showAlipayPaymentModal(btnBillingRecharge);
       }
     } else {
-      await showAlipayPaymentModal(btnBillingAlipay);
+      await showAlipayPaymentModal(btnBillingRecharge);
     }
   } catch (error) {
-    if (!billingAlipayState.textContent.includes('订单已经创建')) {
-      billingAlipayState.textContent = `支付宝充值未开始：${String(error)}`;
+    if (!billingRechargeState.textContent.includes('订单已经创建')) {
+      billingRechargeState.textContent = `支付宝充值未开始：${String(error)}`;
     }
-    await customAlert(billingAlipayState.textContent, '支付宝充值');
+    billingRechargeProgress.hidden = true;
+    await customAlert(billingRechargeState.textContent, '支付宝充值');
   } finally {
-    setAlipayRechargeBusy(false);
+    setRechargeBusy(false);
   }
 }
 
@@ -5216,7 +5361,7 @@ function renderBillingCenter(info: UserInfo | null) {
     ...(billingCenterData?.warnings || []),
   ].filter(Boolean) as string[];
   billingCenterMessage.textContent = messages.join('\n');
-  billingCenterMessage.hidden = messages.length === 0;
+  syncBillingCenterMessageVisibility();
 
   const mauthKnown = info?.source === 'billing' && typeof info.mauthEnabled === 'boolean';
   billingMauthBadge.className = `billing-state-badge ${mauthKnown ? (info!.mauthEnabled ? 'success' : 'warning') : 'neutral'}`;

@@ -331,6 +331,16 @@ pub(crate) struct RechargeResult {
     pub amount: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RechargeBalanceSnapshot {
+    pub payer_account: String,
+    pub card_balance: String,
+    pub target_account: String,
+    pub target_balance: String,
+    pub target_status: String,
+}
+
 #[derive(Debug)]
 pub(crate) struct PendingAlipayRecharge {
     confirmation_id: String,
@@ -448,6 +458,25 @@ pub(crate) async fn prepare_recharge(
         api: context.api,
     };
     Ok((pending, preview))
+}
+
+pub(crate) async fn query_recharge_balances(
+    account: &str,
+    password: &str,
+    target_account: &str,
+) -> Result<RechargeBalanceSnapshot, CampusServiceError> {
+    let target_account = validate_target_account(target_account)?;
+    let mut session = authenticate(account, password).await?;
+    let context = enter_recharge(&mut session).await?;
+    let (target_balance, _, target_status) =
+        query_target_account(&mut session, &context, &target_account).await?;
+    Ok(RechargeBalanceSnapshot {
+        payer_account: context.payer_account,
+        card_balance: context.card_balance,
+        target_account,
+        target_balance,
+        target_status,
+    })
 }
 
 pub(crate) async fn execute_recharge(

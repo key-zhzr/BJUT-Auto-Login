@@ -1,4 +1,4 @@
-use super::{query_campus_dns_ipv4, redact_request_error, VpnCompatibility};
+use super::{query_campus_dns_ipv4, redact_request_error, VpnCompatibility, LGN_HOST};
 use chrono::Datelike;
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use reqwest::header::{
@@ -17,8 +17,19 @@ const BILLING_ORIGIN: &str = "https://jfself.bjut.edu.cn";
 const BILLING_LOGIN_URL: &str = "https://jfself.bjut.edu.cn/Self/login/?302=LI";
 const BILLING_LOGOUT_URL: &str = "https://jfself.bjut.edu.cn/Self/login/logout";
 const BILLING_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+const ACCOUNT_DISCOVERY_PATH: &str = "/eportal/portal/self";
+const ACCOUNT_DISCOVERY_PORT: u16 = 802;
+const BILLING_EPORTAL_LOGIN_PATH: &str = "/Self/login/eportalLogin";
+const BILLING_DASHBOARD_PATH: &str = "/Self/dashboard";
 const MAX_REDIRECTS: usize = 5;
 const MAX_FULL_EXPORT_ROWS: u64 = 50_000;
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiscoveredCampusAccount {
+    pub user: String,
+    pub pass: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -283,6 +294,28 @@ impl SessionCookies {
 
     fn merge(&mut self, other: Self) {
         self.values.extend(other.values);
+    }
+}
+
+#[derive(Clone, Default)]
+struct HostCookies {
+    values: BTreeMap<String, SessionCookies>,
+}
+
+impl HostCookies {
+    fn absorb(&mut self, url: &Url, headers: &HeaderMap) {
+        if let Some(host) = url.host_str() {
+            self.values
+                .entry(host.to_ascii_lowercase())
+                .or_default()
+                .absorb(headers);
+        }
+    }
+
+    fn header(&self, url: &Url) -> Option<String> {
+        self.values
+            .get(&url.host_str()?.to_ascii_lowercase())
+            .and_then(SessionCookies::header)
     }
 }
 
@@ -2182,6 +2215,311 @@ async fn build_client(compatibility: VpnCompatibility) -> Result<Client, Billing
     builder.build().map_err(network_error)
 }
 
+async fn build_account_discovery_client(
+    compatibility: VpnCompatibility,
+) -> Result<Client, BillingError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.6".parse().unwrap());
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
+        .use_rustls_tls()
+        .user_agent(BILLING_USER_AGENT)
+        .default_headers(headers);
+
+    if !matches!(compatibility, VpnCompatibility::Minimum) {
+        let (lgn_addresses, billing_addresses) = if compatibility == VpnCompatibility::Low {
+            let lgn = tokio::task::spawn_blocking(|| query_campus_dns_ipv4(LGN_HOST))
+                .await
+                .map_err(|error| BillingError::Network(format!("校园网 DNS 任务失败：{error}")))?
+                .map_err(BillingError::Network)?;
+            let billing = tokio::task::spawn_blocking(|| query_campus_dns_ipv4(BILLING_HOST))
+                .await
+                .map_err(|error| BillingError::Network(format!("校园网 DNS 任务失败：{error}")))?
+                .map_err(BillingError::Network)?;
+            (lgn, billing)
+        } else {
+            (
+                vec![
+                    Ipv4Addr::new(172, 30, 201, 2),
+                    Ipv4Addr::new(172, 30, 201, 10),
+                ],
+                vec![BILLING_FIXED_ADDRESS],
+            )
+        };
+        let lgn_sockets = lgn_addresses
+            .into_iter()
+            .map(|address| SocketAddr::new(IpAddr::V4(address), ACCOUNT_DISCOVERY_PORT))
+            .collect::<Vec<_>>();
+        let billing_sockets = billing_addresses
+            .into_iter()
+            .map(|address| SocketAddr::new(IpAddr::V4(address), 443))
+            .collect::<Vec<_>>();
+        builder = builder
+            .resolve_to_addrs(LGN_HOST, &lgn_sockets)
+            .resolve_to_addrs(BILLING_HOST, &billing_sockets);
+    }
+
+    builder.build().map_err(network_error)
+}
+
+fn account_discovery_url() -> Result<Url, BillingError> {
+    let mut url = Url::parse(&format!(
+        "https://{LGN_HOST}:{ACCOUNT_DISCOVERY_PORT}{ACCOUNT_DISCOVERY_PATH}"
+    ))
+    .map_err(|_| BillingError::Protocol("校园网账号发现地址无效".to_string()))?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .to_string();
+    url.query_pairs_mut()
+        .append_pair("callback", "726427262622")
+        .append_pair("self_type", "27")
+        .append_pair("user_account", "")
+        .append_pair("user_password", "")
+        .append_pair("wlan_user_mac", "")
+        .append_pair("jsVersion", "2238243824")
+        .append_pair("program_index", "79225954737327212323222f212e2723")
+        .append_pair("page_index", "755e577b7c4e27212323222f212e2320")
+        .append_pair("encrypt", "1")
+        .append_pair("v", &nonce)
+        .append_pair("lang", "zh");
+    Ok(url)
+}
+
+fn validate_account_discovery_url(url: &Url) -> Result<(), BillingError> {
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(BillingError::Protocol(
+            "账号发现流程尝试访问非受信任地址".to_string(),
+        ));
+    }
+    match (url.host_str(), url.port_or_known_default(), url.path()) {
+        (Some(host), Some(ACCOUNT_DISCOVERY_PORT), ACCOUNT_DISCOVERY_PATH) if host == LGN_HOST => {
+            Ok(())
+        }
+        (Some(BILLING_HOST), Some(443), BILLING_EPORTAL_LOGIN_PATH) => Ok(()),
+        (Some(BILLING_HOST), Some(443), path)
+            if path == BILLING_DASHBOARD_PATH
+                || path.starts_with(&format!("{BILLING_DASHBOARD_PATH}/")) =>
+        {
+            Ok(())
+        }
+        _ => Err(BillingError::Protocol(
+            "账号发现流程尝试跳转到非受信任地址".to_string(),
+        )),
+    }
+}
+
+fn parse_self_auth_url(source: &str) -> Result<Option<Url>, BillingError> {
+    let trimmed = source.trim().trim_start_matches('\u{feff}');
+    let Some(open) = trimmed.find('(') else {
+        return Err(BillingError::Protocol(
+            "自服务响应缺少 JSON 包装".to_string(),
+        ));
+    };
+    let Some(close) = trimmed.rfind(')') else {
+        return Err(BillingError::Protocol(
+            "自服务响应缺少 JSON 结尾".to_string(),
+        ));
+    };
+    if close <= open || !trimmed[..open].trim().starts_with("dr1004") {
+        return Err(BillingError::Protocol("自服务响应包装不受支持".to_string()));
+    }
+    let value: serde_json::Value = serde_json::from_str(&trimmed[open + 1..close])
+        .map_err(|_| BillingError::Protocol("自服务响应 JSON 无法解析".to_string()))?;
+    if value.get("result").and_then(serde_json::Value::as_i64) != Some(1) {
+        return Ok(None);
+    }
+    let raw = value
+        .get("self_auth_url")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| BillingError::Protocol("自服务响应缺少登录地址".to_string()))?;
+    let url =
+        Url::parse(raw).map_err(|_| BillingError::Protocol("自服务登录地址无效".to_string()))?;
+    validate_account_discovery_url(&url)?;
+    if url.path() != BILLING_EPORTAL_LOGIN_PATH
+        || !["account", "timestamp", "sign"].iter().all(|name| {
+            url.query_pairs()
+                .any(|(key, value)| key == *name && !value.is_empty())
+        })
+    {
+        return Err(BillingError::Protocol(
+            "自服务登录地址缺少必要的签名参数".to_string(),
+        ));
+    }
+    Ok(Some(url))
+}
+
+async fn limited_response_text(
+    response: Response,
+    label: &str,
+    limit: usize,
+) -> Result<String, BillingError> {
+    let bytes = response.bytes().await.map_err(network_error)?;
+    if bytes.len() > limit {
+        return Err(BillingError::Protocol(format!("{label}内容过大")));
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+async fn account_discovery_get_follow(
+    client: &Client,
+    mut url: Url,
+    cookies: &mut HostCookies,
+    referer: Option<&Url>,
+) -> Result<(Url, String), BillingError> {
+    let mut current_referer = referer.map(Url::to_string);
+    for _ in 0..=MAX_REDIRECTS {
+        validate_account_discovery_url(&url)?;
+        let mut request = client
+            .get(url.clone())
+            .header(
+                ACCEPT,
+                "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+            )
+            .header("Sec-Fetch-Dest", "document")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header(
+                "Sec-Fetch-Site",
+                if current_referer.is_some() {
+                    "same-site"
+                } else {
+                    "none"
+                },
+            );
+        if let Some(value) = cookies.header(&url) {
+            request = request.header(COOKIE, value);
+        }
+        if let Some(value) = current_referer.as_deref() {
+            request = request.header(REFERER, value);
+        }
+        let response = request.send().await.map_err(network_error)?;
+        cookies.absorb(&url, response.headers());
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| BillingError::Protocol("账号发现重定向缺少 Location".to_string()))?;
+            let next = url
+                .join(location)
+                .map_err(|_| BillingError::Protocol("账号发现重定向地址无效".to_string()))?;
+            validate_account_discovery_url(&next)?;
+            current_referer = Some(url.to_string());
+            url = next;
+            continue;
+        }
+        if !response.status().is_success() {
+            return Err(BillingError::Protocol(format!(
+                "账号发现服务返回 HTTP {}",
+                response.status().as_u16()
+            )));
+        }
+        let text = limited_response_text(response, "账号发现页面", 2 * 1024 * 1024).await?;
+        return Ok((url, text));
+    }
+    Err(BillingError::Protocol("账号发现重定向次数过多".to_string()))
+}
+
+fn parse_discovered_account(html: &str) -> Result<DiscoveredCampusAccount, BillingError> {
+    let json = embedded_user_json(html)
+        .ok_or_else(|| BillingError::Protocol("dashboard 缺少用户数据".to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|_| BillingError::Protocol("dashboard 用户数据无法解析".to_string()))?;
+    let user = value
+        .get("userName")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| {
+            (5..=20).contains(&value.len())
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
+        .ok_or_else(|| BillingError::Protocol("dashboard 账号格式无效".to_string()))?;
+    let pass = value
+        .get("userPassword")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
+        })
+        .ok_or_else(|| BillingError::Protocol("dashboard 密码字段无效".to_string()))?;
+    Ok(DiscoveredCampusAccount {
+        user: user.to_string(),
+        pass: pass.to_string(),
+    })
+}
+
+pub(crate) async fn discover_current_campus_account(
+    compatibility: VpnCompatibility,
+) -> Result<Option<DiscoveredCampusAccount>, BillingError> {
+    let client = build_account_discovery_client(compatibility).await?;
+    let discovery_url = account_discovery_url()?;
+    validate_account_discovery_url(&discovery_url)?;
+    let response = client
+        .get(discovery_url.clone())
+        .header(ACCEPT, "application/javascript,text/javascript,*/*;q=0.8")
+        .send()
+        .await
+        .map_err(network_error)?;
+    if !response.status().is_success() {
+        return Err(BillingError::Protocol(format!(
+            "自服务接口返回 HTTP {}",
+            response.status().as_u16()
+        )));
+    }
+    let source = limited_response_text(response, "自服务响应", 256 * 1024).await?;
+    let Some(auth_url) = parse_self_auth_url(&source)? else {
+        return Ok(None);
+    };
+
+    let mut cookies = HostCookies::default();
+    let (mut dashboard_url, mut dashboard_html) =
+        account_discovery_get_follow(&client, auth_url, &mut cookies, Some(&discovery_url)).await?;
+    if dashboard_url.host_str() != Some(BILLING_HOST)
+        || !(dashboard_url.path() == BILLING_DASHBOARD_PATH
+            || dashboard_url
+                .path()
+                .starts_with(&format!("{BILLING_DASHBOARD_PATH}/")))
+    {
+        return Err(BillingError::Protocol(
+            "计费系统未进入 dashboard".to_string(),
+        ));
+    }
+
+    for attempt in 0..2 {
+        let account = parse_discovered_account(&dashboard_html)?;
+        if !account.pass.contains("DS424:") {
+            return Ok(Some(account));
+        }
+        if attempt == 1 {
+            return Err(BillingError::Protocol(
+                "dashboard 连续返回临时密码字段，请稍后重试".to_string(),
+            ));
+        }
+        dashboard_url.query_pairs_mut().append_pair(
+            "account_refresh",
+            &SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+                .to_string(),
+        );
+        let refreshed =
+            account_discovery_get_follow(&client, dashboard_url.clone(), &mut cookies, None)
+                .await?;
+        dashboard_url = refreshed.0;
+        dashboard_html = refreshed.1;
+    }
+    Ok(None)
+}
+
 async fn get_follow(
     client: &Client,
     mut url: Url,
@@ -3570,6 +3908,37 @@ fn decode_html_entities(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_signed_self_service_account_discovery_url() {
+        let source = r#"dr1004({"result":1,"msg":"ok","self_auth_url":"https:\/\/jfself.bjut.edu.cn\/Self\/login\/eportalLogin?account=25000000&timestamp=1780981775208&sign=abcdef"});"#;
+        let url = parse_self_auth_url(source).unwrap().unwrap();
+        assert_eq!(url.host_str(), Some(BILLING_HOST));
+        assert_eq!(url.path(), BILLING_EPORTAL_LOGIN_PATH);
+
+        let unavailable = r#"dr1004({"result":0,"msg":"not connected"});"#;
+        assert!(parse_self_auth_url(unavailable).unwrap().is_none());
+        let attacker = r#"dr1004({"result":1,"self_auth_url":"https:\/\/example.com\/Self\/login\/eportalLogin?account=1&timestamp=2&sign=3"});"#;
+        assert!(parse_self_auth_url(attacker).is_err());
+    }
+
+    #[test]
+    fn extracts_dashboard_credentials_without_normalizing_password() {
+        let html = r#"
+          <script>(function (user) { window.user = user || {}; })({"userName":"25000000","userPassword":":Pass!word","leftMoney":3.12});</script>
+        "#;
+        let account = parse_discovered_account(html).unwrap();
+        assert_eq!(account.user, "25000000");
+        assert_eq!(account.pass, ":Pass!word");
+
+        let temporary = r#"
+          <script>(function (user) { window.user = user || {}; })({"userName":"25000000","userPassword":"DS424:temporary"});</script>
+        "#;
+        assert!(parse_discovered_account(temporary)
+            .unwrap()
+            .pass
+            .contains("DS424:"));
+    }
 
     #[test]
     fn parses_hidden_checkcode_and_session_bound_action() {

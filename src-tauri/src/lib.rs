@@ -3627,6 +3627,54 @@ fn emit_billing_center_progress(
 }
 
 #[tauri::command]
+async fn discover_current_campus_account(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Option<billing::DiscoveredCampusAccount>, String> {
+    let compatibility = {
+        let config = state.config.read().unwrap();
+        VpnCompatibility::from_config(&config.vpn_compatibility)
+    };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(25),
+        billing::discover_current_campus_account(compatibility),
+    )
+    .await;
+    match result {
+        Ok(Ok(Some(account))) => {
+            rust_log(
+                &app,
+                &state,
+                "账号",
+                "已识别当前校园网会话中的账号，等待用户确认是否保存",
+                "info",
+            );
+            Ok(Some(account))
+        }
+        Ok(Ok(None)) => Ok(None),
+        Ok(Err(billing::BillingError::Network(detail))) => {
+            rust_log(
+                &app,
+                &state,
+                "账号",
+                &format!("当前网络未提供校园网账号发现入口：{detail}"),
+                "debug",
+            );
+            Ok(None)
+        }
+        Ok(Err(error)) => {
+            let message = error.user_message();
+            rust_log(&app, &state, "账号", &message, "debug");
+            Err(message)
+        }
+        Err(_) => {
+            rust_log(&app, &state, "账号", "校园网账号发现超时", "debug");
+            Ok(None)
+        }
+    }
+}
+
+#[tauri::command]
 async fn get_user_info(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -4024,6 +4072,39 @@ async fn confirm_network_recharge(
         Err(error) => rust_log(&app, &state, "计费", error, "error"),
     }
     result
+}
+
+#[tauri::command]
+async fn get_network_recharge_balances(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    target_account: String,
+) -> Result<campus_services::RechargeBalanceSnapshot, String> {
+    let account = campus_service_target(&state)?;
+    let _service_guard = state.campus_service_lock.lock().await;
+    rust_log(
+        &app,
+        &state,
+        "计费",
+        "正在刷新校园卡余额与目标网费余额",
+        "debug",
+    );
+    let snapshot = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        campus_services::query_recharge_balances(
+            &account.user,
+            &account.pass,
+            &target_account,
+        ),
+    )
+    .await
+    .map_err(|_| "余额刷新超过 60 秒，已停止等待".to_string())?
+    .map_err(campus_services::CampusServiceError::user_message);
+    match &snapshot {
+        Ok(_) => rust_log(&app, &state, "计费", "充值后余额刷新完成", "success"),
+        Err(error) => rust_log(&app, &state, "计费", error, "error"),
+    }
+    snapshot
 }
 
 #[tauri::command]
@@ -4744,11 +4825,13 @@ pub fn run() {
             trigger_manual_check,
             manual_login,
             get_user_info,
+            discover_current_campus_account,
             get_billing_center,
             query_billing_records,
             perform_billing_action,
             prepare_network_recharge,
             confirm_network_recharge,
+            get_network_recharge_balances,
             cancel_network_recharge,
             prepare_alipay_card_recharge,
             confirm_alipay_card_recharge,

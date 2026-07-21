@@ -233,6 +233,38 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  private fun openAlipayInternal(rawUrl: String): Boolean {
+    return try {
+      val paymentUrl = Uri.parse(rawUrl)
+      val trusted = paymentUrl.scheme.equals("https", ignoreCase = true) &&
+        paymentUrl.host.equals("openapi.alipay.com", ignoreCase = true) &&
+        paymentUrl.path == "/gateway.do" &&
+        (paymentUrl.port == -1 || paymentUrl.port == 443) &&
+        paymentUrl.userInfo.isNullOrEmpty() &&
+        paymentUrl.fragment.isNullOrEmpty() &&
+        paymentUrl.getQueryParameter("method") == "alipay.trade.wap.pay" &&
+        paymentUrl.getQueryParameter("sign_type") == "RSA2"
+      if (!trusted) return false
+
+      val alipayUri = Uri.Builder()
+        .scheme("alipays")
+        .authority("platformapi")
+        .appendPath("startapp")
+        .appendQueryParameter("appId", "20000067")
+        .appendQueryParameter("url", rawUrl)
+        .build()
+      val intent = Intent(Intent.ACTION_VIEW, alipayUri)
+        .setPackage("com.eg.android.AlipayGphone")
+        .addCategory(Intent.CATEGORY_BROWSABLE)
+      if (intent.resolveActivity(packageManager) == null) return false
+      startActivity(intent)
+      true
+    } catch (error: Exception) {
+      KeepAliveJournal.append(this, "直接打开支付宝失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
+      false
+    }
+  }
+
   private fun permissionHealthJson(): String {
     fun granted(permission: String): Boolean =
       ContextCompat.checkSelfPermission(this, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -329,6 +361,25 @@ class MainActivity : TauriActivity() {
     fun requestBatteryOptimizations() {
       activity.runOnUiThread {
         activity.requestBatteryOptimizationsInternal()
+      }
+    }
+
+    @JavascriptInterface
+    fun openAlipay(url: String): Boolean {
+      val completed = java.util.concurrent.CountDownLatch(1)
+      var success = false
+      activity.runOnUiThread {
+        try {
+          success = activity.openAlipayInternal(url)
+        } finally {
+          completed.countDown()
+        }
+      }
+      return try {
+        completed.await(2, java.util.concurrent.TimeUnit.SECONDS) && success
+      } catch (error: InterruptedException) {
+        Thread.currentThread().interrupt()
+        false
       }
     }
 
