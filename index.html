@@ -186,47 +186,6 @@
               </div>
             </div>
           </div>
-
-          <div id="billing-details" class="billing-details glass-card" hidden aria-live="polite">
-            <div class="billing-details-header">
-              <div>
-                <div class="billing-title-row">
-                  <i data-lucide="receipt-text"></i>
-                  <h3>校园网计费</h3>
-                  <span id="billing-source" class="billing-source">计费系统</span>
-                </div>
-                <p id="billing-package-detail" class="billing-package-detail"></p>
-              </div>
-              <div class="billing-header-actions">
-                <button id="btn-refresh-billing" class="btn btn-secondary btn-sm" type="button">
-                  <i data-lucide="refresh-cw"></i> 刷新计费
-                </button>
-              </div>
-            </div>
-            <div class="billing-detail-grid">
-              <div class="billing-detail-item">
-                <span>账号状态</span>
-                <strong id="billing-status">--</strong>
-              </div>
-              <div class="billing-detail-item billing-detail-wide">
-                <span>当前套餐</span>
-                <strong id="billing-package">--</strong>
-              </div>
-              <div class="billing-detail-item">
-                <span>已用流量</span>
-                <strong id="billing-used-flow">--</strong>
-              </div>
-              <div class="billing-detail-item billing-detail-wide">
-                <span>计费周期</span>
-                <strong id="billing-cycle">--</strong>
-              </div>
-              <div class="billing-detail-item">
-                <span>更新时间</span>
-                <strong id="billing-updated-at">--</strong>
-              </div>
-            </div>
-            <p id="billing-message" class="billing-message" hidden></p>
-          </div>
         </section>
 
         <!-- Billing center (opened from the dashboard to keep mobile navigation compact) -->
@@ -477,11 +436,7 @@
             <div class="billing-action-group billing-package-action">
               <div class="billing-action-copy">
                 <h3>预约套餐</h3>
-                <p>新套餐通常在下一计费周期生效；停机账号需复通后才会生效。</p>
-              </div>
-              <div class="billing-package-context" aria-live="polite">
-                <div><span>当前套餐</span><strong id="billing-package-current">--</strong></div>
-                <div><span>下一周期</span><strong id="billing-package-next">未预约</strong></div>
+                <p>下方会直接标记当前周期与下一周期套餐；未预约时，下一周期继续使用当前套餐。</p>
               </div>
               <div id="billing-package-options" class="billing-package-options">
                 <div class="billing-empty">正在读取可预约套餐…</div>
@@ -524,6 +479,10 @@
               </div>
             </div>
             <div class="billing-payment-panel">
+              <div class="billing-recharge-hours" role="note">
+                <i data-lucide="clock"></i>
+                <div><strong>充值服务开放时间：每日 06:00–23:00</strong><span>开放时间以北京时间为准；其他时段可查看余额，但不能创建或确认充值订单。</span></div>
+              </div>
               <p id="billing-recharge-state" class="billing-inline-note" aria-live="polite">填写目标学工号和金额后，先核对账户再确认扣费。</p>
               <form id="billing-recharge-form" class="billing-recharge-form" autocomplete="off">
                 <div class="billing-recharge-flow">
@@ -607,14 +566,11 @@
                 <button id="btn-billing-alipay-show-payment" class="btn btn-secondary btn-sm" type="button" hidden>
                   <i data-lucide="qr-code"></i> 显示支付二维码
                 </button>
-                <button id="btn-billing-alipay-continue" class="btn btn-primary btn-sm" type="button" hidden>
-                  <i data-lucide="check-circle"></i> 检测到账并转入网费
-                </button>
                 <button id="btn-billing-wechat-continue" class="btn btn-primary btn-sm" type="button" hidden>
                   <i data-lucide="check-circle"></i> 检测微信支付并转入网费
                 </button>
               </div>
-              <p class="billing-inline-note">任何充值只提交一次；结果不明确时 App 不会自动重试。支付宝与微信均由学校支付平台发起，App 不读取支付密码。</p>
+              <p class="billing-inline-note">到账状态可自动查询，但任何扣费或网费转入订单只提交一次，结果不明确时不会自动重复扣费。支付宝与微信均由学校支付平台发起，App 不读取支付密码。</p>
             </div>
           </section>
 
@@ -1292,7 +1248,7 @@
             <span class="alipay-payment-modal-icon"><i data-lucide="qr-code"></i></span>
             <div>
               <h3 id="alipay-payment-modal-title">支付宝订单已创建</h3>
-              <p>扫码或打开支付页面；返回 App 后会自动检测校园卡到账。</p>
+              <p>支付页面保持原会话，付款后学校页面会自动返回 ydapp；App 前台时自动核对到账。</p>
             </div>
           </div>
           <button id="btn-alipay-payment-close-icon" class="btn-icon" type="button" aria-label="关闭支付窗口">
@@ -1315,7 +1271,7 @@
             <div><span>充值校园卡</span><strong id="alipay-payment-payer">--</strong></div>
             <div><span>支付金额</span><strong id="alipay-payment-amount">--</strong></div>
             <div><span>后续网费目标</span><strong id="alipay-payment-target">--</strong></div>
-            <p>支付链接包含本次订单的签名信息，请勿公开分享。完成支付后可直接检测到账并转入网费，无需切换充值方式。</p>
+            <p>支付链接包含本次订单的签名信息，请勿公开分享。检测到校园卡到账后，App 会按已确认的目标和金额自动转入网费。</p>
           </div>
         </div>
         <p id="alipay-payment-modal-status" class="alipay-payment-modal-status" aria-live="polite">等待扫码或选择其他支付方式。</p>
@@ -1328,7 +1284,7 @@
             <i data-lucide="external-link"></i><span>打开支付页面</span>
           </button>
           <button type="button" class="btn btn-primary" id="btn-alipay-payment-complete">
-            <i data-lucide="check-circle"></i><span>检测到账并转入网费</span>
+            <i data-lucide="refresh-cw"></i><span>立即重新检测</span>
           </button>
         </div>
       </div>

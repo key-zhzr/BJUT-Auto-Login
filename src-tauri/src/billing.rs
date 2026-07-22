@@ -234,16 +234,6 @@ impl BillingError {
             }
         }
     }
-
-    pub(crate) fn cache_duration(&self) -> Duration {
-        match self {
-            Self::Network(_) => Duration::from_secs(15),
-            Self::Protocol(_) => Duration::from_secs(15 * 60),
-            Self::InvalidRequest(_) => Duration::from_secs(60),
-            Self::ActionRejected(_) => Duration::from_secs(5 * 60),
-            Self::CaptchaRequired | Self::AuthenticationRejected => Duration::from_secs(30 * 60),
-        }
-    }
 }
 
 #[derive(Clone, Default)]
@@ -412,17 +402,6 @@ struct ValidatedBillingRecordQuery {
     end_date: Option<String>,
     year: Option<String>,
     all: bool,
-}
-
-pub(crate) async fn fetch(
-    account: &str,
-    password: &str,
-    compatibility: VpnCompatibility,
-) -> Result<BillingSnapshot, BillingError> {
-    let mut session = authenticate(account, password, compatibility).await?;
-    let snapshot = parse_dashboard_bounded(&session.dashboard_html, account).await?;
-    logout(&mut session).await;
-    Ok(snapshot)
 }
 
 pub(crate) async fn fetch_center<F>(
@@ -976,6 +955,15 @@ async fn cancel_package(session: &mut BillingSession) -> Result<BillingActionRes
     if !has_tag_attribute(&page, "data-toggle", "undoPackage") {
         return Err(BillingError::ActionRejected(
             "当前没有可取消的套餐预约".to_string(),
+        ));
+    }
+    let current_package = dashboard_user(&session.dashboard_html)
+        .service_default
+        .and_then(|service| service.default_name);
+    let scheduled_package = scheduled_package_name(&page);
+    if !package_reservation_is_distinct(current_package.as_deref(), scheduled_package.as_deref()) {
+        return Err(BillingError::ActionRejected(
+            "下一周期将继续使用当前套餐，没有可取消的套餐预约".to_string(),
         ));
     }
     let text = post_form_action(
@@ -3439,6 +3427,12 @@ fn parse_service_state(
     let current_package_id = service.id.map(|id| id.to_string());
     let current_package = service.default_name.clone();
     let package_detail = service.extend.clone();
+    let scheduled_package = scheduled_package_name(package_html);
+    let package_scheduled = has_tag_attribute(package_html, "data-toggle", "undoPackage")
+        && package_reservation_is_distinct(
+            current_package.as_deref(),
+            scheduled_package.as_deref(),
+        );
     let mut package_options = parse_package_options(package_html);
     if let (Some(id), Some(name)) = (current_package_id.as_ref(), current_package.as_ref()) {
         if !package_options.iter().any(|option| option.id == *id) {
@@ -3470,8 +3464,8 @@ fn parse_service_state(
         next_settlement_date: date_near_label(stop_html, "下次结算日期"),
         can_stop_now,
         can_reopen_now,
-        package_scheduled: has_tag_attribute(package_html, "data-toggle", "undoPackage"),
-        scheduled_package: scheduled_package_name(package_html),
+        package_scheduled,
+        scheduled_package,
         consume_limit: user.installment_flag.map(|value| {
             if (value - 999_999.0).abs() < f64::EPSILON {
                 "不限制".to_string()
@@ -3487,6 +3481,19 @@ fn parse_service_state(
             .map(|value| format!("{} 元", compact_decimal(value, 4))),
         package_options,
     }
+}
+
+fn package_reservation_is_distinct(current: Option<&str>, scheduled: Option<&str>) -> bool {
+    let Some(scheduled) = scheduled
+        .map(normalize_text)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    current
+        .map(normalize_text)
+        .filter(|value| !value.is_empty())
+        .is_none_or(|current| !current.eq_ignore_ascii_case(&scheduled))
 }
 
 fn date_near_label(html: &str, label: &str) -> Option<String> {
@@ -4215,6 +4222,22 @@ mod tests {
         );
         assert_eq!(questions.len(), 1);
         assert_eq!(questions[0].text, "示例问题？");
+    }
+
+    #[test]
+    fn package_reservation_requires_a_different_next_cycle_package() {
+        assert!(!package_reservation_is_distinct(
+            Some("本科生10元套餐"),
+            None,
+        ));
+        assert!(!package_reservation_is_distinct(
+            Some("本科生10元套餐"),
+            Some(" 本科生10元套餐 "),
+        ));
+        assert!(package_reservation_is_distinct(
+            Some("本科生10元套餐"),
+            Some("本科生20元套餐"),
+        ));
     }
 
     #[test]

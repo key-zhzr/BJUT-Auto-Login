@@ -574,14 +574,6 @@ struct UserInfo {
     billing_warnings: Vec<String>,
 }
 
-#[derive(Clone)]
-struct BillingCacheEntry {
-    account: String,
-    compatibility: VpnCompatibility,
-    expires_at: std::time::Instant,
-    result: Result<UserInfo, String>,
-}
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateTarget {
@@ -786,7 +778,6 @@ struct AppState {
     last_network_state: Mutex<serde_json::Value>,
     auto_login_paused_until: std::sync::atomic::AtomicI64,
     usage_alert_history: Mutex<HashMap<String, String>>,
-    billing_cache: Mutex<Option<BillingCacheEntry>>,
     billing_fetch_lock: tokio::sync::Mutex<()>,
     campus_service_lock: tokio::sync::Mutex<()>,
     campus_recharge_pending: tokio::sync::Mutex<Option<campus_services::PendingRecharge>>,
@@ -1044,6 +1035,38 @@ fn app_is_in_background(app: &tauri::AppHandle, state: &AppState) -> bool {
         return reported_background || !visible || !focused || minimized;
     }
     reported_background
+}
+
+const BILLING_BACKGROUND_MESSAGE: &str = "App 已进入后台，计费系统请求已停止；返回前台后可重新发起";
+
+fn ensure_billing_foreground(state: &AppState) -> Result<(), String> {
+    if state.is_in_background.load(Ordering::SeqCst) {
+        Err(BILLING_BACKGROUND_MESSAGE.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+async fn wait_for_billing_background(state: &AppState) {
+    loop {
+        if state.is_in_background.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+async fn run_billing_while_foreground<T, F>(state: &AppState, future: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    ensure_billing_foreground(state)?;
+    let background = wait_for_billing_background(state);
+    futures_util::pin_mut!(future, background);
+    match futures_util::future::select(future, background).await {
+        futures_util::future::Either::Left((result, _)) => result,
+        futures_util::future::Either::Right((_, _)) => Err(BILLING_BACKGROUND_MESSAGE.to_string()),
+    }
 }
 
 fn url_encode(input: &str) -> String {
@@ -1788,26 +1811,34 @@ fn redact_request_error(error: reqwest::Error) -> String {
     error.without_url().to_string()
 }
 
-async fn fetch_portal_user_info(local_ip: Option<&str>) -> Option<UserInfo> {
+fn lgn_user_info_url(random: u16) -> String {
+    format!(
+        "https://{LGN_HOST}:802/eportal/portal/page/loadUserInfo?callback=726427262624&lang=6c7e3b7578&program_index=79225954737327212323222f212e2723&page_index=755e577b7c4e27212323222f212e2320&user_account=&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=262626262626262626262626&jsVersion=22384e&encrypt=1&v={random:04}&lang=zh"
+    )
+}
+
+async fn fetch_portal_user_info(
+    local_ip: Option<&str>,
+    compatibility: VpnCompatibility,
+) -> Option<UserInfo> {
     if let Some(ip) = local_ip {
         if !ip.starts_with("10.") && !ip.starts_with("172.") {
             return None;
         }
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(1500))
-        .use_rustls_tls()
-        .build()
-        .ok()?;
+    let client = portal_client(
+        compatibility,
+        &LoginType::Type3,
+        std::time::Duration::from_secs(3),
+    )
+    .await
+    .ok()?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let url = format!(
-        "http://172.30.201.2:801/eportal/portal/page/loadUserInfo?callback=726427262624&lang=6c7e3b7578&program_index=79225954737327212323222f212e2723&page_index=755e577b7c4e27212323222f212e2320&user_account=&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=262626262626262626262626&jsVersion=22384e&encrypt=1&v={:04}&lang=zh",
-        nanos % 9000 + 1000
-    );
+    let url = lgn_user_info_url((nanos % 9000 + 1000) as u16);
     let text = client.get(url).send().await.ok()?.text().await.ok()?;
     let start = text.find('(')?;
     let end = text.rfind(')')?;
@@ -2858,9 +2889,6 @@ fn save_config(
         let mut state_cfg = state.config.write().unwrap();
         *state_cfg = new_cfg.clone();
     }
-    // Account order and credentials both affect which billing session is used.
-    // Never reuse a result after any persisted configuration update.
-    *state.billing_cache.lock().unwrap() = None;
     reconcile_account_health_after_config_save(app, state, &previous_cfg, &new_cfg);
     #[cfg(desktop)]
     refresh_tray_menu(app, state);
@@ -4212,116 +4240,6 @@ fn selected_billing_account(config: &AppConfig, account_user: Option<&str>) -> O
     }
 }
 
-fn billing_snapshot_to_user_info(snapshot: billing::BillingSnapshot) -> UserInfo {
-    UserInfo {
-        account: snapshot.account,
-        balance: snapshot.balance,
-        flow: snapshot.remaining_flow,
-        source: "billing".to_string(),
-        status: snapshot.status,
-        status_reason: snapshot.status_reason,
-        package: snapshot.package,
-        package_detail: snapshot.package_detail,
-        used_flow: snapshot.used_flow,
-        billing_cycle: snapshot.billing_cycle,
-        updated_at: snapshot.updated_at,
-        billing_error: None,
-        login_history: snapshot.login_history,
-        online_sessions: snapshot.online_sessions,
-        offline_tip: snapshot.offline_tip,
-        mauth_enabled: snapshot.mauth_enabled,
-        billing_warnings: snapshot.warnings,
-    }
-}
-
-fn cached_billing_result(
-    state: &AppState,
-    account: &str,
-    compatibility: VpnCompatibility,
-) -> Option<Result<UserInfo, String>> {
-    let cache = state.billing_cache.lock().unwrap();
-    cache
-        .as_ref()
-        .filter(|entry| {
-            entry.account == account
-                && entry.compatibility == compatibility
-                && std::time::Instant::now() < entry.expires_at
-        })
-        .map(|entry| entry.result.clone())
-}
-
-async fn fetch_billing_cached(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    account: &Account,
-    compatibility: VpnCompatibility,
-    force: bool,
-) -> (Result<UserInfo, String>, bool) {
-    if !force {
-        if let Some(result) = cached_billing_result(state, &account.user, compatibility) {
-            return (result, false);
-        }
-    }
-
-    let _fetch_guard = state.billing_fetch_lock.lock().await;
-    if !force {
-        if let Some(result) = cached_billing_result(state, &account.user, compatibility) {
-            return (result, false);
-        }
-    }
-
-    rust_log(app, state, "计费", "开始刷新计费系统账户概览", "info");
-
-    let fetched = tokio::time::timeout(
-        std::time::Duration::from_secs(45),
-        billing::fetch(&account.user, &account.pass, compatibility),
-    )
-    .await;
-    let (result, duration) = match fetched {
-        Ok(Ok(snapshot)) => (
-            Ok(billing_snapshot_to_user_info(snapshot)),
-            std::time::Duration::from_secs(10 * 60),
-        ),
-        Ok(Err(error)) => {
-            let duration = error.cache_duration();
-            (Err(error.user_message()), duration)
-        }
-        Err(_) => (
-            Err("计费系统概览读取超过 45 秒，已停止本次请求".to_string()),
-            std::time::Duration::from_secs(60),
-        ),
-    };
-    *state.billing_cache.lock().unwrap() = Some(BillingCacheEntry {
-        account: account.user.clone(),
-        compatibility,
-        expires_at: std::time::Instant::now() + duration,
-        result: result.clone(),
-    });
-    (result, true)
-}
-
-fn unavailable_billing_info(account: &str, error: String) -> UserInfo {
-    UserInfo {
-        account: account.to_string(),
-        balance: "--".to_string(),
-        flow: "--".to_string(),
-        source: "unavailable".to_string(),
-        status: None,
-        status_reason: None,
-        package: None,
-        package_detail: None,
-        used_flow: None,
-        billing_cycle: None,
-        updated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        billing_error: Some(error),
-        login_history: Vec::new(),
-        online_sessions: Vec::new(),
-        offline_tip: None,
-        mauth_enabled: None,
-        billing_warnings: Vec::new(),
-    }
-}
-
 fn emit_billing_center_progress(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -4340,15 +4258,33 @@ async fn discover_current_campus_account(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Option<billing::DiscoveredCampusAccount>, String> {
+    if ensure_billing_foreground(&state).is_err() {
+        return Ok(None);
+    }
     let compatibility = {
         let config = state.config.read().unwrap();
         VpnCompatibility::from_config(&config.vpn_compatibility)
     };
-    let result = tokio::time::timeout(
+    let request = tokio::time::timeout(
         std::time::Duration::from_secs(25),
         billing::discover_current_campus_account(compatibility),
-    )
-    .await;
+    );
+    let background = wait_for_billing_background(&state);
+    futures_util::pin_mut!(request, background);
+    let result = match futures_util::future::select(request, background).await {
+        futures_util::future::Either::Left((result, _)) => Some(result),
+        futures_util::future::Either::Right((_, _)) => None,
+    };
+    let Some(result) = result else {
+        rust_log(
+            &app,
+            &state,
+            "账号",
+            "App 已进入后台，已停止校园网账号发现",
+            "debug",
+        );
+        return Ok(None);
+    };
     match result {
         Ok(Ok(Some(account))) => {
             rust_log(
@@ -4390,59 +4326,12 @@ async fn get_user_info(
     local_ip: Option<String>,
     force: Option<bool>,
 ) -> Result<Option<UserInfo>, String> {
-    let (account, compatibility) = {
+    let compatibility = {
         let config = state.config.read().unwrap();
-        (
-            preferred_billing_account(&config),
-            VpnCompatibility::from_config(&config.vpn_compatibility),
-        )
+        VpnCompatibility::from_config(&config.vpn_compatibility)
     };
-    let mobile_data = is_mobile_data_network(&state.last_network_state.lock().unwrap());
-    let billing_result = if let Some(account) = account.as_ref() {
-        if mobile_data {
-            cached_billing_result(&state, &account.user, compatibility)
-                .or_else(|| Some(Err("Android 移动数据网络下已暂停计费系统刷新".to_string())))
-        } else {
-            let force = force.unwrap_or(false);
-            let fetch_started = std::time::Instant::now();
-            let (result, fetched_now) =
-                fetch_billing_cached(&app, &state, account, compatibility, force).await;
-            if fetched_now {
-                match &result {
-                    Ok(info) => rust_log(
-                        &app,
-                        &state,
-                        "计费",
-                        &format!(
-                            "计费系统账户概览已更新（耗时 {:.1} 秒，{} 条警告）",
-                            fetch_started.elapsed().as_secs_f32(),
-                            info.billing_warnings.len()
-                        ),
-                        "info",
-                    ),
-                    Err(error) => rust_log(&app, &state, "计费", error, "info"),
-                }
-            }
-            Some(result)
-        }
-    } else {
-        None
-    };
-
-    let info = match billing_result {
-        Some(Ok(info)) => Some(info),
-        Some(Err(error)) => {
-            if let Some(mut fallback) = fetch_portal_user_info(local_ip.as_deref()).await {
-                fallback.billing_error = Some(error);
-                Some(fallback)
-            } else {
-                account
-                    .as_ref()
-                    .map(|account| unavailable_billing_info(&account.user, error))
-            }
-        }
-        None => fetch_portal_user_info(local_ip.as_deref()).await,
-    };
+    let _ = force;
+    let info = fetch_portal_user_info(local_ip.as_deref(), compatibility).await;
     if let Some(info) = info.as_ref() {
         evaluate_usage_alerts(&app, &state, info);
     }
@@ -4481,37 +4370,32 @@ async fn get_billing_center(
     let emit_progress = move |message: &str, percent: u8| {
         emit_billing_center_progress(&progress_app, &progress_state, message, percent);
     };
-    let fetched = tokio::time::timeout(
-        std::time::Duration::from_secs(75),
-        billing::fetch_center(&account.user, &account.pass, compatibility, emit_progress),
-    )
+    ensure_billing_foreground(&state)?;
+    let result = run_billing_while_foreground(&state, async {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(75),
+            billing::fetch_center(&account.user, &account.pass, compatibility, emit_progress),
+        )
+        .await
+        {
+            Ok(result) => result.map_err(|error| error.user_message()),
+            Err(_) => {
+                Err("计费中心完整数据读取超过 75 秒，已停止本次请求；请检查 VPN 后重试".to_string())
+            }
+        }
+    })
     .await;
-    let result = match fetched {
-        Ok(result) => result.map_err(|error| error.user_message()),
-        Err(_) => {
-            Err("计费中心完整数据读取超过 75 秒，已停止本次请求；请检查 VPN 后重试".to_string())
-        }
-    };
     match &result {
-        Ok(data) => {
-            let overview = billing_snapshot_to_user_info(data.overview.clone());
-            *state.billing_cache.lock().unwrap() = Some(BillingCacheEntry {
-                account: account.user.clone(),
-                compatibility,
-                expires_at: std::time::Instant::now() + std::time::Duration::from_secs(10 * 60),
-                result: Ok(overview),
-            });
-            rust_log(
-                &app,
-                &state,
-                "计费",
-                &format!(
-                    "计费中心完整数据已更新（{} 条警告）",
-                    data.warnings.len() + data.overview.warnings.len()
-                ),
-                "debug",
-            )
-        }
+        Ok(data) => rust_log(
+            &app,
+            &state,
+            "计费",
+            &format!(
+                "计费中心完整数据已更新（{} 条警告）",
+                data.warnings.len() + data.overview.warnings.len()
+            ),
+            "debug",
+        ),
         Err(error) => rust_log(&app, &state, "计费", error, "error"),
     }
     result
@@ -4529,9 +4413,13 @@ async fn query_billing_records(
     let page = query.page;
     let all = query.all;
     let _fetch_guard = state.billing_fetch_lock.lock().await;
-    let result = billing::query_records(&account.user, &account.pass, compatibility, &query)
-        .await
-        .map_err(|error| error.user_message());
+    ensure_billing_foreground(&state)?;
+    let result = run_billing_while_foreground(&state, async {
+        billing::query_records(&account.user, &account.pass, compatibility, &query)
+            .await
+            .map_err(|error| error.user_message())
+    })
+    .await;
     match &result {
         Ok(data) => rust_log(
             &app,
@@ -4598,9 +4486,13 @@ async fn perform_billing_action(
     } else {
         let _fetch_guard = state.billing_fetch_lock.lock().await;
         let compatibility = compatibility.ok_or_else(|| "计费操作缺少 VPN 兼容配置".to_string())?;
-        billing::perform_action(&account.user, &account.pass, compatibility, &request)
-            .await
-            .map_err(|error| error.user_message())?
+        ensure_billing_foreground(&state)?;
+        run_billing_while_foreground(&state, async {
+            billing::perform_action(&account.user, &account.pass, compatibility, &request)
+                .await
+                .map_err(|error| error.user_message())
+        })
+        .await?
     };
 
     if result.password_changed {
@@ -4624,7 +4516,6 @@ async fn perform_billing_action(
         result.message = format!("{}；App 中的账号密码已同步更新", result.message);
     }
 
-    *state.billing_cache.lock().unwrap() = None;
     let action_label = match action.as_str() {
         "stopNow" => "立即停机",
         "reopenNow" => "立即复通",
@@ -4708,6 +4599,26 @@ fn persist_campus_service_session(
     }
 }
 
+fn campus_recharge_open_at_hour(hour: u64) -> bool {
+    (6..23).contains(&hour)
+}
+
+fn ensure_campus_recharge_open() -> Result<(), String> {
+    let unix_seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let beijing_hour = (unix_seconds / 3600 + 8) % 24;
+    if campus_recharge_open_at_hour(beijing_hour) {
+        Ok(())
+    } else {
+        Err(
+            "充值系统仅在北京时间每日 06:00–23:00 开放；当前可查看余额，但不能创建或确认充值订单"
+                .to_string(),
+        )
+    }
+}
+
 #[tauri::command]
 async fn prepare_network_recharge(
     app: tauri::AppHandle,
@@ -4716,6 +4627,7 @@ async fn prepare_network_recharge(
     amount: String,
     account_user: Option<String>,
 ) -> Result<campus_services::RechargePreview, String> {
+    ensure_campus_recharge_open()?;
     let account = campus_service_target(&state, account_user.as_deref())?;
     let _service_guard = state.campus_service_lock.lock().await;
     let session_seed = campus_service_session_seed(&state, &account.user);
@@ -4790,6 +4702,7 @@ async fn confirm_network_recharge(
     state: tauri::State<'_, Arc<AppState>>,
     confirmation_id: String,
 ) -> Result<campus_services::RechargeResult, String> {
+    ensure_campus_recharge_open()?;
     let _service_guard = state.campus_service_lock.lock().await;
     let pending = {
         let mut slot = state.campus_recharge_pending.lock().await;
@@ -4823,10 +4736,7 @@ async fn confirm_network_recharge(
     })?
     .map_err(campus_services::CampusServiceError::user_message);
     match &result {
-        Ok(_) => {
-            *state.billing_cache.lock().unwrap() = None;
-            rust_log(&app, &state, "计费", "校园卡网费充值成功", "success");
-        }
+        Ok(_) => rust_log(&app, &state, "计费", "校园卡网费充值成功", "success"),
         Err(error) => rust_log(&app, &state, "计费", error, "error"),
     }
     result
@@ -4896,6 +4806,7 @@ async fn prepare_alipay_card_recharge(
     amount: String,
     account_user: Option<String>,
 ) -> Result<campus_services::AlipayRechargePreview, String> {
+    ensure_campus_recharge_open()?;
     let account = campus_service_target(&state, account_user.as_deref())?;
     let _service_guard = state.campus_service_lock.lock().await;
     let session_seed = campus_service_session_seed(&state, &account.user);
@@ -4945,6 +4856,7 @@ async fn confirm_alipay_card_recharge(
     state: tauri::State<'_, Arc<AppState>>,
     confirmation_id: String,
 ) -> Result<campus_services::AlipayRechargeResult, String> {
+    ensure_campus_recharge_open()?;
     let _service_guard = state.campus_service_lock.lock().await;
     let pending = {
         let mut slot = state.campus_alipay_recharge_pending.lock().await;
@@ -5007,6 +4919,7 @@ async fn prepare_wechat_card_recharge(
     amount: String,
     account_user: Option<String>,
 ) -> Result<campus_services::WechatRechargePreview, String> {
+    ensure_campus_recharge_open()?;
     let account = campus_service_target(&state, account_user.as_deref())?;
     let _service_guard = state.campus_service_lock.lock().await;
     let session_seed = campus_service_session_seed(&state, &account.user);
@@ -5051,6 +4964,7 @@ async fn confirm_wechat_card_recharge(
     state: tauri::State<'_, Arc<AppState>>,
     confirmation_id: String,
 ) -> Result<campus_services::WechatRechargeResult, String> {
+    ensure_campus_recharge_open()?;
     let _service_guard = state.campus_service_lock.lock().await;
     let pending = {
         let mut slot = state.campus_wechat_recharge_pending.lock().await;
@@ -5168,6 +5082,7 @@ fn billing_action_target(
     state: &AppState,
     account_user: Option<&str>,
 ) -> Result<(Account, VpnCompatibility), String> {
+    ensure_billing_foreground(state)?;
     if is_mobile_data_network(&state.last_network_state.lock().unwrap()) {
         return Err("Android 移动数据网络下不能访问校园网计费系统".to_string());
     }
@@ -5199,27 +5114,28 @@ async fn disconnect_billing_session(
 ) -> Result<String, String> {
     let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     let _fetch_guard = state.billing_fetch_lock.lock().await;
-    let result = billing::disconnect_session(
-        &account.user,
-        &account.pass,
-        compatibility,
-        &session_id,
-        &ip,
-        &mac,
-    )
-    .await
-    .map_err(|error| error.user_message());
+    ensure_billing_foreground(&state)?;
+    let result = run_billing_while_foreground(&state, async {
+        billing::disconnect_session(
+            &account.user,
+            &account.pass,
+            compatibility,
+            &session_id,
+            &ip,
+            &mac,
+        )
+        .await
+        .map_err(|error| error.user_message())
+    })
+    .await;
     match &result {
-        Ok(_) => {
-            *state.billing_cache.lock().unwrap() = None;
-            rust_log(
-                &app,
-                &state,
-                "计费",
-                "用户已确认注销一条在线会话",
-                "success",
-            );
-        }
+        Ok(_) => rust_log(
+            &app,
+            &state,
+            "计费",
+            "用户已确认注销一条在线会话",
+            "success",
+        ),
         Err(error) => rust_log(&app, &state, "计费", error, "error"),
     }
     result
@@ -5234,20 +5150,21 @@ async fn set_billing_mauth(
 ) -> Result<String, String> {
     let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     let _fetch_guard = state.billing_fetch_lock.lock().await;
-    let result = billing::set_mauth_enabled(&account.user, &account.pass, compatibility, enabled)
-        .await
-        .map_err(|error| error.user_message());
+    ensure_billing_foreground(&state)?;
+    let result = run_billing_while_foreground(&state, async {
+        billing::set_mauth_enabled(&account.user, &account.pass, compatibility, enabled)
+            .await
+            .map_err(|error| error.user_message())
+    })
+    .await;
     match &result {
-        Ok(_) => {
-            *state.billing_cache.lock().unwrap() = None;
-            rust_log(
-                &app,
-                &state,
-                "计费",
-                "用户已确认修改无感认证状态",
-                "success",
-            );
-        }
+        Ok(_) => rust_log(
+            &app,
+            &state,
+            "计费",
+            "用户已确认修改无感认证状态",
+            "success",
+        ),
         Err(error) => rust_log(&app, &state, "计费", error, "error"),
     }
     result
@@ -5568,7 +5485,6 @@ pub fn run() {
             })),
             auto_login_paused_until: std::sync::atomic::AtomicI64::new(0),
             usage_alert_history: Mutex::new(HashMap::new()),
-            billing_cache: Mutex::new(None),
             billing_fetch_lock: tokio::sync::Mutex::new(()),
             campus_service_lock: tokio::sync::Mutex::new(()),
             campus_recharge_pending: tokio::sync::Mutex::new(None),
@@ -6440,6 +6356,18 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_user_info_uses_the_lgn_https_host() {
+        let url = reqwest::Url::parse(&lgn_user_info_url(1234)).unwrap();
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("lgn.bjut.edu.cn"));
+        assert_eq!(url.port(), Some(802));
+        assert_eq!(
+            url.query_pairs().find(|(key, _)| key == "v").unwrap().1,
+            "1234"
+        );
+    }
+
+    #[test]
     fn lgn_protocol_is_wired_only_unless_explicitly_trusted() {
         assert!(automatic_login_network_allowed(
             &LoginType::Type3,
@@ -6478,5 +6406,13 @@ mod tests {
         assert_eq!(first_decimal("余额 9.50 元"), Some(9.5));
         assert_eq!(first_decimal("4.25 GB"), Some(4.25));
         assert_eq!(first_decimal("无限"), None);
+    }
+
+    #[test]
+    fn campus_recharge_hours_use_beijing_half_open_range() {
+        assert!(!campus_recharge_open_at_hour(5));
+        assert!(campus_recharge_open_at_hour(6));
+        assert!(campus_recharge_open_at_hour(22));
+        assert!(!campus_recharge_open_at_hour(23));
     }
 }
