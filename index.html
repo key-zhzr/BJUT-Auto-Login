@@ -232,16 +232,25 @@
         <!-- Billing center (opened from the dashboard to keep mobile navigation compact) -->
         <section id="billing-center" class="page">
           <header class="page-header billing-center-header">
-            <div>
+            <div class="billing-center-heading">
               <button id="btn-close-billing" class="billing-back-button" type="button">
                 <i data-lucide="arrow-left"></i> 返回控制台
               </button>
               <h1>校园网计费中心</h1>
               <p id="billing-center-subtitle">账户状态、在线会话与近期上网记录</p>
             </div>
-            <button id="btn-refresh-billing-center" class="btn btn-secondary billing-refresh-button" type="button" aria-label="刷新计费中心数据">
-              <i data-lucide="refresh-cw"></i><span id="billing-refresh-label">刷新</span>
-            </button>
+            <div class="billing-header-tools">
+              <label class="billing-account-picker">
+                <span>计费账号</span>
+                <div class="custom-select compact-select" id="billing-account-select" aria-label="当前计费账号">
+                  <div class="custom-select-trigger" tabindex="0"><span>暂无可用账号</span><i data-lucide="chevron-down"></i></div>
+                  <div class="custom-select-options"></div>
+                </div>
+              </label>
+              <button id="btn-refresh-billing-center" class="btn btn-secondary billing-refresh-button" type="button" aria-label="刷新计费中心数据">
+                <i data-lucide="refresh-cw"></i><span id="billing-refresh-label">刷新</span>
+              </button>
+            </div>
           </header>
 
           <div id="billing-center-message" class="billing-center-message" hidden aria-live="polite"></div>
@@ -364,40 +373,52 @@
               </div>
             </div>
             <div class="billing-record-toolbar">
-              <div class="custom-select compact-select" id="billing-record-kind" aria-label="账单记录类型">
-                <div class="custom-select-trigger" tabindex="0"><span>上网记录</span><i data-lucide="chevron-down"></i></div>
-                <div class="custom-select-options">
-                  <div class="custom-option selected" data-value="usage">上网记录</div>
-                  <div class="custom-option" data-value="monthly">历史账单</div>
-                  <div class="custom-option" data-value="payments">充值明细</div>
-                  <div class="custom-option" data-value="operations">业务办理记录</div>
-                  <div class="custom-option" data-value="stopLogs">报停记录</div>
-                  <div class="custom-option" data-value="reopenLogs">复通记录</div>
-                  <div class="custom-option" data-value="packageLogs">套餐预约记录</div>
+              <label class="billing-toolbar-field billing-record-kind-field">
+                <span>记录类型</span>
+                <div class="custom-select compact-select" id="billing-record-kind" aria-label="账单记录类型">
+                  <div class="custom-select-trigger" tabindex="0"><span>上网记录</span><i data-lucide="chevron-down"></i></div>
+                  <div class="custom-select-options">
+                    <div class="custom-option selected" data-value="usage">上网记录</div>
+                    <div class="custom-option" data-value="monthly">历史账单</div>
+                    <div class="custom-option" data-value="payments">充值明细</div>
+                    <div class="custom-option" data-value="operations">业务办理记录</div>
+                    <div class="custom-option" data-value="stopLogs">报停记录</div>
+                    <div class="custom-option" data-value="reopenLogs">复通记录</div>
+                    <div class="custom-option" data-value="packageLogs">套餐预约记录</div>
+                  </div>
                 </div>
-              </div>
+              </label>
               <div id="billing-record-date-filter" class="billing-record-date-filter">
                 <label>开始日期<input id="billing-record-start-date" type="date" aria-label="查询开始日期"></label>
                 <span>至</span>
                 <label>结束日期<input id="billing-record-end-date" type="date" aria-label="查询结束日期"></label>
               </div>
-              <div id="billing-record-year-filter" class="custom-select compact-select" aria-label="历史账单年份" hidden>
-                <div class="custom-select-trigger" tabindex="0"><span>选择年份</span><i data-lucide="chevron-down"></i></div>
-                <div class="custom-select-options"></div>
-              </div>
-              <div class="custom-select compact-select billing-page-size-select" id="billing-record-page-size" aria-label="每页记录数">
-                <div class="custom-select-trigger" tabindex="0"><span>每页 10 条</span><i data-lucide="chevron-down"></i></div>
-                <div class="custom-select-options">
-                  <div class="custom-option selected" data-value="10">每页 10 条</div>
-                  <div class="custom-option" data-value="20">每页 20 条</div>
-                  <div class="custom-option" data-value="25">每页 25 条</div>
-                  <div class="custom-option" data-value="50">每页 50 条</div>
-                  <div class="custom-option" data-value="100">每页 100 条</div>
+              <label class="billing-toolbar-field billing-record-year-field">
+                <span>账单年份</span>
+                <div id="billing-record-year-filter" class="custom-select compact-select" aria-label="历史账单年份" hidden>
+                  <div class="custom-select-trigger" tabindex="0"><span>选择年份</span><i data-lucide="chevron-down"></i></div>
+                  <div class="custom-select-options"></div>
                 </div>
+              </label>
+              <label class="billing-toolbar-field billing-page-size-field">
+                <span>每页显示</span>
+                <div class="custom-select compact-select billing-page-size-select" id="billing-record-page-size" aria-label="每页记录数">
+                  <div class="custom-select-trigger" tabindex="0"><span>每页 10 条</span><i data-lucide="chevron-down"></i></div>
+                  <div class="custom-select-options">
+                    <div class="custom-option selected" data-value="10">每页 10 条</div>
+                    <div class="custom-option" data-value="20">每页 20 条</div>
+                    <div class="custom-option" data-value="25">每页 25 条</div>
+                    <div class="custom-option" data-value="50">每页 50 条</div>
+                    <div class="custom-option" data-value="100">每页 100 条</div>
+                  </div>
+                </div>
+              </label>
+              <div class="billing-toolbar-field billing-record-query-field">
+                <span aria-hidden="true">操作</span>
+                <button id="btn-query-billing-records" class="btn btn-primary btn-sm" type="button">
+                  <i data-lucide="search"></i> 查询
+                </button>
               </div>
-              <button id="btn-query-billing-records" class="btn btn-primary btn-sm" type="button">
-                <i data-lucide="search"></i> 查询
-              </button>
             </div>
             <div class="billing-record-summary-row">
               <div id="billing-record-summary" class="billing-record-summary"></div>
@@ -499,39 +520,75 @@
                   <i data-lucide="wallet-cards"></i>
                   <h2>充值</h2>
                 </div>
-                <p>选择校园卡直接转入网费，或先通过支付宝、微信为当前校园卡充值。</p>
+                <p>按支付方式、校园卡、网费账户和金额依次确认，App 会串联并核对完整充值流程。</p>
               </div>
             </div>
             <div class="billing-payment-panel">
-              <h3 id="billing-recharge-method-title">从校园卡转入网费</h3>
               <p id="billing-recharge-state" class="billing-inline-note" aria-live="polite">填写目标学工号和金额后，先核对账户再确认扣费。</p>
               <form id="billing-recharge-form" class="billing-recharge-form" autocomplete="off">
-                <div class="billing-recharge-fields">
-                  <label>
-                    <span>目标学工号</span>
-                    <input id="billing-recharge-account" inputmode="text" autocomplete="off" maxlength="20" placeholder="需要充值的学工号" required>
-                  </label>
-                  <label>
-                    <span>充值金额（元）</span>
-                    <input id="billing-recharge-amount" inputmode="decimal" autocomplete="off" maxlength="6" placeholder="0.01–500" required>
-                  </label>
+                <div class="billing-recharge-flow">
+                  <section class="billing-flow-step billing-flow-method-step">
+                    <div class="billing-flow-step-heading">
+                      <span class="billing-flow-step-number">1</span>
+                      <div><small>支付入口</small><h3 id="billing-recharge-method-title">从校园卡转入网费</h3></div>
+                    </div>
+                    <div class="billing-payment-methods" role="tablist" aria-label="充值方式">
+                      <button class="billing-payment-method active" type="button" role="tab" aria-selected="true" data-recharge-method-target="campus-card">
+                        <i data-lucide="credit-card"></i>
+                        <span><strong>校园卡余额</strong><small>直接转入网费</small></span>
+                      </button>
+                      <button class="billing-payment-method" type="button" role="tab" aria-selected="false" data-recharge-method-target="alipay">
+                        <i data-lucide="smartphone"></i>
+                        <span><strong>支付宝</strong><small>先充值校园卡</small></span>
+                      </button>
+                      <button class="billing-payment-method android-only-payment-method" type="button" role="tab" aria-selected="false" data-recharge-method-target="wechat">
+                        <i data-lucide="qr-code"></i>
+                        <span><strong>微信支付</strong><small>直接唤起微信</small></span>
+                      </button>
+                    </div>
+                    <p id="billing-recharge-method-description" class="billing-inline-note">将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。</p>
+                  </section>
+                  <span class="billing-flow-connector" aria-hidden="true">→</span>
+                  <section class="billing-flow-step">
+                    <div class="billing-flow-step-heading">
+                      <span class="billing-flow-step-number">2</span>
+                      <div><small>资金承接</small><h3>校园卡账户</h3></div>
+                    </div>
+                    <div class="custom-select form-select" id="billing-recharge-card-account" aria-label="充值使用的校园卡账户">
+                      <div class="custom-select-trigger" tabindex="0"><span>暂无可用账号</span><i data-lucide="chevron-down"></i></div>
+                      <div class="custom-select-options"></div>
+                    </div>
+                    <p class="billing-inline-note">校园卡余额扣款，或接收支付宝、微信到账。</p>
+                  </section>
+                  <span class="billing-flow-connector" aria-hidden="true">→</span>
+                  <section class="billing-flow-step">
+                    <div class="billing-flow-step-heading">
+                      <span class="billing-flow-step-number">3</span>
+                      <div><small>最终到账</small><h3>目标网费账户</h3></div>
+                    </div>
+                    <div class="custom-select form-select" id="billing-recharge-target-account" aria-label="目标网费账户">
+                      <div class="custom-select-trigger" tabindex="0"><span>选择已保存账号</span><i data-lucide="chevron-down"></i></div>
+                      <div class="custom-select-options"></div>
+                    </div>
+                    <label id="billing-recharge-custom-target" class="billing-recharge-custom-target" hidden>
+                      <span>自定义学工号</span>
+                      <input id="billing-recharge-account" inputmode="text" autocomplete="off" maxlength="20" placeholder="输入 5–20 位学工号" required>
+                    </label>
+                    <p class="billing-inline-note">可从已保存账号中选择，也可输入其他学工号。</p>
+                  </section>
+                  <span class="billing-flow-connector" aria-hidden="true">→</span>
+                  <section class="billing-flow-step billing-flow-submit-step">
+                    <div class="billing-flow-step-heading">
+                      <span class="billing-flow-step-number">4</span>
+                      <div><small>核对提交</small><h3>充值金额</h3></div>
+                    </div>
+                    <label class="billing-recharge-amount-field">
+                      <span>金额（元）</span>
+                      <input id="billing-recharge-amount" inputmode="decimal" autocomplete="off" maxlength="6" placeholder="0.01–500" required>
+                    </label>
+                    <button id="btn-billing-recharge" class="btn btn-primary btn-sm" type="submit">核对充值信息</button>
+                  </section>
                 </div>
-                <div class="billing-payment-methods" role="tablist" aria-label="充值方式">
-                  <button class="billing-payment-method active" type="button" role="tab" aria-selected="true" data-recharge-method-target="campus-card">
-                    <i data-lucide="credit-card"></i>
-                    <span><strong>校园卡转入</strong><small>直接从当前校园卡转入目标网费账户</small></span>
-                  </button>
-                  <button class="billing-payment-method" type="button" role="tab" aria-selected="false" data-recharge-method-target="alipay">
-                    <i data-lucide="smartphone"></i>
-                    <span><strong>支付宝</strong><small>先为当前校园卡充值，再自动衔接网费转入</small></span>
-                  </button>
-                  <button class="billing-payment-method android-only-payment-method" type="button" role="tab" aria-selected="false" data-recharge-method-target="wechat">
-                    <i data-lucide="qr-code"></i>
-                    <span><strong>微信支付</strong><small>保持学校支付会话并直接唤起微信，再自动衔接网费转入</small></span>
-                  </button>
-                </div>
-                <p id="billing-recharge-method-description" class="billing-inline-note">将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。</p>
-                <button id="btn-billing-recharge" class="btn btn-primary btn-sm" type="submit">核对充值信息</button>
               </form>
               <div id="billing-recharge-progress" class="billing-recharge-progress" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                 <div class="billing-recharge-progress-label">
@@ -573,13 +630,13 @@
             </div>
             <form id="billing-password-form" class="billing-security-form" autocomplete="off">
               <h3>修改统一认证密码</h3>
-              <p id="billing-password-policy" class="billing-inline-note">正在读取密码策略…</p>
+              <p id="billing-password-policy" class="billing-inline-note">密码要求：12–16 位、大写字母、小写字母、数字、特殊字符 !@#$%^&amp;*()</p>
               <div class="billing-security-fields">
                 <input id="billing-old-password" type="password" autocomplete="current-password" maxlength="16" placeholder="当前密码" required>
                 <input id="billing-new-password" type="password" autocomplete="new-password" maxlength="16" placeholder="新密码" required>
                 <input id="billing-confirm-password" type="password" autocomplete="new-password" maxlength="16" placeholder="确认新密码" required>
               </div>
-              <button id="btn-billing-password" class="btn btn-danger btn-sm" type="submit" disabled>修改统一认证密码</button>
+              <button id="btn-billing-password" class="btn btn-danger btn-sm" type="submit">修改统一认证密码</button>
             </form>
             <form id="billing-questions-form" class="billing-security-form" autocomplete="off">
               <h3>密码保护</h3>
@@ -1047,13 +1104,6 @@
               </div>
               <div class="setting-item">
                 <div class="setting-info">
-                  <h4>当前版本</h4>
-                  <p id="app-version">v0.1.4</p>
-                </div>
-                <button class="btn btn-secondary btn-sm" id="btn-check-update">检查更新</button>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
                   <h4>更新通道</h4>
                   <p>选择您想接收的更新版本类型</p>
                 </div>
@@ -1102,6 +1152,28 @@
                 </div>
                 <button class="btn btn-danger btn-sm" id="btn-quit-app">退出</button>
               </div>
+            </div>
+
+            <div id="settings-about" class="settings-group glass-card settings-about-card" style="margin-top: 1rem;">
+              <div class="settings-about-header">
+                <div class="settings-about-logo" aria-hidden="true"></div>
+                <div>
+                  <p class="settings-about-eyebrow">关于</p>
+                  <h3>BJUT Auto Login</h3>
+                  <p>面向北京工业大学校园网的本地自动登录、网络诊断与计费服务助手。</p>
+                </div>
+              </div>
+              <div class="settings-about-meta">
+                <div><span>当前版本</span><strong id="app-version">v0.1.4</strong></div>
+                <div><span>数据原则</span><strong>账号凭据仅保存在本机安全存储</strong></div>
+                <div><span>项目性质</span><strong>开源第三方工具，非学校官方应用</strong></div>
+              </div>
+              <div class="settings-about-actions">
+                <button class="btn btn-primary btn-sm" id="btn-check-update" type="button"><i data-lucide="refresh-cw"></i> 检查更新</button>
+                <button class="btn btn-secondary btn-sm" id="btn-open-project-home" type="button"><i data-lucide="external-link"></i> 开源仓库</button>
+                <button class="btn btn-secondary btn-sm" id="btn-open-project-license" type="button"><i data-lucide="file-text"></i> 开源许可</button>
+              </div>
+              <p class="settings-about-note">应用只会连接校园网登录、计费、统一认证、校园服务与 GitHub Releases 等明确用途的服务；敏感字段不会写入运行日志。</p>
             </div>
         </section>
       </main>

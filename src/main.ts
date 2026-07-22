@@ -1,5 +1,5 @@
 import {
-  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
   Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
   QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
@@ -14,7 +14,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 const icons = {
-  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown,
+  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
   Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
   QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
@@ -1595,6 +1595,13 @@ class CustomSelect {
     this.triggerSpan.textContent = selectedText || val;
   }
 
+  setDisabled(disabled: boolean) {
+    this.element.classList.toggle('is-disabled', disabled);
+    this.trigger.setAttribute('aria-disabled', String(disabled));
+    this.trigger.tabIndex = disabled ? -1 : 0;
+    if (disabled) this.close();
+  }
+
   addEventListener(event: 'change', callback: (e: any) => void) {
     if (event === 'change') {
       this.onChangeCallbacks.push((val) => {
@@ -1702,6 +1709,7 @@ const billingRechargeMethodTitle = document.getElementById('billing-recharge-met
 const billingRechargeMethodDescription = document.getElementById('billing-recharge-method-description')!;
 const billingRechargeForm = document.getElementById('billing-recharge-form') as HTMLFormElement;
 const billingRechargeAccount = document.getElementById('billing-recharge-account') as HTMLInputElement;
+const billingRechargeCustomTarget = document.getElementById('billing-recharge-custom-target')!;
 const billingRechargeAmount = document.getElementById('billing-recharge-amount') as HTMLInputElement;
 const btnBillingRecharge = document.getElementById('btn-billing-recharge') as HTMLButtonElement;
 const billingRechargeProgress = document.getElementById('billing-recharge-progress')!;
@@ -1807,6 +1815,9 @@ let logSessionFilter: CustomSelect;
 let logLevelFilter: CustomSelect;
 let networkProfileProtocolSelect: CustomSelect;
 let networkProfileAccountSelect: CustomSelect;
+let billingAccountSelect: CustomSelect;
+let billingRechargeCardAccountSelect: CustomSelect;
+let billingRechargeTargetAccountSelect: CustomSelect;
 let billingRecordKindSelect: CustomSelect;
 let billingRecordYearSelect: CustomSelect;
 let billingRecordPageSizeSelect: CustomSelect;
@@ -1834,6 +1845,14 @@ let campusAccountDiscoveryPromise: Promise<void> | null = null;
 let lastCampusAccountDiscoveryAt = 0;
 const FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY = 'bjut_first_launch_account_discovery_pending';
 const DISMISSED_DISCOVERED_ACCOUNT_KEY = 'bjut_dismissed_discovered_account';
+const UNIFIED_AUTH_PASSWORD_POLICY: BillingPasswordPolicy = {
+  minLength: 12,
+  maxLength: 16,
+  requireUppercase: true,
+  requireLowercase: true,
+  requireDigit: true,
+  requireSpecial: true,
+};
 
 // Add Modal
 const addModal = document.getElementById('add-modal')!;
@@ -1887,6 +1906,9 @@ async function init() {
   logLevelFilter = new CustomSelect('log-level-filter');
   networkProfileProtocolSelect = new CustomSelect('network-profile-protocol');
   networkProfileAccountSelect = new CustomSelect('network-profile-account');
+  billingAccountSelect = new CustomSelect('billing-account-select');
+  billingRechargeCardAccountSelect = new CustomSelect('billing-recharge-card-account');
+  billingRechargeTargetAccountSelect = new CustomSelect('billing-recharge-target-account');
   billingRecordKindSelect = new CustomSelect('billing-record-kind');
   billingRecordYearSelect = new CustomSelect('billing-record-year-filter');
   billingRecordPageSizeSelect = new CustomSelect('billing-record-page-size');
@@ -1908,6 +1930,22 @@ async function init() {
     if (state.queried) void queryBillingRecords(1);
     else renderBillingRecords();
   });
+  billingAccountSelect.addEventListener('change', () => {
+    billingCenterData = null;
+    billingRecordQueryStates = {};
+    resetBillingCenterForSelectedAccount();
+    syncStandaloneBillingSecurity();
+    void refreshBillingCenterData();
+  });
+  billingRechargeCardAccountSelect.addEventListener('change', () => {
+    billingRechargePreview.hidden = true;
+    billingRechargeState.textContent = `已选择校园卡账户 ${selectedRechargePayerAccount() || '--'}，请继续核对目标账户和金额。`;
+  });
+  billingRechargeTargetAccountSelect.addEventListener('change', () => {
+    syncRechargeTargetAccountInput();
+    billingRechargePreview.hidden = true;
+  });
+  syncStandaloneBillingSecurity();
 
   renderIcons();
   settingAutoLogin.checked = autoLoginEnabled;
@@ -3264,6 +3302,17 @@ function setupEventListeners() {
     });
   }
 
+  document.getElementById('btn-open-project-home')?.addEventListener('click', () => {
+    void openUrl('https://github.com/key-zhzr/BJUT-Auto-Login').catch(error => {
+      void customAlert(`无法打开开源仓库：${String(error)}`, '关于 BJUT-AL');
+    });
+  });
+  document.getElementById('btn-open-project-license')?.addEventListener('click', () => {
+    void openUrl('https://github.com/key-zhzr/BJUT-Auto-Login/blob/main/LICENSE').catch(error => {
+      void customAlert(`无法打开开源许可：${String(error)}`, '关于 BJUT-AL');
+    });
+  });
+
   const btnCheckUpdate = document.getElementById('btn-check-update') as HTMLButtonElement | null;
   if (btnCheckUpdate) {
     btnCheckUpdate.addEventListener('click', async () => {
@@ -3875,6 +3924,7 @@ function renderAccounts() {
   if (accounts.length === 0) {
     accountsList.innerHTML = '<div style="color: var(--text-muted); padding: 1rem;">暂无账号，请添加。</div>';
     updateOverrideOptions();
+    updateBillingAccountOptions();
     return;
   }
   
@@ -3933,6 +3983,7 @@ function renderAccounts() {
   });
   renderIcons(accountsList);
   updateOverrideOptions();
+  updateBillingAccountOptions();
 }
 
 function updateOverrideOptions() {
@@ -3946,6 +3997,78 @@ function updateOverrideOptions() {
   });
   opts.push({ value: 'add', text: '添加账号...' });
   overrideAccountSelect.setOptions(opts);
+}
+
+function enabledBillingAccounts() {
+  return getAccounts().filter(account => !account.isDisabled && account.user && account.pass);
+}
+
+function defaultBillingAccountUser(): string {
+  const accounts = enabledBillingAccounts();
+  return accounts.find(account => account.isDefault)?.user || accounts[0]?.user || '';
+}
+
+function selectedBillingAccountUser(): string {
+  return billingAccountSelect?.value || defaultBillingAccountUser();
+}
+
+function selectedRechargePayerAccount(): string {
+  return billingRechargeCardAccountSelect?.value || selectedBillingAccountUser();
+}
+
+function syncRechargeTargetAccountInput() {
+  if (!billingRechargeTargetAccountSelect) return;
+  const selected = billingRechargeTargetAccountSelect.value;
+  const custom = selected === '__custom__' || !selected;
+  billingRechargeCustomTarget.hidden = !custom;
+  if (!custom) billingRechargeAccount.value = selected;
+  else if (enabledBillingAccounts().some(account => account.user === billingRechargeAccount.value)) {
+    billingRechargeAccount.value = '';
+  }
+  billingRechargeAccount.required = custom;
+  billingRechargeAccount.disabled = !custom;
+}
+
+function updateBillingAccountOptions() {
+  if (!billingAccountSelect || !billingRechargeCardAccountSelect || !billingRechargeTargetAccountSelect) return;
+  const accounts = enabledBillingAccounts();
+  const previousBilling = billingAccountSelect.value;
+  const options = accounts.map(account => ({
+    value: account.user,
+    text: `${account.user}${account.isDefault ? '（默认）' : ''}`,
+  }));
+  const fallback = accounts.find(account => account.isDefault)?.user || accounts[0]?.user || '';
+
+  const currentBilling = accounts.some(account => account.user === billingAccountSelect.value)
+    ? billingAccountSelect.value
+    : fallback;
+  billingAccountSelect.setOptions(options.length > 0 ? options : [{ value: '', text: '暂无可用账号' }]);
+  billingAccountSelect.setValue(currentBilling);
+
+  const currentPayer = accounts.some(account => account.user === billingRechargeCardAccountSelect.value)
+    ? billingRechargeCardAccountSelect.value
+    : currentBilling;
+  billingRechargeCardAccountSelect.setOptions(options.length > 0 ? options : [{ value: '', text: '暂无可用账号' }]);
+  billingRechargeCardAccountSelect.setValue(currentPayer);
+
+  const previousTarget = billingRechargeTargetAccountSelect.value;
+  const targetOptions = [
+    ...options.map(option => ({ ...option, text: `已保存 · ${option.value}` })),
+    { value: '__custom__', text: '自定义其他学工号' },
+  ];
+  billingRechargeTargetAccountSelect.setOptions(targetOptions);
+  billingRechargeTargetAccountSelect.setValue(
+    targetOptions.some(option => option.value === previousTarget)
+      ? previousTarget
+      : (currentBilling || '__custom__'),
+  );
+  syncRechargeTargetAccountInput();
+  syncStandaloneBillingSecurity();
+  if (billingCenterData && (billingCenterData.account !== currentBilling || previousBilling !== currentBilling)) {
+    billingCenterData = null;
+    billingRecordQueryStates = {};
+    resetBillingCenterForSelectedAccount();
+  }
 }
 
 // Split Network Check Loops
@@ -4452,7 +4575,10 @@ async function queryBillingRecords(page: number) {
   setBillingRecordQueryBusy(true);
   btnQueryBillingRecords.textContent = '查询中…';
   try {
-    const result = await invoke<BillingRecordResult>('query_billing_records', { query });
+    const result = await invoke<BillingRecordResult>('query_billing_records', {
+      query,
+      accountUser: selectedBillingAccountUser(),
+    });
     if (!billingCenterData || result.kind !== queriedKind) {
       throw new Error('计费记录类型与请求不一致');
     }
@@ -4662,20 +4788,16 @@ function renderBillingDevices(data: BillingCenterData) {
     billingDeviceList.replaceChildren(fragment);
   }
 
-  if (!billingRechargeAccount.value.trim()) {
-    billingRechargeAccount.value = data.account;
-  }
   if (!billingRechargeState.textContent?.trim() || billingRechargeState.textContent.includes('正在读取')) {
     billingRechargeState.textContent = activeRechargeMethod === 'alipay'
-      ? '填写目标学工号和金额后，App 将先核对当前校园卡，再创建支付宝支付入口。'
+      ? '选择校园卡、目标学工号和金额后，App 将先核对所选校园卡，再创建支付宝支付入口。'
       : activeRechargeMethod === 'wechat'
-        ? '填写目标学工号和金额后，App 将核对当前校园卡，并由后端保持会话直接唤起微信。'
-        : '填写目标学工号和金额后，App 将通过统一认证核对校园卡、目标账户与可充值状态。';
+        ? '选择校园卡、目标学工号和金额后，App 将核对账户，并由后端保持会话直接唤起微信。'
+        : '选择校园卡、目标学工号和金额后，App 将通过统一认证核对双方账户与可充值状态。';
   }
 }
 
-function renderBillingSecurity(data: BillingCenterData) {
-  const policy = data.passwordPolicy;
+function applyBillingPasswordPolicy(policy: BillingPasswordPolicy) {
   const requirements = [
     `${policy.minLength}–${policy.maxLength} 位`,
     policy.requireUppercase ? '大写字母' : '',
@@ -4687,7 +4809,16 @@ function renderBillingSecurity(data: BillingCenterData) {
   [billingOldPassword, billingNewPassword, billingConfirmPassword].forEach(input => {
     input.maxLength = policy.maxLength || 16;
   });
-  btnBillingPassword.disabled = false;
+}
+
+function syncStandaloneBillingSecurity() {
+  applyBillingPasswordPolicy(UNIFIED_AUTH_PASSWORD_POLICY);
+  btnBillingPassword.disabled = !selectedBillingAccountUser();
+}
+
+function renderBillingSecurity(data: BillingCenterData) {
+  applyBillingPasswordPolicy(data.passwordPolicy || UNIFIED_AUTH_PASSWORD_POLICY);
+  btnBillingPassword.disabled = !selectedBillingAccountUser();
   const questionOptions = data.securityQuestions.map(question => ({ value: question.id, text: question.text }));
   billingQuestionSelects.forEach((select, index) => {
     select.setOptions(questionOptions.map(option => ({ ...option })));
@@ -4697,13 +4828,47 @@ function renderBillingSecurity(data: BillingCenterData) {
   btnBillingQuestions.disabled = questionOptions.length === 0;
 }
 
+function resetBillingCenterForSelectedAccount() {
+  const account = selectedBillingAccountUser();
+  billingCenterAccount.textContent = account || '--';
+  billingCenterBalance.textContent = '--';
+  billingCenterFlow.textContent = '--';
+  billingCenterStatus.textContent = '--';
+  billingCenterStatus.className = '';
+  billingMauthBadge.className = 'billing-state-badge neutral';
+  billingMauthBadge.textContent = '未知';
+  btnToggleBillingMauth.disabled = true;
+  btnToggleBillingMauth.textContent = '状态未知';
+  renderBillingOnlineSessions([]);
+  renderBillingHistory([]);
+  billingRecordTotal.textContent = '0';
+  billingRecordSummary.replaceChildren();
+  billingRecordsList.replaceChildren(createBillingEmpty('请查询所选账号的账单记录'));
+  billingServiceStatusBadge.className = 'billing-state-badge neutral';
+  billingServiceStatusBadge.textContent = '未知';
+  billingServiceReason.textContent = '正在读取所选账号的账户服务状态。';
+  [billingServicePackage, billingServiceSettlement, billingServiceSpend, billingServiceLimit]
+    .forEach(element => { element.textContent = '--'; });
+  btnBillingStopNow.disabled = true;
+  btnBillingReopenNow.disabled = true;
+  btnBillingConsumeLimit.disabled = true;
+  btnBillingPackage.disabled = true;
+  billingPackageCurrent.textContent = '--';
+  billingPackageNext.textContent = '未预约';
+  billingPackageOptions.replaceChildren(createBillingEmpty('正在读取可预约套餐…'));
+  billingDeviceCount.textContent = '0';
+  btnBillingBindMac.disabled = true;
+  billingDeviceList.replaceChildren(createBillingEmpty('正在读取设备列表…'));
+  billingCenterMessage.textContent = account ? `正在读取账号 ${account} 的计费数据` : '请先添加并启用一个已保存密码的账号';
+  syncBillingCenterMessageVisibility();
+  syncStandaloneBillingSecurity();
+  renderIcons(document.getElementById('billing-center')!);
+}
+
 function renderBillingCenterData(data: BillingCenterData) {
   billingCenterData = data;
   const info = billingOverviewToUserInfo(data.overview);
-  infoAccount.textContent = info.account || '--';
-  infoBalance.textContent = info.balance || '--';
-  infoFlow.textContent = info.flow || '--';
-  renderBillingInfo(info);
+  renderBillingCenter(info);
   initializeBillingRecordQueryStates(data);
   syncBillingRecordControls();
   renderBillingRecords();
@@ -4739,20 +4904,29 @@ function updateBillingRefreshProgress(percent: number, loading: boolean) {
 
 async function refreshBillingCenterData() {
   if (billingRecordQueryBusy || billingCenterLoading) return;
+  const accountUser = selectedBillingAccountUser();
+  if (!accountUser) {
+    resetBillingCenterForSelectedAccount();
+    return;
+  }
   billingCenterLoading = true;
   btnRefreshBillingCenter.disabled = true;
+  billingAccountSelect.setDisabled(true);
   setBillingRecordQueryBusy(true);
   updateBillingRefreshProgress(2, true);
   billingCenterMessage.textContent = '正在连接计费系统';
   syncBillingCenterMessageVisibility();
   try {
-    const data = await invoke<BillingCenterData>('get_billing_center');
+    const data = await invoke<BillingCenterData>('get_billing_center', { accountUser });
+    if (selectedBillingAccountUser() !== accountUser) return;
     renderBillingCenterData(data);
   } catch (error) {
     billingCenterMessage.textContent = `完整计费数据读取失败：${String(error)}`;
     syncBillingCenterMessageVisibility();
+    syncStandaloneBillingSecurity();
   } finally {
     btnRefreshBillingCenter.disabled = false;
+    billingAccountSelect.setDisabled(false);
     updateBillingRefreshProgress(0, false);
     setBillingRecordQueryBusy(false);
     billingCenterLoading = false;
@@ -4812,7 +4986,10 @@ async function exportBillingRecords(all: boolean) {
     if (all) {
       const query = readBillingRecordQuery(1, true);
       if (!query) return;
-      const result = await invoke<BillingRecordResult>('query_billing_records', { query });
+      const result = await invoke<BillingRecordResult>('query_billing_records', {
+        query,
+        accountUser: selectedBillingAccountUser(),
+      });
       if (result.kind !== selection.kind) throw new Error('计费记录类型与请求不一致');
       table = result.table;
     }
@@ -4876,9 +5053,9 @@ function activateRechargeMethod(method: RechargeMethod) {
       ? '微信充值网费'
       : '从校园卡转入网费';
   billingRechargeMethodDescription.textContent = alipay
-    ? '支付宝先为当前校园卡充值，到账后 App 会继续把同一金额转入上方目标网费账户。'
+    ? '支付宝先为所选校园卡充值，到账后 App 会继续把同一金额转入目标网费账户。'
     : wechat
-      ? '后端保持学校支付会话并直接唤起微信，支付确认后 App 会继续把同一金额转入上方目标网费账户。'
+      ? '后端保持学校支付会话并直接唤起微信，支付确认后 App 会继续把同一金额转入目标网费账户。'
       : '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。';
   btnBillingRecharge.textContent = alipay
     ? '核对并前往支付宝'
@@ -4889,7 +5066,7 @@ function activateRechargeMethod(method: RechargeMethod) {
     ? '目标和金额保持不变；确认后 Android 会优先直接打开支付宝，桌面端显示二维码。'
     : wechat
       ? '目标和金额保持不变；后端将以同一会话进入 Tenpay，取得受信任的微信协议地址后直接唤起微信。'
-      : '目标和金额保持不变；确认后从当前账号的校园卡直接转入网费。';
+      : '校园卡、目标和金额保持不变；确认后从所选账号的校园卡直接转入网费。';
   if (activeAlipayPayment) {
     btnBillingAlipayShowPayment.hidden = IS_ANDROID || !alipay;
     btnBillingAlipayContinue.hidden = !alipay;
@@ -4902,7 +5079,9 @@ function activateRechargeMethod(method: RechargeMethod) {
 
 function setRechargeBusy(busy: boolean, label?: string) {
   btnBillingRecharge.disabled = busy;
-  billingRechargeAccount.disabled = busy;
+  billingRechargeCardAccountSelect.setDisabled(busy);
+  billingRechargeTargetAccountSelect.setDisabled(busy);
+  billingRechargeAccount.disabled = busy || billingRechargeTargetAccountSelect.value !== '__custom__';
   billingRechargeAmount.disabled = busy;
   billingRechargeMethodButtons.forEach(button => { button.disabled = busy; });
   btnBillingRecharge.textContent = label || (activeRechargeMethod === 'alipay'
@@ -4957,11 +5136,15 @@ function renderRechargeBalances(snapshot: RechargeBalanceSnapshot) {
   billingRechargePreview.hidden = false;
 }
 
-async function refreshRechargeBalancesOnce(targetAccount: string): Promise<string | null> {
+async function refreshRechargeBalancesOnce(
+  targetAccount: string,
+  accountUser = selectedRechargePayerAccount(),
+): Promise<string | null> {
   updateRechargeProgress(88, '正在刷新校园卡与目标网费余额…');
   try {
     const snapshot = await invoke<RechargeBalanceSnapshot>('get_network_recharge_balances', {
       targetAccount,
+      accountUser,
     });
     renderRechargeBalances(snapshot);
     return null;
@@ -4973,6 +5156,11 @@ async function refreshRechargeBalancesOnce(targetAccount: string): Promise<strin
 async function prepareAndConfirmNetworkRecharge() {
   if (btnBillingRecharge.disabled) return;
   const targetAccount = billingRechargeAccount.value.trim();
+  const accountUser = selectedRechargePayerAccount();
+  if (!accountUser) {
+    await customAlert('请选择一个已保存密码的校园卡账户。', '充值网费');
+    return;
+  }
   const amount = billingRechargeAmount.value.trim();
   if (!/^[A-Za-z0-9_-]{5,20}$/.test(targetAccount)) {
     await customAlert('请输入 5–20 位有效学工号。', '充值网费');
@@ -4990,6 +5178,7 @@ async function prepareAndConfirmNetworkRecharge() {
     const preview = await invoke<RechargePreview>('prepare_network_recharge', {
       targetAccount,
       amount,
+      accountUser,
     });
     updateRechargeProgress(42, '账户与余额核对完成，等待确认…');
     renderRechargePreview(preview);
@@ -5012,7 +5201,7 @@ async function prepareAndConfirmNetworkRecharge() {
       confirmationId: preview.confirmationId,
     });
     updateRechargeProgress(84, '充值已提交，正在读取最新余额…');
-    const balanceError = await refreshRechargeBalancesOnce(targetAccount);
+    const balanceError = await refreshRechargeBalancesOnce(targetAccount, accountUser);
     billingRechargeAmount.value = '';
     billingRechargeState.textContent = balanceError
       ? `${result.message}；余额刷新失败：${balanceError}`
@@ -5206,6 +5395,7 @@ async function completeAlipayNetworkRecharge(automatic = false) {
     const preview = await invoke<RechargePreview>('prepare_network_recharge', {
       targetAccount: payment.targetAccount,
       amount: payment.amount,
+      accountUser: payment.payerAccount,
     });
     preparedConfirmationId = preview.confirmationId;
     if (activeAlipayPayment !== payment) {
@@ -5262,7 +5452,7 @@ async function completeAlipayNetworkRecharge(automatic = false) {
       confirmationId: preview.confirmationId,
     });
     updateRechargeProgress(84, '网费转入完成，正在刷新双方余额…');
-    const balanceError = await refreshRechargeBalancesOnce(payment.targetAccount);
+    const balanceError = await refreshRechargeBalancesOnce(payment.targetAccount, payment.payerAccount);
     clearActiveAlipayPayment();
     billingRechargeAmount.value = '';
     billingRechargeState.textContent = balanceError
@@ -5294,6 +5484,11 @@ async function prepareAndOpenAlipayRecharge() {
   if (btnBillingRecharge.disabled) return;
   const targetAccount = billingRechargeAccount.value.trim();
   const amount = billingRechargeAmount.value.trim();
+  const accountUser = selectedRechargePayerAccount();
+  if (!accountUser) {
+    await customAlert('请选择一个已保存密码的校园卡账户。', '支付宝充值');
+    return;
+  }
   if (!/^[A-Za-z0-9_-]{5,20}$/.test(targetAccount)) {
     await customAlert('请输入 5–20 位有效学工号。', '支付宝充值');
     return;
@@ -5304,7 +5499,8 @@ async function prepareAndOpenAlipayRecharge() {
   }
 
   if (activeAlipayPayment) {
-    const sameOrder = activeAlipayPayment.targetAccount === targetAccount
+    const sameOrder = activeAlipayPayment.payerAccount === accountUser
+      && activeAlipayPayment.targetAccount === targetAccount
       && Number(activeAlipayPayment.amount) === Number(amount);
     const replace = await customConfirm(
       sameOrder
@@ -5332,7 +5528,10 @@ async function prepareAndOpenAlipayRecharge() {
   setRechargeBusy(true, '正在核对…');
   updateRechargeProgress(10, '正在登录统一认证并读取校园卡…');
   try {
-    const preview = await invoke<AlipayRechargePreview>('prepare_alipay_card_recharge', { amount });
+    const preview = await invoke<AlipayRechargePreview>('prepare_alipay_card_recharge', {
+      amount,
+      accountUser,
+    });
     billingRechargePayer.textContent = preview.payerAccount;
     billingRechargeCardBalance.textContent = formatBillingCurrency(preview.cardBalance);
     billingRechargeTargetStatus.textContent = '待支付宝付款';
@@ -5528,6 +5727,7 @@ async function completeWechatNetworkRecharge(automatic = false) {
     const preview = await invoke<RechargePreview>('prepare_network_recharge', {
       targetAccount: payment.targetAccount,
       amount: payment.amount,
+      accountUser: payment.payerAccount,
     });
     preparedConfirmationId = preview.confirmationId;
     if (activeWechatPayment !== payment) {
@@ -5550,7 +5750,7 @@ async function completeWechatNetworkRecharge(automatic = false) {
       confirmationId: preview.confirmationId,
     });
     updateRechargeProgress(88, '网费转入完成，正在刷新双方余额…');
-    const balanceError = await refreshRechargeBalancesOnce(payment.targetAccount);
+    const balanceError = await refreshRechargeBalancesOnce(payment.targetAccount, payment.payerAccount);
     await invoke('cancel_wechat_card_recharge', {
       confirmationId: null,
       paymentId: payment.paymentId,
@@ -5585,6 +5785,11 @@ async function prepareAndOpenWechatRecharge() {
   if (!IS_ANDROID || btnBillingRecharge.disabled) return;
   const targetAccount = billingRechargeAccount.value.trim();
   const amount = billingRechargeAmount.value.trim();
+  const accountUser = selectedRechargePayerAccount();
+  if (!accountUser) {
+    await customAlert('请选择一个已保存密码的校园卡账户。', '微信充值');
+    return;
+  }
   if (!/^[A-Za-z0-9_-]{5,20}$/.test(targetAccount)) {
     await customAlert('请输入 5–20 位有效学工号。', '微信充值');
     return;
@@ -5595,7 +5800,8 @@ async function prepareAndOpenWechatRecharge() {
   }
 
   if (activeWechatPayment) {
-    const sameOrder = activeWechatPayment.targetAccount === targetAccount
+    const sameOrder = activeWechatPayment.payerAccount === accountUser
+      && activeWechatPayment.targetAccount === targetAccount
       && Number(activeWechatPayment.amount) === Number(amount);
     const replace = await customConfirm(
       sameOrder
@@ -5622,6 +5828,7 @@ async function prepareAndOpenWechatRecharge() {
     const preview = await invoke<WechatRechargePreview>('prepare_wechat_card_recharge', {
       targetAccount,
       amount,
+      accountUser,
     });
     billingRechargePayer.textContent = preview.payerAccount;
     billingRechargeCardBalance.textContent = formatBillingCurrency(preview.cardBalance);
@@ -5687,13 +5894,17 @@ async function performConfirmedBillingAction(
   button.disabled = true;
   button.textContent = '处理中…';
   try {
-    const result = await invoke<BillingActionResult>('perform_billing_action', { request });
+    const result = await invoke<BillingActionResult>('perform_billing_action', {
+      request,
+      accountUser: selectedBillingAccountUser(),
+    });
     clearBillingSecretInputs();
     if (result.passwordChanged) {
       await loadConfigFromRust();
       renderAccounts();
+    } else {
+      await refreshBillingCenterData();
     }
-    await refreshBillingCenterData();
     await customAlert(result.message, '操作完成');
   } catch (error) {
     clearBillingSecretInputs();
@@ -5731,7 +5942,7 @@ function billingQuestionAnswers(): BillingQuestionAnswer[] | null {
 }
 
 function renderBillingCenter(info: UserInfo | null) {
-  billingCenterAccount.textContent = info?.account || '--';
+  billingCenterAccount.textContent = info?.account || selectedBillingAccountUser() || '--';
   billingCenterBalance.textContent = info?.balance || '--';
   billingCenterFlow.textContent = info?.flow || '--';
   billingCenterStatus.textContent = info?.status || '--';
@@ -5764,14 +5975,20 @@ async function disconnectBillingSession(button: HTMLButtonElement) {
     await customAlert('在线会话信息不完整，请刷新后重试。');
     return;
   }
-  const tip = currentUserInfo?.offlineTip || '注销会话会中断对应设备的校园网连接；无感认证设备可能还需要解绑 MAC。';
+  const tip = billingCenterData?.overview.offlineTip
+    || '注销会话会中断对应设备的校园网连接；无感认证设备可能还需要解绑 MAC。';
   const confirmed = await customConfirm(`${tip}\n\n设备 IP：${ip}\n设备 MAC：${mac || '--'}`, '确认注销在线会话');
   if (!confirmed) return;
   button.disabled = true;
   const originalText = button.textContent;
   button.textContent = '注销中…';
   try {
-    const message = await invoke<string>('disconnect_billing_session', { sessionId, ip, mac });
+    const message = await invoke<string>('disconnect_billing_session', {
+      sessionId,
+      ip,
+      mac,
+      accountUser: selectedBillingAccountUser(),
+    });
     await refreshBillingCenterData();
     await customAlert(message, '操作完成');
   } catch (error) {
@@ -5783,7 +6000,7 @@ async function disconnectBillingSession(button: HTMLButtonElement) {
 }
 
 async function toggleBillingMauth() {
-  const current = currentUserInfo?.mauthEnabled;
+  const current = billingCenterData?.overview.mauthEnabled;
   if (typeof current !== 'boolean') {
     await customAlert('无感认证状态尚未读取，请刷新后重试。');
     return;
@@ -5795,21 +6012,25 @@ async function toggleBillingMauth() {
   if (!await customConfirm(text, enabled ? '开启无感认证' : '关闭无感认证')) return;
   btnToggleBillingMauth.disabled = true;
   try {
-    const message = await invoke<string>('set_billing_mauth', { enabled });
+    const message = await invoke<string>('set_billing_mauth', {
+      enabled,
+      accountUser: selectedBillingAccountUser(),
+    });
     await refreshBillingCenterData();
     await customAlert(message, '操作完成');
   } catch (error) {
     await customAlert(`修改失败：${String(error)}`);
   } finally {
-    btnToggleBillingMauth.disabled = !(
-      currentUserInfo?.source === 'billing' && typeof currentUserInfo.mauthEnabled === 'boolean'
-    );
+    btnToggleBillingMauth.disabled = typeof billingCenterData?.overview.mauthEnabled !== 'boolean';
   }
 }
 
 function renderBillingInfo(info: UserInfo | null) {
   currentUserInfo = info;
-  renderBillingCenter(info);
+  const selectedAccount = selectedBillingAccountUser();
+  if (!billingCenterData && (!info || !selectedAccount || info.account === selectedAccount)) {
+    renderBillingCenter(info);
+  }
   if (!info) {
     billingDetails.hidden = true;
     infoAccountLabel.textContent = '当前登录账号';

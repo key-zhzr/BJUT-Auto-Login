@@ -628,6 +628,36 @@ main {
 
 .billing-center-header > div { min-width: 0; }
 
+.billing-header-tools {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.billing-account-picker {
+  display: grid;
+  width: min(17rem, 34vw);
+  min-width: 11rem;
+  gap: 0.24rem;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+}
+
+#billing-account-select {
+  width: 100%;
+}
+
+.billing-account-picker .custom-select-trigger,
+.billing-toolbar-field .custom-select-trigger {
+  min-height: 2.35rem;
+}
+
+.billing-toolbar-field .custom-select-trigger {
+  height: 2.35rem;
+}
+
 .billing-refresh-button {
   --billing-refresh-progress: 0%;
   position: relative;
@@ -982,8 +1012,40 @@ body.is-desktop .billing-back-button { display: none; }
 }
 
 .billing-record-toolbar {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.85fr) minmax(20rem, 1.45fr) minmax(8.5rem, 0.58fr) auto;
+  align-items: end;
   margin-bottom: 0.85rem;
+}
+
+.billing-toolbar-field {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+}
+
+.billing-toolbar-field > .custom-select,
+.billing-toolbar-field > .btn {
+  width: 100%;
+}
+
+.billing-record-year-field:has(#billing-record-year-filter[hidden]) {
+  display: none;
+}
+
+.billing-record-query-field {
+  width: 6rem;
+}
+
+.billing-record-query-field > span {
+  visibility: hidden;
+}
+
+.billing-record-query-field .btn {
+  min-height: 2.35rem;
+  justify-content: center;
 }
 
 .billing-export-actions {
@@ -993,7 +1055,7 @@ body.is-desktop .billing-back-button { display: none; }
 
 .billing-record-date-filter {
   min-width: min(100%, 330px);
-  flex: 1 1 330px;
+  align-items: end;
 }
 
 .billing-record-date-filter[hidden],
@@ -1040,15 +1102,11 @@ body.is-desktop .billing-back-button { display: none; }
   font-size: 0.72rem;
 }
 
-#billing-record-kind {
-  width: min(100%, 220px);
-  flex: 0 0 auto;
-}
+#billing-record-kind { width: 100%; }
 
 #billing-record-year-filter,
 .billing-page-size-select {
-  width: 145px;
-  flex: 0 0 auto;
+  width: 100%;
 }
 
 .billing-record-summary-row {
@@ -1113,6 +1171,26 @@ body.is-desktop .billing-back-button { display: none; }
   border-top: 1px solid rgba(255, 255, 255, 0.07);
 }
 
+.billing-action-group:not(.billing-package-action) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.7fr);
+  align-items: center;
+  gap: 1rem;
+  padding: 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.billing-action-group:not(.billing-package-action) .billing-action-controls {
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
+.billing-action-group:not(.billing-package-action) .billing-action-controls input {
+  flex: 1 1 12rem;
+}
+
 .billing-action-copy h3,
 .billing-security-form h3,
 .billing-subsection-title {
@@ -1130,6 +1208,11 @@ body.is-desktop .billing-back-button { display: none; }
 .billing-action-controls {
   flex-wrap: wrap;
   margin-top: 0.7rem;
+}
+
+.billing-action-group:not(.billing-package-action) .billing-action-controls .btn,
+.billing-bind-mac .btn {
+  min-height: 2.35rem;
 }
 
 .billing-action-controls input,
@@ -1240,7 +1323,15 @@ button.billing-package-option:hover,
 }
 
 .billing-bind-mac {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
   margin: 0 0 0.85rem;
+}
+
+.billing-bind-mac input {
+  width: 100%;
 }
 
 .billing-subsection-title {
@@ -1262,10 +1353,10 @@ button.billing-package-option:hover,
 
 .billing-payment-methods {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.7rem;
-  margin-top: 0.8rem;
-  margin-bottom: 0.65rem;
+  grid-template-columns: 1fr;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+  margin-bottom: 0.55rem;
 }
 
 .billing-payment-method {
@@ -1273,7 +1364,7 @@ button.billing-package-option:hover,
   align-items: center;
   min-width: 0;
   gap: 0.7rem;
-  padding: 0.8rem;
+  padding: 0.62rem 0.68rem;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 12px;
   color: var(--text-muted);
@@ -1363,18 +1454,103 @@ body.is-android .billing-payment-method.android-only-payment-method { display: f
   margin-top: 0.75rem;
 }
 
-.billing-recharge-fields {
+.billing-recharge-flow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr);
-  gap: 0.65rem;
+  grid-template-columns: minmax(14rem, 1.2fr) auto minmax(11.5rem, 0.9fr) auto minmax(11.5rem, 0.9fr) auto minmax(10rem, 0.72fr);
+  align-items: stretch;
+  gap: 0.55rem;
 }
 
-.billing-recharge-form label {
+.billing-flow-step {
+  position: relative;
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 0.65rem;
+  padding: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.34);
+}
+
+.billing-flow-step:has(.custom-select.open) {
+  z-index: 20;
+}
+
+.billing-flow-step-heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.55rem;
+}
+
+.billing-flow-step-heading > div {
+  min-width: 0;
+}
+
+.billing-flow-step-heading small,
+.billing-flow-step-heading h3 {
+  display: block;
+  margin: 0;
+}
+
+.billing-flow-step-heading small {
+  margin-bottom: 0.08rem;
+  color: var(--text-muted);
+  font-size: 0.6rem;
+}
+
+.billing-flow-step-heading h3 {
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.billing-flow-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  color: #dbeafe;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.95), rgba(59, 130, 246, 0.72));
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.22);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.billing-flow-connector {
+  display: grid;
+  align-self: center;
+  place-items: center;
+  width: 1.25rem;
+  color: rgba(96, 165, 250, 0.8);
+  font-size: 1.15rem;
+}
+
+.billing-flow-step .custom-select {
+  width: 100%;
+}
+
+.billing-flow-step .custom-select-trigger {
+  min-height: 2.35rem;
+  padding: 0.52rem 0.62rem;
+}
+
+.billing-recharge-form label,
+.billing-recharge-amount-field,
+.billing-recharge-custom-target {
   display: grid;
   min-width: 0;
   gap: 0.28rem;
   color: var(--text-muted);
   font-size: 0.66rem;
+}
+
+.billing-recharge-custom-target[hidden] {
+  display: none;
 }
 
 .billing-recharge-form input {
@@ -1393,9 +1569,14 @@ body.is-android .billing-payment-method.android-only-payment-method { display: f
   border-color: rgba(59, 130, 246, 0.55);
 }
 
-.billing-recharge-form > .btn {
+.billing-flow-submit-step > .btn {
+  width: 100%;
   min-height: 2.35rem;
-  margin-top: 0.75rem;
+  margin-top: auto;
+}
+
+.billing-flow-step > .billing-inline-note {
+  margin-top: auto;
 }
 
 .billing-recharge-progress {
@@ -1938,6 +2119,92 @@ input:checked + .slider:before { transform: translateX(24px); }
 .setting-group-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .setting-group-heading p { margin-top: 0.3rem; color: var(--text-muted); font-size: 0.85rem; }
 .setting-group-actions { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+
+.settings-about-card {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 92% 10%, rgba(59, 130, 246, 0.15), transparent 34%),
+    var(--card-bg);
+}
+
+.settings-about-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.settings-about-logo {
+  width: 4rem;
+  height: 4rem;
+  flex: 0 0 auto;
+  border-radius: 1rem;
+  background: url('/logo.png') center / cover no-repeat, #fff;
+  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.22);
+}
+
+.settings-about-eyebrow {
+  margin-bottom: 0.2rem;
+  color: var(--primary-color);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-about-header h3 {
+  margin-bottom: 0.25rem;
+  font-size: 1.15rem;
+}
+
+.settings-about-header p:last-child,
+.settings-about-note {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.settings-about-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.settings-about-meta > div {
+  min-width: 0;
+  padding: 0.72rem 0.78rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.settings-about-meta span,
+.settings-about-meta strong {
+  display: block;
+}
+
+.settings-about-meta span {
+  margin-bottom: 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+}
+
+.settings-about-meta strong {
+  overflow-wrap: anywhere;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.settings-about-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
+}
+
+.settings-about-note {
+  margin-top: 0.85rem;
+}
 .network-profiles-list { display: flex; flex-direction: column; gap: 0.65rem; margin-top: 1rem; }
 .network-profile-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.8rem; border-radius: 10px; background: rgba(0, 0, 0, 0.16); }
 .network-profile-row.disabled { opacity: 0.55; }
@@ -2026,6 +2293,22 @@ input:checked + .slider:before { transform: translateX(24px); }
 .account-health-inline .account-health-badge {
   padding: 0.16rem 0.42rem;
   font-size: 0.62rem;
+}
+
+@media (max-width: 1200px) {
+  .billing-recharge-flow {
+    grid-template-columns: 1fr;
+  }
+
+  .billing-flow-connector {
+    width: 100%;
+    height: 0.8rem;
+    transform: rotate(90deg);
+  }
+
+  .billing-record-toolbar {
+    grid-template-columns: minmax(10rem, 0.8fr) minmax(20rem, 1.4fr) minmax(8.5rem, 0.62fr) auto;
+  }
 }
 
 /* Responsive */
@@ -2193,7 +2476,15 @@ input:checked + .slider:before { transform: translateX(24px); }
   .billing-details-header { align-items: flex-start; margin-bottom: 0.75rem; }
   .billing-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
   .billing-detail-wide { grid-column: 1 / -1; }
-  .billing-center-header { gap: 0.8rem; }
+  .billing-center-header { grid-template-columns: 1fr; gap: 0.8rem; }
+  .billing-header-tools {
+    width: 100%;
+  }
+  .billing-account-picker {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
   .billing-mobile-nav {
     display: grid;
     top: 0;
@@ -2208,6 +2499,28 @@ input:checked + .slider:before { transform: translateX(24px); }
   }
   .billing-center-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
   .billing-center-panel { padding: 1rem; }
+  .billing-record-toolbar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .billing-record-date-filter {
+    width: 100%;
+    min-width: 0;
+  }
+  .billing-record-query-field {
+    width: 100%;
+  }
+  .billing-record-query-field > span {
+    display: none;
+  }
+  .billing-action-group:not(.billing-package-action) {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .billing-action-group:not(.billing-package-action) .billing-action-controls {
+    justify-content: stretch;
+    margin-top: 0.15rem;
+  }
   .billing-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .billing-service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .billing-recharge-form { grid-template-columns: 1fr; align-items: stretch; }
@@ -2215,6 +2528,7 @@ input:checked + .slider:before { transform: translateX(24px); }
   .billing-recharge-form .btn { width: 100%; }
   .billing-recharge-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .billing-payment-methods { grid-template-columns: 1fr; gap: 0.5rem; }
+  .settings-about-meta { grid-template-columns: 1fr; }
 
   body.is-android.billing-center-active main {
     padding-bottom: calc(11.25rem + env(safe-area-inset-bottom));
@@ -2296,7 +2610,7 @@ input:checked + .slider:before { transform: translateX(24px); }
   .billing-header-actions .btn { flex: 1; padding-left: 0.55rem; padding-right: 0.55rem; }
   .billing-detail-item { padding: 0.6rem; }
   .billing-center-header h1 { font-size: 1.4rem; }
-  .billing-center-header { grid-template-columns: minmax(0, 1fr) auto; }
+  .billing-center-header { grid-template-columns: 1fr; }
   .billing-center-header #btn-refresh-billing-center { width: auto; min-width: 6.6rem; padding-left: 0.65rem; padding-right: 0.65rem; }
   .billing-mobile-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   body.is-android.billing-center-active .billing-mobile-nav {
@@ -2324,7 +2638,7 @@ input:checked + .slider:before { transform: translateX(24px); }
     flex-basis: 100%;
   }
   #billing-record-year-filter,
-  .billing-page-size-select { width: calc(50% - 0.35rem); flex: 1 1 calc(50% - 0.35rem); }
+  .billing-page-size-select { width: 100%; }
   #btn-query-billing-records { width: 100%; }
   .billing-record-summary { flex-basis: 100%; }
   .billing-record-pager { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
@@ -2338,6 +2652,10 @@ input:checked + .slider:before { transform: translateX(24px); }
   .billing-question-select,
   .billing-question-row input { width: 100%; }
   .billing-security-form > .btn { width: 100%; }
+  .settings-about-header { align-items: flex-start; }
+  .settings-about-logo { width: 3.25rem; height: 3.25rem; border-radius: 0.85rem; }
+  .settings-about-actions { display: grid; grid-template-columns: 1fr; }
+  .settings-about-actions .btn { width: 100%; }
 }
 
 @media (max-width: 350px) {
@@ -3026,6 +3344,11 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
 .custom-select-trigger:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.3);
+}
+
+.custom-select.is-disabled {
+  opacity: 0.58;
+  pointer-events: none;
 }
 
 .custom-select-trigger span {

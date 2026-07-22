@@ -4194,6 +4194,24 @@ fn preferred_billing_account(config: &AppConfig) -> Option<Account> {
         .cloned()
 }
 
+fn selected_billing_account(config: &AppConfig, account_user: Option<&str>) -> Option<Account> {
+    let requested = account_user
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match requested {
+        Some(user) => config
+            .accounts
+            .iter()
+            .find(|account| {
+                account.user == user
+                    && !account.is_disabled.unwrap_or(false)
+                    && !account.user.trim().is_empty()
+            })
+            .cloned(),
+        None => preferred_billing_account(config),
+    }
+}
+
 fn billing_snapshot_to_user_info(snapshot: billing::BillingSnapshot) -> UserInfo {
     UserInfo {
         account: snapshot.account,
@@ -4435,8 +4453,9 @@ async fn get_user_info(
 async fn get_billing_center(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
+    account_user: Option<String>,
 ) -> Result<billing::BillingCenterData, String> {
-    let (account, compatibility) = billing_action_target(&state)?;
+    let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     emit_billing_center_progress(&app, &state, "准备读取计费中心完整数据", 2);
     let _fetch_guard = match state.billing_fetch_lock.try_lock() {
         Ok(guard) => guard,
@@ -4503,8 +4522,9 @@ async fn query_billing_records(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     query: billing::BillingRecordQuery,
+    account_user: Option<String>,
 ) -> Result<billing::BillingRecordResult, String> {
-    let (account, compatibility) = billing_action_target(&state)?;
+    let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     let kind = query.kind.clone();
     let page = query.page;
     let all = query.all;
@@ -4535,16 +4555,19 @@ async fn perform_billing_action(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     request: billing::BillingActionRequest,
+    account_user: Option<String>,
 ) -> Result<billing::BillingActionResult, String> {
     let action = request.action.clone();
     let (account, compatibility) = if action == "changePassword" {
-        (campus_service_target(&state)?, None)
+        (
+            campus_service_target(&state, account_user.as_deref())?,
+            None,
+        )
     } else {
-        let (account, compatibility) = billing_action_target(&state)?;
+        let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
         (account, Some(compatibility))
     };
     let new_password = request.new_password.clone();
-    let _fetch_guard = state.billing_fetch_lock.lock().await;
     let mut result = if action == "changePassword" {
         let supplied_password = request
             .old_password
@@ -4573,6 +4596,7 @@ async fn perform_billing_action(
             password_changed: true,
         }
     } else {
+        let _fetch_guard = state.billing_fetch_lock.lock().await;
         let compatibility = compatibility.ok_or_else(|| "计费操作缺少 VPN 兼容配置".to_string())?;
         billing::perform_action(&account.user, &account.pass, compatibility, &request)
             .await
@@ -4623,10 +4647,15 @@ async fn perform_billing_action(
     Ok(result)
 }
 
-fn campus_service_target(state: &AppState) -> Result<Account, String> {
+fn campus_service_target(state: &AppState, account_user: Option<&str>) -> Result<Account, String> {
     let config = state.config.read().unwrap();
-    let account = preferred_billing_account(&config)
-        .ok_or_else(|| "没有可用于统一认证的已启用账号".to_string())?;
+    let account = selected_billing_account(&config, account_user).ok_or_else(|| {
+        if account_user.is_some() {
+            "所选统一认证账号不存在、已停用或缺少有效配置".to_string()
+        } else {
+            "没有可用于统一认证的已启用账号".to_string()
+        }
+    })?;
     if account.pass.is_empty() {
         return Err("统一认证账号缺少已保存的密码".to_string());
     }
@@ -4685,8 +4714,9 @@ async fn prepare_network_recharge(
     state: tauri::State<'_, Arc<AppState>>,
     target_account: String,
     amount: String,
+    account_user: Option<String>,
 ) -> Result<campus_services::RechargePreview, String> {
-    let account = campus_service_target(&state)?;
+    let account = campus_service_target(&state, account_user.as_deref())?;
     let _service_guard = state.campus_service_lock.lock().await;
     let session_seed = campus_service_session_seed(&state, &account.user);
     rust_log(
@@ -4807,8 +4837,9 @@ async fn get_network_recharge_balances(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     target_account: String,
+    account_user: Option<String>,
 ) -> Result<campus_services::RechargeBalanceSnapshot, String> {
-    let account = campus_service_target(&state)?;
+    let account = campus_service_target(&state, account_user.as_deref())?;
     let _service_guard = state.campus_service_lock.lock().await;
     let session_seed = campus_service_session_seed(&state, &account.user);
     rust_log(
@@ -4863,8 +4894,9 @@ async fn prepare_alipay_card_recharge(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     amount: String,
+    account_user: Option<String>,
 ) -> Result<campus_services::AlipayRechargePreview, String> {
-    let account = campus_service_target(&state)?;
+    let account = campus_service_target(&state, account_user.as_deref())?;
     let _service_guard = state.campus_service_lock.lock().await;
     let session_seed = campus_service_session_seed(&state, &account.user);
     rust_log(
@@ -4973,8 +5005,9 @@ async fn prepare_wechat_card_recharge(
     state: tauri::State<'_, Arc<AppState>>,
     target_account: String,
     amount: String,
+    account_user: Option<String>,
 ) -> Result<campus_services::WechatRechargePreview, String> {
-    let account = campus_service_target(&state)?;
+    let account = campus_service_target(&state, account_user.as_deref())?;
     let _service_guard = state.campus_service_lock.lock().await;
     let session_seed = campus_service_session_seed(&state, &account.user);
     rust_log(&app, &state, "计费", "正在核对微信充值所用校园卡", "info");
@@ -5131,13 +5164,21 @@ async fn cancel_wechat_card_recharge(
     Ok(())
 }
 
-fn billing_action_target(state: &AppState) -> Result<(Account, VpnCompatibility), String> {
+fn billing_action_target(
+    state: &AppState,
+    account_user: Option<&str>,
+) -> Result<(Account, VpnCompatibility), String> {
     if is_mobile_data_network(&state.last_network_state.lock().unwrap()) {
         return Err("Android 移动数据网络下不能访问校园网计费系统".to_string());
     }
     let config = state.config.read().unwrap();
-    let account = preferred_billing_account(&config)
-        .ok_or_else(|| "没有可用于计费系统的已启用账号".to_string())?;
+    let account = selected_billing_account(&config, account_user).ok_or_else(|| {
+        if account_user.is_some() {
+            "所选计费账号不存在、已停用或缺少有效配置".to_string()
+        } else {
+            "没有可用于计费系统的已启用账号".to_string()
+        }
+    })?;
     if account.pass.is_empty() {
         return Err("计费账号缺少已保存的密码".to_string());
     }
@@ -5154,8 +5195,9 @@ async fn disconnect_billing_session(
     session_id: String,
     ip: String,
     mac: String,
+    account_user: Option<String>,
 ) -> Result<String, String> {
-    let (account, compatibility) = billing_action_target(&state)?;
+    let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     let _fetch_guard = state.billing_fetch_lock.lock().await;
     let result = billing::disconnect_session(
         &account.user,
@@ -5188,8 +5230,9 @@ async fn set_billing_mauth(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     enabled: bool,
+    account_user: Option<String>,
 ) -> Result<String, String> {
-    let (account, compatibility) = billing_action_target(&state)?;
+    let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     let _fetch_guard = state.billing_fetch_lock.lock().await;
     let result = billing::set_mauth_enabled(&account.user, &account.pass, compatibility, enabled)
         .await
@@ -5991,6 +6034,29 @@ mod tests {
             find_v6ip("<input name='v6ip' value='2001:db8::2'>"),
             "2001:db8::2"
         );
+    }
+
+    #[test]
+    fn billing_account_selection_honors_requested_and_default_accounts() {
+        let config: AppConfig = serde_json::from_value(serde_json::json!({
+            "accounts": [
+                {"user": "20260001", "pass": "first", "isDefault": true},
+                {"user": "20260002", "pass": "second", "isDefault": false},
+                {"user": "20260003", "pass": "disabled", "isDefault": false, "isDisabled": true}
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            selected_billing_account(&config, Some("20260002")).map(|account| account.user),
+            Some("20260002".to_string())
+        );
+        assert_eq!(
+            selected_billing_account(&config, None).map(|account| account.user),
+            Some("20260001".to_string())
+        );
+        assert!(selected_billing_account(&config, Some("20260003")).is_none());
+        assert!(selected_billing_account(&config, Some("missing")).is_none());
     }
 
     #[test]
