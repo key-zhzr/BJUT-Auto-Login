@@ -123,11 +123,18 @@ pub(crate) struct BillingServiceState {
     pub can_stop_now: bool,
     pub can_reopen_now: bool,
     pub package_scheduled: bool,
+    pub scheduled_package_id: Option<String>,
     pub scheduled_package: Option<String>,
     pub consume_limit: Option<String>,
     pub current_cycle_spend: Option<String>,
     pub balance: Option<String>,
     pub package_options: Vec<BillingPackageOption>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ActivePackageReservation {
+    current_package: Option<String>,
+    scheduled_package: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -450,6 +457,8 @@ where
             &mut warnings,
         )
         .await;
+        let active_package_reservation =
+            fetch_active_package_reservation_bounded(&mut session, &mut warnings).await;
         let protect_html = get_page_bounded(
             &mut session,
             "/Self/service/consumeProtect",
@@ -508,6 +517,7 @@ where
                 &reopen_html,
                 &package_html,
                 &protect_html,
+                active_package_reservation.as_ref(),
             ),
             // Password changes are handled by BJUT unified authentication,
             // whose currently deployed rule was verified from /api/register/rules.
@@ -924,6 +934,14 @@ async fn schedule_package(
         .filter(|value| !value.is_empty() && value.len() <= 32)
         .ok_or_else(|| BillingError::InvalidRequest("请选择要预约的套餐".to_string()))?;
     let page = get_page_text(session, "/Self/service/package").await?;
+    let current_package_id = dashboard_user(&session.dashboard_html)
+        .service_default
+        .and_then(|service| service.id)
+        .map(|id| id.to_string());
+    if current_package_id.as_deref() == Some(package_id) {
+        let reservation = package_reservation_for_action(session, &page).await?;
+        return cancel_package_from_page(session, &page, reservation.as_ref()).await;
+    }
     if !parse_package_options(&page)
         .iter()
         .any(|option| option.id == package_id)
@@ -952,7 +970,27 @@ async fn schedule_package(
 
 async fn cancel_package(session: &mut BillingSession) -> Result<BillingActionResult, BillingError> {
     let page = get_page_text(session, "/Self/service/package").await?;
-    if !has_tag_attribute(&page, "data-toggle", "undoPackage") {
+    let reservation = package_reservation_for_action(session, &page).await?;
+    cancel_package_from_page(session, &page, reservation.as_ref()).await
+}
+
+async fn package_reservation_for_action(
+    session: &mut BillingSession,
+    page: &str,
+) -> Result<Option<ActivePackageReservation>, BillingError> {
+    match fetch_active_package_reservation(session).await {
+        Ok(reservation) => Ok(reservation),
+        Err(_) if has_package_cancel_control(page) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+async fn cancel_package_from_page(
+    session: &mut BillingSession,
+    page: &str,
+    reservation: Option<&ActivePackageReservation>,
+) -> Result<BillingActionResult, BillingError> {
+    if reservation.is_none() && !has_package_cancel_control(page) {
         return Err(BillingError::ActionRejected(
             "当前没有可取消的套餐预约".to_string(),
         ));
@@ -960,8 +998,15 @@ async fn cancel_package(session: &mut BillingSession) -> Result<BillingActionRes
     let current_package = dashboard_user(&session.dashboard_html)
         .service_default
         .and_then(|service| service.default_name);
-    let scheduled_package = scheduled_package_name(&page);
-    if !package_reservation_is_distinct(current_package.as_deref(), scheduled_package.as_deref()) {
+    let scheduled_package = reservation
+        .map(|value| value.scheduled_package.clone())
+        .or_else(|| scheduled_package_name(page));
+    if scheduled_package.is_some()
+        && !package_reservation_is_distinct(
+            current_package.as_deref(),
+            scheduled_package.as_deref(),
+        )
+    {
         return Err(BillingError::ActionRejected(
             "下一周期将继续使用当前套餐，没有可取消的套餐预约".to_string(),
         ));
@@ -1751,6 +1796,51 @@ async fn get_ajax_text_owned(
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect::<Vec<_>>();
     get_ajax_text(session, path, &borrowed, referer_path).await
+}
+
+async fn fetch_active_package_reservation(
+    session: &mut BillingSession,
+) -> Result<Option<ActivePackageReservation>, BillingError> {
+    // The package page omits the current package from its selectable cards and
+    // does not consistently print the pending package beside the cancel
+    // control. The first package-log row is the canonical state returned by
+    // the site after both doPackage and undoPackage.
+    let params = [
+        ("pageSize", "10"),
+        ("pageNumber", "1"),
+        ("sortName", "fldchangedate"),
+        ("sortOrder", "DESC"),
+    ];
+    let text = get_ajax_text(
+        session,
+        "/Self/service/packageLog",
+        &params,
+        "/Self/service/package",
+    )
+    .await?;
+    parse_active_package_reservation(&text)
+}
+
+async fn fetch_active_package_reservation_bounded(
+    session: &mut BillingSession,
+    warnings: &mut Vec<String>,
+) -> Option<ActivePackageReservation> {
+    match tokio::time::timeout(
+        Duration::from_secs(8),
+        fetch_active_package_reservation(session),
+    )
+    .await
+    {
+        Ok(Ok(reservation)) => reservation,
+        Ok(Err(error)) => {
+            warnings.push(format!("下一周期套餐读取失败：{}", error.user_message()));
+            None
+        }
+        Err(_) => {
+            warnings.push("下一周期套餐读取超过 8 秒，已跳过".to_string());
+            None
+        }
+    }
 }
 
 async fn fetch_table_or_warning(
@@ -3417,6 +3507,7 @@ fn parse_service_state(
     reopen_html: &str,
     package_html: &str,
     protect_html: &str,
+    active_package_reservation: Option<&ActivePackageReservation>,
 ) -> BillingServiceState {
     let mut user = dashboard_user(dashboard_html);
     let protect_user = dashboard_user(protect_html);
@@ -3427,10 +3518,15 @@ fn parse_service_state(
     let current_package_id = service.id.map(|id| id.to_string());
     let current_package = service.default_name.clone();
     let package_detail = service.extend.clone();
-    let scheduled_package = scheduled_package_name(package_html);
-    let package_scheduled = has_tag_attribute(package_html, "data-toggle", "undoPackage")
+    let scheduled_package = active_package_reservation
+        .map(|reservation| reservation.scheduled_package.clone())
+        .or_else(|| scheduled_package_name(package_html));
+    let reservation_current_package =
+        active_package_reservation.and_then(|reservation| reservation.current_package.as_deref());
+    let package_scheduled = (active_package_reservation.is_some()
+        || has_package_cancel_control(package_html))
         && package_reservation_is_distinct(
-            current_package.as_deref(),
+            current_package.as_deref().or(reservation_current_package),
             scheduled_package.as_deref(),
         );
     let mut package_options = parse_package_options(package_html);
@@ -3446,6 +3542,15 @@ fn parse_service_state(
             );
         }
     }
+    let scheduled_package_id = if package_scheduled {
+        let scheduled_name = normalize_text(scheduled_package.as_deref().unwrap_or_default());
+        package_options
+            .iter()
+            .find(|option| normalize_text(&option.name).eq_ignore_ascii_case(&scheduled_name))
+            .map(|option| option.id.clone())
+    } else {
+        None
+    };
     let stopped = user.use_flag == Some(0) || user.stop_reason.is_some();
     let can_stop_now = user.use_flag == Some(1) && has_enabled_element_id(stop_html, "stopNow");
     let can_reopen_now = stopped && has_enabled_element_id(reopen_html, "reOpenNow");
@@ -3465,6 +3570,7 @@ fn parse_service_state(
         can_stop_now,
         can_reopen_now,
         package_scheduled,
+        scheduled_package_id,
         scheduled_package,
         consume_limit: user.installment_flag.map(|value| {
             if (value - 999_999.0).abs() < f64::EPSILON {
@@ -3481,6 +3587,31 @@ fn parse_service_state(
             .map(|value| format!("{} 元", compact_decimal(value, 4))),
         package_options,
     }
+}
+
+fn parse_active_package_reservation(
+    text: &str,
+) -> Result<Option<ActivePackageReservation>, BillingError> {
+    let table = parse_billing_table(text, PACKAGE_LOG_FIELDS, "预约套餐记录")?;
+    let Some(latest) = table.rows.first() else {
+        return Ok(None);
+    };
+    if latest.get("fldstate").map(String::as_str) != Some("1") {
+        return Ok(None);
+    }
+    let scheduled_package = latest
+        .get("flddefaultname2")
+        .map(|value| normalize_text(value))
+        .filter(|value| !value.is_empty() && value != "--")
+        .ok_or_else(|| BillingError::Protocol("有效套餐预约缺少目标套餐".to_string()))?;
+    let current_package = latest
+        .get("flddefaultname1")
+        .map(|value| normalize_text(value))
+        .filter(|value| !value.is_empty() && value != "--");
+    Ok(Some(ActivePackageReservation {
+        current_package,
+        scheduled_package,
+    }))
 }
 
 fn package_reservation_is_distinct(current: Option<&str>, scheduled: Option<&str>) -> bool {
@@ -3508,6 +3639,19 @@ fn has_tag_attribute(html: &str, name: &str, value: &str) -> bool {
         .into_iter()
         .flat_map(|tag_name| tags(html, tag_name))
         .any(|tag| attribute(tag, name).as_deref() == Some(value))
+}
+
+fn has_package_cancel_control(html: &str) -> bool {
+    has_tag_attribute(html, "data-toggle", "undoPackage")
+        || ["a", "button", "input"]
+            .into_iter()
+            .flat_map(|tag_name| tags(html, tag_name))
+            .any(|tag| {
+                ["href", "action", "onclick"]
+                    .into_iter()
+                    .filter_map(|name| attribute(tag, name))
+                    .any(|value| value.to_ascii_lowercase().contains("undopackage"))
+            })
 }
 
 fn scheduled_package_name(html: &str) -> Option<String> {
@@ -4204,6 +4348,10 @@ mod tests {
             "data-toggle",
             "undoPackage"
         ));
+        assert!(has_package_cancel_control(package_html));
+        assert!(!has_package_cancel_control(
+            r#"<script>$('[data-toggle="undoPackage"]')</script>"#
+        ));
         assert_eq!(
             scheduled_package_name(package_html).as_deref(),
             Some("下周期测试套餐")
@@ -4241,6 +4389,44 @@ mod tests {
     }
 
     #[test]
+    fn parses_only_the_latest_active_package_reservation() {
+        let active = parse_active_package_reservation(
+            r#"{"total":1,"rows":[{"fldchangedate":1784523386000,"flddefaultname1":"本科生10元套餐","flddefaultname2":"本科生默认套餐","fldstate":"1"}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(active.current_package.as_deref(), Some("本科生10元套餐"));
+        assert_eq!(active.scheduled_package, "本科生默认套餐");
+
+        assert!(parse_active_package_reservation(
+            r#"{"total":1,"rows":[{"flddefaultname1":"本科生10元套餐","flddefaultname2":"本科生默认套餐","fldstate":"0","fldextend":"用户手动取消"}]}"#,
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn derives_next_cycle_package_from_the_active_log_entry() {
+        let dashboard = r#"
+          <script>(function(user){window.user=user;})({"useFlag":1,"serviceDefault":{"id":7,"defaultName":"本科生10元套餐","extend":"当前套餐"}});</script>
+        "#;
+        let package_html = r#"
+          <a class="pick-card" data-package="6"><span>套餐： 本科生默认套餐</span></a>
+          <a class="pick-card" data-package="8"><span>套餐： 本科生20元套餐</span></a>
+          <script>$('[data-toggle="undoPackage"]')</script>
+        "#;
+        let reservation = ActivePackageReservation {
+            current_package: Some("本科生10元套餐".to_string()),
+            scheduled_package: "本科生默认套餐".to_string(),
+        };
+        let state = parse_service_state(dashboard, "", "", package_html, "", Some(&reservation));
+        assert!(state.package_scheduled);
+        assert_eq!(state.scheduled_package_id.as_deref(), Some("6"));
+        assert_eq!(state.scheduled_package.as_deref(), Some("本科生默认套餐"));
+        assert!(state.package_options.iter().any(|option| option.id == "7"));
+    }
+
+    #[test]
     fn derives_service_state_without_treating_script_selectors_as_schedules() {
         let dashboard = r#"
           <script>(function(user){window.user=user;})({"leftMoney":3.5,"installmentFlag":999999,"useMoney":1.25,"useFlag":0,"stopReason":"余额不足","serviceDefault":{"id":7,"defaultName":"测试套餐","extend":"测试说明"}});</script>
@@ -4249,7 +4435,7 @@ mod tests {
             r#"<p>下次结算日期：2026-08-01</p><script>$('[data-toggle="undoPreStop"]')</script>"#;
         let reopen =
             r#"<button id="reOpenNow">立即复通</button><button id="reOpen">预约复通</button>"#;
-        let state = parse_service_state(dashboard, stop, reopen, "", "");
+        let state = parse_service_state(dashboard, stop, reopen, "", "", None);
         assert_eq!(state.account_status.as_deref(), Some("停机"));
         assert!(state.can_reopen_now);
         assert!(!state.can_stop_now);

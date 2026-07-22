@@ -540,6 +540,7 @@ interface BillingServiceState {
   canStopNow: boolean;
   canReopenNow: boolean;
   packageScheduled: boolean;
+  scheduledPackageId?: string | null;
   scheduledPackage?: string | null;
   consumeLimit?: string | null;
   currentCycleSpend?: string | null;
@@ -1829,6 +1830,7 @@ let billingCenterLoading = false;
 let selectedBillingPackageId = '';
 let effectiveNextBillingPackageId = '';
 let effectiveNextBillingPackageName = '';
+let hasDistinctBillingPackageReservation = false;
 let activeBillingWorkbenchSection: BillingWorkbenchSection = 'overview';
 let campusAccountDiscoveryPromise: Promise<void> | null = null;
 let lastCampusAccountDiscoveryAt = 0;
@@ -2665,8 +2667,7 @@ function setupEventListeners() {
       element.classList.toggle('selected', element === option);
       element.setAttribute('aria-pressed', String(element === option));
     });
-    btnBillingPackage.disabled = !selectedBillingPackageId
-      || selectedBillingPackageId === effectiveNextBillingPackageId;
+    updateBillingPackageActionButton();
   });
   btnBillingStopNow.addEventListener('click', () => void performConfirmedBillingAction(
     { action: 'stopNow' },
@@ -2686,10 +2687,16 @@ function setupEventListeners() {
       void customAlert('请先选择一个可预约套餐。');
       return;
     }
+    const selectsCurrentPackage = billingPackageOptionIsCurrent(option, billingCenterData!.service);
+    const restoresCurrentPackage = hasDistinctBillingPackageReservation && selectsCurrentPackage;
     void performConfirmedBillingAction(
-      { action: 'schedulePackage', packageId: option.id },
-      '预约套餐',
-      `确定将下一周期套餐调整为“${option.name}”吗？新套餐通常在下一计费周期生效。`,
+      restoresCurrentPackage
+        ? { action: 'cancelPackage' }
+        : { action: 'schedulePackage', packageId: option.id },
+      restoresCurrentPackage ? '下一周期沿用当前套餐' : '预约套餐',
+      restoresCurrentPackage
+        ? `确定取消“${billingCenterData?.service.scheduledPackage || '已预约套餐'}”，让下一周期继续使用“${option.name}”吗？`
+        : `确定将下一周期套餐调整为“${option.name}”吗？新套餐通常在下一计费周期生效。`,
       btnBillingPackage,
     );
   });
@@ -4702,6 +4709,31 @@ function normalizedPackageName(value: string | null | undefined): string {
   return (value || '').replace(/\s+/g, '').toLocaleLowerCase('zh-CN');
 }
 
+function billingPackageOptionIsCurrent(
+  option: BillingPackageOption,
+  service: BillingServiceState,
+): boolean {
+  return option.id === service.currentPackageId
+    || (!service.currentPackageId
+      && normalizedPackageName(option.name) === normalizedPackageName(service.currentPackage));
+}
+
+function updateBillingPackageActionButton() {
+  const service = billingCenterData?.service;
+  const selected = service?.packageOptions.find(option => option.id === selectedBillingPackageId);
+  const restoresCurrentPackage = Boolean(
+    service
+    && selected
+    && hasDistinctBillingPackageReservation
+    && billingPackageOptionIsCurrent(selected, service),
+  );
+  btnBillingPackage.textContent = restoresCurrentPackage
+    ? '下一周期沿用当前套餐'
+    : '确认预约套餐';
+  btnBillingPackage.disabled = !selectedBillingPackageId
+    || selectedBillingPackageId === effectiveNextBillingPackageId;
+}
+
 function renderBillingService(data: BillingCenterData) {
   const service = data.service;
   billingServiceStatusBadge.textContent = service.accountStatus || '未知';
@@ -4716,22 +4748,31 @@ function renderBillingService(data: BillingCenterData) {
   btnBillingConsumeLimit.disabled = false;
 
   const currentName = service.currentPackage || '';
+  const currentId = service.currentPackageId || '';
   const scheduledName = service.scheduledPackage || '';
-  const hasScheduledPackage = service.packageScheduled && Boolean(normalizedPackageName(scheduledName));
-  const scheduledMatchesCurrent = hasScheduledPackage
-    && Boolean(normalizedPackageName(currentName))
-    && normalizedPackageName(scheduledName) === normalizedPackageName(currentName);
-  const hasDistinctReservation = hasScheduledPackage && !scheduledMatchesCurrent;
+  const scheduledId = service.scheduledPackageId || '';
+  const scheduledMatchesCurrent = service.packageScheduled && (
+    (Boolean(scheduledId) && Boolean(currentId) && scheduledId === currentId)
+    || (Boolean(normalizedPackageName(scheduledName))
+      && Boolean(normalizedPackageName(currentName))
+      && normalizedPackageName(scheduledName) === normalizedPackageName(currentName))
+  );
+  const hasDistinctReservation = service.packageScheduled && !scheduledMatchesCurrent;
+  hasDistinctBillingPackageReservation = hasDistinctReservation;
   effectiveNextBillingPackageName = hasDistinctReservation
     ? scheduledName
     : currentName;
-  const nextOption = service.packageOptions.find(option =>
-    normalizedPackageName(option.name) === normalizedPackageName(effectiveNextBillingPackageName),
-  );
-  effectiveNextBillingPackageId = nextOption?.id
-    || (!hasDistinctReservation ? (service.currentPackageId || '') : '');
+  const nextOption = service.packageOptions.find(option => (
+    (Boolean(scheduledId) && option.id === scheduledId)
+    || (Boolean(normalizedPackageName(effectiveNextBillingPackageName))
+      && normalizedPackageName(option.name) === normalizedPackageName(effectiveNextBillingPackageName))
+  ));
+  effectiveNextBillingPackageId = hasDistinctReservation
+    ? (scheduledId || nextOption?.id || '')
+    : currentId;
   selectedBillingPackageId = effectiveNextBillingPackageId;
   btnBillingCancelPackage.hidden = !hasDistinctReservation;
+  btnBillingCancelPackage.disabled = !hasDistinctReservation;
 
   if (service.packageOptions.length === 0) {
     billingPackageOptions.replaceChildren(createBillingEmpty('当前没有可预约套餐'));
@@ -4743,9 +4784,7 @@ function renderBillingService(data: BillingCenterData) {
       button.type = 'button';
       button.className = 'billing-package-option';
       button.dataset.packageId = option.id;
-      const isCurrent = option.id === service.currentPackageId
-        || (!service.currentPackageId
-          && normalizedPackageName(option.name) === normalizedPackageName(currentName));
+      const isCurrent = billingPackageOptionIsCurrent(option, service);
       const isNext = effectiveNextBillingPackageId
         ? option.id === effectiveNextBillingPackageId
         : normalizedPackageName(option.name) === normalizedPackageName(effectiveNextBillingPackageName);
@@ -4776,9 +4815,8 @@ function renderBillingService(data: BillingCenterData) {
       fragment.appendChild(button);
     });
     billingPackageOptions.replaceChildren(fragment);
-    btnBillingPackage.disabled = !selectedBillingPackageId
-      || selectedBillingPackageId === effectiveNextBillingPackageId;
   }
+  updateBillingPackageActionButton();
 }
 
 function renderBillingDevices(data: BillingCenterData) {
@@ -4884,7 +4922,10 @@ function resetBillingCenterForSelectedAccount() {
   selectedBillingPackageId = '';
   effectiveNextBillingPackageId = '';
   effectiveNextBillingPackageName = '';
+  hasDistinctBillingPackageReservation = false;
+  btnBillingPackage.textContent = '确认预约套餐';
   btnBillingCancelPackage.hidden = true;
+  btnBillingCancelPackage.disabled = true;
   billingPackageOptions.replaceChildren(createBillingEmpty('正在读取可预约套餐…'));
   billingDeviceCount.textContent = '0';
   btnBillingBindMac.disabled = true;
