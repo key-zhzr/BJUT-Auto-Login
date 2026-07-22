@@ -13,6 +13,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -58,6 +59,18 @@ class MainActivity : TauriActivity() {
       .putBoolean("engine_foreground", false)
       .apply()
     super.onCreate(savedInstanceState)
+    onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+      override fun handleOnBackPressed() {
+        val webView = appWebView
+        if (webView == null) {
+          moveTaskToBack(true)
+          return
+        }
+        webView.evaluateJavascript("Boolean(window.__handleAndroidBack?.())") { handled ->
+          if (handled != "true") moveTaskToBack(true)
+        }
+      }
+    })
     engineHeartbeatHandler.post(engineHeartbeatRunnable)
     ContextCompat.registerReceiver(
       this,

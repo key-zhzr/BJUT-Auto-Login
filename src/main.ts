@@ -74,6 +74,7 @@ document.addEventListener('visibilitychange', () => {
   if (documentWasHidden && !document.hidden) {
     showResumeMask();
     scheduleAlipayAutomaticCompletionCheck();
+    scheduleWechatAutomaticCompletionCheck();
   }
   documentWasHidden = document.hidden;
 });
@@ -631,6 +632,41 @@ interface AlipayRechargeResult {
 }
 
 interface ActiveAlipayPayment {
+  paymentUrl: string;
+  payerAccount: string;
+  amount: string;
+  targetAccount: string;
+  cardBalanceBefore: string;
+}
+
+interface WechatRechargePreview {
+  confirmationId: string;
+  payerAccount: string;
+  cardBalance: string;
+  targetAccount: string;
+  targetBalance: string;
+  targetStatus: string;
+  amount: string;
+  allowedTime: string;
+  expiresInSeconds: number;
+}
+
+interface WechatRechargeResult {
+  message: string;
+  paymentId: string;
+  payerAccount: string;
+  targetAccount: string;
+  amount: string;
+  paymentUrl: string;
+}
+
+interface WechatPaymentStatus {
+  status: 'pending' | 'paid';
+  message: string;
+}
+
+interface ActiveWechatPayment {
+  paymentId: string;
   paymentUrl: string;
   payerAccount: string;
   amount: string;
@@ -1677,12 +1713,13 @@ const billingRechargePayer = document.getElementById('billing-recharge-payer')!;
 const billingRechargeCardBalance = document.getElementById('billing-recharge-card-balance')!;
 const billingRechargeTargetStatus = document.getElementById('billing-recharge-target-status')!;
 const billingRechargeTargetBalance = document.getElementById('billing-recharge-target-balance')!;
-type RechargeMethod = 'campus-card' | 'alipay';
+type RechargeMethod = 'campus-card' | 'alipay' | 'wechat';
 const billingRechargeMethodButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('[data-recharge-method-target]'),
 );
 const btnBillingAlipayShowPayment = document.getElementById('btn-billing-alipay-show-payment') as HTMLButtonElement;
 const btnBillingAlipayContinue = document.getElementById('btn-billing-alipay-continue') as HTMLButtonElement;
+const btnBillingWechatContinue = document.getElementById('btn-billing-wechat-continue') as HTMLButtonElement;
 const alipayPaymentModal = document.getElementById('alipay-payment-modal')!;
 const alipayPaymentQr = document.getElementById('alipay-payment-qr') as HTMLCanvasElement;
 const alipayPaymentQrShell = document.getElementById('alipay-payment-qr-shell')!;
@@ -1713,7 +1750,7 @@ const billingWorkbenchSectionSubtitles: Record<BillingWorkbenchSection, string> 
   overview: '账户状态、在线会话与近期上网记录',
   records: '用量、账单与各类业务办理记录',
   services: '停复机、消费保护与套餐预约',
-  recharge: '校园卡转入与支付宝充值',
+  recharge: '校园卡转入、支付宝与微信充值',
   devices: '无感认证设备与统一认证安全设置',
 };
 const billingSectionNavButtons = Array.from(
@@ -1777,11 +1814,17 @@ let billingQuestionSelects: CustomSelect[] = [];
 let billingCenterData: BillingCenterData | null = null;
 let activeRechargeMethod: RechargeMethod = 'campus-card';
 let activeAlipayPayment: ActiveAlipayPayment | null = null;
+let activeWechatPayment: ActiveWechatPayment | null = null;
 let alipayPaymentModalReturnFocus: HTMLElement | null = null;
 let alipayCompletionBusy = false;
 let alipayExternalHandoffAt = 0;
 let alipayLastAutomaticCheckAt = 0;
 let alipayAutomaticCheckTimer: number | null = null;
+let wechatCompletionBusy = false;
+let wechatExternalHandoffAt = 0;
+let wechatLastAutomaticCheckAt = 0;
+let wechatAutomaticCheckTimer: number | null = null;
+let wechatAutomaticCheckCount = 0;
 let billingRecordQueryStates: Partial<Record<BillingRecordKind, BillingRecordQueryState>> = {};
 let billingRecordQueryBusy = false;
 let billingCenterLoading = false;
@@ -2479,6 +2522,38 @@ function activatePage(target: string, navTarget = target) {
   }
 }
 
+function handleAndroidBack() {
+  const visibleModal = document.querySelector<HTMLElement>('.modal-overlay:not(.hidden)');
+  if (visibleModal) {
+    const dismiss = visibleModal.querySelector<HTMLElement>([
+      '#btn-confirm-cancel',
+      '#btn-alert-ok',
+      '#btn-alipay-payment-close-icon',
+      '#btn-password-prompt-cancel',
+      '#btn-cancel-add',
+      '#btn-cancel-edit',
+      '#btn-cancel-delete',
+      '#btn-sec-cancel',
+      '#btn-update-later',
+    ].join(','));
+    if (dismiss) {
+      dismiss.click();
+      return true;
+    }
+  }
+  const activePage = document.querySelector<HTMLElement>('.page.active')?.id;
+  if (activePage && activePage !== 'dashboard') {
+    activatePage('dashboard');
+    document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, behavior: 'auto' });
+    return true;
+  }
+  return false;
+}
+
+if (IS_ANDROID) {
+  (window as any).__handleAndroidBack = handleAndroidBack;
+}
+
 function setupNavigation() {
   navItems.forEach(item => {
     item.addEventListener('click', () => {
@@ -2647,6 +2722,7 @@ function setupEventListeners() {
   billingRechargeForm.addEventListener('submit', event => {
     event.preventDefault();
     if (activeRechargeMethod === 'alipay') void prepareAndOpenAlipayRecharge();
+    else if (activeRechargeMethod === 'wechat') void prepareAndOpenWechatRecharge();
     else void prepareAndConfirmNetworkRecharge();
   });
   billingRechargeMethodButtons.forEach(button => {
@@ -2672,7 +2748,9 @@ function setupEventListeners() {
     }
   });
   window.addEventListener('focus', scheduleAlipayAutomaticCompletionCheck);
+  window.addEventListener('focus', scheduleWechatAutomaticCompletionCheck);
   btnBillingAlipayContinue.addEventListener('click', () => void completeAlipayNetworkRecharge(false));
+  btnBillingWechatContinue.addEventListener('click', () => void completeWechatNetworkRecharge(false));
   billingQuestionsForm.addEventListener('submit', event => {
     event.preventDefault();
     if (!billingQuestionPassword.value) {
@@ -4590,7 +4668,9 @@ function renderBillingDevices(data: BillingCenterData) {
   if (!billingRechargeState.textContent?.trim() || billingRechargeState.textContent.includes('正在读取')) {
     billingRechargeState.textContent = activeRechargeMethod === 'alipay'
       ? '填写目标学工号和金额后，App 将先核对当前校园卡，再创建支付宝支付入口。'
-      : '填写目标学工号和金额后，App 将通过统一认证核对校园卡、目标账户与可充值状态。';
+      : activeRechargeMethod === 'wechat'
+        ? '填写目标学工号和金额后，App 将先核对当前校园卡，再创建微信 H5 支付入口。'
+        : '填写目标学工号和金额后，App 将通过统一认证核对校园卡、目标账户与可充值状态。';
   }
 }
 
@@ -4780,7 +4860,8 @@ function clearBillingSecretInputs() {
 }
 
 function activateRechargeMethod(method: RechargeMethod) {
-  if (!['campus-card', 'alipay'].includes(method)) return;
+  if (!['campus-card', 'alipay', 'wechat'].includes(method)) return;
+  if (method === 'wechat' && !IS_ANDROID) return;
   activeRechargeMethod = method;
   billingRechargeMethodButtons.forEach(button => {
     const active = button.dataset.rechargeMethodTarget === method;
@@ -4788,14 +4869,27 @@ function activateRechargeMethod(method: RechargeMethod) {
     button.setAttribute('aria-selected', String(active));
   });
   const alipay = method === 'alipay';
-  billingRechargeMethodTitle.textContent = alipay ? '支付宝充值网费' : '从校园卡转入网费';
+  const wechat = method === 'wechat';
+  billingRechargeMethodTitle.textContent = alipay
+    ? '支付宝充值网费'
+    : wechat
+      ? '微信充值网费'
+      : '从校园卡转入网费';
   billingRechargeMethodDescription.textContent = alipay
     ? '支付宝先为当前校园卡充值，到账后 App 会继续把同一金额转入上方目标网费账户。'
-    : '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。';
-  btnBillingRecharge.textContent = alipay ? '核对并前往支付宝' : '核对充值信息';
+    : wechat
+      ? '微信 H5 收银台先为当前校园卡充值，支付确认后 App 会继续把同一金额转入上方目标网费账户。'
+      : '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。';
+  btnBillingRecharge.textContent = alipay
+    ? '核对并前往支付宝'
+    : wechat
+      ? '核对并前往微信支付'
+      : '核对充值信息';
   billingRechargeState.textContent = alipay
     ? '目标和金额保持不变；确认后 Android 会优先直接打开支付宝，桌面端显示二维码。'
-    : '目标和金额保持不变；确认后从当前账号的校园卡直接转入网费。';
+    : wechat
+      ? '目标和金额保持不变；确认后将用系统浏览器打开微信 H5 收银台，支付页不使用微信 UA。'
+      : '目标和金额保持不变；确认后从当前账号的校园卡直接转入网费。';
   if (activeAlipayPayment) {
     btnBillingAlipayShowPayment.hidden = IS_ANDROID || !alipay;
     btnBillingAlipayContinue.hidden = !alipay;
@@ -4803,6 +4897,7 @@ function activateRechargeMethod(method: RechargeMethod) {
     btnBillingAlipayShowPayment.hidden = true;
     btnBillingAlipayContinue.hidden = true;
   }
+  btnBillingWechatContinue.hidden = !wechat || !activeWechatPayment;
 }
 
 function setRechargeBusy(busy: boolean, label?: string) {
@@ -4810,8 +4905,11 @@ function setRechargeBusy(busy: boolean, label?: string) {
   billingRechargeAccount.disabled = busy;
   billingRechargeAmount.disabled = busy;
   billingRechargeMethodButtons.forEach(button => { button.disabled = busy; });
-  btnBillingRecharge.textContent = label
-    || (activeRechargeMethod === 'alipay' ? '核对并前往支付宝' : '核对充值信息');
+  btnBillingRecharge.textContent = label || (activeRechargeMethod === 'alipay'
+    ? '核对并前往支付宝'
+    : activeRechargeMethod === 'wechat'
+      ? '核对并前往微信支付'
+      : '核对充值信息');
 }
 
 function updateRechargeProgress(percent: number, text: string, visible = true) {
@@ -5288,6 +5386,277 @@ async function prepareAndOpenAlipayRecharge() {
     }
     billingRechargeProgress.hidden = true;
     await customAlert(billingRechargeState.textContent, '支付宝充值');
+  } finally {
+    setRechargeBusy(false);
+  }
+}
+
+function isTrustedWechatPaymentUrl(value: string) {
+  try {
+    const url = new URL(value);
+    const keys = Array.from(url.searchParams.keys());
+    return url.protocol === 'https:'
+      && url.hostname === 'wx.tenpay.com'
+      && url.pathname === '/cgi-bin/mmpayweb-bin/checkmweb'
+      && keys.length === 4
+      && ['prepay_id', 'ct', 'sign', 'package'].every(key => Boolean(url.searchParams.get(key)));
+  } catch {
+    return false;
+  }
+}
+
+function clearActiveWechatPayment() {
+  if (wechatAutomaticCheckTimer !== null) {
+    window.clearTimeout(wechatAutomaticCheckTimer);
+    wechatAutomaticCheckTimer = null;
+  }
+  activeWechatPayment = null;
+  wechatExternalHandoffAt = 0;
+  wechatLastAutomaticCheckAt = 0;
+  wechatAutomaticCheckCount = 0;
+  wechatCompletionBusy = false;
+  btnBillingWechatContinue.hidden = true;
+  btnBillingWechatContinue.disabled = false;
+}
+
+function rememberActiveWechatPayment(payment: ActiveWechatPayment) {
+  activeWechatPayment = payment;
+  wechatExternalHandoffAt = 0;
+  wechatLastAutomaticCheckAt = 0;
+  wechatAutomaticCheckCount = 0;
+  btnBillingWechatContinue.hidden = activeRechargeMethod !== 'wechat';
+}
+
+function setWechatCompletionBusy(busy: boolean) {
+  wechatCompletionBusy = busy;
+  btnBillingWechatContinue.disabled = busy;
+  setRechargeBusy(busy, busy ? '正在确认微信支付…' : undefined);
+}
+
+function scheduleWechatAutomaticCompletionCheck() {
+  if (!activeWechatPayment
+    || !wechatExternalHandoffAt
+    || wechatCompletionBusy
+    || document.hidden
+    || wechatAutomaticCheckCount >= 20) return;
+  const now = Date.now();
+  if (now - wechatExternalHandoffAt < 800 || now - wechatLastAutomaticCheckAt < 2200) return;
+  if (wechatAutomaticCheckTimer !== null) window.clearTimeout(wechatAutomaticCheckTimer);
+  wechatAutomaticCheckTimer = window.setTimeout(() => {
+    wechatAutomaticCheckTimer = null;
+    if (!activeWechatPayment || wechatCompletionBusy || document.hidden) return;
+    wechatLastAutomaticCheckAt = Date.now();
+    wechatAutomaticCheckCount += 1;
+    void completeWechatNetworkRecharge(true);
+  }, 650);
+}
+
+async function openActiveWechatPayment() {
+  const payment = activeWechatPayment;
+  if (!payment || !isTrustedWechatPaymentUrl(payment.paymentUrl)) {
+    await customAlert('当前没有可用的微信支付入口，请重新核对充值信息。', '微信充值');
+    return false;
+  }
+  wechatExternalHandoffAt = Date.now();
+  wechatLastAutomaticCheckAt = 0;
+  wechatAutomaticCheckCount = 0;
+  try {
+    // Deliberately hand the H5 cashier URL to the system browser. The payment
+    // page must use a regular browser UA; only ITSApp authentication uses a
+    // WeChat UA in the Rust request chain.
+    await openUrl(payment.paymentUrl);
+    billingRechargeState.textContent = '微信 H5 收银台已交给系统浏览器打开；支付完成后返回 App，将自动确认订单并转入网费。';
+    updateRechargeProgress(55, '等待微信支付完成…');
+    return true;
+  } catch (error) {
+    wechatExternalHandoffAt = 0;
+    billingRechargeState.textContent = `微信支付页打开失败：${String(error)}`;
+    return false;
+  }
+}
+
+async function completeWechatNetworkRecharge(automatic = false) {
+  if (wechatCompletionBusy) return;
+  const payment = activeWechatPayment;
+  if (!payment) {
+    if (!automatic) await customAlert('当前没有等待处理的微信订单，请重新发起充值。', '微信充值');
+    return;
+  }
+
+  let preparedConfirmationId: string | null = null;
+  let transferSubmitted = false;
+  setWechatCompletionBusy(true);
+  billingRechargeState.textContent = '正在向学校支付平台确认微信订单状态…';
+  updateRechargeProgress(58, '正在确认微信支付状态…');
+  try {
+    const status = await invoke<WechatPaymentStatus>('check_wechat_card_recharge', {
+      paymentId: payment.paymentId,
+    });
+    if (activeWechatPayment !== payment) return;
+    if (status.status !== 'paid') {
+      billingRechargeState.textContent = automatic
+        ? '学校支付平台暂未确认微信付款，App 将在前台继续检查。'
+        : '暂未确认微信付款；若已完成支付，请稍候几秒再检查。';
+      updateRechargeProgress(55, '等待微信支付完成…');
+      if (automatic && wechatAutomaticCheckCount < 20) {
+        wechatAutomaticCheckTimer = window.setTimeout(() => {
+          wechatAutomaticCheckTimer = null;
+          if (!activeWechatPayment || wechatCompletionBusy || document.hidden) return;
+          wechatLastAutomaticCheckAt = Date.now();
+          wechatAutomaticCheckCount += 1;
+          void completeWechatNetworkRecharge(true);
+        }, 2400);
+      }
+      return;
+    }
+
+    billingRechargeState.textContent = `${status.message}，正在核对目标网费账户并准备自动转入…`;
+    updateRechargeProgress(68, '微信已支付，正在准备网费转入…');
+    const preview = await invoke<RechargePreview>('prepare_network_recharge', {
+      targetAccount: payment.targetAccount,
+      amount: payment.amount,
+    });
+    preparedConfirmationId = preview.confirmationId;
+    if (activeWechatPayment !== payment) {
+      await invoke('cancel_network_recharge', { confirmationId: preview.confirmationId }).catch(() => undefined);
+      preparedConfirmationId = null;
+      return;
+    }
+    if (preview.payerAccount !== payment.payerAccount || preview.targetAccount !== payment.targetAccount) {
+      await invoke('cancel_network_recharge', { confirmationId: preview.confirmationId }).catch(() => undefined);
+      preparedConfirmationId = null;
+      throw new Error('到账核对返回的校园卡或目标网费账户与当前微信订单不一致');
+    }
+
+    renderRechargePreview(preview);
+    billingRechargeState.textContent = '微信支付已确认，正在按首次确认的信息从校园卡转入目标网费账户，请勿重复操作…';
+    updateRechargeProgress(76, '正在从校园卡转入目标网费账户…');
+    transferSubmitted = true;
+    preparedConfirmationId = null;
+    const result = await invoke<RechargeResult>('confirm_network_recharge', {
+      confirmationId: preview.confirmationId,
+    });
+    updateRechargeProgress(88, '网费转入完成，正在刷新双方余额…');
+    const balanceError = await refreshRechargeBalancesOnce(payment.targetAccount);
+    await invoke('cancel_wechat_card_recharge', {
+      confirmationId: null,
+      paymentId: payment.paymentId,
+    }).catch(() => undefined);
+    clearActiveWechatPayment();
+    billingRechargeAmount.value = '';
+    billingRechargeState.textContent = balanceError
+      ? `${result.message}。微信 → 校园卡 → 网费账户流程已完成；余额刷新失败：${balanceError}`
+      : `${result.message}。微信 → 校园卡 → 网费账户流程已完成，最新余额已读取。`;
+    finishRechargeProgress(balanceError ? '充值完成，余额暂未刷新' : '充值与余额刷新完成');
+    await customAlert(billingRechargeState.textContent, '微信充值完成');
+  } catch (error) {
+    if (preparedConfirmationId) {
+      await invoke('cancel_network_recharge', { confirmationId: preparedConfirmationId }).catch(() => undefined);
+    }
+    const detail = String(error);
+    const uncertain = transferSubmitted
+      && /结果未知|订单已经创建|不要立即重复|未能确认/.test(detail);
+    if (uncertain) clearActiveWechatPayment();
+    const message = automatic
+      ? `微信支付后的自动处理暂未完成：${detail}。可稍后点击“检测微信支付并转入网费”重试。`
+      : `微信支付确认或网费转入未完成：${detail}`;
+    billingRechargeState.textContent = message;
+    billingRechargeProgress.hidden = true;
+    if (!automatic) await customAlert(message, '微信充值');
+  } finally {
+    setWechatCompletionBusy(false);
+  }
+}
+
+async function prepareAndOpenWechatRecharge() {
+  if (!IS_ANDROID || btnBillingRecharge.disabled) return;
+  const targetAccount = billingRechargeAccount.value.trim();
+  const amount = billingRechargeAmount.value.trim();
+  if (!/^[A-Za-z0-9_-]{5,20}$/.test(targetAccount)) {
+    await customAlert('请输入 5–20 位有效学工号。', '微信充值');
+    return;
+  }
+  if (!/^\d+(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0 || Number(amount) > 500) {
+    await customAlert('充值金额必须大于 0、不超过 500 元，且最多保留两位小数。', '微信充值');
+    return;
+  }
+
+  if (activeWechatPayment) {
+    const sameOrder = activeWechatPayment.targetAccount === targetAccount
+      && Number(activeWechatPayment.amount) === Number(amount);
+    const replace = await customConfirm(
+      sameOrder
+        ? '当前仍保留着相同金额和目标的微信支付入口。仅在原入口已经失效或确定不再支付时才应创建新订单。\n\n选择“取消”将继续使用原支付入口，选择“确定”将创建新订单。'
+        : '当前仍保留着另一个微信支付入口。仅在确认原订单不再支付时才应创建新订单。\n\n选择“取消”将继续使用原支付入口，选择“确定”将替换它。',
+      '替换现有微信订单',
+    );
+    if (!replace) {
+      await openActiveWechatPayment();
+      return;
+    }
+    await invoke('cancel_wechat_card_recharge', {
+      confirmationId: null,
+      paymentId: activeWechatPayment.paymentId,
+    }).catch(() => undefined);
+    clearActiveWechatPayment();
+  }
+
+  billingRechargePreview.hidden = true;
+  billingRechargeState.textContent = '正在核对当前校园卡与目标网费账户…';
+  setRechargeBusy(true, '正在核对…');
+  updateRechargeProgress(10, '正在复用移动门户登录状态并核对账户…');
+  try {
+    const preview = await invoke<WechatRechargePreview>('prepare_wechat_card_recharge', {
+      targetAccount,
+      amount,
+    });
+    billingRechargePayer.textContent = preview.payerAccount;
+    billingRechargeCardBalance.textContent = formatBillingCurrency(preview.cardBalance);
+    billingRechargeTargetStatus.textContent = preview.targetStatus;
+    billingRechargeTargetBalance.textContent = formatBillingCurrency(preview.targetBalance);
+    billingRechargePreview.hidden = false;
+    updateRechargeProgress(34, '校园卡与目标网费账户已核对，等待确认…');
+    const confirmed = await customConfirm(
+      `充值校园卡账号：${preview.payerAccount}\n当前校园卡余额：${formatBillingCurrency(preview.cardBalance)}\n微信支付金额：${formatBillingCurrency(preview.amount)}\n最终网费目标：${preview.targetAccount}\n目标当前余额：${formatBillingCurrency(preview.targetBalance)}\n\n确认后 App 将打开学校微信 H5 收银台；支付成功后会自动把同一金额从校园卡转入上述网费账户。`,
+      '确认前往微信支付',
+    );
+    if (!confirmed) {
+      await invoke('cancel_wechat_card_recharge', {
+        confirmationId: preview.confirmationId,
+        paymentId: null,
+      }).catch(() => undefined);
+      billingRechargeState.textContent = '已取消，没有创建微信支付订单。';
+      billingRechargeProgress.hidden = true;
+      return;
+    }
+    setRechargeBusy(true, '正在创建订单…');
+    billingRechargeState.textContent = '正在创建一次性微信支付订单，请勿重复操作…';
+    updateRechargeProgress(46, '正在创建一次性微信支付订单…');
+    const result = await invoke<WechatRechargeResult>('confirm_wechat_card_recharge', {
+      confirmationId: preview.confirmationId,
+    });
+    if (!isTrustedWechatPaymentUrl(result.paymentUrl)
+      || result.payerAccount !== preview.payerAccount
+      || result.targetAccount !== preview.targetAccount) {
+      throw new Error('学校支付平台返回的微信订单信息未通过安全校验');
+    }
+    rememberActiveWechatPayment({
+      paymentId: result.paymentId,
+      paymentUrl: result.paymentUrl,
+      payerAccount: result.payerAccount,
+      amount: result.amount,
+      targetAccount: result.targetAccount,
+      cardBalanceBefore: preview.cardBalance,
+    });
+    billingRechargeState.textContent = `${result.message}。支付后返回 App，将自动确认并转入网费。`;
+    updateRechargeProgress(55, '支付订单已创建，等待微信付款…');
+    if (!await openActiveWechatPayment()) {
+      await customAlert('微信 H5 支付入口已创建，但系统浏览器未能打开。请稍后重试，避免重复创建订单。', '微信充值');
+    }
+  } catch (error) {
+    billingRechargeState.textContent = `微信充值未开始或支付入口未打开：${String(error)}`;
+    billingRechargeProgress.hidden = true;
+    await customAlert(billingRechargeState.textContent, '微信充值');
   } finally {
     setRechargeBusy(false);
   }

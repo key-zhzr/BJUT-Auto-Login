@@ -24,9 +24,14 @@ fn get_network_info(
         if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
             if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
                 if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
-                    
-                    match tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.NetworkHelper".into()) {
+                    let activity =
+                        unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+
+                    match tauri::wry::prelude::find_class(
+                        &mut env,
+                        &activity,
+                        "cn.edu.bjut.al.NetworkHelper".into(),
+                    ) {
                         Ok(class) => {
                             let method_call = env.call_static_method(
                                 class,
@@ -35,16 +40,23 @@ fn get_network_info(
                                 &[
                                     jni::objects::JValue::Object(&activity),
                                     jni::objects::JValue::Bool(
-                                        if _include_wifi_details.unwrap_or(true) { 1 } else { 0 }
+                                        if _include_wifi_details.unwrap_or(true) {
+                                            1
+                                        } else {
+                                            0
+                                        },
                                     ),
                                 ],
                             );
-                            
+
                             match method_call {
                                 Ok(jvalue) => {
                                     if let Ok(jobject) = jvalue.l() {
                                         let jstring: jni::objects::JString = jobject.into();
-                                        if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
+                                        if let Ok(rust_str) = env.get_string(&jstring).map(|s| {
+                                            let s: String = s.into();
+                                            s
+                                        }) {
                                             if let Ok(val) = serde_json::from_str(&rust_str) {
                                                 result = val;
                                             }
@@ -64,7 +76,7 @@ fn get_network_info(
                             }
                         }
                     }
-                    
+
                     if env.exception_check().unwrap_or(false) {
                         let _ = env.exception_clear();
                     }
@@ -104,12 +116,20 @@ fn get_network_info(
                 }
             }
 
-            if let Ok(output) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en0").output() {
+            if let Ok(output) = std::process::Command::new("sh")
+                .arg("-c")
+                .arg("ipconfig getifaddr en0")
+                .output()
+            {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let trimmed = stdout.trim();
                 if !trimmed.is_empty() {
                     ip = trimmed.to_string();
-                } else if let Ok(output2) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en1").output() {
+                } else if let Ok(output2) = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg("ipconfig getifaddr en1")
+                    .output()
+                {
                     ip = String::from_utf8_lossy(&output2.stdout).trim().to_string();
                 }
             }
@@ -219,14 +239,11 @@ fn request_battery_optimizations(_app: tauri::AppHandle) {
         if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
             if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
                 if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
-                    
-                    let call = env.call_method(
-                        &activity,
-                        "requestBatteryOptimizations",
-                        "()V",
-                        &[],
-                    );
+                    let activity =
+                        unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+
+                    let call =
+                        env.call_method(&activity, "requestBatteryOptimizations", "()V", &[]);
                     if call.is_err() {
                         if env.exception_check().unwrap_or(false) {
                             let _ = env.exception_clear();
@@ -245,13 +262,9 @@ fn request_foreground_permissions(_app: tauri::AppHandle) {
         if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
             if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
                 if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
-                    let _ = env.call_method(
-                        &activity,
-                        "requestForegroundPermissions",
-                        "()V",
-                        &[],
-                    );
+                    let activity =
+                        unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    let _ = env.call_method(&activity, "requestForegroundPermissions", "()V", &[]);
                     if env.exception_check().unwrap_or(false) {
                         let _ = env.exception_clear();
                     }
@@ -268,13 +281,9 @@ fn request_background_permissions(_app: tauri::AppHandle) {
         if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
             if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
                 if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
-                    let _ = env.call_method(
-                        &activity,
-                        "requestBackgroundPermissions",
-                        "()V",
-                        &[],
-                    );
+                    let activity =
+                        unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    let _ = env.call_method(&activity, "requestBackgroundPermissions", "()V", &[]);
                     if env.exception_check().unwrap_or(false) {
                         let _ = env.exception_clear();
                     }
@@ -291,13 +300,9 @@ fn start_keep_alive_service(_app: tauri::AppHandle) {
         if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
             if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
                 if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
-                    let _ = env.call_method(
-                        &activity,
-                        "startKeepAliveService",
-                        "()V",
-                        &[],
-                    );
+                    let activity =
+                        unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    let _ = env.call_method(&activity, "startKeepAliveService", "()V", &[]);
                     if env.exception_check().unwrap_or(false) {
                         let _ = env.exception_clear();
                     }
@@ -314,13 +319,9 @@ fn stop_keep_alive_service(_app: tauri::AppHandle) {
         if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
             if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
                 if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
-                    let _ = env.call_method(
-                        &activity,
-                        "stopKeepAliveService",
-                        "()V",
-                        &[],
-                    );
+                    let activity =
+                        unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                    let _ = env.call_method(&activity, "stopKeepAliveService", "()V", &[]);
                     if env.exception_check().unwrap_or(false) {
                         let _ = env.exception_clear();
                     }
@@ -345,7 +346,8 @@ fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> 
         } else {
             ActivationPolicy::Accessory
         };
-        app.set_activation_policy(policy).map_err(|e| e.to_string())?;
+        app.set_activation_policy(policy)
+            .map_err(|e| e.to_string())?;
         if visible {
             // Changing Accessory -> Regular is asynchronous in AppKit. Restore
             // focus after the policy transition instead of during cold start.
@@ -383,7 +385,7 @@ fn frontend_ready(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn get_local_ip() -> String {
     let mut ip = String::new();
-    
+
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -430,8 +432,13 @@ fn get_local_ip() -> String {
             if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
                 if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
                     if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
-                        if let Ok(class) = tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.NetworkHelper".into()) {
+                        let activity =
+                            unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+                        if let Ok(class) = tauri::wry::prelude::find_class(
+                            &mut env,
+                            &activity,
+                            "cn.edu.bjut.al.NetworkHelper".into(),
+                        ) {
                             let method_call = env.call_static_method(
                                 class,
                                 "getLocalIpAddress",
@@ -441,13 +448,18 @@ fn get_local_ip() -> String {
                             if let Ok(jvalue) = method_call {
                                 if let Ok(jobject) = jvalue.l() {
                                     let jstring: jni::objects::JString = jobject.into();
-                                    if let Ok(rust_str) = env.get_string(&jstring).map(|s| { let s: String = s.into(); s }) {
+                                    if let Ok(rust_str) = env.get_string(&jstring).map(|s| {
+                                        let s: String = s.into();
+                                        s
+                                    }) {
                                         ip = rust_str;
                                     }
                                 }
                             }
                         }
-                        if env.exception_check().unwrap_or(false) { let _ = env.exception_clear(); }
+                        if env.exception_check().unwrap_or(false) {
+                            let _ = env.exception_clear();
+                        }
                     }
                 }
             }
@@ -455,12 +467,20 @@ fn get_local_ip() -> String {
 
         #[cfg(target_os = "macos")]
         {
-            if let Ok(output) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en0").output() {
+            if let Ok(output) = std::process::Command::new("sh")
+                .arg("-c")
+                .arg("ipconfig getifaddr en0")
+                .output()
+            {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let trimmed = stdout.trim();
                 if !trimmed.is_empty() {
                     ip = trimmed.to_string();
-                } else if let Ok(output2) = std::process::Command::new("sh").arg("-c").arg("ipconfig getifaddr en1").output() {
+                } else if let Ok(output2) = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg("ipconfig getifaddr en1")
+                    .output()
+                {
                     ip = String::from_utf8_lossy(&output2.stdout).trim().to_string();
                 }
             }
@@ -477,7 +497,7 @@ fn get_local_ip() -> String {
             }
         }
     }
-    
+
     ip
 }
 
@@ -509,8 +529,8 @@ fn write_clipboard(text: String) -> Result<(), String> {
 }
 
 use std::collections::HashMap;
-use std::sync::{Mutex, RwLock, Arc};
-use std::sync::atomic::{AtomicI32, AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::Emitter;
 use tauri::Manager;
 
@@ -686,7 +706,10 @@ struct AppConfig {
     balance_alert_threshold: f64,
     #[serde(default = "default_flow_alert_threshold")]
     flow_alert_threshold: f64,
-    #[serde(default = "default_android_notification_mode", alias = "androidNotificationMode")]
+    #[serde(
+        default = "default_android_notification_mode",
+        alias = "androidNotificationMode"
+    )]
     android_notification_mode: String,
     #[serde(default = "default_true", alias = "androidNotifyNetworkStatus")]
     android_notify_network_status: bool,
@@ -694,20 +717,50 @@ struct AppConfig {
     android_notify_login_results: bool,
     #[serde(default = "default_true", alias = "androidNotifyBackgroundErrors")]
     android_notify_background_errors: bool,
+    #[serde(
+        default,
+        rename = "campusServiceSessions",
+        alias = "campus_service_sessions"
+    )]
+    campus_service_sessions: Vec<campus_services::PersistedCampusSession>,
 }
 
-fn default_auto_login() -> bool { false }
-fn default_check_interval() -> i32 { 15 }
-fn default_check_interval_bg() -> i32 { 60 }
-fn default_wifi_change_detect() -> bool { true }
-fn default_log_level() -> String { "info".to_string() }
-fn default_vpn_compatibility() -> String { "high".to_string() }
-fn default_true() -> bool { true }
-fn default_profile_login_type() -> String { "auto".to_string() }
-fn default_usage_alerts() -> bool { true }
-fn default_balance_alert_threshold() -> f64 { 10.0 }
-fn default_flow_alert_threshold() -> f64 { 5.0 }
-fn default_android_notification_mode() -> String { "combined".to_string() }
+fn default_auto_login() -> bool {
+    false
+}
+fn default_check_interval() -> i32 {
+    15
+}
+fn default_check_interval_bg() -> i32 {
+    60
+}
+fn default_wifi_change_detect() -> bool {
+    true
+}
+fn default_log_level() -> String {
+    "info".to_string()
+}
+fn default_vpn_compatibility() -> String {
+    "high".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_profile_login_type() -> String {
+    "auto".to_string()
+}
+fn default_usage_alerts() -> bool {
+    true
+}
+fn default_balance_alert_threshold() -> f64 {
+    10.0
+}
+fn default_flow_alert_threshold() -> f64 {
+    5.0
+}
+fn default_android_notification_mode() -> String {
+    "combined".to_string()
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct LogEntry {
@@ -737,7 +790,12 @@ struct AppState {
     billing_fetch_lock: tokio::sync::Mutex<()>,
     campus_service_lock: tokio::sync::Mutex<()>,
     campus_recharge_pending: tokio::sync::Mutex<Option<campus_services::PendingRecharge>>,
-    campus_alipay_recharge_pending: tokio::sync::Mutex<Option<campus_services::PendingAlipayRecharge>>,
+    campus_alipay_recharge_pending:
+        tokio::sync::Mutex<Option<campus_services::PendingAlipayRecharge>>,
+    campus_wechat_recharge_pending:
+        tokio::sync::Mutex<Option<campus_services::PendingWechatRecharge>>,
+    campus_wechat_payment_pending:
+        tokio::sync::Mutex<Option<campus_services::PendingWechatPayment>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -793,7 +851,8 @@ impl LoginType {
 }
 
 fn is_campus_local_ip(ip: &str) -> bool {
-    let octets: Vec<u8> = ip.split('.')
+    let octets: Vec<u8> = ip
+        .split('.')
         .map(str::parse::<u8>)
         .collect::<Result<_, _>>()
         .unwrap_or_default();
@@ -815,7 +874,10 @@ const MOBILE_DATA_CHECK_INTERVAL_FOREGROUND: i32 = 120;
 const MOBILE_DATA_CHECK_INTERVAL_BACKGROUND: i32 = 300;
 
 fn network_transport(network: &serde_json::Value) -> &str {
-    network.get("transport").and_then(|value| value.as_str()).unwrap_or("unknown")
+    network
+        .get("transport")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown")
 }
 
 fn is_mobile_data_network(network: &serde_json::Value) -> bool {
@@ -833,7 +895,10 @@ fn is_mobile_data_network(network: &serde_json::Value) -> bool {
 fn network_is_system_validated(network: &serde_json::Value) -> bool {
     #[cfg(target_os = "android")]
     {
-        return network.get("validated").and_then(|value| value.as_bool()).unwrap_or(false);
+        return network
+            .get("validated")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -879,7 +944,10 @@ fn automatic_login_network_allowed(
                 || transport.eq_ignore_ascii_case("ethernet"))
                 && (normalized_ssid.is_empty()
                     || normalized_ssid.eq_ignore_ascii_case("unknown")
-                    || normalized_ssid.eq_ignore_ascii_case("<unknown ssid>")) => Ok(()),
+                    || normalized_ssid.eq_ignore_ascii_case("<unknown ssid>")) =>
+        {
+            Ok(())
+        }
         LoginType::Type1 | LoginType::Type2 => {
             Err("无线网络名称未经识别，且未加入白名单".to_string())
         }
@@ -903,33 +971,42 @@ fn matching_network_profile(
     bssid: &str,
     detected_type: &LoginType,
 ) -> Option<NetworkProfile> {
-    config.network_profiles.iter().find(|profile| {
-        if !profile.enabled {
-            return false;
-        }
-        let ssid_matches = if profile.ssid.trim().is_empty() {
-            *detected_type == LoginType::Type3
-                && (ssid.trim().is_empty()
-                    || ssid.eq_ignore_ascii_case("unknown")
-                    || ssid.eq_ignore_ascii_case("<unknown ssid>"))
-        } else {
-            profile.ssid.trim().eq_ignore_ascii_case(ssid.trim())
-        };
-        let bssid_matches = profile.bssid.trim().is_empty()
-            || profile.bssid.trim().eq_ignore_ascii_case(bssid.trim());
-        ssid_matches && bssid_matches
-    }).cloned()
+    config
+        .network_profiles
+        .iter()
+        .find(|profile| {
+            if !profile.enabled {
+                return false;
+            }
+            let ssid_matches = if profile.ssid.trim().is_empty() {
+                *detected_type == LoginType::Type3
+                    && (ssid.trim().is_empty()
+                        || ssid.eq_ignore_ascii_case("unknown")
+                        || ssid.eq_ignore_ascii_case("<unknown ssid>"))
+            } else {
+                profile.ssid.trim().eq_ignore_ascii_case(ssid.trim())
+            };
+            let bssid_matches = profile.bssid.trim().is_empty()
+                || profile.bssid.trim().eq_ignore_ascii_case(bssid.trim());
+            ssid_matches && bssid_matches
+        })
+        .cloned()
 }
 
 fn accounts_for_profile(accounts: Vec<Account>, profile: Option<&NetworkProfile>) -> Vec<Account> {
-    let active: Vec<Account> = accounts.into_iter()
+    let active: Vec<Account> = accounts
+        .into_iter()
         .filter(|account| !account.is_disabled.unwrap_or(false) && !account.pass.is_empty())
         .collect();
-    let Some(profile) = profile else { return active; };
+    let Some(profile) = profile else {
+        return active;
+    };
     if profile.account_order.is_empty() {
         return active;
     }
-    profile.account_order.iter()
+    profile
+        .account_order
+        .iter()
         .filter_map(|user| active.iter().find(|account| account.user == *user).cloned())
         .collect()
 }
@@ -939,7 +1016,9 @@ fn profile_auto_login_enabled(
     login_type: &LoginType,
     global_default: bool,
 ) -> bool {
-    let Some(profile) = profile else { return global_default; };
+    let Some(profile) = profile else {
+        return global_default;
+    };
     let legacy_default = profile.auto_login.unwrap_or(global_default);
     let key = match login_type {
         LoginType::Type1 => "type1",
@@ -947,7 +1026,11 @@ fn profile_auto_login_enabled(
         LoginType::Type3 => "type3",
         LoginType::Unknown => return legacy_default,
     };
-    profile.auto_login_types.get(key).copied().unwrap_or(legacy_default)
+    profile
+        .auto_login_types
+        .get(key)
+        .copied()
+        .unwrap_or(legacy_default)
 }
 
 #[allow(unused_variables)]
@@ -1009,7 +1092,8 @@ fn parse_dr_response(text: &str) -> (bool, String) {
                     if result == 1 {
                         return (true, "Portal协议认证成功！".to_string());
                     } else {
-                        let msg = data.get("msg")
+                        let msg = data
+                            .get("msg")
                             .or_else(|| data.get("msga"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("未知错误")
@@ -1042,7 +1126,8 @@ async fn check_internet_rust() -> bool {
     let checks = targets.into_iter().map(|(url, validation)| {
         let client = client.clone();
         async move {
-            let response = client.get(url)
+            let response = client
+                .get(url)
                 .header("Cache-Control", "no-cache, no-store")
                 .send()
                 .await
@@ -1059,7 +1144,11 @@ async fn check_internet_rust() -> bool {
             }
         }
     });
-    futures_util::future::join_all(checks).await.into_iter().flatten().any(|online| online)
+    futures_util::future::join_all(checks)
+        .await
+        .into_iter()
+        .flatten()
+        .any(|online| online)
 }
 
 const CAMPUS_DNS_SERVER: &str = "10.21.200.28:53";
@@ -1081,7 +1170,8 @@ fn skip_dns_name(packet: &[u8], position: &mut usize) -> Result<(), String> {
         if length == 0 {
             return Ok(());
         }
-        *position = position.checked_add(length as usize)
+        *position = position
+            .checked_add(length as usize)
             .filter(|next| *next <= packet.len())
             .ok_or("校园网 DNS 名称越界")?;
     }
@@ -1089,13 +1179,18 @@ fn skip_dns_name(packet: &[u8], position: &mut usize) -> Result<(), String> {
 
 fn query_campus_dns_ipv4(host: &str) -> Result<Vec<std::net::Ipv4Addr>, String> {
     let labels: Vec<&str> = host.split('.').collect();
-    if labels.is_empty() || labels.iter().any(|label| label.is_empty() || label.len() > 63) {
+    if labels.is_empty()
+        || labels
+            .iter()
+            .any(|label| label.is_empty() || label.len() > 63)
+    {
         return Err("校园网 DNS 查询域名无效".to_string());
     }
     let query_id = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .subsec_nanos() & 0xffff) as u16;
+        .subsec_nanos()
+        & 0xffff) as u16;
     let mut query = Vec::with_capacity(64);
     query.extend_from_slice(&query_id.to_be_bytes());
     query.extend_from_slice(&[0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
@@ -1109,13 +1204,22 @@ fn query_campus_dns_ipv4(host: &str) -> Result<Vec<std::net::Ipv4Addr>, String> 
     let socket = std::net::UdpSocket::bind("0.0.0.0:0")
         .map_err(|error| format!("无法创建校园网 DNS 查询：{error}"))?;
     let timeout = Some(std::time::Duration::from_millis(1200));
-    socket.set_read_timeout(timeout).map_err(|error| error.to_string())?;
-    socket.set_write_timeout(timeout).map_err(|error| error.to_string())?;
-    socket.connect(CAMPUS_DNS_SERVER)
+    socket
+        .set_read_timeout(timeout)
+        .map_err(|error| error.to_string())?;
+    socket
+        .set_write_timeout(timeout)
+        .map_err(|error| error.to_string())?;
+    socket
+        .connect(CAMPUS_DNS_SERVER)
         .map_err(|error| format!("无法连接校园网 DNS：{error}"))?;
-    socket.send(&query).map_err(|error| format!("校园网 DNS 查询发送失败：{error}"))?;
+    socket
+        .send(&query)
+        .map_err(|error| format!("校园网 DNS 查询发送失败：{error}"))?;
     let mut packet = [0u8; 2048];
-    let size = socket.recv(&mut packet).map_err(|error| format!("校园网 DNS 查询失败：{error}"))?;
+    let size = socket
+        .recv(&mut packet)
+        .map_err(|error| format!("校园网 DNS 查询失败：{error}"))?;
     let packet = &packet[..size];
     if packet.len() < 12 || u16::from_be_bytes([packet[0], packet[1]]) != query_id {
         return Err("校园网 DNS 返回了无效响应".to_string());
@@ -1128,7 +1232,9 @@ fn query_campus_dns_ipv4(host: &str) -> Result<Vec<std::net::Ipv4Addr>, String> 
     let mut position = 12usize;
     for _ in 0..question_count {
         skip_dns_name(packet, &mut position)?;
-        position = position.checked_add(4).filter(|next| *next <= packet.len())
+        position = position
+            .checked_add(4)
+            .filter(|next| *next <= packet.len())
             .ok_or("校园网 DNS 问题段越界")?;
     }
     let mut addresses = Vec::new();
@@ -1146,7 +1252,10 @@ fn query_campus_dns_ipv4(host: &str) -> Result<Vec<std::net::Ipv4Addr>, String> 
         }
         if record_type == 1 && record_class == 1 && data_length == 4 {
             let address = std::net::Ipv4Addr::new(
-                packet[position], packet[position + 1], packet[position + 2], packet[position + 3],
+                packet[position],
+                packet[position + 1],
+                packet[position + 2],
+                packet[position + 3],
             );
             if !addresses.contains(&address) {
                 addresses.push(address);
@@ -1173,12 +1282,27 @@ async fn portal_client(
     let hosts: Vec<(&str, Vec<std::net::Ipv4Addr>)> = match login_type {
         LoginType::Type2 => vec![(WLGN_HOST, vec![std::net::Ipv4Addr::new(10, 21, 251, 3)])],
         LoginType::Type3 => vec![
-            (LGN_HOST, vec![std::net::Ipv4Addr::new(172, 30, 201, 2), std::net::Ipv4Addr::new(172, 30, 201, 10)]),
-            (LGN6_HOST, vec![std::net::Ipv4Addr::new(172, 30, 201, 2), std::net::Ipv4Addr::new(172, 30, 201, 10)]),
+            (
+                LGN_HOST,
+                vec![
+                    std::net::Ipv4Addr::new(172, 30, 201, 2),
+                    std::net::Ipv4Addr::new(172, 30, 201, 10),
+                ],
+            ),
+            (
+                LGN6_HOST,
+                vec![
+                    std::net::Ipv4Addr::new(172, 30, 201, 2),
+                    std::net::Ipv4Addr::new(172, 30, 201, 10),
+                ],
+            ),
         ],
         _ => Vec::new(),
     };
-    if matches!(compatibility, VpnCompatibility::Low | VpnCompatibility::High) {
+    if matches!(
+        compatibility,
+        VpnCompatibility::Low | VpnCompatibility::High
+    ) {
         for (host, fixed_addresses) in hosts {
             let ipv4_addresses = if compatibility == VpnCompatibility::Low {
                 let host_owned = host.to_string();
@@ -1188,7 +1312,8 @@ async fn portal_client(
             } else {
                 fixed_addresses
             };
-            let socket_addresses: Vec<std::net::SocketAddr> = ipv4_addresses.into_iter()
+            let socket_addresses: Vec<std::net::SocketAddr> = ipv4_addresses
+                .into_iter()
                 .map(|address| std::net::SocketAddr::new(std::net::IpAddr::V4(address), 443))
                 .collect();
             builder = builder.resolve_to_addrs(host, &socket_addresses);
@@ -1224,9 +1349,12 @@ async fn probe_login_type(
         compatibility,
         &login_type,
         std::time::Duration::from_millis(1800),
-    ).await.ok()?;
+    )
+    .await
+    .ok()?;
     for url in portal_probe_urls(compatibility, &login_type) {
-        if client.get(url)
+        if client
+            .get(url)
             .header("Cache-Control", "no-cache")
             .send()
             .await
@@ -1242,7 +1370,11 @@ async fn detect_login_type_rust(compatibility: VpnCompatibility) -> LoginType {
     let probes = [LoginType::Type1, LoginType::Type2, LoginType::Type3]
         .into_iter()
         .map(|login_type| probe_login_type(compatibility, login_type));
-    futures_util::future::join_all(probes).await.into_iter().flatten().next()
+    futures_util::future::join_all(probes)
+        .await
+        .into_iter()
+        .flatten()
+        .next()
         .unwrap_or(LoginType::Unknown)
 }
 
@@ -1258,7 +1390,8 @@ async fn login_lgn_once(
     first_form.insert("upass", pass);
     first_form.insert("v46s", "0");
     first_form.insert("0MKKey", "");
-    let first_response = client.post(first_url)
+    let first_response = client
+        .post(first_url)
         .form(&first_form)
         .send()
         .await
@@ -1274,7 +1407,8 @@ async fn login_lgn_once(
     second_form.insert("upass", pass);
     second_form.insert("0MKKey", "Login");
     second_form.insert("v6ip", v6ip.as_str());
-    let final_response = client.post(second_url)
+    let final_response = client
+        .post(second_url)
         .form(&second_form)
         .send()
         .await
@@ -1297,10 +1431,14 @@ async fn login_to_campus_network_rust(
         compatibility,
         &login_type,
         std::time::Duration::from_secs(5),
-    ).await?;
+    )
+    .await?;
     match login_type {
         LoginType::Type1 => {
-            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
             let v = format!("{:04}", nanos % 9000 + 1000);
             let user_encoded = url_encode(&(format!("{}@campus", user)));
             let pass_encoded = url_encode(pass);
@@ -1313,12 +1451,19 @@ async fn login_to_campus_network_rust(
                 "{base}?callback=dr1003&login_method=1&user_account={}&user_password={}&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=000000000000&wlan_ac_ip=&wlan_ac_name=&jsVersion=4.2.1&terminal_type=1&lang=zh-cn&v={}",
                 user_encoded, pass_encoded, v
             );
-            let response = client.get(&url).send().await.map_err(redact_request_error)?;
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(redact_request_error)?;
             let text = response.text().await.map_err(redact_request_error)?;
             Ok(parse_dr_response(&text))
         }
         LoginType::Type2 => {
-            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
             let v = format!("{:04}", nanos % 9000 + 1000);
             let user_encoded = url_encode(user);
             let pass_encoded = url_encode(pass);
@@ -1331,7 +1476,11 @@ async fn login_to_campus_network_rust(
                 "{base}?callback=dr1002&DDDDD={}&upass={}&0MKKey=123456&R1=0&R2=&R3=0&R6=0&para=00&v6ip=&terminal_type=1&lang=zh-cn&jsVersion=4.1&v={}",
                 user_encoded, pass_encoded, v
             );
-            let response = client.get(&url).send().await.map_err(redact_request_error)?;
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(redact_request_error)?;
             let text = response.text().await.map_err(redact_request_error)?;
             Ok(parse_dr_response(&text))
         }
@@ -1347,13 +1496,16 @@ async fn login_to_campus_network_rust(
             }
             Err(last_error)
         }
-        LoginType::Type3 => login_lgn_once(
-            &client,
-            "https://lgn6.bjut.edu.cn/V6?https://lgn.bjut.edu.cn",
-            "https://lgn.bjut.edu.cn",
-            user,
-            pass,
-        ).await,
+        LoginType::Type3 => {
+            login_lgn_once(
+                &client,
+                "https://lgn6.bjut.edu.cn/V6?https://lgn.bjut.edu.cn",
+                "https://lgn.bjut.edu.cn",
+                user,
+                pass,
+            )
+            .await
+        }
         LoginType::Unknown => Err("未设定的登录类型".to_string()),
     }
 }
@@ -1368,7 +1520,12 @@ struct HeadlessLog {
 }
 
 #[cfg(target_os = "android")]
-fn headless_log(logs: &mut Vec<HeadlessLog>, module: &str, message: impl Into<String>, log_type: &str) {
+fn headless_log(
+    logs: &mut Vec<HeadlessLog>,
+    module: &str,
+    message: impl Into<String>,
+    log_type: &str,
+) {
     logs.push(HeadlessLog {
         module: module.to_string(),
         message: message.into(),
@@ -1385,10 +1542,25 @@ async fn run_headless_network_check(
     let mut logs = Vec::new();
     let compatibility = VpnCompatibility::from_config(&config.vpn_compatibility);
     let transport = network_transport(&network).to_string();
-    let validated = network.get("validated").and_then(|value| value.as_bool()).unwrap_or(false);
-    let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
-    let bssid = network.get("bssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
-    let ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let validated = network
+        .get("validated")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let ssid = network
+        .get("ssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+    let bssid = network
+        .get("bssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+    let ip = network
+        .get("ip")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
     if config.log_level == "debug" {
         headless_log(
             &mut logs,
@@ -1428,11 +1600,17 @@ async fn run_headless_network_check(
 
     let detected = detect_login_type_rust(compatibility).await;
     let profile = matching_network_profile(&config, &ssid, &bssid, &detected);
-    let login_type = profile.as_ref()
+    let login_type = profile
+        .as_ref()
         .and_then(|item| login_type_from_profile(&item.login_type))
         .unwrap_or(detected);
     if login_type == LoginType::Unknown {
-        headless_log(&mut logs, "网络", "无界面检测未找到可访问的校园网认证网关", "info");
+        headless_log(
+            &mut logs,
+            "网络",
+            "无界面检测未找到可访问的校园网认证网关",
+            "info",
+        );
         return serde_json::json!({
             "status": "offline",
             "notification_category": "network",
@@ -1442,7 +1620,12 @@ async fn run_headless_network_check(
     }
 
     if !profile_auto_login_enabled(profile.as_ref(), &login_type, config.auto_login) {
-        headless_log(&mut logs, "网络", "已检测到校园网认证网关，但当前协议的自动登录已停用", "info");
+        headless_log(
+            &mut logs,
+            "网络",
+            "已检测到校园网认证网关，但当前协议的自动登录已停用",
+            "info",
+        );
         return serde_json::json!({
             "status": "campus",
             "notification_category": "network",
@@ -1459,7 +1642,12 @@ async fn run_headless_network_check(
         &config.whitelist,
         &config.blacklist,
     ) {
-        headless_log(&mut logs, "安全", format!("无界面自动登录已阻止：{reason}"), "error");
+        headless_log(
+            &mut logs,
+            "安全",
+            format!("无界面自动登录已阻止：{reason}"),
+            "error",
+        );
         return serde_json::json!({
             "status": "blocked",
             "notification_category": "login",
@@ -1470,7 +1658,12 @@ async fn run_headless_network_check(
 
     let accounts = accounts_for_profile(config.accounts.clone(), profile.as_ref());
     if accounts.is_empty() {
-        headless_log(&mut logs, "网络", "没有可供无界面自动登录使用的已保存账号", "error");
+        headless_log(
+            &mut logs,
+            "网络",
+            "没有可供无界面自动登录使用的已保存账号",
+            "error",
+        );
         return serde_json::json!({
             "status": "campus",
             "notification_category": "login",
@@ -1492,7 +1685,9 @@ async fn run_headless_network_check(
             &account.user,
             &account.pass,
             compatibility,
-        ).await {
+        )
+        .await
+        {
             Ok((true, message)) => {
                 headless_log(
                     &mut logs,
@@ -1545,9 +1740,18 @@ pub extern "system" fn Java_cn_edu_bjut_al_NativeKeepAlive_runHeadlessCheck(
     reason: jni::objects::JString,
 ) -> jni::sys::jstring {
     let result = (|| -> Result<String, String> {
-        let config_json: String = env.get_string(&config_json).map_err(|error| error.to_string())?.into();
-        let network_info_json: String = env.get_string(&network_info_json).map_err(|error| error.to_string())?.into();
-        let reason: String = env.get_string(&reason).map_err(|error| error.to_string())?.into();
+        let config_json: String = env
+            .get_string(&config_json)
+            .map_err(|error| error.to_string())?
+            .into();
+        let network_info_json: String = env
+            .get_string(&network_info_json)
+            .map_err(|error| error.to_string())?
+            .into();
+        let reason: String = env
+            .get_string(&reason)
+            .map_err(|error| error.to_string())?
+            .into();
         let config: AppConfig = serde_json::from_str(&config_json)
             .map_err(|error| format!("解析安全配置失败：{error}"))?;
         let network: serde_json::Value = serde_json::from_str(&network_info_json)
@@ -1558,7 +1762,8 @@ pub extern "system" fn Java_cn_edu_bjut_al_NativeKeepAlive_runHeadlessCheck(
             .map_err(|error| format!("创建无界面运行时失败：{error}"))?;
         let payload = runtime.block_on(run_headless_network_check(config, network, &reason));
         serde_json::to_string(&payload).map_err(|error| error.to_string())
-    })().unwrap_or_else(|error| {
+    })()
+    .unwrap_or_else(|error| {
         serde_json::json!({
             "status": "error",
             "notification_category": "background",
@@ -1568,7 +1773,8 @@ pub extern "system" fn Java_cn_edu_bjut_al_NativeKeepAlive_runHeadlessCheck(
                 "message": error,
                 "type": "error"
             }]
-        }).to_string()
+        })
+        .to_string()
     });
     env.new_string(result)
         .map(|value| value.into_raw())
@@ -1607,7 +1813,10 @@ async fn fetch_portal_user_info(local_ip: Option<&str>) -> Option<UserInfo> {
     let end = text.rfind(')')?;
     let data: serde_json::Value = serde_json::from_str(&text[start + 1..end]).ok()?;
     let info = data.get("user_info")?;
-    let package_name = info.get("package_group_name").and_then(|v| v.as_str()).unwrap_or("");
+    let package_name = info
+        .get("package_group_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let total_flow = if package_name.contains("Test") {
         None
     } else if package_name.contains("10元") {
@@ -1621,7 +1830,10 @@ async fn fetch_portal_user_info(local_ip: Option<&str>) -> Option<UserInfo> {
     } else {
         Some(30.0)
     };
-    let used_raw = info.get("use_flow").and_then(|v| v.as_str()).unwrap_or("0GB");
+    let used_raw = info
+        .get("use_flow")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0GB");
     let mut used = used_raw
         .chars()
         .filter(|c| c.is_ascii_digit() || *c == '.')
@@ -1632,9 +1844,19 @@ async fn fetch_portal_user_info(local_ip: Option<&str>) -> Option<UserInfo> {
         used /= 1024.0;
     }
     Some(UserInfo {
-        account: info.get("account").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        balance: info.get("balance").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        flow: total_flow.map(|total| format!("{:.2} GB", total - used)).unwrap_or_else(|| "无限".to_string()),
+        account: info
+            .get("account")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        balance: info
+            .get("balance")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        flow: total_flow
+            .map(|total| format!("{:.2} GB", total - used))
+            .unwrap_or_else(|| "无限".to_string()),
         source: "portal".to_string(),
         status: None,
         status_reason: None,
@@ -1696,21 +1918,27 @@ fn launch_update_installer(_app: &tauri::AppHandle, path: &std::path::Path) -> R
     let context = tauri::tao::platform::android::prelude::main_android_context()
         .ok_or_else(|| "Android context is unavailable".to_string())?;
     let vm = unsafe { jni::JavaVM::from_raw(context.java_vm.cast()) }.map_err(|e| e.to_string())?;
-    let mut env = vm.attach_current_thread_as_daemon().map_err(|e| e.to_string())?;
+    let mut env = vm
+        .attach_current_thread_as_daemon()
+        .map_err(|e| e.to_string())?;
     let activity = unsafe { JObject::from_raw(context.context_jobject.cast()) };
-    let class = tauri::wry::prelude::find_class(
-        &mut env,
-        &activity,
-        "cn.edu.bjut.al.UpdateHelper".into(),
-    ).map_err(|e| e.to_string())?;
-    let path_string = env.new_string(path.to_string_lossy().as_ref()).map_err(|e| e.to_string())?;
+    let class =
+        tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.UpdateHelper".into())
+            .map_err(|e| e.to_string())?;
+    let path_string = env
+        .new_string(path.to_string_lossy().as_ref())
+        .map_err(|e| e.to_string())?;
     let path_object = JObject::from(path_string);
-    let launched = env.call_static_method(
-        class,
-        "installApk",
-        "(Landroid/content/Context;Ljava/lang/String;)Z",
-        &[JValue::Object(&activity), JValue::Object(&path_object)],
-    ).map_err(|e| e.to_string())?.z().map_err(|e| e.to_string())?;
+    let launched = env
+        .call_static_method(
+            class,
+            "installApk",
+            "(Landroid/content/Context;Ljava/lang/String;)Z",
+            &[JValue::Object(&activity), JValue::Object(&path_object)],
+        )
+        .map_err(|e| e.to_string())?
+        .z()
+        .map_err(|e| e.to_string())?;
     if launched {
         Ok(())
     } else {
@@ -1736,7 +1964,9 @@ async fn download_and_install_update(
     let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
     if parsed.scheme() != "https"
         || parsed.host_str() != Some("github.com")
-        || !parsed.path().starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
+        || !parsed
+            .path()
+            .starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
     {
         return Err("拒绝下载非官方 GitHub Release 资产".to_string());
     }
@@ -1772,15 +2002,21 @@ async fn download_and_install_update(
         file.write_all(&chunk).map_err(|e| e.to_string())?;
         received += chunk.len() as u64;
         let percent = total.map(|size| ((received as f64 / size as f64) * 100.0).min(100.0));
-        let _ = app.emit("update-progress", serde_json::json!({
-            "status": "downloading",
-            "received": received,
-            "total": total,
-            "percent": percent
-        }));
+        let _ = app.emit(
+            "update-progress",
+            serde_json::json!({
+                "status": "downloading",
+                "received": received,
+                "total": total,
+                "percent": percent
+            }),
+        );
     }
     file.flush().map_err(|e| e.to_string())?;
-    let _ = app.emit("update-progress", serde_json::json!({"status": "installing", "percent": 100.0}));
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({"status": "installing", "percent": 100.0}),
+    );
     launch_update_installer(&app, &target_path)
 }
 
@@ -1796,7 +2032,9 @@ async fn download_and_install_update(
     let endpoint = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
     if endpoint.scheme() != "https"
         || endpoint.host_str() != Some("github.com")
-        || !endpoint.path().starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
+        || !endpoint
+            .path()
+            .starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
         || !endpoint.path().ends_with("/latest.json")
     {
         return Err("拒绝使用非官方签名更新清单".to_string());
@@ -1817,21 +2055,26 @@ async fn download_and_install_update(
         .download_and_install(
             |chunk_length, content_length| {
                 received += chunk_length as u64;
-                let percent = content_length.map(|total| {
-                    ((received as f64 / total as f64) * 100.0).min(100.0)
-                });
-                let _ = app.emit("update-progress", serde_json::json!({
-                    "status": "downloading",
-                    "received": received,
-                    "total": content_length,
-                    "percent": percent,
-                }));
+                let percent = content_length
+                    .map(|total| ((received as f64 / total as f64) * 100.0).min(100.0));
+                let _ = app.emit(
+                    "update-progress",
+                    serde_json::json!({
+                        "status": "downloading",
+                        "received": received,
+                        "total": content_length,
+                        "percent": percent,
+                    }),
+                );
             },
             || {
-                let _ = app.emit("update-progress", serde_json::json!({
-                    "status": "installing",
-                    "percent": 100.0,
-                }));
+                let _ = app.emit(
+                    "update-progress",
+                    serde_json::json!({
+                        "status": "installing",
+                        "percent": 100.0,
+                    }),
+                );
             },
         )
         .await
@@ -1862,21 +2105,30 @@ fn automatic_login_result_notifications_enabled(state: &AppState) -> bool {
 }
 
 fn get_config_path(app: &tauri::AppHandle) -> std::path::PathBuf {
-    let mut p = app.path().app_config_dir().unwrap_or_else(|_| std::env::current_dir().unwrap());
+    let mut p = app
+        .path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::env::current_dir().unwrap());
     let _ = std::fs::create_dir_all(&p);
     p.push("config.json");
     p
 }
 
 fn get_log_path(app: &tauri::AppHandle) -> std::path::PathBuf {
-    let mut p = app.path().app_data_dir().unwrap_or_else(|_| std::env::current_dir().unwrap());
+    let mut p = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::current_dir().unwrap());
     let _ = std::fs::create_dir_all(&p);
     p.push("app.log");
     p
 }
 
 fn get_account_health_path(app: &tauri::AppHandle) -> std::path::PathBuf {
-    let mut path = app.path().app_data_dir().unwrap_or_else(|_| std::env::current_dir().unwrap());
+    let mut path = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::current_dir().unwrap());
     let _ = std::fs::create_dir_all(&path);
     path.push("account-health.json");
     path
@@ -1897,36 +2149,47 @@ fn persist_account_health(app: &tauri::AppHandle, health: &HashMap<String, Accou
 
 fn account_health_views(health: &HashMap<String, AccountHealth>) -> Vec<AccountHealthView> {
     let now = chrono::Utc::now().timestamp();
-    let mut views: Vec<AccountHealthView> = health.iter().map(|(user, item)| {
-        let cooldown_seconds = item.cooldown_until.map(|until| (until - now).max(0)).unwrap_or(0);
-        let status = if cooldown_seconds > 0 && item.failure_kind.as_deref() == Some("credential") {
-            "needs_attention"
-        } else if cooldown_seconds > 0 {
-            "cooling_down"
-        } else if item.consecutive_failures > 0 {
-            "degraded"
-        } else {
-            "healthy"
-        };
-        AccountHealthView {
-            user: user.clone(),
-            status: status.to_string(),
-            consecutive_failures: item.consecutive_failures,
-            cooldown_until: item.cooldown_until,
-            cooldown_seconds,
-            last_success: item.last_success.clone(),
-            last_failure: item.last_failure.clone(),
-            last_failure_reason: item.last_failure_reason.clone(),
-            failure_kind: item.failure_kind.clone(),
-        }
-    }).collect();
+    let mut views: Vec<AccountHealthView> = health
+        .iter()
+        .map(|(user, item)| {
+            let cooldown_seconds = item
+                .cooldown_until
+                .map(|until| (until - now).max(0))
+                .unwrap_or(0);
+            let status =
+                if cooldown_seconds > 0 && item.failure_kind.as_deref() == Some("credential") {
+                    "needs_attention"
+                } else if cooldown_seconds > 0 {
+                    "cooling_down"
+                } else if item.consecutive_failures > 0 {
+                    "degraded"
+                } else {
+                    "healthy"
+                };
+            AccountHealthView {
+                user: user.clone(),
+                status: status.to_string(),
+                consecutive_failures: item.consecutive_failures,
+                cooldown_until: item.cooldown_until,
+                cooldown_seconds,
+                last_success: item.last_success.clone(),
+                last_failure: item.last_failure.clone(),
+                last_failure_reason: item.last_failure_reason.clone(),
+                failure_kind: item.failure_kind.clone(),
+            }
+        })
+        .collect();
     views.sort_by(|a, b| a.user.cmp(&b.user));
     views
 }
 
 fn current_account_health_views(state: &AppState) -> Vec<AccountHealthView> {
     let mut health = state.account_health.lock().unwrap().clone();
-    let users: Vec<String> = state.config.read().unwrap().accounts
+    let users: Vec<String> = state
+        .config
+        .read()
+        .unwrap()
+        .accounts
         .iter()
         .map(|account| account.user.clone())
         .collect();
@@ -1963,11 +2226,16 @@ fn classify_account_failure(reason: &str, consecutive_failures: u32) -> (&'stati
 fn account_attempt_allowed(state: &AppState, user: &str) -> Result<(), i64> {
     let now = chrono::Utc::now().timestamp();
     let health = state.account_health.lock().unwrap();
-    let remaining = health.get(user)
+    let remaining = health
+        .get(user)
         .and_then(|item| item.cooldown_until)
         .map(|until| (until - now).max(0))
         .unwrap_or(0);
-    if remaining > 0 { Err(remaining) } else { Ok(()) }
+    if remaining > 0 {
+        Err(remaining)
+    } else {
+        Ok(())
+    }
 }
 
 fn emit_account_health(app: &tauri::AppHandle, state: &AppState) {
@@ -2016,7 +2284,9 @@ fn reconcile_account_health_after_config_save(
         let mut health = state.account_health.lock().unwrap();
         health.retain(|user, _| current.accounts.iter().any(|account| account.user == *user));
         for account in &current.accounts {
-            let password_changed = previous.accounts.iter()
+            let password_changed = previous
+                .accounts
+                .iter()
                 .find(|candidate| candidate.user == account.user)
                 .map(|candidate| candidate.pass != account.pass)
                 .unwrap_or(true);
@@ -2035,6 +2305,7 @@ fn public_config(config: &AppConfig) -> AppConfig {
     for account in &mut public.accounts {
         account.pass.clear();
     }
+    public.campus_service_sessions.clear();
     public
 }
 
@@ -2044,9 +2315,7 @@ fn ensure_persistent_credential_backend() -> Result<(), String> {
 
     match keyring::default::default_credential_builder().persistence() {
         CredentialPersistence::UntilDelete => Ok(()),
-        _ => Err(
-            "系统凭据库后端不是持久存储，已拒绝读写以避免重启后丢失密码".to_string()
-        ),
+        _ => Err("系统凭据库后端不是持久存储，已拒绝读写以避免重启后丢失密码".to_string()),
     }
 }
 
@@ -2055,7 +2324,9 @@ fn load_secure_config(_app: &tauri::AppHandle) -> Result<Option<AppConfig>, Stri
     ensure_persistent_credential_backend()?;
     let entry = keyring::Entry::new("cn.edu.bjut.al", "app-config").map_err(|e| e.to_string())?;
     match entry.get_password() {
-        Ok(serialized) => serde_json::from_str(&serialized).map(Some).map_err(|e| e.to_string()),
+        Ok(serialized) => serde_json::from_str(&serialized)
+            .map(Some)
+            .map_err(|e| e.to_string()),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(error.to_string()),
     }
@@ -2070,14 +2341,22 @@ fn save_secure_config(_app: &tauri::AppHandle, config: &AppConfig) -> Result<(),
 }
 
 #[cfg(target_os = "macos")]
-fn macos_credential_paths(app: &tauri::AppHandle) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+fn macos_credential_paths(
+    app: &tauri::AppHandle,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     use std::os::unix::fs::PermissionsExt;
 
-    let directory = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
         .map_err(|error| error.to_string())?;
-    Ok((directory.join("credentials.key"), directory.join("credentials.enc")))
+    Ok((
+        directory.join("credentials.key"),
+        directory.join("credentials.enc"),
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -2088,7 +2367,9 @@ fn load_or_create_macos_credential_key(app: &tauri::AppHandle) -> Result<[u8; 32
 
     let (key_path, _) = macos_credential_paths(app)?;
     if let Ok(bytes) = std::fs::read(&key_path) {
-        return bytes.try_into().map_err(|_| "macOS 本地凭据密钥长度无效".to_string());
+        return bytes
+            .try_into()
+            .map_err(|_| "macOS 本地凭据密钥长度无效".to_string());
     }
     let mut key = [0u8; 32];
     OsRng.fill_bytes(&mut key);
@@ -2121,12 +2402,17 @@ fn load_secure_config(app: &tauri::AppHandle) -> Result<Option<AppConfig>, Strin
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&payload[1..13]), &payload[13..])
         .map_err(|_| "macOS 本地凭据文件认证失败".to_string())?;
-    serde_json::from_slice(&plaintext).map(Some).map_err(|error| error.to_string())
+    serde_json::from_slice(&plaintext)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "macos")]
 fn save_secure_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
-    use aes_gcm::{aead::{Aead, OsRng, rand_core::RngCore}, Aes256Gcm, KeyInit, Nonce};
+    use aes_gcm::{
+        aead::{rand_core::RngCore, Aead, OsRng},
+        Aes256Gcm, KeyInit, Nonce,
+    };
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -2147,7 +2433,9 @@ fn save_secure_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), 
         .mode(0o600)
         .open(&temporary_path)
         .map_err(|error| error.to_string())?;
-    file.write_all(&[1]).and_then(|_| file.write_all(&nonce)).and_then(|_| file.write_all(&ciphertext))
+    file.write_all(&[1])
+        .and_then(|_| file.write_all(&nonce))
+        .and_then(|_| file.write_all(&ciphertext))
         .map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
     std::fs::rename(temporary_path, encrypted_path).map_err(|error| error.to_string())
@@ -2168,15 +2456,14 @@ fn android_secure_config(value: Option<&str>) -> Result<Option<String>, String> 
 
     let context = tauri::tao::platform::android::prelude::main_android_context()
         .ok_or_else(|| "Android context is unavailable".to_string())?;
-    let vm = unsafe { jni::JavaVM::from_raw(context.java_vm.cast()) }
+    let vm = unsafe { jni::JavaVM::from_raw(context.java_vm.cast()) }.map_err(|e| e.to_string())?;
+    let mut env = vm
+        .attach_current_thread_as_daemon()
         .map_err(|e| e.to_string())?;
-    let mut env = vm.attach_current_thread_as_daemon().map_err(|e| e.to_string())?;
     let activity = unsafe { JObject::from_raw(context.context_jobject.cast()) };
-    let class = tauri::wry::prelude::find_class(
-        &mut env,
-        &activity,
-        "cn.edu.bjut.al.NetworkHelper".into(),
-    ).map_err(|e| e.to_string())?;
+    let class =
+        tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.NetworkHelper".into())
+            .map_err(|e| e.to_string())?;
 
     if let Some(value) = value {
         let value = env.new_string(value).map_err(|e| e.to_string())?;
@@ -2194,7 +2481,11 @@ fn android_secure_config(value: Option<&str>) -> Result<Option<String>, String> 
                 return Err(format!("Android secure storage write failed: {error}"));
             }
         };
-        return if saved { Ok(None) } else { Err("Android Keystore refused the configuration".to_string()) };
+        return if saved {
+            Ok(None)
+        } else {
+            Err("Android Keystore refused the configuration".to_string())
+        };
     }
 
     let result = env.call_static_method(
@@ -2233,7 +2524,8 @@ fn save_secure_config(_app: &tauri::AppHandle, config: &AppConfig) -> Result<(),
 }
 
 fn write_public_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
-    let content = serde_json::to_string_pretty(&public_config(config)).map_err(|e| e.to_string())?;
+    let content =
+        serde_json::to_string_pretty(&public_config(config)).map_err(|e| e.to_string())?;
     std::fs::write(get_config_path(app), content).map_err(|e| e.to_string())
 }
 
@@ -2307,7 +2599,9 @@ fn initialize_log_history(app: &tauri::AppHandle, state: &AppState) {
         });
     }
     let existing_lines: Vec<&str> = existing.lines().collect();
-    let session_starts: Vec<usize> = existing_lines.iter().enumerate()
+    let session_starts: Vec<usize> = existing_lines
+        .iter()
+        .enumerate()
         .filter_map(|(index, line)| line.contains(LOG_SESSION_MARKER).then_some(index))
         .collect();
     let keep_from = if session_starts.len() >= MAX_LOG_SESSIONS {
@@ -2315,9 +2609,15 @@ fn initialize_log_history(app: &tauri::AppHandle, state: &AppState) {
     } else {
         0
     };
-    let mut lines: Vec<String> = existing_lines[keep_from..].iter().map(|line| (*line).to_string()).collect();
+    let mut lines: Vec<String> = existing_lines[keep_from..]
+        .iter()
+        .map(|line| (*line).to_string())
+        .collect();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    lines.push(format!("[{}] [info] [系统] {} {}", now, LOG_SESSION_MARKER, now));
+    lines.push(format!(
+        "[{}] [info] [系统] {} {}",
+        now, LOG_SESSION_MARKER, now
+    ));
     let serialized = format!("{}\n", lines.join("\n"));
     let history_written = std::fs::write(path, serialized).is_ok();
     #[cfg(target_os = "android")]
@@ -2382,7 +2682,9 @@ fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &st
 fn merge_legacy_credentials(current: &mut AppConfig, legacy: &AppConfig) -> bool {
     let mut changed = false;
     for legacy_account in &legacy.accounts {
-        if let Some(index) = current.accounts.iter()
+        if let Some(index) = current
+            .accounts
+            .iter()
             .position(|account| account.user == legacy_account.user)
         {
             let account = &mut current.accounts[index];
@@ -2413,7 +2715,9 @@ fn fill_missing_passwords(target: &mut AppConfig, existing: &AppConfig) -> bool 
         if !account.pass.is_empty() {
             continue;
         }
-        if let Some(saved) = existing.accounts.iter()
+        if let Some(saved) = existing
+            .accounts
+            .iter()
             .find(|candidate| candidate.user == account.user && !candidate.pass.is_empty())
         {
             account.pass = saved.pass.clone();
@@ -2431,7 +2735,8 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
 
     match load_secure_config(app) {
         Ok(Some(mut config)) => {
-            let migrated = disk_config.as_ref()
+            let migrated = disk_config
+                .as_ref()
                 .map(|legacy| merge_legacy_credentials(&mut config, legacy))
                 .unwrap_or(false);
             let migration_persisted = if migrated {
@@ -2460,7 +2765,11 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
             if let Some(config) = disk_config {
                 // Migrate legacy plaintext configurations once the system credential store is available.
                 let mut status = "missing";
-                if config.accounts.iter().any(|account| !account.pass.is_empty()) {
+                if config
+                    .accounts
+                    .iter()
+                    .any(|account| !account.pass.is_empty())
+                {
                     if let Err(error) = save_secure_config_verified(app, &config) {
                         eprintln!("Unable to migrate credentials to secure storage: {error}");
                         status = "error";
@@ -2489,7 +2798,11 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
-fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig) -> Result<(), String> {
+fn save_config(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    mut new_cfg: AppConfig,
+) -> Result<(), String> {
     if new_cfg.android_notification_mode != "separate" {
         new_cfg.android_notification_mode = default_android_notification_mode();
     }
@@ -2498,11 +2811,34 @@ fn save_config(app: &tauri::AppHandle, state: &AppState, mut new_cfg: AppConfig)
         fill_missing_passwords(&mut new_cfg, &state_cfg);
         state_cfg.clone()
     };
+    new_cfg.campus_service_sessions = previous_cfg
+        .campus_service_sessions
+        .iter()
+        .filter(|session| {
+            previous_cfg
+                .accounts
+                .iter()
+                .find(|account| account.user == session.account())
+                .zip(
+                    new_cfg
+                        .accounts
+                        .iter()
+                        .find(|account| account.user == session.account()),
+                )
+                .is_some_and(|(before, after)| before.pass == after.pass)
+        })
+        .cloned()
+        .collect();
     let storage_was_unreadable = {
         let status = state.credential_storage_status.lock().unwrap();
         status.as_str() == "error" || status.as_str() == "unknown"
     };
-    if storage_was_unreadable && new_cfg.accounts.iter().any(|account| account.pass.is_empty()) {
+    if storage_was_unreadable
+        && new_cfg
+            .accounts
+            .iter()
+            .any(|account| account.pass.is_empty())
+    {
         match load_secure_config(app) {
             Ok(Some(saved)) => {
                 fill_missing_passwords(&mut new_cfg, &saved);
@@ -2553,16 +2889,37 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             )
         };
         let _ = app.emit("countdown-tick", serde_json::json!({"status": "checking"}));
-        rust_log(&app, &state, "网络", &format!("[DEBUG] 开始检测网络连通性 (模式: {})", if is_bg { "后台" } else { "前台" }), "debug");
+        rust_log(
+            &app,
+            &state,
+            "网络",
+            &format!(
+                "[DEBUG] 开始检测网络连通性 (模式: {})",
+                if is_bg { "后台" } else { "前台" }
+            ),
+            "debug",
+        );
 
         // Connectivity-only checks reuse the last details and avoid location-protected APIs.
         #[cfg(target_os = "macos")]
         if is_bg && !full_details {
-            rust_log(&app, &state, "隐私", "macOS 后台普通检测已跳过 SSID/BSSID，仅检查网络连通性", "debug");
+            rust_log(
+                &app,
+                &state,
+                "隐私",
+                "macOS 后台普通检测已跳过 SSID/BSSID，仅检查网络连通性",
+                "debug",
+            );
         }
         #[cfg(target_os = "macos")]
         if is_bg && full_details {
-            rust_log(&app, &state, "隐私", "macOS 后台完整检测已触发，将读取 SSID/BSSID", "debug");
+            rust_log(
+                &app,
+                &state,
+                "隐私",
+                "macOS 后台完整检测已触发，将读取 SSID/BSSID",
+                "debug",
+            );
         }
         #[cfg(target_os = "android")]
         let net_info = get_network_info(app.clone(), Some(full_details));
@@ -2578,33 +2935,52 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         let was_mobile_data = is_mobile_data_network(&previous_network);
         let system_validated = network_is_system_validated(&net_info);
         #[cfg(target_os = "android")]
-        let metered = net_info.get("metered").and_then(|value| value.as_bool()).unwrap_or(false);
+        let metered = net_info
+            .get("metered")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
         let raw_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("");
         let raw_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("");
         let raw_ip = net_info.get("ip").and_then(|v| v.as_str()).unwrap_or("");
         let preserve_wifi_identity = !full_details && transport.eq_ignore_ascii_case("wifi");
         let current_ssid = if preserve_wifi_identity && raw_ssid.is_empty() {
-            previous_network.get("ssid").and_then(|value| value.as_str()).unwrap_or("")
+            previous_network
+                .get("ssid")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
         } else {
             raw_ssid
-        }.to_string();
+        }
+        .to_string();
         let current_bssid = if preserve_wifi_identity && raw_bssid.is_empty() {
-            previous_network.get("bssid").and_then(|value| value.as_str()).unwrap_or("")
+            previous_network
+                .get("bssid")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
         } else {
             raw_bssid
-        }.to_string();
+        }
+        .to_string();
         let current_ip = if preserve_wifi_identity && raw_ip.is_empty() {
-            previous_network.get("ip").and_then(|value| value.as_str()).unwrap_or("")
+            previous_network
+                .get("ip")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
         } else {
             raw_ip
-        }.to_string();
+        }
+        .to_string();
         let preliminary_profile = {
             let cfg = state.config.read().unwrap();
             matching_network_profile(&cfg, &current_ssid, &current_bssid, &LoginType::Unknown)
         };
         let mut next_interval = if is_bg { interval_bg } else { interval_fg };
         if let Some(profile) = preliminary_profile.as_ref() {
-            let interval = if is_bg { profile.check_interval_bg } else { profile.check_interval };
+            let interval = if is_bg {
+                profile.check_interval_bg
+            } else {
+                profile.check_interval
+            };
             if let Some(interval) = interval.filter(|value| *value >= 5) {
                 next_interval = interval;
             }
@@ -2617,7 +2993,11 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 "网络",
                 &format!(
                     "{}移动数据网络，自动检测间隔为 {} 秒，校园网认证网关探测已停用",
-                    if was_mobile_data { "继续使用" } else { "检测到" },
+                    if was_mobile_data {
+                        "继续使用"
+                    } else {
+                        "检测到"
+                    },
                     next_interval
                 ),
                 if was_mobile_data { "debug" } else { "info" },
@@ -2629,14 +3009,44 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
 
         if full_details {
             #[cfg(target_os = "android")]
-            rust_log(&app, &state, "网络", &format!("[DEBUG] 完整检测网络详情: SSID={}, BSSID={}, IP={}, 传输类型={}, 系统验证={}", current_ssid, current_bssid, current_ip, transport, system_validated), "debug");
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                &format!(
+                    "[DEBUG] 完整检测网络详情: SSID={}, BSSID={}, IP={}, 传输类型={}, 系统验证={}",
+                    current_ssid, current_bssid, current_ip, transport, system_validated
+                ),
+                "debug",
+            );
             #[cfg(not(target_os = "android"))]
-            rust_log(&app, &state, "网络", &format!("[DEBUG] 完整检测网络详情: SSID={}, BSSID={}, IP={}", current_ssid, current_bssid, current_ip), "debug");
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                &format!(
+                    "[DEBUG] 完整检测网络详情: SSID={}, BSSID={}, IP={}",
+                    current_ssid, current_bssid, current_ip
+                ),
+                "debug",
+            );
         } else {
             #[cfg(target_os = "android")]
-            rust_log(&app, &state, "网络", &format!("[DEBUG] 后台间隔检测仅检查连通性，传输类型={}", transport), "debug");
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                &format!("[DEBUG] 后台间隔检测仅检查连通性，传输类型={}", transport),
+                "debug",
+            );
             #[cfg(not(target_os = "android"))]
-            rust_log(&app, &state, "网络", "[DEBUG] 后台间隔检测仅检查连通性，复用上次网络详情", "debug");
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                "[DEBUG] 后台间隔检测仅检查连通性，复用上次网络详情",
+                "debug",
+            );
         }
 
         let make_payload = |state_str: &str, login_type: Option<&LoginType>| {
@@ -2651,7 +3061,10 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             });
             #[cfg(target_os = "android")]
             if let Some(object) = payload.as_object_mut() {
-                object.insert("transport".to_string(), serde_json::json!(transport.clone()));
+                object.insert(
+                    "transport".to_string(),
+                    serde_json::json!(transport.clone()),
+                );
                 object.insert("validated".to_string(), serde_json::json!(system_validated));
                 object.insert("metered".to_string(), serde_json::json!(metered));
             }
@@ -2659,15 +3072,40 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         };
 
         let is_online = if system_validated {
-            rust_log(&app, &state, "网络", "[DEBUG] 系统已验证默认网络具备互联网能力，跳过额外连通性探测", "debug");
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                "[DEBUG] 系统已验证默认网络具备互联网能力，跳过额外连通性探测",
+                "debug",
+            );
             true
         } else {
             check_internet_rust().await
         };
-        rust_log(&app, &state, "网络", &format!("[DEBUG] 互联网可用性检测结果: {}", if is_online { "连通 (Online)" } else { "断开/受限" }), "debug");
-        
+        rust_log(
+            &app,
+            &state,
+            "网络",
+            &format!(
+                "[DEBUG] 互联网可用性检测结果: {}",
+                if is_online {
+                    "连通 (Online)"
+                } else {
+                    "断开/受限"
+                }
+            ),
+            "debug",
+        );
+
         if is_online {
-            rust_log(&app, &state, "网络", "网络检测完毕: 互联网已连通 (Online)", "info");
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                "网络检测完毕: 互联网已连通 (Online)",
+                "info",
+            );
             state.is_checking.store(false, Ordering::SeqCst);
             state.non_campus_count.store(0, Ordering::SeqCst);
             let payload = make_payload("Online", None);
@@ -2706,7 +3144,10 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             &app,
             &state,
             "网络",
-            &format!("[DEBUG] 使用 VPN 共存兼容等级 {} 探测校园网网关", compatibility.as_str()),
+            &format!(
+                "[DEBUG] 使用 VPN 共存兼容等级 {} 探测校园网网关",
+                compatibility.as_str()
+            ),
             "debug",
         );
         let detected_login_type = detect_login_type_rust(compatibility).await;
@@ -2714,7 +3155,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             let cfg = state.config.read().unwrap();
             matching_network_profile(&cfg, &current_ssid, &current_bssid, &detected_login_type)
         };
-        let login_type = profile.as_ref()
+        let login_type = profile
+            .as_ref()
             .and_then(|item| login_type_from_profile(&item.login_type))
             .unwrap_or_else(|| detected_login_type.clone());
         if let Some(profile) = profile.as_ref() {
@@ -2725,17 +3167,40 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 &format!("已匹配网络档案“{}”，使用其账号顺序与登录策略", profile.name),
                 "info",
             );
-            let profile_interval = if is_bg { profile.check_interval_bg } else { profile.check_interval };
+            let profile_interval = if is_bg {
+                profile.check_interval_bg
+            } else {
+                profile.check_interval
+            };
             if let Some(interval) = profile_interval.filter(|value| *value >= 5) {
                 state.countdown.store(interval, Ordering::SeqCst);
             }
         }
-        rust_log(&app, &state, "网络", &format!("[DEBUG] 检测到校园网环境判定: {}", if login_type != LoginType::Unknown { "需要登录认证" } else { "非校园网/完全离线" }), "debug");
-        
+        rust_log(
+            &app,
+            &state,
+            "网络",
+            &format!(
+                "[DEBUG] 检测到校园网环境判定: {}",
+                if login_type != LoginType::Unknown {
+                    "需要登录认证"
+                } else {
+                    "非校园网/完全离线"
+                }
+            ),
+            "debug",
+        );
+
         match login_type {
             LoginType::Unknown => {
                 state.non_campus_count.store(0, Ordering::SeqCst);
-                rust_log(&app, &state, "网络", "网络检测完毕: 离线或非校园网 (Offline)", "info");
+                rust_log(
+                    &app,
+                    &state,
+                    "网络",
+                    "网络检测完毕: 离线或非校园网 (Offline)",
+                    "info",
+                );
                 let payload = make_payload("Offline", None);
                 {
                     let mut last_state = state.last_network_state.lock().unwrap();
@@ -2744,7 +3209,13 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 let _ = app.emit("network-state-change", payload);
             }
             _ => {
-                rust_log(&app, &state, "网络", &format!("检测到校园网登录页面 (登录类型: {:?})", login_type), "info");
+                rust_log(
+                    &app,
+                    &state,
+                    "网络",
+                    &format!("检测到校园网登录页面 (登录类型: {:?})", login_type),
+                    "info",
+                );
                 let mut login_succeeded = false;
                 let auto_login_paused = state.auto_login_paused_until.load(Ordering::SeqCst)
                     > chrono::Utc::now().timestamp();
@@ -2791,28 +3262,55 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                     &app,
                                     &state,
                                     "账号健康",
-                                    &format!("账号 {} 仍在冷却中（剩余 {} 秒），跳过本次尝试", account.user, remaining),
+                                    &format!(
+                                        "账号 {} 仍在冷却中（剩余 {} 秒），跳过本次尝试",
+                                        account.user, remaining
+                                    ),
                                     "info",
                                 ),
                             }
                         }
                         if active_accounts.is_empty() {
-                            rust_log(&app, &state, "网络", "未配置带已保存密码的有效账号，跳过自动登录", "error");
+                            rust_log(
+                                &app,
+                                &state,
+                                "网络",
+                                "未配置带已保存密码的有效账号，跳过自动登录",
+                                "error",
+                            );
                         } else {
                             let mut success = false;
                             for acc in active_accounts {
-                                rust_log(&app, &state, "网络", &format!("尝试使用账号 {} 自动登录...", acc.user), "info");
+                                rust_log(
+                                    &app,
+                                    &state,
+                                    "网络",
+                                    &format!("尝试使用账号 {} 自动登录...", acc.user),
+                                    "info",
+                                );
                                 match login_to_campus_network_rust(
                                     login_type.clone(),
                                     &acc.user,
                                     &acc.pass,
                                     compatibility,
-                                ).await {
+                                )
+                                .await
+                                {
                                     Ok((true, msg)) => {
                                         record_account_success(&app, &state, &acc.user);
-                                        rust_log(&app, &state, "网络", &format!("登录成功: {}", msg), "success");
+                                        rust_log(
+                                            &app,
+                                            &state,
+                                            "网络",
+                                            &format!("登录成功: {}", msg),
+                                            "success",
+                                        );
                                         if automatic_login_result_notifications_enabled(&state) {
-                                            let _ = show_native_notification(&app, "自动登录成功", &format!("账号: {}", acc.user));
+                                            let _ = show_native_notification(
+                                                &app,
+                                                "自动登录成功",
+                                                &format!("账号: {}", acc.user),
+                                            );
                                         }
                                         success = true;
                                         login_succeeded = true;
@@ -2820,16 +3318,39 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                     }
                                     Ok((false, msg)) => {
                                         record_account_failure(&app, &state, &acc.user, &msg);
-                                        rust_log(&app, &state, "网络", &format!("登录失败: {}", msg), "error");
+                                        rust_log(
+                                            &app,
+                                            &state,
+                                            "网络",
+                                            &format!("登录失败: {}", msg),
+                                            "error",
+                                        );
                                     }
                                     Err(err) => {
-                                        record_account_failure(&app, &state, &acc.user, &format!("请求出错: {err}"));
-                                        rust_log(&app, &state, "网络", &format!("请求出错: {}", err), "error");
+                                        record_account_failure(
+                                            &app,
+                                            &state,
+                                            &acc.user,
+                                            &format!("请求出错: {err}"),
+                                        );
+                                        rust_log(
+                                            &app,
+                                            &state,
+                                            "网络",
+                                            &format!("请求出错: {}", err),
+                                            "error",
+                                        );
                                     }
                                 }
                             }
                             if !success {
-                                rust_log(&app, &state, "网络", "所有账号登录尝试完毕，均未成功", "error");
+                                rust_log(
+                                    &app,
+                                    &state,
+                                    "网络",
+                                    "所有账号登录尝试完毕，均未成功",
+                                    "error",
+                                );
                             }
                         }
                     }
@@ -2842,7 +3363,13 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                     state.non_campus_count.store(0, Ordering::SeqCst);
                 } else if is_bg {
                     let count = state.non_campus_count.fetch_add(1, Ordering::SeqCst) + 1;
-                    rust_log(&app, &state, "网络", &format!("[DEBUG] 后台检测为非校园网环境，当前连续次数: {}/5", count), "debug");
+                    rust_log(
+                        &app,
+                        &state,
+                        "网络",
+                        &format!("[DEBUG] 后台检测为非校园网环境，当前连续次数: {}/5", count),
+                        "debug",
+                    );
                     if count >= 5 {
                         rust_log(&app, &state, "网络", "后台连续5次检测到校园网登录页面（或自动登录失败），进入自动休眠模式以省电。返回前台时将自动恢复。", "info");
                         state.is_suspended.store(true, Ordering::SeqCst);
@@ -2869,16 +3396,30 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
 }
 
 #[tauri::command]
-fn sync_config(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>, config: AppConfig) -> Result<(), String> {
+fn sync_config(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    config: AppConfig,
+) -> Result<(), String> {
     if let Err(error) = save_config(&app, &state, config) {
-        rust_log(&app, &state, "配置", &format!("配置持久化失败: {error}"), "error");
+        rust_log(
+            &app,
+            &state,
+            "配置",
+            &format!("配置持久化失败: {error}"),
+            "error",
+        );
         return Err(error);
     }
     rust_log(&app, &state, "配置", "配置已写入安全存储", "debug");
     let is_bg = state.is_in_background.load(Ordering::SeqCst);
     let current_val = state.countdown.load(Ordering::SeqCst);
     let new_cfg = state.config.read().unwrap();
-    let configured_interval = if is_bg { new_cfg.check_interval_bg } else { new_cfg.check_interval };
+    let configured_interval = if is_bg {
+        new_cfg.check_interval_bg
+    } else {
+        new_cfg.check_interval
+    };
     let mobile_data = is_mobile_data_network(&state.last_network_state.lock().unwrap());
     let new_interval = if mobile_data {
         mobile_data_check_interval(configured_interval, is_bg)
@@ -2919,18 +3460,26 @@ fn credential_backend_name() -> &'static str {
 fn get_credential_storage_health(state: tauri::State<Arc<AppState>>) -> CredentialStorageHealth {
     let status = state.credential_storage_status.lock().unwrap().clone();
     let config = state.config.read().unwrap();
-    let missing_password_accounts: Vec<String> = config.accounts.iter()
+    let missing_password_accounts: Vec<String> = config
+        .accounts
+        .iter()
         .filter(|account| account.pass.is_empty())
         .map(|account| account.user.clone())
         .collect();
-    let saved_accounts = config.accounts.len().saturating_sub(missing_password_accounts.len());
+    let saved_accounts = config
+        .accounts
+        .len()
+        .saturating_sub(missing_password_accounts.len());
     let message = match status.as_str() {
-        "available" if missing_password_accounts.is_empty() => "安全凭据存储工作正常，所有账号均已保存密码",
+        "available" if missing_password_accounts.is_empty() => {
+            "安全凭据存储工作正常，所有账号均已保存密码"
+        }
         "available" => "安全凭据存储可用，但部分账号仍需补录密码",
         "missing" => "安全凭据存储可用，当前尚未保存凭据",
         "error" => "安全凭据存储暂时不可读；应用已阻止空密码覆盖",
         _ => "安全凭据存储状态尚未完成初始化",
-    }.to_string();
+    }
+    .to_string();
     CredentialStorageHealth {
         status,
         backend: credential_backend_name().to_string(),
@@ -2985,7 +3534,8 @@ fn make_diagnostic_step(
 async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     use std::net::ToSocketAddrs;
 
-    let compatibility = app.try_state::<Arc<AppState>>()
+    let compatibility = app
+        .try_state::<Arc<AppState>>()
         .map(|state| {
             let config = state.config.read().unwrap();
             VpnCompatibility::from_config(&config.vpn_compatibility)
@@ -2997,12 +3547,26 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let transport = network_transport(&network).to_string();
     let mobile_data = is_mobile_data_network(&network);
     let system_validated = network_is_system_validated(&network);
-    let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
-    let mut ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let ssid = network
+        .get("ssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut ip = network
+        .get("ip")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
     if ip.is_empty() {
         ip = get_local_ip();
     }
-    let identity_status = if ip.is_empty() { "error" } else if mobile_data || !ssid.is_empty() { "success" } else { "warning" };
+    let identity_status = if ip.is_empty() {
+        "error"
+    } else if mobile_data || !ssid.is_empty() {
+        "success"
+    } else {
+        "warning"
+    };
     let identity_message = if ip.is_empty() {
         "未检测到可用网络接口或 IPv4 地址".to_string()
     } else if mobile_data {
@@ -3037,7 +3601,9 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     } else {
         match (campus_ip, campus_ssid) {
             (true, true) => "SSID 与本地网段均符合校园网特征".to_string(),
-            (true, false) => "本地网段符合校园网，但 SSID 未识别；自动登录需要白名单或有线协议".to_string(),
+            (true, false) => {
+                "本地网段符合校园网，但 SSID 未识别；自动登录需要白名单或有线协议".to_string()
+            }
             (false, true) => "SSID 符合校园网，但本地 IP 不在已知网段".to_string(),
             (false, false) => "当前网络不符合已知校园网特征".to_string(),
         }
@@ -3052,16 +3618,23 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
 
     let dns_started = std::time::Instant::now();
     let dns_ok = tauri::async_runtime::spawn_blocking(|| {
-        ("www.baidu.com", 443).to_socket_addrs()
+        ("www.baidu.com", 443)
+            .to_socket_addrs()
             .map(|mut addresses| addresses.next().is_some())
             .unwrap_or(false)
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
     steps.push(make_diagnostic_step(
         "dns",
         "DNS 解析",
         dns_started,
         if dns_ok { "success" } else { "warning" },
-        if dns_ok { "DNS 解析正常".to_string() } else { "DNS 解析失败或被认证页面限制".to_string() },
+        if dns_ok {
+            "DNS 解析正常".to_string()
+        } else {
+            "DNS 解析失败或被认证页面限制".to_string()
+        },
     ));
 
     let internet_started = std::time::Instant::now();
@@ -3089,13 +3662,25 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         detect_login_type_rust(compatibility).await
     };
     let (portal_status, portal_message) = if mobile_data {
-        ("skipped", "当前使用移动数据，已跳过校园网认证网关探测".to_string())
+        (
+            "skipped",
+            "当前使用移动数据，已跳过校园网认证网关探测".to_string(),
+        )
     } else if online {
         ("success", "互联网已连通，跳过认证网关探测".to_string())
     } else if login_type != LoginType::Unknown {
-        ("warning", format!("已检测到校园网认证协议 {}，当前需要登录", login_type.as_str()))
+        (
+            "warning",
+            format!(
+                "已检测到校园网认证协议 {}，当前需要登录",
+                login_type.as_str()
+            ),
+        )
     } else {
-        ("error", "未找到可访问的校园网认证网关，可能是完全离线或处于非校园网络".to_string())
+        (
+            "error",
+            "未找到可访问的校园网认证网关，可能是完全离线或处于非校园网络".to_string(),
+        )
     };
     steps.push(make_diagnostic_step(
         "portal",
@@ -3112,11 +3697,20 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     } else if login_type != LoginType::Unknown {
         ("auth_required", "已连接校园网，但需要完成账号认证")
     } else if ip.is_empty() || transport == "none" {
-        ("no_network", "未取得网络地址，请检查 Wi-Fi、有线连接或系统权限")
+        (
+            "no_network",
+            "未取得网络地址，请检查 Wi-Fi、有线连接或系统权限",
+        )
     } else if mobile_data {
-        ("offline", "移动数据存在，但系统与独立目标均未验证互联网连通性")
+        (
+            "offline",
+            "移动数据存在，但系统与独立目标均未验证互联网连通性",
+        )
     } else {
-        ("offline", "已取得本地网络，但无法访问互联网或校园网认证网关")
+        (
+            "offline",
+            "已取得本地网络，但无法访问互联网或校园网认证网关",
+        )
     };
     DiagnosticReport {
         created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -3133,7 +3727,18 @@ fn mask_identifier(value: &str) -> String {
     if chars.len() <= 4 {
         return "****".to_string();
     }
-    format!("{}***{}", chars.iter().take(2).collect::<String>(), chars.iter().rev().take(2).collect::<Vec<_>>().into_iter().rev().collect::<String>())
+    format!(
+        "{}***{}",
+        chars.iter().take(2).collect::<String>(),
+        chars
+            .iter()
+            .rev()
+            .take(2)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<String>()
+    )
 }
 
 fn redact_diagnostic_text(mut text: String, accounts: &[Account], ip: &str, bssid: &str) -> String {
@@ -3162,8 +3767,14 @@ async fn create_diagnostic_bundle(
     let mut report = run_network_diagnostics(app.clone()).await;
     let config = state.config.read().unwrap().clone();
     let network_state = state.last_network_state.lock().unwrap().clone();
-    let ip = network_state.get("ip").and_then(|value| value.as_str()).unwrap_or("");
-    let bssid = network_state.get("bssid").and_then(|value| value.as_str()).unwrap_or("");
+    let ip = network_state
+        .get("ip")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let bssid = network_state
+        .get("bssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     let logs: Vec<serde_json::Value> = state.logs.lock().unwrap().iter().rev().take(500).rev()
         .map(|entry| serde_json::json!({
             "time": entry.time,
@@ -3172,14 +3783,28 @@ async fn create_diagnostic_bundle(
             "message": redact_diagnostic_text(entry.message.clone(), &config.accounts, ip, bssid),
         }))
         .collect();
-    let public_accounts: Vec<Account> = config.accounts.iter().cloned().map(|mut account| {
-        account.pass.clear();
-        account
-    }).collect();
+    let public_accounts: Vec<Account> = config
+        .accounts
+        .iter()
+        .cloned()
+        .map(|mut account| {
+            account.pass.clear();
+            account
+        })
+        .collect();
     report.summary = redact_diagnostic_text(report.summary, &public_accounts, ip, bssid);
-    report.ip = if report.ip.is_empty() { String::new() } else { "[LOCAL-IP]".to_string() };
+    report.ip = if report.ip.is_empty() {
+        String::new()
+    } else {
+        "[LOCAL-IP]".to_string()
+    };
     for step in &mut report.steps {
-        step.message = redact_diagnostic_text(std::mem::take(&mut step.message), &public_accounts, ip, bssid);
+        step.message = redact_diagnostic_text(
+            std::mem::take(&mut step.message),
+            &public_accounts,
+            ip,
+            bssid,
+        );
     }
     let redacted_report = serde_json::to_value(&report).map_err(|error| error.to_string())?;
     let bundle = serde_json::json!({
@@ -3227,7 +3852,9 @@ fn export_logs(app: tauri::AppHandle) -> Result<String, String> {
     if metadata.len() == 0 {
         return Err("当前没有可导出的日志".to_string());
     }
-    let directory = app.path().download_dir()
+    let directory = app
+        .path()
+        .download_dir()
         .or_else(|_| app.path().document_dir())
         .map_err(|error| format!("无法定位导出目录：{error}"))?;
     std::fs::create_dir_all(&directory).map_err(|error| format!("无法创建导出目录：{error}"))?;
@@ -3325,7 +3952,13 @@ fn get_countdown_status(state: tauri::State<Arc<AppState>>) -> serde_json::Value
 
 #[tauri::command]
 fn trigger_manual_check(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) {
-    rust_log(&app, &state, "网络", "收到手动连通性检测请求，开始检测...", "info");
+    rust_log(
+        &app,
+        &state,
+        "网络",
+        "收到手动连通性检测请求，开始检测...",
+        "info",
+    );
     state.is_suspended.store(false, Ordering::SeqCst);
     state.non_campus_count.store(0, Ordering::SeqCst);
     let app_clone = app.clone();
@@ -3368,21 +4001,40 @@ async fn manual_login(
         _ => detected_type,
     };
     if login_type == LoginType::Unknown {
-        return Ok(ManualLoginResult { success: false, message: "未检测到校园网登录页面".to_string() });
+        return Ok(ManualLoginResult {
+            success: false,
+            message: "未检测到校园网登录页面".to_string(),
+        });
     }
 
     let configured_accounts = state.config.read().unwrap().accounts.clone();
     let accounts: Vec<Account> = match account_index {
-        Some(index) => configured_accounts.get(index).cloned().into_iter().collect(),
+        Some(index) => configured_accounts
+            .get(index)
+            .cloned()
+            .into_iter()
+            .collect(),
         None => configured_accounts,
-    }.into_iter().filter(|account| !account.is_disabled.unwrap_or(false)).collect();
+    }
+    .into_iter()
+    .filter(|account| !account.is_disabled.unwrap_or(false))
+    .collect();
     if accounts.is_empty() {
-        return Ok(ManualLoginResult { success: false, message: "未配置可用账号".to_string() });
+        return Ok(ManualLoginResult {
+            success: false,
+            message: "未配置可用账号".to_string(),
+        });
     }
 
     for account in accounts {
         if account.pass.is_empty() {
-            rust_log(&app, &state, "登录", &format!("账号 {} 缺少已保存的密码", account.user), "error");
+            rust_log(
+                &app,
+                &state,
+                "登录",
+                &format!("账号 {} 缺少已保存的密码", account.user),
+                "error",
+            );
             continue;
         }
         if let Err(remaining) = account_attempt_allowed(&state, &account.user) {
@@ -3390,21 +4042,38 @@ async fn manual_login(
                 &app,
                 &state,
                 "账号健康",
-                &format!("账号 {} 正在冷却，剩余 {} 秒；可在网络诊断页解除", account.user, remaining),
+                &format!(
+                    "账号 {} 正在冷却，剩余 {} 秒；可在网络诊断页解除",
+                    account.user, remaining
+                ),
                 "info",
             );
             continue;
         }
-        rust_log(&app, &state, "登录", &format!("尝试使用账号 {} 登录...", account.user), "info");
+        rust_log(
+            &app,
+            &state,
+            "登录",
+            &format!("尝试使用账号 {} 登录...", account.user),
+            "info",
+        );
         match login_to_campus_network_rust(
             login_type.clone(),
             &account.user,
             &account.pass,
             compatibility,
-        ).await {
+        )
+        .await
+        {
             Ok((true, message)) => {
                 record_account_success(&app, &state, &account.user);
-                rust_log(&app, &state, "登录", &format!("登录成功: {message}"), "success");
+                rust_log(
+                    &app,
+                    &state,
+                    "登录",
+                    &format!("登录成功: {message}"),
+                    "success",
+                );
                 let net_info = get_network_info(app.clone(), Some(true));
                 let payload = serde_json::json!({
                     "state": "Online",
@@ -3417,11 +4086,20 @@ async fn manual_login(
                 let _ = app.emit("network-state-change", payload);
                 #[cfg(desktop)]
                 refresh_tray_menu(&app, &state);
-                return Ok(ManualLoginResult { success: true, message });
+                return Ok(ManualLoginResult {
+                    success: true,
+                    message,
+                });
             }
             Ok((false, message)) => {
                 record_account_failure(&app, &state, &account.user, &message);
-                rust_log(&app, &state, "登录", &format!("登录失败: {message}"), "error");
+                rust_log(
+                    &app,
+                    &state,
+                    "登录",
+                    &format!("登录失败: {message}"),
+                    "error",
+                );
             }
             Err(error) => {
                 record_account_failure(&app, &state, &account.user, &format!("请求出错: {error}"));
@@ -3429,11 +4107,15 @@ async fn manual_login(
             }
         }
     }
-    Ok(ManualLoginResult { success: false, message: "所有可用账号均未能登录".to_string() })
+    Ok(ManualLoginResult {
+        success: false,
+        message: "所有可用账号均未能登录".to_string(),
+    })
 }
 
 fn first_decimal(value: &str) -> Option<f64> {
-    let number = value.chars()
+    let number = value
+        .chars()
         .filter(|character| character.is_ascii_digit() || *character == '.')
         .collect::<String>();
     number.parse::<f64>().ok()
@@ -3455,13 +4137,25 @@ fn evaluate_usage_alerts(app: &tauri::AppHandle, state: &AppState, info: &UserIn
     let mut alerts = Vec::new();
     if let Some(balance) = first_decimal(&info.balance) {
         if balance <= balance_threshold {
-            alerts.push(("balance", format!("校园网余额仅剩 {}，已低于 {:.2} 元提醒线", info.balance, balance_threshold)));
+            alerts.push((
+                "balance",
+                format!(
+                    "校园网余额仅剩 {}，已低于 {:.2} 元提醒线",
+                    info.balance, balance_threshold
+                ),
+            ));
         }
     }
     if info.flow != "无限" {
         if let Some(flow) = first_decimal(&info.flow) {
             if flow <= flow_threshold {
-                alerts.push(("flow", format!("套餐流量仅剩 {}，已低于 {:.2} GB 提醒线", info.flow, flow_threshold)));
+                alerts.push((
+                    "flow",
+                    format!(
+                        "套餐流量仅剩 {}，已低于 {:.2} GB 提醒线",
+                        info.flow, flow_threshold
+                    ),
+                ));
             }
         }
     }
@@ -3478,7 +4172,10 @@ fn evaluate_usage_alerts(app: &tauri::AppHandle, state: &AppState, info: &UserIn
         if should_notify {
             rust_log(app, state, "用量提醒", &message, "error");
             let _ = show_native_notification(app, "校园网用量提醒", &message);
-            let _ = app.emit("usage-alert", serde_json::json!({ "kind": kind, "message": message }));
+            let _ = app.emit(
+                "usage-alert",
+                serde_json::json!({ "kind": kind, "message": message }),
+            );
         }
     }
 }
@@ -3555,13 +4252,7 @@ async fn fetch_billing_cached(
         }
     }
 
-    rust_log(
-        app,
-        state,
-        "计费",
-        "开始刷新计费系统账户概览",
-        "info",
-    );
+    rust_log(app, state, "计费", "开始刷新计费系统账户概览", "info");
 
     let fetched = tokio::time::timeout(
         std::time::Duration::from_secs(45),
@@ -3778,10 +4469,9 @@ async fn get_billing_center(
     .await;
     let result = match fetched {
         Ok(result) => result.map_err(|error| error.user_message()),
-        Err(_) => Err(
-            "计费中心完整数据读取超过 75 秒，已停止本次请求；请检查 VPN 后重试"
-                .to_string(),
-        ),
+        Err(_) => {
+            Err("计费中心完整数据读取超过 75 秒，已停止本次请求；请检查 VPN 后重试".to_string())
+        }
     };
     match &result {
         Ok(data) => {
@@ -3865,13 +4555,7 @@ async fn perform_billing_action(
             .as_deref()
             .ok_or_else(|| "请输入新统一认证密码".to_string())?;
         let _campus_guard = state.campus_service_lock.lock().await;
-        rust_log(
-            &app,
-            &state,
-            "计费",
-            "正在通过统一认证修改密码",
-            "info",
-        );
+        rust_log(&app, &state, "计费", "正在通过统一认证修改密码", "info");
         let changed = campus_services::change_password(
             &account.user,
             &account.pass,
@@ -3889,16 +4573,10 @@ async fn perform_billing_action(
             password_changed: true,
         }
     } else {
-        let compatibility = compatibility
-            .ok_or_else(|| "计费操作缺少 VPN 兼容配置".to_string())?;
-        billing::perform_action(
-            &account.user,
-            &account.pass,
-            compatibility,
-            &request,
-        )
-        .await
-        .map_err(|error| error.user_message())?
+        let compatibility = compatibility.ok_or_else(|| "计费操作缺少 VPN 兼容配置".to_string())?;
+        billing::perform_action(&account.user, &account.pass, compatibility, &request)
+            .await
+            .map_err(|error| error.user_message())?
     };
 
     if result.password_changed {
@@ -3910,10 +4588,14 @@ async fn perform_billing_action(
             .accounts
             .iter_mut()
             .find(|saved| saved.user == account.user)
-            .ok_or_else(|| "统一认证密码已修改，但 App 中已找不到对应账号，请立即重新添加账号".to_string())?;
+            .ok_or_else(|| {
+                "统一认证密码已修改，但 App 中已找不到对应账号，请立即重新添加账号".to_string()
+            })?;
         saved.pass = replacement;
         save_config(&app, &state, config).map_err(|error| {
-            format!("统一认证密码已修改，但 App 安全存储同步失败：{error}。请立即在账号管理中更新密码")
+            format!(
+                "统一认证密码已修改，但 App 安全存储同步失败：{error}。请立即在账号管理中更新密码"
+            )
         })?;
         result.message = format!("{}；App 中的账号密码已同步更新", result.message);
     }
@@ -3951,6 +4633,52 @@ fn campus_service_target(state: &AppState) -> Result<Account, String> {
     Ok(account)
 }
 
+fn campus_service_session_seed(
+    state: &AppState,
+    account: &str,
+) -> Option<campus_services::PersistedCampusSession> {
+    state
+        .config
+        .read()
+        .unwrap()
+        .campus_service_sessions
+        .iter()
+        .find(|session| session.account() == account)
+        .cloned()
+}
+
+fn persist_campus_service_session(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    session: campus_services::PersistedCampusSession,
+) {
+    let snapshot = {
+        let mut config = state.config.write().unwrap();
+        config
+            .campus_service_sessions
+            .retain(|current| current.account() != session.account());
+        config.campus_service_sessions.push(session);
+        config.clone()
+    };
+    if let Err(error) = save_secure_config_verified(app, &snapshot) {
+        rust_log(
+            app,
+            state,
+            "计费",
+            &format!("移动门户登录状态未能写入安全存储：{error}"),
+            "error",
+        );
+    } else {
+        rust_log(
+            app,
+            state,
+            "计费",
+            "已在安全存储中更新移动门户长期登录状态",
+            "debug",
+        );
+    }
+}
+
 #[tauri::command]
 async fn prepare_network_recharge(
     app: tauri::AppHandle,
@@ -3960,6 +4688,7 @@ async fn prepare_network_recharge(
 ) -> Result<campus_services::RechargePreview, String> {
     let account = campus_service_target(&state)?;
     let _service_guard = state.campus_service_lock.lock().await;
+    let session_seed = campus_service_session_seed(&state, &account.user);
     rust_log(
         &app,
         &state,
@@ -3987,9 +4716,7 @@ async fn prepare_network_recharge(
             &app,
             &state,
             "计费",
-            &format!(
-                "统一认证网络上下文: transport={transport}, systemValidated={validated}"
-            ),
+            &format!("统一认证网络上下文: transport={transport}, systemValidated={validated}"),
             "debug",
         );
     }
@@ -4000,13 +4727,15 @@ async fn prepare_network_recharge(
             &account.pass,
             &target_account,
             &amount,
+            session_seed,
         ),
     )
     .await
     .map_err(|_| "充值信息核对超过 60 秒，已取消本次请求".to_string())?
     .map_err(campus_services::CampusServiceError::user_message);
     match prepared {
-        Ok((pending, preview)) => {
+        Ok((pending, preview, persisted)) => {
+            persist_campus_service_session(&app, &state, persisted);
             *state.campus_recharge_pending.lock().await = Some(pending);
             rust_log(
                 &app,
@@ -4060,8 +4789,7 @@ async fn confirm_network_recharge(
     )
     .await
     .map_err(|_| {
-        "充值提交超过 45 秒，结果未知；请先查询校园卡和网费记录，不要立即重复充值"
-            .to_string()
+        "充值提交超过 45 秒，结果未知；请先查询校园卡和网费记录，不要立即重复充值".to_string()
     })?
     .map_err(campus_services::CampusServiceError::user_message);
     match &result {
@@ -4082,6 +4810,7 @@ async fn get_network_recharge_balances(
 ) -> Result<campus_services::RechargeBalanceSnapshot, String> {
     let account = campus_service_target(&state)?;
     let _service_guard = state.campus_service_lock.lock().await;
+    let session_seed = campus_service_session_seed(&state, &account.user);
     rust_log(
         &app,
         &state,
@@ -4095,16 +4824,23 @@ async fn get_network_recharge_balances(
             &account.user,
             &account.pass,
             &target_account,
+            session_seed,
         ),
     )
     .await
     .map_err(|_| "余额刷新超过 60 秒，已停止等待".to_string())?
     .map_err(campus_services::CampusServiceError::user_message);
-    match &snapshot {
-        Ok(_) => rust_log(&app, &state, "计费", "充值后余额刷新完成", "success"),
-        Err(error) => rust_log(&app, &state, "计费", error, "error"),
+    match snapshot {
+        Ok((snapshot, persisted)) => {
+            persist_campus_service_session(&app, &state, persisted);
+            rust_log(&app, &state, "计费", "充值后余额刷新完成", "success");
+            Ok(snapshot)
+        }
+        Err(error) => {
+            rust_log(&app, &state, "计费", &error, "error");
+            Err(error)
+        }
     }
-    snapshot
 }
 
 #[tauri::command]
@@ -4130,6 +4866,7 @@ async fn prepare_alipay_card_recharge(
 ) -> Result<campus_services::AlipayRechargePreview, String> {
     let account = campus_service_target(&state)?;
     let _service_guard = state.campus_service_lock.lock().await;
+    let session_seed = campus_service_session_seed(&state, &account.user);
     rust_log(
         &app,
         &state,
@@ -4139,13 +4876,19 @@ async fn prepare_alipay_card_recharge(
     );
     let prepared = tokio::time::timeout(
         std::time::Duration::from_secs(60),
-        campus_services::prepare_alipay_card_recharge(&account.user, &account.pass, &amount),
+        campus_services::prepare_alipay_card_recharge(
+            &account.user,
+            &account.pass,
+            &amount,
+            session_seed,
+        ),
     )
     .await
     .map_err(|_| "支付宝充值信息核对超过 60 秒，已取消本次请求".to_string())?
     .map_err(campus_services::CampusServiceError::user_message);
     match prepared {
-        Ok((pending, preview)) => {
+        Ok((pending, preview, persisted)) => {
+            persist_campus_service_session(&app, &state, persisted);
             *state.campus_alipay_recharge_pending.lock().await = Some(pending);
             rust_log(
                 &app,
@@ -4220,6 +4963,170 @@ async fn cancel_alipay_card_recharge(
         .is_some_and(|pending| pending.confirmation_id() == confirmation_id)
     {
         *slot = None;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn prepare_wechat_card_recharge(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    target_account: String,
+    amount: String,
+) -> Result<campus_services::WechatRechargePreview, String> {
+    let account = campus_service_target(&state)?;
+    let _service_guard = state.campus_service_lock.lock().await;
+    let session_seed = campus_service_session_seed(&state, &account.user);
+    rust_log(&app, &state, "计费", "正在核对微信充值所用校园卡", "info");
+    let prepared = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        campus_services::prepare_wechat_card_recharge(
+            &account.user,
+            &account.pass,
+            &target_account,
+            &amount,
+            session_seed,
+        ),
+    )
+    .await
+    .map_err(|_| "微信充值信息核对超过 60 秒，已取消本次请求".to_string())?
+    .map_err(campus_services::CampusServiceError::user_message);
+    match prepared {
+        Ok((pending, preview, persisted)) => {
+            persist_campus_service_session(&app, &state, persisted);
+            *state.campus_wechat_recharge_pending.lock().await = Some(pending);
+            rust_log(
+                &app,
+                &state,
+                "计费",
+                "微信充值校园卡信息核对完成，等待用户确认",
+                "debug",
+            );
+            Ok(preview)
+        }
+        Err(error) => {
+            *state.campus_wechat_recharge_pending.lock().await = None;
+            rust_log(&app, &state, "计费", &error, "error");
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+async fn confirm_wechat_card_recharge(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    confirmation_id: String,
+) -> Result<campus_services::WechatRechargeResult, String> {
+    let _service_guard = state.campus_service_lock.lock().await;
+    let pending = {
+        let mut slot = state.campus_wechat_recharge_pending.lock().await;
+        let current = slot
+            .as_ref()
+            .ok_or_else(|| "没有待确认的微信充值，请先重新核对校园卡与金额".to_string())?;
+        if current.confirmation_id() != confirmation_id {
+            return Err("微信充值确认标识不匹配，请重新核对校园卡与金额".to_string());
+        }
+        if current.expired() {
+            *slot = None;
+            return Err("微信充值确认已过期，请重新核对校园卡与金额".to_string());
+        }
+        slot.take()
+            .ok_or_else(|| "待确认的微信充值状态已失效，请重新核对".to_string())?
+    };
+    rust_log(
+        &app,
+        &state,
+        "计费",
+        "用户已确认微信充值校园卡，正在创建一次性支付订单",
+        "info",
+    );
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(45),
+        campus_services::execute_wechat_card_recharge(pending),
+    )
+    .await
+    .map_err(|_| {
+        "微信订单创建超过 45 秒，结果未知；请先检查校园卡充值记录，不要立即重复操作".to_string()
+    })?
+    .map_err(campus_services::CampusServiceError::user_message);
+    match result {
+        Ok((payment, result)) => {
+            *state.campus_wechat_payment_pending.lock().await = Some(payment);
+            rust_log(
+                &app,
+                &state,
+                "计费",
+                "微信 H5 支付入口已安全生成",
+                "success",
+            );
+            Ok(result)
+        }
+        Err(error) => {
+            rust_log(&app, &state, "计费", &error, "error");
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+async fn check_wechat_card_recharge(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    payment_id: String,
+) -> Result<campus_services::WechatPaymentStatus, String> {
+    let _service_guard = state.campus_service_lock.lock().await;
+    let mut slot = state.campus_wechat_payment_pending.lock().await;
+    let pending = slot
+        .as_mut()
+        .ok_or_else(|| "没有等待查询的微信支付订单".to_string())?;
+    if pending.payment_id() != payment_id {
+        return Err("微信支付查询标识不匹配".to_string());
+    }
+    if pending.expired() {
+        *slot = None;
+        return Err("微信支付状态查询已过期，请核对校园卡充值记录".to_string());
+    }
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        campus_services::check_wechat_card_recharge(pending),
+    )
+    .await
+    .map_err(|_| "微信支付状态查询超时，请稍后重试".to_string())?
+    .map_err(campus_services::CampusServiceError::user_message);
+    match &result {
+        Ok(status) if status.status == "paid" => {
+            rust_log(&app, &state, "计费", "微信支付状态已确认成功", "success")
+        }
+        Ok(_) => rust_log(&app, &state, "计费", "微信支付尚未完成", "debug"),
+        Err(error) => rust_log(&app, &state, "计费", error, "error"),
+    }
+    result
+}
+
+#[tauri::command]
+async fn cancel_wechat_card_recharge(
+    state: tauri::State<'_, Arc<AppState>>,
+    confirmation_id: Option<String>,
+    payment_id: Option<String>,
+) -> Result<(), String> {
+    if let Some(confirmation_id) = confirmation_id {
+        let mut slot = state.campus_wechat_recharge_pending.lock().await;
+        if slot
+            .as_ref()
+            .is_some_and(|pending| pending.confirmation_id() == confirmation_id)
+        {
+            *slot = None;
+        }
+    }
+    if let Some(payment_id) = payment_id {
+        let mut slot = state.campus_wechat_payment_pending.lock().await;
+        if slot
+            .as_ref()
+            .is_some_and(|pending| pending.payment_id() == payment_id)
+        {
+            *slot = None;
+        }
     }
     Ok(())
 }
@@ -4350,7 +5257,11 @@ fn set_auto_login_pause(
         &app,
         &state,
         "自动登录",
-        if until == 0 { "已恢复自动登录" } else { "已暂停自动登录 1 小时" },
+        if until == 0 {
+            "已恢复自动登录"
+        } else {
+            "已暂停自动登录 1 小时"
+        },
         "info",
     );
     #[cfg(desktop)]
@@ -4359,7 +5270,13 @@ fn set_auto_login_pause(
 }
 
 #[tauri::command]
-fn log_from_js(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>, module: String, message: String, log_type: String) {
+fn log_from_js(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    module: String,
+    message: String,
+    log_type: String,
+) {
     rust_log(&app, &state, &module, &message, &log_type);
 }
 
@@ -4368,7 +5285,11 @@ fn set_background_state(state: tauri::State<Arc<AppState>>, is_bg: bool) {
     state.is_in_background.store(is_bg, Ordering::SeqCst);
     let val = state.countdown.load(Ordering::SeqCst);
     let cfg = state.config.read().unwrap();
-    let configured_interval = if is_bg { cfg.check_interval_bg } else { cfg.check_interval };
+    let configured_interval = if is_bg {
+        cfg.check_interval_bg
+    } else {
+        cfg.check_interval
+    };
     let mobile_data = is_mobile_data_network(&state.last_network_state.lock().unwrap());
     let max_interval = if mobile_data {
         mobile_data_check_interval(configured_interval, is_bg)
@@ -4394,9 +5315,16 @@ fn refresh_tray_menu(app: &tauri::AppHandle, state: &AppState) {
         Some("BjutCampus") => "校园网待认证",
         _ => "离线",
     };
-    let paused = state.auto_login_paused_until.load(Ordering::SeqCst) > chrono::Utc::now().timestamp();
+    let paused =
+        state.auto_login_paused_until.load(Ordering::SeqCst) > chrono::Utc::now().timestamp();
     let config = state.config.read().unwrap().clone();
-    let status_item = match MenuItem::with_id(app, "status", format!("状态：{state_name}"), false, None::<&str>) {
+    let status_item = match MenuItem::with_id(
+        app,
+        "status",
+        format!("状态：{state_name}"),
+        false,
+        None::<&str>,
+    ) {
         Ok(item) => item,
         Err(_) => return,
     };
@@ -4406,13 +5334,26 @@ fn refresh_tray_menu(app: &tauri::AppHandle, state: &AppState) {
         .text("show", "显示主窗口")
         .text("check", "立即检测网络")
         .text("login", "立即登录")
-        .text("pause", if paused { "恢复自动登录" } else { "暂停自动登录 1 小时" })
+        .text(
+            "pause",
+            if paused {
+                "恢复自动登录"
+            } else {
+                "暂停自动登录 1 小时"
+            },
+        )
         .separator();
-    for (index, account) in config.accounts.iter().enumerate()
+    for (index, account) in config
+        .accounts
+        .iter()
+        .enumerate()
         .filter(|(_, account)| !account.is_disabled.unwrap_or(false))
     {
         let marker = if account.is_default { "✓" } else { " " };
-        builder = builder.text(format!("account:{index}"), format!("{marker} 首选账号：{}", account.user));
+        builder = builder.text(
+            format!("account:{index}"),
+            format!("{marker} 首选账号：{}", account.user),
+        );
     }
     let menu = match builder.separator().text("quit", "退出").build() {
         Ok(menu) => menu,
@@ -4428,14 +5369,27 @@ fn refresh_tray_menu(app: &tauri::AppHandle, state: &AppState) {
 async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
     let network = get_network_info(app.clone(), Some(true));
     let transport = network_transport(&network).to_string();
-    let ssid = network.get("ssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
-    let bssid = network.get("bssid").and_then(|value| value.as_str()).unwrap_or("").to_string();
-    let ip = network.get("ip").and_then(|value| value.as_str()).unwrap_or("").to_string();
+    let ssid = network
+        .get("ssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+    let bssid = network
+        .get("bssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+    let ip = network
+        .get("ip")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
     let config = state.config.read().unwrap().clone();
     let compatibility = VpnCompatibility::from_config(&config.vpn_compatibility);
     let detected = detect_login_type_rust(compatibility).await;
     let profile = matching_network_profile(&config, &ssid, &bssid, &detected);
-    let login_type = profile.as_ref()
+    let login_type = profile
+        .as_ref()
         .and_then(|item| login_type_from_profile(&item.login_type))
         .unwrap_or(detected);
     if login_type == LoginType::Unknown {
@@ -4451,335 +5405,433 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         &config.whitelist,
         &config.blacklist,
     ) {
-        rust_log(&app, &state, "安全", &format!("托盘登录已阻止：{reason}"), "error");
+        rust_log(
+            &app,
+            &state,
+            "安全",
+            &format!("托盘登录已阻止：{reason}"),
+            "error",
+        );
         let _ = show_native_notification(&app, "校园网登录已阻止", &reason);
         return;
     }
     let accounts = accounts_for_profile(config.accounts, profile.as_ref());
-    let account = accounts.iter().find(|account| account.is_default)
+    let account = accounts
+        .iter()
+        .find(|account| account.is_default)
         .or_else(|| accounts.first());
     let Some(account) = account else {
         let _ = show_native_notification(&app, "校园网登录", "没有可用且已保存密码的账号");
         return;
     };
     if let Err(remaining) = account_attempt_allowed(&state, &account.user) {
-        let _ = show_native_notification(&app, "账号正在冷却", &format!("请在 {remaining} 秒后重试或在诊断页解除"));
+        let _ = show_native_notification(
+            &app,
+            "账号正在冷却",
+            &format!("请在 {remaining} 秒后重试或在诊断页解除"),
+        );
         return;
     }
-    rust_log(&app, &state, "托盘", &format!("使用首选账号 {} 执行快捷登录", account.user), "info");
-    match login_to_campus_network_rust(
-        login_type,
-        &account.user,
-        &account.pass,
-        compatibility,
-    ).await {
+    rust_log(
+        &app,
+        &state,
+        "托盘",
+        &format!("使用首选账号 {} 执行快捷登录", account.user),
+        "info",
+    );
+    match login_to_campus_network_rust(login_type, &account.user, &account.pass, compatibility)
+        .await
+    {
         Ok((true, message)) => {
             record_account_success(&app, &state, &account.user);
-            rust_log(&app, &state, "托盘", &format!("快捷登录成功：{message}"), "success");
-            let _ = show_native_notification(&app, "校园网登录成功", &format!("账号：{}", account.user));
+            rust_log(
+                &app,
+                &state,
+                "托盘",
+                &format!("快捷登录成功：{message}"),
+                "success",
+            );
+            let _ = show_native_notification(
+                &app,
+                "校园网登录成功",
+                &format!("账号：{}", account.user),
+            );
             trigger_network_check(app, state, true).await;
         }
         Ok((false, message)) => {
             record_account_failure(&app, &state, &account.user, &message);
-            rust_log(&app, &state, "托盘", &format!("快捷登录失败：{message}"), "error");
+            rust_log(
+                &app,
+                &state,
+                "托盘",
+                &format!("快捷登录失败：{message}"),
+                "error",
+            );
             let _ = show_native_notification(&app, "校园网登录失败", &message);
         }
         Err(error) => {
             record_account_failure(&app, &state, &account.user, &format!("请求出错: {error}"));
-            rust_log(&app, &state, "托盘", &format!("快捷登录出错：{error}"), "error");
+            rust_log(
+                &app,
+                &state,
+                "托盘",
+                &format!("快捷登录出错：{error}"),
+                "error",
+            );
         }
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
-        .setup(|_app| {
-            let app_state = std::sync::Arc::new(AppState {
-                config: RwLock::new(AppConfig {
-                    accounts: Vec::new(),
-                    auto_login: false,
-                    check_interval: 15,
-                    check_interval_bg: 60,
-                    wifi_change_detect: true,
-                    log_level: "info".to_string(),
-                    vpn_compatibility: default_vpn_compatibility(),
-                    whitelist: Vec::new(),
-                    blacklist: Vec::new(),
-                    network_profiles: Vec::new(),
-                    usage_alerts: true,
-                    balance_alert_threshold: default_balance_alert_threshold(),
-                    flow_alert_threshold: default_flow_alert_threshold(),
-                    android_notification_mode: default_android_notification_mode(),
-                    android_notify_network_status: true,
-                    android_notify_login_results: true,
-                    android_notify_background_errors: true,
-                }),
-                credential_storage_status: Mutex::new("unknown".to_string()),
-                account_health: Mutex::new(load_account_health(_app.handle())),
-                logs: Mutex::new(Vec::new()),
-                countdown: AtomicI32::new(15),
-                is_checking: AtomicBool::new(false),
-                pending_full_check: AtomicBool::new(false),
-                is_suspended: AtomicBool::new(false),
-                last_known_ip: Mutex::new(None),
-                non_campus_count: AtomicU32::new(0),
-                is_in_background: AtomicBool::new(false),
-                last_network_state: Mutex::new(serde_json::json!({
-                    "state": "Offline",
-                    "ssid": "",
-                    "bssid": "",
-                    "ip": "",
-                    "timestamp": "--"
-                })),
-                auto_login_paused_until: std::sync::atomic::AtomicI64::new(0),
-                usage_alert_history: Mutex::new(HashMap::new()),
-                billing_cache: Mutex::new(None),
-                billing_fetch_lock: tokio::sync::Mutex::new(()),
-                campus_service_lock: tokio::sync::Mutex::new(()),
-                campus_recharge_pending: tokio::sync::Mutex::new(None),
-                campus_alipay_recharge_pending: tokio::sync::Mutex::new(None),
-            });
-            _app.manage(app_state.clone());
+    let builder = tauri::Builder::default().setup(|_app| {
+        let app_state = std::sync::Arc::new(AppState {
+            config: RwLock::new(AppConfig {
+                accounts: Vec::new(),
+                auto_login: false,
+                check_interval: 15,
+                check_interval_bg: 60,
+                wifi_change_detect: true,
+                log_level: "info".to_string(),
+                vpn_compatibility: default_vpn_compatibility(),
+                whitelist: Vec::new(),
+                blacklist: Vec::new(),
+                network_profiles: Vec::new(),
+                usage_alerts: true,
+                balance_alert_threshold: default_balance_alert_threshold(),
+                flow_alert_threshold: default_flow_alert_threshold(),
+                android_notification_mode: default_android_notification_mode(),
+                android_notify_network_status: true,
+                android_notify_login_results: true,
+                android_notify_background_errors: true,
+                campus_service_sessions: Vec::new(),
+            }),
+            credential_storage_status: Mutex::new("unknown".to_string()),
+            account_health: Mutex::new(load_account_health(_app.handle())),
+            logs: Mutex::new(Vec::new()),
+            countdown: AtomicI32::new(15),
+            is_checking: AtomicBool::new(false),
+            pending_full_check: AtomicBool::new(false),
+            is_suspended: AtomicBool::new(false),
+            last_known_ip: Mutex::new(None),
+            non_campus_count: AtomicU32::new(0),
+            is_in_background: AtomicBool::new(false),
+            last_network_state: Mutex::new(serde_json::json!({
+                "state": "Offline",
+                "ssid": "",
+                "bssid": "",
+                "ip": "",
+                "timestamp": "--"
+            })),
+            auto_login_paused_until: std::sync::atomic::AtomicI64::new(0),
+            usage_alert_history: Mutex::new(HashMap::new()),
+            billing_cache: Mutex::new(None),
+            billing_fetch_lock: tokio::sync::Mutex::new(()),
+            campus_service_lock: tokio::sync::Mutex::new(()),
+            campus_recharge_pending: tokio::sync::Mutex::new(None),
+            campus_alipay_recharge_pending: tokio::sync::Mutex::new(None),
+            campus_wechat_recharge_pending: tokio::sync::Mutex::new(None),
+            campus_wechat_payment_pending: tokio::sync::Mutex::new(None),
+        });
+        _app.manage(app_state.clone());
 
-            let app_handle = _app.handle().clone();
-            let state_clone = app_state.clone();
-            
-            // Load config on startup
-            load_config(&app_handle, &state_clone);
-            
-            initialize_log_history(&app_handle, &state_clone);
+        let app_handle = _app.handle().clone();
+        let state_clone = app_state.clone();
 
-            // Start background loop task in Rust
-            let loop_handle = app_handle.clone();
-            let loop_state = state_clone.clone();
-            tauri::async_runtime::spawn(async move {
-                let mut wifi_check_counter = 0;
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    let is_bg = loop_state.is_in_background.load(Ordering::SeqCst);
-                    let is_susp = loop_state.is_suspended.load(Ordering::SeqCst);
-                    let is_chk = loop_state.is_checking.load(Ordering::SeqCst);
+        // Load config on startup
+        load_config(&app_handle, &state_clone);
 
-                    if !is_chk && loop_state.pending_full_check.swap(false, Ordering::SeqCst) {
-                        rust_log(&loop_handle, &loop_state, "网络", "执行等待中的完整网络检测", "debug");
+        initialize_log_history(&app_handle, &state_clone);
+
+        // Start background loop task in Rust
+        let loop_handle = app_handle.clone();
+        let loop_state = state_clone.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut wifi_check_counter = 0;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let is_bg = loop_state.is_in_background.load(Ordering::SeqCst);
+                let is_susp = loop_state.is_suspended.load(Ordering::SeqCst);
+                let is_chk = loop_state.is_checking.load(Ordering::SeqCst);
+
+                if !is_chk && loop_state.pending_full_check.swap(false, Ordering::SeqCst) {
+                    rust_log(
+                        &loop_handle,
+                        &loop_state,
+                        "网络",
+                        "执行等待中的完整网络检测",
+                        "debug",
+                    );
+                    trigger_network_check(loop_handle.clone(), loop_state.clone(), true).await;
+                    continue;
+                }
+
+                // 1. Local interface change check. Android NetworkCallback is the
+                // primary signal on mobile data, so polling can be much slower there.
+                wifi_check_counter += 1;
+                let mobile_data_active =
+                    is_mobile_data_network(&loop_state.last_network_state.lock().unwrap());
+                let interface_poll_interval = if mobile_data_active { 15 } else { 3 };
+                if wifi_check_counter >= interface_poll_interval {
+                    wifi_check_counter = 0;
+                    let wifi_change_detect = {
+                        let cfg = loop_state.config.read().unwrap();
+                        cfg.wifi_change_detect
+                    };
+                    if wifi_change_detect {
+                        let (ip_changed, current_ip, last_ip) = {
+                            let current_ip = get_local_ip();
+                            let mut last_ip_lock = loop_state.last_known_ip.lock().unwrap();
+                            let last_ip = last_ip_lock.clone();
+                            let mut changed = false;
+                            if !current_ip.is_empty() {
+                                if let Some(ref l_ip) = last_ip {
+                                    if current_ip != *l_ip {
+                                        changed = true;
+                                    }
+                                }
+                                *last_ip_lock = Some(current_ip.clone());
+                            } else if last_ip.is_some() {
+                                *last_ip_lock = None;
+                            }
+                            (changed, current_ip, last_ip)
+                        };
+                        rust_log(
+                            &loop_handle,
+                            &loop_state,
+                            "网络",
+                            &format!(
+                                "[DEBUG] 执行网络接口变更检测。当前 IP: {} (上次 IP: {})",
+                                current_ip,
+                                last_ip.as_deref().unwrap_or("空")
+                            ),
+                            "debug",
+                        );
+                        if ip_changed {
+                            rust_log(
+                                &loop_handle,
+                                &loop_state,
+                                "网络",
+                                &format!(
+                                    "检测到局域网 IP 发生变更: {} -> {}，重新检测网络环境...",
+                                    last_ip.unwrap_or_default(),
+                                    current_ip
+                                ),
+                                "info",
+                            );
+                            loop_state.is_suspended.store(false, Ordering::SeqCst);
+                            loop_state.non_campus_count.store(0, Ordering::SeqCst);
+                            trigger_network_check(loop_handle.clone(), loop_state.clone(), true)
+                                .await;
+                            continue;
+                        }
+                    }
+                }
+
+                // 2. Connectivity Check Loop (every 1 second)
+                if !is_chk {
+                    if !is_bg && is_susp {
+                        rust_log(
+                            &loop_handle,
+                            &loop_state,
+                            "网络",
+                            "检测到已返回前台，恢复连通性检测...",
+                            "info",
+                        );
+                        loop_state.is_suspended.store(false, Ordering::SeqCst);
+                        loop_state.non_campus_count.store(0, Ordering::SeqCst);
                         trigger_network_check(loop_handle.clone(), loop_state.clone(), true).await;
                         continue;
                     }
-
-                    // 1. Local interface change check. Android NetworkCallback is the
-                    // primary signal on mobile data, so polling can be much slower there.
-                    wifi_check_counter += 1;
-                    let mobile_data_active = is_mobile_data_network(
-                        &loop_state.last_network_state.lock().unwrap()
-                    );
-                    let interface_poll_interval = if mobile_data_active { 15 } else { 3 };
-                    if wifi_check_counter >= interface_poll_interval {
-                        wifi_check_counter = 0;
-                        let wifi_change_detect = {
-                            let cfg = loop_state.config.read().unwrap();
-                            cfg.wifi_change_detect
-                        };
-                        if wifi_change_detect {
-                            let (ip_changed, current_ip, last_ip) = {
-                                let current_ip = get_local_ip();
-                                let mut last_ip_lock = loop_state.last_known_ip.lock().unwrap();
-                                let last_ip = last_ip_lock.clone();
-                                let mut changed = false;
-                                if !current_ip.is_empty() {
-                                    if let Some(ref l_ip) = last_ip {
-                                        if current_ip != *l_ip {
-                                            changed = true;
-                                        }
-                                    }
-                                    *last_ip_lock = Some(current_ip.clone());
-                                } else if last_ip.is_some() {
-                                    *last_ip_lock = None;
-                                }
-                                (changed, current_ip, last_ip)
-                            };
-                            rust_log(&loop_handle, &loop_state, "网络", &format!("[DEBUG] 执行网络接口变更检测。当前 IP: {} (上次 IP: {})", current_ip, last_ip.as_deref().unwrap_or("空")), "debug");
-                            if ip_changed {
-                                rust_log(&loop_handle, &loop_state, "网络", &format!("检测到局域网 IP 发生变更: {} -> {}，重新检测网络环境...", last_ip.unwrap_or_default(), current_ip), "info");
-                                loop_state.is_suspended.store(false, Ordering::SeqCst);
-                                loop_state.non_campus_count.store(0, Ordering::SeqCst);
-                                trigger_network_check(loop_handle.clone(), loop_state.clone(), true).await;
-                                continue;
-                            }
-                        }
+                    if is_susp {
+                        let _ = loop_handle
+                            .emit("countdown-tick", serde_json::json!({"status": "suspended"}));
+                        continue;
                     }
-
-                    // 2. Connectivity Check Loop (every 1 second)
-                    if !is_chk {
-                        if !is_bg && is_susp {
-                            rust_log(&loop_handle, &loop_state, "网络", "检测到已返回前台，恢复连通性检测...", "info");
-                            loop_state.is_suspended.store(false, Ordering::SeqCst);
-                            loop_state.non_campus_count.store(0, Ordering::SeqCst);
-                            trigger_network_check(loop_handle.clone(), loop_state.clone(), true).await;
-                            continue;
-                        }
-                        if is_susp {
-                            let _ = loop_handle.emit("countdown-tick", serde_json::json!({"status": "suspended"}));
-                            continue;
-                        }
-                        let val = loop_state.countdown.fetch_sub(1, Ordering::SeqCst);
-                        let current_countdown = val - 1;
-                        if current_countdown <= 0 {
-                            rust_log(&loop_handle, &loop_state, "网络", "[DEBUG] 倒计时归零，触发自动网络连通性检测", "debug");
-                            trigger_network_check(loop_handle.clone(), loop_state.clone(), !is_bg).await;
-                        } else {
-                            let _ = loop_handle.emit("countdown-tick", serde_json::json!({
+                    let val = loop_state.countdown.fetch_sub(1, Ordering::SeqCst);
+                    let current_countdown = val - 1;
+                    if current_countdown <= 0 {
+                        rust_log(
+                            &loop_handle,
+                            &loop_state,
+                            "网络",
+                            "[DEBUG] 倒计时归零，触发自动网络连通性检测",
+                            "debug",
+                        );
+                        trigger_network_check(loop_handle.clone(), loop_state.clone(), !is_bg)
+                            .await;
+                    } else {
+                        let _ = loop_handle.emit(
+                            "countdown-tick",
+                            serde_json::json!({
                                 "status": "ticking",
                                 "seconds": current_countdown
-                            }));
-                        }
-                    } else {
-                        let _ = loop_handle.emit("countdown-tick", serde_json::json!({"status": "checking"}));
+                            }),
+                        );
                     }
+                } else {
+                    let _ = loop_handle
+                        .emit("countdown-tick", serde_json::json!({"status": "checking"}));
                 }
-            });
+            }
+        });
 
-            let init_handle = app_handle.clone();
-            let init_state = state_clone.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                let full_details = !app_is_in_background(&init_handle, &init_state);
-                trigger_network_check(init_handle, init_state, full_details).await;
-            });
+        let init_handle = app_handle.clone();
+        let init_state = state_clone.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let full_details = !app_is_in_background(&init_handle, &init_state);
+            trigger_network_check(init_handle, init_state, full_details).await;
+        });
 
-            #[cfg(desktop)]
+        #[cfg(desktop)]
+        {
+            use tauri::Manager;
+
+            // Set frameless for non-macOS desktop windows
+            #[cfg(not(target_os = "macos"))]
             {
-                use tauri::Manager;
-                
-                // Set frameless for non-macOS desktop windows
-                #[cfg(not(target_os = "macos"))]
-                {
-                    if let Some(window) = _app.get_webview_window("main") {
-                        let _ = window.set_decorations(false);
-                    }
-                }
-
-                // Prevent window close, hide instead to keep in system tray
                 if let Some(window) = _app.get_webview_window("main") {
-                    let window_clone = window.clone();
-                    let window_state = state_clone.clone();
-                    window.on_window_event(move |event| {
-                        match event {
-                            tauri::WindowEvent::Focused(focused) => {
-                                window_state.is_in_background.store(!focused, Ordering::SeqCst);
-                            }
-                            tauri::WindowEvent::CloseRequested { api, .. } => {
-                                api.prevent_close();
-                                window_state.is_in_background.store(true, Ordering::SeqCst);
-                                let _ = window_clone.hide();
-                            }
-                            _ => {}
-                        }
-                    });
+                    let _ = window.set_decorations(false);
                 }
+            }
 
-                // System Tray Setup
-                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-
-                let mut tray_builder = TrayIconBuilder::with_id("main-tray");
-                
-                #[cfg(target_os = "macos")]
-                {
-                    let mac_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray_mac.png"))
-                        .expect("Failed to load macOS tray icon");
-                    tray_builder = tray_builder.icon(mac_icon);
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    if let Some(ic) = _app.default_window_icon().cloned() {
-                        tray_builder = tray_builder.icon(ic);
+            // Prevent window close, hide instead to keep in system tray
+            if let Some(window) = _app.get_webview_window("main") {
+                let window_clone = window.clone();
+                let window_state = state_clone.clone();
+                window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::Focused(focused) => {
+                        window_state
+                            .is_in_background
+                            .store(!focused, Ordering::SeqCst);
                     }
-                }
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        window_state.is_in_background.store(true, Ordering::SeqCst);
+                        let _ = window_clone.hide();
+                    }
+                    _ => {}
+                });
+            }
 
-                let tray = tray_builder
-                    .show_menu_on_left_click(false)
-                    .on_menu_event(|app, event| {
-                        if event.id == "show" {
-                            if let Some(window) = app.get_webview_window("main") {
+            // System Tray Setup
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+            let mut tray_builder = TrayIconBuilder::with_id("main-tray");
+
+            #[cfg(target_os = "macos")]
+            {
+                let mac_icon =
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/tray_mac.png"))
+                        .expect("Failed to load macOS tray icon");
+                tray_builder = tray_builder.icon(mac_icon);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Some(ic) = _app.default_window_icon().cloned() {
+                    tray_builder = tray_builder.icon(ic);
+                }
+            }
+
+            let tray = tray_builder
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    if event.id == "show" {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    } else if event.id == "check" {
+                        let state = app.state::<Arc<AppState>>().inner().clone();
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            trigger_network_check(app_handle, state, true).await;
+                        });
+                    } else if event.id == "login" {
+                        let state = app.state::<Arc<AppState>>().inner().clone();
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tray_manual_login(app_handle, state).await;
+                        });
+                    } else if event.id == "pause" {
+                        let state = app.state::<Arc<AppState>>();
+                        let paused = state.auto_login_paused_until.load(Ordering::SeqCst)
+                            > chrono::Utc::now().timestamp();
+                        state.auto_login_paused_until.store(
+                            if paused {
+                                0
+                            } else {
+                                chrono::Utc::now().timestamp() + 3600
+                            },
+                            Ordering::SeqCst,
+                        );
+                        rust_log(
+                            app,
+                            &state,
+                            "托盘",
+                            if paused {
+                                "已恢复自动登录"
+                            } else {
+                                "已暂停自动登录 1 小时"
+                            },
+                            "info",
+                        );
+                        refresh_tray_menu(app, &state);
+                    } else if let Some(index) = event
+                        .id
+                        .as_ref()
+                        .strip_prefix("account:")
+                        .and_then(|value| value.parse::<usize>().ok())
+                    {
+                        let state = app.state::<Arc<AppState>>();
+                        let mut config = state.config.read().unwrap().clone();
+                        if index < config.accounts.len() {
+                            for (account_index, account) in config.accounts.iter_mut().enumerate() {
+                                account.is_default = account_index == index;
+                            }
+                            if save_config(app, &state, config).is_ok() {
+                                rust_log(app, &state, "托盘", "已切换首选账号", "info");
+                                let _ = app.emit(
+                                    "preferred-account-change",
+                                    serde_json::json!({ "index": index }),
+                                );
+                                refresh_tray_menu(app, &state);
+                            }
+                        }
+                    } else if event.id == "quit" {
+                        app.exit(0);
+                    }
+                })
+                .on_tray_icon_event(|tray_event, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray_event.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            if window.is_visible().unwrap_or(false) {
+                                let _ = window.hide();
+                            } else {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
-                        } else if event.id == "check" {
-                            let state = app.state::<Arc<AppState>>().inner().clone();
-                            let app_handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                trigger_network_check(app_handle, state, true).await;
-                            });
-                        } else if event.id == "login" {
-                            let state = app.state::<Arc<AppState>>().inner().clone();
-                            let app_handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                tray_manual_login(app_handle, state).await;
-                            });
-                        } else if event.id == "pause" {
-                            let state = app.state::<Arc<AppState>>();
-                            let paused = state.auto_login_paused_until.load(Ordering::SeqCst)
-                                > chrono::Utc::now().timestamp();
-                            state.auto_login_paused_until.store(
-                                if paused { 0 } else { chrono::Utc::now().timestamp() + 3600 },
-                                Ordering::SeqCst,
-                            );
-                            rust_log(
-                                app,
-                                &state,
-                                "托盘",
-                                if paused { "已恢复自动登录" } else { "已暂停自动登录 1 小时" },
-                                "info",
-                            );
-                            refresh_tray_menu(app, &state);
-                        } else if let Some(index) = event.id.as_ref().strip_prefix("account:")
-                            .and_then(|value| value.parse::<usize>().ok())
-                        {
-                            let state = app.state::<Arc<AppState>>();
-                            let mut config = state.config.read().unwrap().clone();
-                            if index < config.accounts.len() {
-                                for (account_index, account) in config.accounts.iter_mut().enumerate() {
-                                    account.is_default = account_index == index;
-                                }
-                                if save_config(app, &state, config).is_ok() {
-                                    rust_log(app, &state, "托盘", "已切换首选账号", "info");
-                                    let _ = app.emit("preferred-account-change", serde_json::json!({ "index": index }));
-                                    refresh_tray_menu(app, &state);
-                                }
-                            }
-                        } else if event.id == "quit" {
-                            app.exit(0);
                         }
-                    })
-                    .on_tray_icon_event(|tray_event, event| {
-                        if let TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            button_state: MouseButtonState::Up,
-                            ..
-                        } = event
-                        {
-                            let app = tray_event.app_handle();
-                            if let Some(window) = app.get_webview_window("main") {
-                                if window.is_visible().unwrap_or(false) {
-                                    let _ = window.hide();
-                                } else {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                }
-                            }
-                        }
-                    })
-                    .build(_app)?;
+                    }
+                })
+                .build(_app)?;
 
-                refresh_tray_menu(_app.handle(), &state_clone);
+            refresh_tray_menu(_app.handle(), &state_clone);
 
-                #[cfg(target_os = "macos")]
-                {
-                    let _ = tray.set_icon_as_template(true);
-                }
+            #[cfg(target_os = "macos")]
+            {
+                let _ = tray.set_icon_as_template(true);
             }
-            Ok(())
-        });
+        }
+        Ok(())
+    });
 
     #[allow(unused_mut)]
     let mut builder = builder
@@ -4795,8 +5847,8 @@ pub fn run() {
 
     let app = builder
         .invoke_handler(tauri::generate_handler![
-            greet, 
-            get_network_info, 
+            greet,
+            get_network_info,
             request_battery_optimizations,
             request_foreground_permissions,
             request_background_permissions,
@@ -4836,6 +5888,10 @@ pub fn run() {
             prepare_alipay_card_recharge,
             confirm_alipay_card_recharge,
             cancel_alipay_card_recharge,
+            prepare_wechat_card_recharge,
+            confirm_wechat_card_recharge,
+            check_wechat_card_recharge,
+            cancel_wechat_card_recharge,
             disconnect_billing_session,
             set_billing_mauth,
             notify_network_change,
@@ -4884,7 +5940,9 @@ mod tests {
             "bssid": "00:00:00:00:00:00",
             "ip": "0.0.0.0"
         })));
-        assert!(!is_mobile_data_network(&serde_json::json!({"transport": "wifi"})));
+        assert!(!is_mobile_data_network(
+            &serde_json::json!({"transport": "wifi"})
+        ));
         assert_eq!(
             network_is_system_validated(&serde_json::json!({"validated": true})),
             cfg!(target_os = "android")
@@ -4901,26 +5959,65 @@ mod tests {
 
     #[test]
     fn encodes_portal_query_values() {
-        assert_eq!(url_encode("a b@北工大"), "a%20b%40%E5%8C%97%E5%B7%A5%E5%A4%A7");
+        assert_eq!(
+            url_encode("a b@北工大"),
+            "a%20b%40%E5%8C%97%E5%B7%A5%E5%A4%A7"
+        );
     }
 
     #[test]
     fn parses_success_and_failure_portal_responses() {
-        assert_eq!(parse_dr_response("dr1003({\"result\":1})"), (true, "Portal协议认证成功！".to_string()));
-        assert_eq!(parse_dr_response("dr1002({\"result\":0,\"msga\":\"密码错误\"})"), (false, "密码错误".to_string()));
-        assert_eq!(parse_dr_response("not json"), (false, "解析响应数据失败".to_string()));
+        assert_eq!(
+            parse_dr_response("dr1003({\"result\":1})"),
+            (true, "Portal协议认证成功！".to_string())
+        );
+        assert_eq!(
+            parse_dr_response("dr1002({\"result\":0,\"msga\":\"密码错误\"})"),
+            (false, "密码错误".to_string())
+        );
+        assert_eq!(
+            parse_dr_response("not json"),
+            (false, "解析响应数据失败".to_string())
+        );
     }
 
     #[test]
     fn extracts_v6ip_from_both_html_quote_styles() {
-        assert_eq!(find_v6ip("<input name=\"v6ip\" value=\"2001:db8::1\">"), "2001:db8::1");
-        assert_eq!(find_v6ip("<input name='v6ip' value='2001:db8::2'>"), "2001:db8::2");
+        assert_eq!(
+            find_v6ip("<input name=\"v6ip\" value=\"2001:db8::1\">"),
+            "2001:db8::1"
+        );
+        assert_eq!(
+            find_v6ip("<input name='v6ip' value='2001:db8::2'>"),
+            "2001:db8::2"
+        );
     }
 
     #[test]
     fn public_config_never_contains_passwords() {
+        let persisted_session: campus_services::PersistedCampusSession =
+            serde_json::from_value(serde_json::json!({
+                "account": "20260001",
+                "cookies": [{
+                    "name": "eai-sess",
+                    "value": "durable-cookie-secret",
+                    "domain": "itsapp.bjut.edu.cn",
+                    "host_only": true,
+                    "path": "/",
+                    "expires_at": 4102444800_i64,
+                    "secure": true,
+                    "http_only": true
+                }],
+                "saved_at": 1784707200_i64
+            }))
+            .unwrap();
         let config = AppConfig {
-            accounts: vec![Account { user: "20260001".to_string(), pass: "secret".to_string(), is_default: true, is_disabled: None }],
+            accounts: vec![Account {
+                user: "20260001".to_string(),
+                pass: "secret".to_string(),
+                is_default: true,
+                is_disabled: None,
+            }],
             auto_login: true,
             check_interval: 15,
             check_interval_bg: 60,
@@ -4937,18 +6034,25 @@ mod tests {
             android_notify_network_status: true,
             android_notify_login_results: true,
             android_notify_background_errors: true,
+            campus_service_sessions: vec![persisted_session],
         };
         let serialized = serde_json::to_string(&public_config(&config)).unwrap();
         assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("eai-sess"));
+        assert!(!serialized.contains("durable-cookie-secret"));
         assert_eq!(public_config(&config).accounts[0].pass, "");
+        assert!(public_config(&config).campus_service_sessions.is_empty());
     }
 
     #[test]
     fn legacy_config_uses_compatible_android_notification_defaults() {
-        let config: AppConfig = serde_json::from_str(r#"{
+        let config: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[],
             "autoLogin":true
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         assert_eq!(config.android_notification_mode, "combined");
         assert!(config.android_notify_network_status);
@@ -4958,14 +6062,20 @@ mod tests {
 
     #[test]
     fn migrates_passwords_from_legacy_plaintext_config() {
-        let mut current: AppConfig = serde_json::from_str(r#"{
+        let mut current: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[{"user":"20260001","pass":"","isDefault":true}]
-        }"#).unwrap();
-        let legacy: AppConfig = serde_json::from_str(r#"{
+        }"#,
+        )
+        .unwrap();
+        let legacy: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[{"username":"20260001","password":"legacy-secret","is_default":true}],
             "autoLogin":true,
             "checkInterval":30
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         assert!(merge_legacy_credentials(&mut current, &legacy));
         assert_eq!(current.accounts[0].pass, "legacy-secret");
@@ -4975,12 +6085,18 @@ mod tests {
 
     #[test]
     fn legacy_migration_never_overwrites_a_new_password() {
-        let mut current: AppConfig = serde_json::from_str(r#"{
+        let mut current: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[{"user":"20260001","pass":"new-secret","isDefault":true}]
-        }"#).unwrap();
-        let legacy: AppConfig = serde_json::from_str(r#"{
+        }"#,
+        )
+        .unwrap();
+        let legacy: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[{"user":"20260001","pass":"old-secret","isDefault":true}]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         assert!(!merge_legacy_credentials(&mut current, &legacy));
         assert_eq!(current.accounts[0].pass, "new-secret");
@@ -4988,15 +6104,21 @@ mod tests {
 
     #[test]
     fn legacy_migration_keeps_current_values_and_adds_missing_accounts() {
-        let mut current: AppConfig = serde_json::from_str(r#"{
+        let mut current: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[{"user":"a","pass":"new-a","isDefault":true}]
-        }"#).unwrap();
-        let legacy: AppConfig = serde_json::from_str(r#"{
+        }"#,
+        )
+        .unwrap();
+        let legacy: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[
                 {"user":"a","pass":"old-a","isDefault":true},
                 {"user":"b","pass":"old-b","isDefault":true}
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         assert!(merge_legacy_credentials(&mut current, &legacy));
         assert_eq!(current.accounts.len(), 2);
@@ -5008,12 +6130,18 @@ mod tests {
 
     #[test]
     fn blank_password_updates_reuse_existing_secrets() {
-        let existing: AppConfig = serde_json::from_str(r#"{
+        let existing: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[{"user":"a","pass":"saved-secret","isDefault":true}]
-        }"#).unwrap();
-        let mut update: AppConfig = serde_json::from_str(r#"{
+        }"#,
+        )
+        .unwrap();
+        let mut update: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[{"user":"a","pass":"","isDefault":true}]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         assert!(fill_missing_passwords(&mut update, &existing));
         assert_eq!(update.accounts[0].pass, "saved-secret");
@@ -5021,12 +6149,15 @@ mod tests {
 
     #[test]
     fn partial_password_repair_keeps_other_unrecoverable_accounts_editable() {
-        let existing: AppConfig = serde_json::from_str(r#"{
+        let existing: AppConfig = serde_json::from_str(
+            r#"{
             "accounts":[
                 {"user":"a","pass":"","isDefault":true},
                 {"user":"b","pass":"","isDefault":false}
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let mut update = existing.clone();
         update.accounts[0].pass = "re-entered-secret".to_string();
 
@@ -5068,7 +6199,8 @@ mod tests {
             "wifi",
             &[],
             &[],
-        ).is_ok());
+        )
+        .is_ok());
         assert!(automatic_login_network_allowed(
             &LoginType::Type1,
             "evil-ap",
@@ -5077,7 +6209,8 @@ mod tests {
             "wifi",
             &[],
             &[],
-        ).is_err());
+        )
+        .is_err());
         assert!(automatic_login_network_allowed(
             &LoginType::Type2,
             "custom-campus",
@@ -5086,7 +6219,8 @@ mod tests {
             "wifi",
             &whitelist,
             &[],
-        ).is_ok());
+        )
+        .is_ok());
         assert!(automatic_login_network_allowed(
             &LoginType::Type3,
             "",
@@ -5095,28 +6229,47 @@ mod tests {
             "ethernet",
             &[],
             &[],
-        ).is_err());
+        )
+        .is_err());
     }
 
     #[test]
     fn account_failures_use_bounded_cooldowns() {
-        assert_eq!(classify_account_failure("密码错误", 1), ("credential", 1800));
+        assert_eq!(
+            classify_account_failure("密码错误", 1),
+            ("credential", 1800)
+        );
         assert_eq!(classify_account_failure("余额不足", 1), ("balance", 21600));
-        assert_eq!(classify_account_failure("请求出错: timeout", 1), ("network", 15));
-        assert_eq!(classify_account_failure("请求出错: timeout", 20), ("network", 900));
-        assert_eq!(classify_account_failure("认证服务器繁忙", 1), ("server", 60));
-        assert_eq!(classify_account_failure("认证服务器繁忙", 20), ("server", 900));
+        assert_eq!(
+            classify_account_failure("请求出错: timeout", 1),
+            ("network", 15)
+        );
+        assert_eq!(
+            classify_account_failure("请求出错: timeout", 20),
+            ("network", 900)
+        );
+        assert_eq!(
+            classify_account_failure("认证服务器繁忙", 1),
+            ("server", 60)
+        );
+        assert_eq!(
+            classify_account_failure("认证服务器繁忙", 20),
+            ("server", 900)
+        );
     }
 
     #[test]
     fn account_health_view_reports_active_cooldown() {
         let mut health = HashMap::new();
-        health.insert("student".to_string(), AccountHealth {
-            consecutive_failures: 1,
-            cooldown_until: Some(chrono::Utc::now().timestamp() + 120),
-            failure_kind: Some("credential".to_string()),
-            ..Default::default()
-        });
+        health.insert(
+            "student".to_string(),
+            AccountHealth {
+                consecutive_failures: 1,
+                cooldown_until: Some(chrono::Utc::now().timestamp() + 120),
+                failure_kind: Some("credential".to_string()),
+                ..Default::default()
+            },
+        );
 
         let views = account_health_views(&health);
         assert_eq!(views.len(), 1);
@@ -5126,7 +6279,8 @@ mod tests {
 
     #[test]
     fn network_profiles_match_exact_network_and_order_accounts() {
-        let config: AppConfig = serde_json::from_str(r#"{
+        let config: AppConfig = serde_json::from_str(
+            r#"{
             "accounts": [
                 {"user":"first","pass":"one","isDefault":true},
                 {"user":"second","pass":"two","isDefault":false}
@@ -5135,10 +6289,15 @@ mod tests {
                 "id":"dorm","name":"宿舍","ssid":"bjut_sushe","login_type":"bjut-sushe",
                 "account_order":["second"],"enabled":true
             }]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let profile = matching_network_profile(&config, "BJUT_SUSHE", "", &LoginType::Type1)
             .expect("profile should match case-insensitively");
-        assert_eq!(login_type_from_profile(&profile.login_type), Some(LoginType::Type1));
+        assert_eq!(
+            login_type_from_profile(&profile.login_type),
+            Some(LoginType::Type1)
+        );
         let ordered = accounts_for_profile(config.accounts, Some(&profile));
         assert_eq!(ordered.len(), 1);
         assert_eq!(ordered[0].user, "second");
@@ -5146,24 +6305,49 @@ mod tests {
 
     #[test]
     fn network_profile_controls_auto_login_per_authentication_type() {
-        let config: AppConfig = serde_json::from_str(r#"{
+        let config: AppConfig = serde_json::from_str(
+            r#"{
             "network_profiles": [{
                 "id":"mixed","name":"自动识别","ssid":"bjut_wifi","enabled":true,
                 "auto_login":false,
                 "auto_login_types":{"type1":true,"type2":false,"type3":true}
             }]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let profile = &config.network_profiles[0];
-        assert!(profile_auto_login_enabled(Some(profile), &LoginType::Type1, false));
-        assert!(!profile_auto_login_enabled(Some(profile), &LoginType::Type2, true));
-        assert!(profile_auto_login_enabled(Some(profile), &LoginType::Type3, false));
-        assert!(!profile_auto_login_enabled(Some(profile), &LoginType::Unknown, true));
+        assert!(profile_auto_login_enabled(
+            Some(profile),
+            &LoginType::Type1,
+            false
+        ));
+        assert!(!profile_auto_login_enabled(
+            Some(profile),
+            &LoginType::Type2,
+            true
+        ));
+        assert!(profile_auto_login_enabled(
+            Some(profile),
+            &LoginType::Type3,
+            false
+        ));
+        assert!(!profile_auto_login_enabled(
+            Some(profile),
+            &LoginType::Unknown,
+            true
+        ));
     }
 
     #[test]
     fn campus_profile_names_map_to_the_documented_gateways() {
-        assert_eq!(login_type_from_profile("bjut-sushe"), Some(LoginType::Type1));
-        assert_eq!(login_type_from_profile("bjut_sushe"), Some(LoginType::Type1));
+        assert_eq!(
+            login_type_from_profile("bjut-sushe"),
+            Some(LoginType::Type1)
+        );
+        assert_eq!(
+            login_type_from_profile("bjut_sushe"),
+            Some(LoginType::Type1)
+        );
         assert_eq!(login_type_from_profile("bjut-wifi"), Some(LoginType::Type2));
         assert_eq!(login_type_from_profile("bjut_wifi"), Some(LoginType::Type2));
         assert_eq!(login_type_from_profile("wired"), Some(LoginType::Type3));
@@ -5199,7 +6383,8 @@ mod tests {
             "wifi",
             &[],
             &[],
-        ).is_err());
+        )
+        .is_err());
         assert!(automatic_login_network_allowed(
             &LoginType::Type3,
             "",
@@ -5208,7 +6393,8 @@ mod tests {
             "ethernet",
             &[],
             &[],
-        ).is_ok());
+        )
+        .is_ok());
         assert!(automatic_login_network_allowed(
             &LoginType::Type3,
             "",
@@ -5217,7 +6403,8 @@ mod tests {
             "wifi",
             &[],
             &[],
-        ).is_err());
+        )
+        .is_err());
     }
 
     #[test]

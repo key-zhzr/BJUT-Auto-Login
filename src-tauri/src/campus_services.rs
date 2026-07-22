@@ -1,8 +1,9 @@
 use reqwest::header::{
-    HeaderMap, ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, REFERER, SET_COOKIE,
+    HeaderMap, ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, REFERER,
+    SET_COOKIE, USER_AGENT,
 };
 use reqwest::{Client, Response, Url};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
@@ -24,9 +25,11 @@ const ALIPAY_GATEWAY_HOST: &str = "openapi.alipay.com";
 const ALIPAY_APP_ID: &str = "2021003142658367";
 const ALIPAY_NOTIFY_URL: &str = "https://alipay.bjut.edu.cn/PayPreService/aliPayWapBackResNotify";
 const ALIPAY_RETURN_URL: &str = "https://alipay.bjut.edu.cn/PayPreService/aliPayWapBackResReturn";
+const REGULAR_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
 const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 13; M2102K1C Build/TKQ1.220829.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36 XWEB/1160065 MMWEBSDK/20231202 MicroMessenger/8.0.47.2560(0x28002F30) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64";
 const MAX_REDIRECTS: usize = 12;
 const CONFIRMATION_LIFETIME: Duration = Duration::from_secs(120);
+const WECHAT_PAYMENT_LIFETIME: Duration = Duration::from_secs(20 * 60);
 static CONFIRMATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
@@ -115,6 +118,9 @@ fn request_stage(url: &Url) -> &'static str {
         | (Some(YD_HOST), "/channel/get085Detail") => "查询目标网费账户",
         (Some(YD_HOST), "/netpay/createPreThirdTrade") => "创建充值订单",
         (Some(YD_HOST), "/netpay/consumeFromYktToNet") => "提交校园卡扣费",
+        (Some(YD_HOST), "/cardpay/openCardPay") => "读取校园卡第三方支付入口",
+        (Some(YD_HOST), "/wxpay/transferFromWx2Card") => "创建微信充值订单",
+        (Some(YD_HOST), "/wxpay/orderRefreshPage") => "查询微信支付状态",
         (Some(CAS_HOST), _) => "访问 CAS",
         (Some(UC_HOST), _) => "访问统一认证",
         (Some(ITS_HOST), _) => "访问移动门户 OAuth 中转",
@@ -123,13 +129,29 @@ fn request_stage(url: &Url) -> &'static str {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct StoredCookie {
     name: String,
     value: String,
     domain: String,
     host_only: bool,
     path: String,
+    expires_at: Option<i64>,
+    secure: bool,
+    http_only: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct PersistedCampusSession {
+    account: String,
+    cookies: Vec<StoredCookie>,
+    saved_at: i64,
+}
+
+impl PersistedCampusSession {
+    pub(crate) fn account(&self) -> &str {
+        &self.account
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -138,6 +160,55 @@ struct DomainCookies {
 }
 
 impl DomainCookies {
+    fn from_persisted(account: &str, persisted: Option<PersistedCampusSession>) -> Self {
+        let now = unix_timestamp();
+        let mut jar = Self::default();
+        let Some(persisted) = persisted.filter(|session| session.account == account) else {
+            return jar;
+        };
+        for cookie in persisted.cookies {
+            if cookie.domain != ITS_HOST
+                || !cookie.host_only
+                || !cookie.path.starts_with('/')
+                || cookie.value.is_empty()
+                || cookie.value.len() > 4096
+                || cookie.expires_at.is_none_or(|expires| expires <= now)
+                || !cookie.secure
+                || !cookie.http_only
+            {
+                continue;
+            }
+            let key = (
+                cookie.domain.clone(),
+                cookie.path.clone(),
+                cookie.name.clone(),
+            );
+            jar.values.insert(key, cookie);
+        }
+        jar
+    }
+
+    fn persistent_snapshot(&self, account: &str) -> PersistedCampusSession {
+        let now = unix_timestamp();
+        let cookies = self
+            .values
+            .values()
+            .filter(|cookie| {
+                cookie.domain == ITS_HOST
+                    && cookie.host_only
+                    && cookie.secure
+                    && cookie.http_only
+                    && cookie.expires_at.is_some_and(|expires| expires > now)
+            })
+            .cloned()
+            .collect();
+        PersistedCampusSession {
+            account: account.to_string(),
+            cookies,
+            saved_at: now,
+        }
+    }
+
     fn absorb(&mut self, url: &Url, headers: &HeaderMap) {
         let Some(response_host) = url.host_str().map(str::to_ascii_lowercase) else {
             return;
@@ -161,6 +232,9 @@ impl DomainCookies {
             let mut host_only = true;
             let mut path = default_cookie_path(url.path());
             let mut expired = value.trim().is_empty();
+            let mut expires_at = None;
+            let mut secure = false;
+            let mut http_only = false;
             for attribute in parts {
                 let (key, value) = attribute
                     .trim()
@@ -180,9 +254,13 @@ impl DomainCookies {
                         }
                     }
                     "path" if value.starts_with('/') => path = value.to_string(),
-                    "max-age" if value.parse::<i64>().ok().is_some_and(|age| age <= 0) => {
-                        expired = true
-                    }
+                    "max-age" => match value.parse::<i64>() {
+                        Ok(age) if age <= 0 => expired = true,
+                        Ok(age) => expires_at = unix_timestamp().checked_add(age),
+                        Err(_) => {}
+                    },
+                    "secure" => secure = true,
+                    "httponly" => http_only = true,
                     _ => {}
                 }
             }
@@ -201,6 +279,9 @@ impl DomainCookies {
                         domain,
                         host_only,
                         path,
+                        expires_at,
+                        secure,
+                        http_only,
                     },
                 );
             }
@@ -219,7 +300,11 @@ impl DomainCookies {
                 } else {
                     host == cookie.domain || host.ends_with(&format!(".{}", cookie.domain))
                 };
-                domain_matches && cookie_path_matches(path, &cookie.path)
+                domain_matches
+                    && cookie_path_matches(path, &cookie.path)
+                    && cookie
+                        .expires_at
+                        .is_none_or(|expires| expires > unix_timestamp())
             })
             .collect::<Vec<_>>();
         cookies.sort_by_key(|cookie| std::cmp::Reverse(cookie.path.len()));
@@ -231,6 +316,13 @@ impl DomainCookies {
                 .join("; ")
         })
     }
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 fn default_cookie_path(path: &str) -> String {
@@ -253,6 +345,24 @@ fn cookie_path_matches(request: &str, cookie: &str) -> bool {
 struct CampusSession {
     client: Client,
     cookies: DomainCookies,
+}
+
+impl CampusSession {
+    fn new(
+        account: &str,
+        persisted: Option<PersistedCampusSession>,
+    ) -> Result<Self, CampusServiceError> {
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9".parse().unwrap());
+        Ok(Self {
+            client: build_client(headers)?,
+            cookies: DomainCookies::from_persisted(account, persisted),
+        })
+    }
+
+    fn persisted(&self, account: &str) -> PersistedCampusSession {
+        self.cookies.persistent_snapshot(account)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -380,6 +490,80 @@ pub(crate) struct AlipayRechargeResult {
     pub payment_url: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct PendingWechatRecharge {
+    confirmation_id: String,
+    created_at: Instant,
+    session: CampusSession,
+    payer_account: String,
+    target_account: String,
+    amount: String,
+    openid: String,
+}
+
+impl PendingWechatRecharge {
+    pub(crate) fn confirmation_id(&self) -> &str {
+        &self.confirmation_id
+    }
+
+    pub(crate) fn expired(&self) -> bool {
+        self.created_at.elapsed() > CONFIRMATION_LIFETIME
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingWechatPayment {
+    payment_id: String,
+    created_at: Instant,
+    session: CampusSession,
+    payer_account: String,
+    amount: String,
+    openid: String,
+    partner_jour_no: String,
+}
+
+impl PendingWechatPayment {
+    pub(crate) fn payment_id(&self) -> &str {
+        &self.payment_id
+    }
+
+    pub(crate) fn expired(&self) -> bool {
+        self.created_at.elapsed() > WECHAT_PAYMENT_LIFETIME
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WechatRechargePreview {
+    pub confirmation_id: String,
+    pub payer_account: String,
+    pub card_balance: String,
+    pub target_account: String,
+    pub target_balance: String,
+    pub target_status: String,
+    pub amount: String,
+    pub allowed_time: String,
+    pub expires_in_seconds: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WechatRechargeResult {
+    pub message: String,
+    pub payment_id: String,
+    pub payer_account: String,
+    pub target_account: String,
+    pub amount: String,
+    pub payment_url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WechatPaymentStatus {
+    pub status: String,
+    pub message: String,
+}
+
 pub(crate) async fn change_password(
     account: &str,
     saved_password: &str,
@@ -411,11 +595,13 @@ pub(crate) async fn prepare_recharge(
     password: &str,
     target_account: &str,
     amount: &str,
-) -> Result<(PendingRecharge, RechargePreview), CampusServiceError> {
+    persisted: Option<PersistedCampusSession>,
+) -> Result<(PendingRecharge, RechargePreview, PersistedCampusSession), CampusServiceError> {
     let target_account = validate_target_account(target_account)?;
     let amount = canonical_amount(amount)?;
-    let mut session = authenticate(account, password).await?;
-    let context = enter_recharge(&mut session).await?;
+    let mut session = CampusSession::new(account, persisted)?;
+    let context = enter_recharge(&mut session, account, password).await?;
+    let persisted = session.persisted(account);
     let (target_balance, target_status_code, target_status) =
         query_target_account(&mut session, &context, &target_account).await?;
     if !matches!(target_status_code.as_str(), "" | "0" | "1" | "2") {
@@ -457,26 +643,31 @@ pub(crate) async fn prepare_recharge(
         openid: context.openid,
         api: context.api,
     };
-    Ok((pending, preview))
+    Ok((pending, preview, persisted))
 }
 
 pub(crate) async fn query_recharge_balances(
     account: &str,
     password: &str,
     target_account: &str,
-) -> Result<RechargeBalanceSnapshot, CampusServiceError> {
+    persisted: Option<PersistedCampusSession>,
+) -> Result<(RechargeBalanceSnapshot, PersistedCampusSession), CampusServiceError> {
     let target_account = validate_target_account(target_account)?;
-    let mut session = authenticate(account, password).await?;
-    let context = enter_recharge(&mut session).await?;
+    let mut session = CampusSession::new(account, persisted)?;
+    let context = enter_recharge(&mut session, account, password).await?;
+    let persisted = session.persisted(account);
     let (target_balance, _, target_status) =
         query_target_account(&mut session, &context, &target_account).await?;
-    Ok(RechargeBalanceSnapshot {
-        payer_account: context.payer_account,
-        card_balance: context.card_balance,
-        target_account,
-        target_balance,
-        target_status,
-    })
+    Ok((
+        RechargeBalanceSnapshot {
+            payer_account: context.payer_account,
+            card_balance: context.card_balance,
+            target_account,
+            target_balance,
+            target_status,
+        },
+        persisted,
+    ))
 }
 
 pub(crate) async fn execute_recharge(
@@ -566,10 +757,19 @@ pub(crate) async fn prepare_alipay_card_recharge(
     account: &str,
     password: &str,
     amount: &str,
-) -> Result<(PendingAlipayRecharge, AlipayRechargePreview), CampusServiceError> {
+    persisted: Option<PersistedCampusSession>,
+) -> Result<
+    (
+        PendingAlipayRecharge,
+        AlipayRechargePreview,
+        PersistedCampusSession,
+    ),
+    CampusServiceError,
+> {
     let amount = canonical_amount(amount)?;
-    let mut session = authenticate(account, password).await?;
-    let context = enter_recharge(&mut session).await?;
+    let mut session = CampusSession::new(account, persisted)?;
+    let context = enter_recharge(&mut session, account, password).await?;
+    let persisted = session.persisted(account);
     let opened = yd_post(
         &mut session,
         "/cardpay/openCardPay",
@@ -594,7 +794,7 @@ pub(crate) async fn prepare_alipay_card_recharge(
         amount,
         openid: context.openid,
     };
-    Ok((pending, preview))
+    Ok((pending, preview, persisted))
 }
 
 pub(crate) async fn execute_alipay_card_recharge(
@@ -643,6 +843,179 @@ pub(crate) async fn execute_alipay_card_recharge(
     })
 }
 
+pub(crate) async fn prepare_wechat_card_recharge(
+    account: &str,
+    password: &str,
+    target_account: &str,
+    amount: &str,
+    persisted: Option<PersistedCampusSession>,
+) -> Result<
+    (
+        PendingWechatRecharge,
+        WechatRechargePreview,
+        PersistedCampusSession,
+    ),
+    CampusServiceError,
+> {
+    let target_account = validate_target_account(target_account)?;
+    let amount = canonical_amount(amount)?;
+    let mut session = CampusSession::new(account, persisted)?;
+    let context = enter_recharge(&mut session, account, password).await?;
+    let persisted = session.persisted(account);
+    let (target_balance, target_status_code, target_status) =
+        query_target_account(&mut session, &context, &target_account).await?;
+    if !matches!(target_status_code.as_str(), "" | "0" | "1" | "2") {
+        return Err(CampusServiceError::rejected("目标网费账户状态不允许充值"));
+    }
+    let opened = yd_post(
+        &mut session,
+        "/cardpay/openCardPay",
+        json!({"openid": context.openid}),
+    )
+    .await?;
+    ensure_success(&opened, "打开校园卡微信充值")?;
+
+    let confirmation_id = confirmation_id();
+    let preview = WechatRechargePreview {
+        confirmation_id: confirmation_id.clone(),
+        payer_account: context.payer_account.clone(),
+        card_balance: context.card_balance.clone(),
+        target_account: target_account.clone(),
+        target_balance,
+        target_status,
+        amount: amount.clone(),
+        allowed_time: context.allowed_time,
+        expires_in_seconds: CONFIRMATION_LIFETIME.as_secs(),
+    };
+    let pending = PendingWechatRecharge {
+        confirmation_id,
+        created_at: Instant::now(),
+        session,
+        payer_account: context.payer_account,
+        target_account,
+        amount,
+        openid: context.openid,
+    };
+    Ok((pending, preview, persisted))
+}
+
+pub(crate) async fn execute_wechat_card_recharge(
+    mut pending: PendingWechatRecharge,
+) -> Result<(PendingWechatPayment, WechatRechargeResult), CampusServiceError> {
+    if pending.expired() {
+        return Err(CampusServiceError::rejected(
+            "微信充值确认已过期，请重新核对校园卡与金额",
+        ));
+    }
+    let response = yd_post(
+        &mut pending.session,
+        &format!("/wxpay/transferFromWx2Card?openid={}", pending.openid),
+        json!({
+            "idserial": pending.payer_account,
+            "txamt": pending.amount,
+            "payway": "",
+            "openid": pending.openid,
+            "payWay": 1,
+            "tradetype": "WAP",
+            "usertype": "1",
+            "orgid": "2"
+        }),
+    )
+    .await
+    .map_err(|error| {
+        CampusServiceError::rejected(format!(
+            "微信订单创建结果未能确认：{}。请先检查校园卡充值记录，不要立即重复操作",
+            error.user_message()
+        ))
+    })?;
+    ensure_success(&response, "创建微信充值订单")?;
+    let payment_url = wechat_h5_payment_url(&response)?;
+    let partner_jour_no = recursive_json_string(&response, "partnerjourno")
+        .filter(|value| {
+            (6..=96).contains(&value.len())
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+        })
+        .ok_or_else(|| CampusServiceError::protocol("微信充值订单缺少有效流水号"))?
+        .to_string();
+    let payment_id = confirmation_id();
+    let result = WechatRechargeResult {
+        message: format!(
+            "已为校园卡 {} 创建 {} 元微信充值订单",
+            pending.payer_account, pending.amount
+        ),
+        payment_id: payment_id.clone(),
+        payer_account: pending.payer_account.clone(),
+        target_account: pending.target_account.clone(),
+        amount: pending.amount.clone(),
+        payment_url,
+    };
+    let payment = PendingWechatPayment {
+        payment_id,
+        created_at: Instant::now(),
+        session: pending.session,
+        payer_account: pending.payer_account,
+        amount: pending.amount,
+        openid: pending.openid,
+        partner_jour_no,
+    };
+    Ok((payment, result))
+}
+
+pub(crate) async fn check_wechat_card_recharge(
+    pending: &mut PendingWechatPayment,
+) -> Result<WechatPaymentStatus, CampusServiceError> {
+    if pending.expired() {
+        return Err(CampusServiceError::rejected(
+            "微信支付状态查询已过期，请先核对校园卡充值记录",
+        ));
+    }
+    let mut url = parse_url(&format!("{YD_ORIGIN}/wxpay/orderRefreshPage"))?;
+    url.query_pairs_mut()
+        .append_pair("partnerjourno", &pending.partner_jour_no)
+        .append_pair("openid", &pending.openid)
+        .append_pair("orgid", "2");
+    let response = yd_get(&mut pending.session, url).await?;
+    if response.get("success").and_then(Value::as_bool) != Some(true) {
+        return Ok(WechatPaymentStatus {
+            status: "pending".to_string(),
+            message: "尚未确认微信支付完成".to_string(),
+        });
+    }
+    let result = response
+        .get("resultData")
+        .and_then(Value::as_object)
+        .ok_or_else(|| CampusServiceError::protocol("微信支付状态缺少 resultData"))?;
+    let successful = ["returncode", "tradestatus", "tradestate"]
+        .iter()
+        .all(|key| result.get(*key).and_then(Value::as_str) == Some("SUCCESS"));
+    if !successful || result.get("paytype").and_then(Value::as_str) != Some("02") {
+        return Err(CampusServiceError::rejected(format!(
+            "微信支付未成功：{}",
+            result
+                .get("returnmsg")
+                .and_then(Value::as_str)
+                .unwrap_or("服务器未提供原因")
+        )));
+    }
+    let expected_cents = parse_money_cents(&pending.amount)
+        .ok_or_else(|| CampusServiceError::protocol("微信订单金额无法核对"))?;
+    let paid_cents = required_json_string(result.get("txamt"), "txamt")?
+        .parse::<u64>()
+        .map_err(|_| CampusServiceError::protocol("微信支付金额格式无效"))?;
+    if paid_cents != expected_cents {
+        return Err(CampusServiceError::protocol("微信支付金额与本次订单不一致"));
+    }
+    Ok(WechatPaymentStatus {
+        status: "paid".to_string(),
+        message: format!(
+            "微信支付已完成，校园卡 {} 已充值 {} 元",
+            pending.payer_account, pending.amount
+        ),
+    })
+}
+
 async fn authenticate(account: &str, password: &str) -> Result<CampusSession, CampusServiceError> {
     if account.trim().is_empty() || password.is_empty() {
         return Err(CampusServiceError::rejected(
@@ -663,7 +1036,8 @@ async fn authenticate(account: &str, password: &str) -> Result<CampusSession, Ca
             "统一认证入口没有到达 CAS 登录页",
         ));
     }
-    let (action, fields) = cas_login_form(&login_html, &login_url, account, password)?;
+    let (action, fields) =
+        cas_login_form(&login_html, &login_url, account, password, CasTarget::Uc)?;
     let response = send_form(
         &mut session,
         action.clone(),
@@ -708,7 +1082,7 @@ fn build_client(headers: HeaderMap) -> Result<Client, CampusServiceError> {
         .use_native_tls()
         .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .max_tls_version(reqwest::tls::Version::TLS_1_2)
-        .user_agent(WECHAT_USER_AGENT)
+        .user_agent(REGULAR_USER_AGENT)
         .default_headers(headers)
         .build()
         .map_err(|error| CampusServiceError::network("初始化 HTTPS 客户端", error))
@@ -716,17 +1090,56 @@ fn build_client(headers: HeaderMap) -> Result<Client, CampusServiceError> {
 
 async fn enter_recharge(
     session: &mut CampusSession,
+    account: &str,
+    password: &str,
 ) -> Result<RechargeContext, CampusServiceError> {
-    let (final_url, _) = get_follow_text(
+    if account.trim().is_empty() || password.is_empty() {
+        return Err(CampusServiceError::rejected(
+            "首选账号缺少统一认证账号或密码",
+        ));
+    }
+    let (mut final_url, mut final_html) = get_follow_text(
         session,
         parse_url(YD_ENTRY)?,
         &[YD_HOST, CAS_HOST, ITS_HOST, UC_HOST],
-        Some(&parse_url("https://uc.bjut.edu.cn/#/user/login")?),
+        None,
     )
     .await?;
+    if final_url.host_str() == Some(CAS_HOST) && final_url.path() == "/login" {
+        let (action, fields) = cas_login_form(
+            &final_html,
+            &final_url,
+            account,
+            password,
+            CasTarget::MobilePortal,
+        )?;
+        let response = send_form(
+            session,
+            action.clone(),
+            &fields,
+            CAS_HOST,
+            final_url.as_str(),
+        )
+        .await?;
+        if matches!(response.status().as_u16(), 307 | 308) {
+            return Err(CampusServiceError::protocol(
+                "CAS 要求重复提交密码，已安全中止",
+            ));
+        }
+        if !response.status().is_redirection() {
+            return Err(CampusServiceError::rejected(
+                "统一认证拒绝登录；为避免触发验证码，本次没有自动重试",
+            ));
+        }
+        let next = redirect_target(&action, &response, &[CAS_HOST, ITS_HOST, YD_HOST])?;
+        let _ = response.bytes().await;
+        (final_url, final_html) =
+            get_follow_text(session, next, &[CAS_HOST, ITS_HOST, YD_HOST], Some(&action)).await?;
+    }
     if final_url.host_str() != Some(YD_HOST) {
         return Err(CampusServiceError::protocol("移动门户没有进入网费充值服务"));
     }
+    let _ = final_html;
     let openid = extract_openid(&final_url)?;
     let opened = yd_post(session, "/netpay/openNetPay", json!({"openid": openid})).await?;
     ensure_success(&opened, "打开网费充值")?;
@@ -803,6 +1216,34 @@ async fn yd_post(
     .await
 }
 
+async fn yd_get(session: &mut CampusSession, url: Url) -> Result<Value, CampusServiceError> {
+    validate_url(&url, &[YD_HOST])?;
+    let mut request = session
+        .client
+        .get(url.clone())
+        .header(USER_AGENT, REGULAR_USER_AGENT)
+        .header(ACCEPT, "application/json, text/plain, */*")
+        .header(ORIGIN, YD_ORIGIN)
+        .header(REFERER, "https://ydapp.bjut.edu.cn/")
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header("Sec-Fetch-Dest", "empty")
+        .header("Sec-Fetch-Mode", "cors")
+        .header("Sec-Fetch-Site", "same-origin")
+        .header("session-type", "uniapp")
+        .header("isWechatApp", "true")
+        .header("orgid", "2");
+    if let Some(cookie) = session.cookies.header(&url) {
+        request = request.header(COOKIE, cookie);
+    }
+    let stage = request_stage(&url);
+    let response = request
+        .send()
+        .await
+        .map_err(|error| CampusServiceError::network(stage, error))?;
+    session.cookies.absorb(&url, response.headers());
+    response_json(response, stage).await
+}
+
 async fn yd_post_text(
     session: &mut CampusSession,
     path: &str,
@@ -859,6 +1300,52 @@ async fn yd_post_text(
     Ok(text)
 }
 
+fn recursive_json_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    match value {
+        Value::Object(object) => object.get(key).and_then(Value::as_str).or_else(|| {
+            object
+                .values()
+                .find_map(|child| recursive_json_string(child, key))
+        }),
+        Value::Array(items) => items
+            .iter()
+            .find_map(|child| recursive_json_string(child, key)),
+        _ => None,
+    }
+}
+
+fn wechat_h5_payment_url(value: &Value) -> Result<String, CampusServiceError> {
+    fn find(value: &Value) -> Option<String> {
+        match value {
+            Value::String(candidate) => {
+                let candidate = decode_html_entities(candidate);
+                let url = Url::parse(&candidate).ok()?;
+                let values = unique_query_values(&url).ok()?;
+                (url.scheme() == "https"
+                    && url.host_str() == Some("wx.tenpay.com")
+                    && url.port_or_known_default() == Some(443)
+                    && url.path() == "/cgi-bin/mmpayweb-bin/checkmweb"
+                    && url.fragment().is_none()
+                    && values.len() == 4
+                    && ["prepay_id", "ct", "sign", "package"]
+                        .iter()
+                        .all(|key| values.get(*key).is_some_and(|part| !part.is_empty())))
+                .then_some(candidate)
+            }
+            Value::Object(object) => object.values().find_map(find),
+            Value::Array(items) => items.iter().find_map(find),
+            _ => None,
+        }
+    }
+
+    let url = find(value)
+        .ok_or_else(|| CampusServiceError::protocol("微信订单没有返回受信任的 H5 支付入口"))?;
+    if url.len() > 4096 {
+        return Err(CampusServiceError::protocol("微信支付地址过长"));
+    }
+    Ok(url)
+}
+
 async fn get_follow_text(
     session: &mut CampusSession,
     mut url: Url,
@@ -871,6 +1358,7 @@ async fn get_follow_text(
         let mut request = session
             .client
             .get(url.clone())
+            .header(USER_AGENT, request_user_agent(&url))
             .header(
                 ACCEPT,
                 "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -919,6 +1407,14 @@ async fn get_follow_text(
         return Ok((url, text));
     }
     Err(CampusServiceError::protocol("校园服务重定向次数过多"))
+}
+
+fn request_user_agent(url: &Url) -> &'static str {
+    if url.host_str() == Some(ITS_HOST) {
+        WECHAT_USER_AGENT
+    } else {
+        REGULAR_USER_AGENT
+    }
 }
 
 async fn get_json(
@@ -1169,11 +1665,18 @@ fn alipay_gateway_url(html: &str, expected_amount: &str) -> Result<String, Campu
     ))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CasTarget {
+    Uc,
+    MobilePortal,
+}
+
 fn cas_login_form(
     html: &str,
     page_url: &Url,
     account: &str,
     password: &str,
+    target: CasTarget,
 ) -> Result<(Url, Vec<(String, String)>), CampusServiceError> {
     let lower = html.to_ascii_lowercase();
     let mut cursor = 0usize;
@@ -1206,7 +1709,7 @@ fn cas_login_form(
         let action = page_url
             .join(&decode_html_entities(&action_value))
             .map_err(|_| CampusServiceError::protocol("CAS 表单地址无效"))?;
-        validate_cas_action(&action)?;
+        validate_cas_action(&action, target)?;
         let mut fields = BTreeMap::<String, String>::new();
         for tag in tags(body, "input") {
             let Some(name) = attribute(tag, "name") else {
@@ -1239,32 +1742,59 @@ fn cas_login_form(
     Err(CampusServiceError::protocol("没有找到 CAS 登录表单"))
 }
 
-fn validate_cas_action(url: &Url) -> Result<(), CampusServiceError> {
+fn validate_cas_action(url: &Url, target: CasTarget) -> Result<(), CampusServiceError> {
     validate_url(url, &[CAS_HOST])?;
     if url.path() != "/login" {
         return Err(CampusServiceError::protocol("CAS 表单路径发生变化"));
     }
-    let mut service = None;
-    for (key, value) in url.query_pairs() {
-        if key == "service" && service.replace(value.into_owned()).is_some() {
-            return Err(CampusServiceError::protocol("CAS service 重复"));
-        } else if key != "service" {
-            return Err(CampusServiceError::protocol("CAS 表单出现未知参数"));
-        }
-    }
+    let values = unique_query_values(url)?;
     let service = parse_url(
-        service
-            .as_deref()
+        values
+            .get("service")
+            .map(String::as_str)
             .ok_or_else(|| CampusServiceError::protocol("CAS 表单缺少 UC service"))?,
     )?;
-    validate_url(&service, &[UC_HOST])?;
-    if service.path() != "/api/login"
-        || service.query_pairs().collect::<Vec<_>>()
-            != vec![("target".into(), UC_LOGIN_TARGET.into())]
-    {
-        return Err(CampusServiceError::protocol(
-            "CAS service 不是预期的 UC 入口",
-        ));
+    match target {
+        CasTarget::Uc => {
+            if values.len() != 1 {
+                return Err(CampusServiceError::protocol("CAS 表单出现未知参数"));
+            }
+            validate_url(&service, &[UC_HOST])?;
+            if service.path() != "/api/login"
+                || service.query_pairs().collect::<Vec<_>>()
+                    != vec![("target".into(), UC_LOGIN_TARGET.into())]
+            {
+                return Err(CampusServiceError::protocol(
+                    "CAS service 不是预期的 UC 入口",
+                ));
+            }
+        }
+        CasTarget::MobilePortal => {
+            if values.len() != 2 || values.get("noAutoRedirect").map(String::as_str) != Some("1") {
+                return Err(CampusServiceError::protocol("移动门户 CAS 参数发生变化"));
+            }
+            validate_url(&service, &[ITS_HOST])?;
+            let service_values = unique_query_values(&service)?;
+            if service.path() != "/a_bjut/api/sso/index"
+                || service_values.len() != 2
+                || service_values.get("from").map(String::as_str) != Some("wap")
+            {
+                return Err(CampusServiceError::protocol(
+                    "CAS service 不是预期的移动门户入口",
+                ));
+            }
+            let oauth =
+                parse_url(service_values.get("redirect").ok_or_else(|| {
+                    CampusServiceError::protocol("移动门户 service 缺少回跳地址")
+                })?)?;
+            validate_url(&oauth, &[ITS_HOST])?;
+            if oauth.path() != "/uc/api/oauth/index" {
+                return Err(CampusServiceError::protocol(
+                    "移动门户 service 没有进入 OAuth",
+                ));
+            }
+            validate_its_oauth_values(&unique_query_values(&oauth)?)?;
+        }
     }
     Ok(())
 }
@@ -1799,6 +2329,61 @@ mod tests {
     }
 
     #[test]
+    fn persisted_session_restores_only_secure_itsapp_cookies() {
+        let future = unix_timestamp() + 3600;
+        let persisted = PersistedCampusSession {
+            account: "student".to_string(),
+            cookies: vec![
+                StoredCookie {
+                    name: "eai-sess".to_string(),
+                    value: "durable-session".to_string(),
+                    domain: ITS_HOST.to_string(),
+                    host_only: true,
+                    path: "/".to_string(),
+                    expires_at: Some(future),
+                    secure: true,
+                    http_only: true,
+                },
+                StoredCookie {
+                    name: "untrusted".to_string(),
+                    value: "ignored".to_string(),
+                    domain: YD_HOST.to_string(),
+                    host_only: true,
+                    path: "/".to_string(),
+                    expires_at: Some(future),
+                    secure: true,
+                    http_only: true,
+                },
+            ],
+            saved_at: unix_timestamp(),
+        };
+        let jar = DomainCookies::from_persisted("student", Some(persisted));
+        assert_eq!(
+            jar.header(&Url::parse("https://itsapp.bjut.edu.cn/uc/api/oauth/index").unwrap())
+                .as_deref(),
+            Some("eai-sess=durable-session")
+        );
+        assert!(jar
+            .header(&Url::parse("https://ydapp.bjut.edu.cn/openV8HomePage").unwrap())
+            .is_none());
+        assert_eq!(jar.persistent_snapshot("student").cookies.len(), 1);
+    }
+
+    #[test]
+    fn limits_wechat_user_agent_to_itsapp_navigation() {
+        assert_eq!(
+            request_user_agent(
+                &Url::parse("https://itsapp.bjut.edu.cn/uc/api/oauth/index").unwrap()
+            ),
+            WECHAT_USER_AGENT
+        );
+        assert_eq!(
+            request_user_agent(&Url::parse("https://ydapp.bjut.edu.cn/openV8HomePage").unwrap()),
+            REGULAR_USER_AGENT
+        );
+    }
+
+    #[test]
     fn parses_and_validates_cas_login_form() {
         let page = r#"<form method="post" action="">
           <input type="hidden" name="execution" value="opaque-token">
@@ -1808,7 +2393,7 @@ mod tests {
             "https://cas.bjut.edu.cn/login?service=https%3A%2F%2Fuc.bjut.edu.cn%2Fapi%2Flogin%3Ftarget%3Dhttps%253A%252F%252Fuc.bjut.edu.cn%252F%2523%252Fuser%252Flogin",
         )
         .unwrap();
-        let (_, fields) = cas_login_form(page, &url, "student", "secret").unwrap();
+        let (_, fields) = cas_login_form(page, &url, "student", "secret", CasTarget::Uc).unwrap();
         let fields = fields.into_iter().collect::<BTreeMap<_, _>>();
         assert_eq!(
             fields.get("execution").map(String::as_str),
@@ -1817,7 +2402,43 @@ mod tests {
         assert_eq!(fields.get("username").map(String::as_str), Some("student"));
         assert_eq!(fields.get("password").map(String::as_str), Some("secret"));
         assert_eq!(request_stage(&url), "打开 CAS 登录页");
-        assert!(validate_cas_action(&Url::parse(CAS_LOGIN_ENTRY).unwrap()).is_ok());
+        assert!(validate_cas_action(&Url::parse(CAS_LOGIN_ENTRY).unwrap(), CasTarget::Uc).is_ok());
+    }
+
+    #[test]
+    fn validates_mobile_portal_cas_target() {
+        let oauth = Url::parse(
+            "https://itsapp.bjut.edu.cn/uc/api/oauth/index?redirect=https%3A%2F%2Fydapp.bjut.edu.cn%2FopenV8HomePage&appid=200220816093810809&state=V8YKT&qrcode=1",
+        )
+        .unwrap();
+        let mut service = Url::parse("https://itsapp.bjut.edu.cn/a_bjut/api/sso/index").unwrap();
+        service
+            .query_pairs_mut()
+            .append_pair("redirect", oauth.as_str())
+            .append_pair("from", "wap");
+        let mut login = Url::parse("https://cas.bjut.edu.cn/login").unwrap();
+        login
+            .query_pairs_mut()
+            .append_pair("noAutoRedirect", "1")
+            .append_pair("service", service.as_str());
+        assert!(validate_cas_action(&login, CasTarget::MobilePortal).is_ok());
+    }
+
+    #[test]
+    fn validates_wechat_h5_payment_url_from_nested_response() {
+        let response = json!({
+            "success": true,
+            "resultData": {
+                "partnerjourno": "202607220001",
+                "mweb_url": "https://wx.tenpay.com/cgi-bin/mmpayweb-bin/checkmweb?prepay_id=wx-test&ct=1&sign=test-sign&package=WAP"
+            }
+        });
+        assert!(wechat_h5_payment_url(&response).is_ok());
+        assert!(wechat_h5_payment_url(&json!({
+            "success": true,
+            "url": "https://example.com/cgi-bin/mmpayweb-bin/checkmweb?prepay_id=x&ct=1&sign=s&package=WAP"
+        }))
+        .is_err());
     }
 
     #[test]

@@ -499,7 +499,7 @@
                   <i data-lucide="wallet-cards"></i>
                   <h2>充值</h2>
                 </div>
-                <p>选择校园卡直接转入网费，或先通过支付宝为当前校园卡充值。</p>
+                <p>选择校园卡直接转入网费，或先通过支付宝、微信为当前校园卡充值。</p>
               </div>
             </div>
             <div class="billing-payment-panel">
@@ -525,6 +525,10 @@
                     <i data-lucide="smartphone"></i>
                     <span><strong>支付宝</strong><small>先为当前校园卡充值，再自动衔接网费转入</small></span>
                   </button>
+                  <button class="billing-payment-method android-only-payment-method" type="button" role="tab" aria-selected="false" data-recharge-method-target="wechat">
+                    <i data-lucide="qr-code"></i>
+                    <span><strong>微信支付</strong><small>通过学校微信 H5 收银台充值，再自动衔接网费转入</small></span>
+                  </button>
                 </div>
                 <p id="billing-recharge-method-description" class="billing-inline-note">将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。</p>
                 <button id="btn-billing-recharge" class="btn btn-primary btn-sm" type="submit">核对充值信息</button>
@@ -549,8 +553,11 @@
                 <button id="btn-billing-alipay-continue" class="btn btn-primary btn-sm" type="button" hidden>
                   <i data-lucide="check-circle"></i> 检测到账并转入网费
                 </button>
+                <button id="btn-billing-wechat-continue" class="btn btn-primary btn-sm" type="button" hidden>
+                  <i data-lucide="check-circle"></i> 检测微信支付并转入网费
+                </button>
               </div>
-              <p class="billing-inline-note">任何充值只提交一次；结果不明确时 App 不会自动重试。支付宝由学校支付平台发起，App 不读取支付密码。</p>
+              <p class="billing-inline-note">任何充值只提交一次；结果不明确时 App 不会自动重试。支付宝与微信均由学校支付平台发起，App 不读取支付密码。</p>
             </div>
           </section>
 
