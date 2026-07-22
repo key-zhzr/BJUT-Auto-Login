@@ -1,6 +1,6 @@
 use reqwest::header::{
-    HeaderMap, ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, REFERER,
-    SET_COOKIE, USER_AGENT,
+    HeaderMap, ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN,
+    REFERER, SET_COOKIE, USER_AGENT,
 };
 use reqwest::{Client, Response, Url};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ const CAS_HOST: &str = "cas.bjut.edu.cn";
 const UC_HOST: &str = "uc.bjut.edu.cn";
 const ITS_HOST: &str = "itsapp.bjut.edu.cn";
 const YD_HOST: &str = "ydapp.bjut.edu.cn";
+const TENPAY_HOST: &str = "wx.tenpay.com";
 const UC_ORIGIN: &str = "https://uc.bjut.edu.cn";
 const YD_ORIGIN: &str = "https://ydapp.bjut.edu.cn";
 const UC_LOGIN_TARGET: &str = "https://uc.bjut.edu.cn/#/user/login";
@@ -121,6 +122,7 @@ fn request_stage(url: &Url) -> &'static str {
         (Some(YD_HOST), "/cardpay/openCardPay") => "读取校园卡第三方支付入口",
         (Some(YD_HOST), "/wxpay/transferFromWx2Card") => "创建微信充值订单",
         (Some(YD_HOST), "/wxpay/orderRefreshPage") => "查询微信支付状态",
+        (Some(TENPAY_HOST), "/cgi-bin/mmpayweb-bin/checkmweb") => "解析微信支付唤起地址",
         (Some(CAS_HOST), _) => "访问 CAS",
         (Some(UC_HOST), _) => "访问统一认证",
         (Some(ITS_HOST), _) => "访问移动门户 OAuth 中转",
@@ -554,7 +556,7 @@ pub(crate) struct WechatRechargeResult {
     pub payer_account: String,
     pub target_account: String,
     pub amount: String,
-    pub payment_url: String,
+    pub launch_url: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -929,7 +931,7 @@ pub(crate) async fn execute_wechat_card_recharge(
         ))
     })?;
     ensure_success(&response, "创建微信充值订单")?;
-    let payment_url = wechat_h5_payment_url(&response)?;
+    let h5_url = wechat_h5_payment_url(&response)?;
     let partner_jour_no = recursive_json_string(&response, "partnerjourno")
         .filter(|value| {
             (6..=96).contains(&value.len())
@@ -939,6 +941,14 @@ pub(crate) async fn execute_wechat_card_recharge(
         })
         .ok_or_else(|| CampusServiceError::protocol("微信充值订单缺少有效流水号"))?
         .to_string();
+    let launch_url = resolve_wechat_launch_url(&mut pending.session, &h5_url)
+        .await
+        .map_err(|error| {
+            CampusServiceError::rejected(format!(
+                "微信订单已创建，但无法安全取得微信唤起地址：{}。请先检查校园卡充值记录，不要立即重复操作",
+                error.user_message()
+            ))
+        })?;
     let payment_id = confirmation_id();
     let result = WechatRechargeResult {
         message: format!(
@@ -949,7 +959,7 @@ pub(crate) async fn execute_wechat_card_recharge(
         payer_account: pending.payer_account.clone(),
         target_account: pending.target_account.clone(),
         amount: pending.amount.clone(),
-        payment_url,
+        launch_url,
     };
     let payment = PendingWechatPayment {
         payment_id,
@@ -1344,6 +1354,178 @@ fn wechat_h5_payment_url(value: &Value) -> Result<String, CampusServiceError> {
         return Err(CampusServiceError::protocol("微信支付地址过长"));
     }
     Ok(url)
+}
+
+fn validate_wechat_launch_url(candidate: &str) -> Result<String, CampusServiceError> {
+    let candidate = decode_html_entities(candidate.trim())
+        .replace("\\/", "/")
+        .replace("\\u0026", "&")
+        .replace("\\u003d", "=")
+        .replace("\\x26", "&")
+        .replace("\\x3d", "=");
+    if candidate.len() > 4096 {
+        return Err(CampusServiceError::protocol("微信唤起地址过长"));
+    }
+    let url =
+        Url::parse(&candidate).map_err(|_| CampusServiceError::protocol("微信唤起地址无效"))?;
+    let query = url
+        .query()
+        .filter(|query| (16..=3072).contains(&query.len()))
+        .ok_or_else(|| CampusServiceError::protocol("微信唤起地址缺少支付参数"))?;
+    let query_lower = query.to_ascii_lowercase();
+    if url.scheme() != "weixin"
+        || url.host_str() != Some("wap")
+        || url.path() != "/pay"
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || !query.bytes().all(|byte| {
+            byte.is_ascii_graphic() && !matches!(byte, b'\'' | b'"' | b'<' | b'>' | b'\\')
+        })
+        || !["prepay", "package", "sign"]
+            .iter()
+            .all(|marker| query_lower.contains(marker))
+    {
+        return Err(CampusServiceError::protocol("微信唤起地址没有通过安全校验"));
+    }
+    Ok(candidate)
+}
+
+fn percent_decode_ascii_once(value: &str) -> String {
+    fn hex(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) {
+                decoded.push(high * 16 + low);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn extract_wechat_launch_url(html: &str) -> Result<String, CampusServiceError> {
+    let normalized = decode_html_entities(html)
+        .replace("\\/", "/")
+        .replace("\\u0026", "&")
+        .replace("\\u003d", "=")
+        .replace("\\x26", "&")
+        .replace("\\x3d", "=");
+    let percent_decoded = percent_decode_ascii_once(&normalized);
+    for source in [&normalized, &percent_decoded] {
+        let mut cursor = 0usize;
+        let marker = "weixin://wap/pay?";
+        while let Some(relative) = source[cursor..].find(marker) {
+            let start = cursor + relative;
+            let tail = &source[start..];
+            let end = tail[marker.len()..]
+                .char_indices()
+                .find_map(|(offset, character)| {
+                    (character.is_whitespace()
+                        || matches!(character, '\'' | '"' | '<' | '>' | '\\' | ')' | ';' | ','))
+                    .then_some(marker.len() + offset)
+                })
+                .unwrap_or(tail.len());
+            if let Ok(url) = validate_wechat_launch_url(&tail[..end]) {
+                return Ok(url);
+            }
+            cursor = start + marker.len();
+        }
+    }
+    Err(CampusServiceError::protocol(
+        "Tenpay 页面没有返回受信任的微信唤起地址",
+    ))
+}
+
+async fn resolve_wechat_launch_url(
+    session: &mut CampusSession,
+    h5_url: &str,
+) -> Result<String, CampusServiceError> {
+    let mut url = parse_url(h5_url)?;
+    validate_url(&url, &[TENPAY_HOST])?;
+    let mut referer = format!("{YD_ORIGIN}/");
+    for _ in 0..=3 {
+        let mut request = session
+            .client
+            .get(url.clone())
+            .header(USER_AGENT, REGULAR_USER_AGENT)
+            .header(ACCEPT_ENCODING, "identity")
+            .header(
+                ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            )
+            .header(REFERER, &referer)
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache")
+            .header("Sec-Fetch-Dest", "document")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Site", "cross-site")
+            .header("Sec-Fetch-User", "?1")
+            .header("Upgrade-Insecure-Requests", "1");
+        if let Some(cookie) = session.cookies.header(&url) {
+            request = request.header(COOKIE, cookie);
+        }
+        let stage = request_stage(&url);
+        let response = request
+            .send()
+            .await
+            .map_err(|error| CampusServiceError::network(stage, error))?;
+        session.cookies.absorb(&url, response.headers());
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| CampusServiceError::protocol("Tenpay 重定向缺少 Location"))?;
+            if location.trim_start().starts_with("weixin://") {
+                return validate_wechat_launch_url(location);
+            }
+            let next = url
+                .join(location)
+                .map_err(|_| CampusServiceError::protocol("Tenpay 重定向地址无效"))?;
+            validate_url(&next, &[TENPAY_HOST])?;
+            let _ = response.bytes().await;
+            referer = url.to_string();
+            url = next;
+            continue;
+        }
+        if !response.status().is_success() {
+            return Err(CampusServiceError::protocol(format!(
+                "Tenpay 返回 HTTP {}",
+                response.status().as_u16()
+            )));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > 256 * 1024)
+        {
+            return Err(CampusServiceError::protocol("Tenpay 响应体过大"));
+        }
+        let text = response
+            .text()
+            .await
+            .map_err(|error| CampusServiceError::network(stage, error))?;
+        if text.len() > 256 * 1024 {
+            return Err(CampusServiceError::protocol("Tenpay 响应体过大"));
+        }
+        return extract_wechat_launch_url(&text);
+    }
+    Err(CampusServiceError::protocol("Tenpay 重定向次数过多"))
 }
 
 async fn get_follow_text(
@@ -2438,6 +2620,18 @@ mod tests {
             "success": true,
             "url": "https://example.com/cgi-bin/mmpayweb-bin/checkmweb?prepay_id=x&ct=1&sign=s&package=WAP"
         }))
+        .is_err());
+    }
+
+    #[test]
+    fn extracts_and_validates_wechat_launch_url_from_tenpay_html() {
+        let html = r#"<script>window.location.href = "weixin:\/\/wap\/pay?prepayid%3Dwx-test%26package%3DWAP%26noncestr%3Dn%26sign%3Dsafe";</script>"#;
+        let launch = extract_wechat_launch_url(html).unwrap();
+        assert!(launch.starts_with("weixin://wap/pay?"));
+        assert!(validate_wechat_launch_url(&launch).is_ok());
+        assert!(validate_wechat_launch_url(
+            "weixin://evil/pay?prepayid%3Dx%26package%3DWAP%26sign%3Ds"
+        )
         .is_err());
     }
 

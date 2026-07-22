@@ -657,7 +657,7 @@ interface WechatRechargeResult {
   payerAccount: string;
   targetAccount: string;
   amount: string;
-  paymentUrl: string;
+  launchUrl: string;
 }
 
 interface WechatPaymentStatus {
@@ -667,7 +667,7 @@ interface WechatPaymentStatus {
 
 interface ActiveWechatPayment {
   paymentId: string;
-  paymentUrl: string;
+  launchUrl: string;
   payerAccount: string;
   amount: string;
   targetAccount: string;
@@ -4669,7 +4669,7 @@ function renderBillingDevices(data: BillingCenterData) {
     billingRechargeState.textContent = activeRechargeMethod === 'alipay'
       ? '填写目标学工号和金额后，App 将先核对当前校园卡，再创建支付宝支付入口。'
       : activeRechargeMethod === 'wechat'
-        ? '填写目标学工号和金额后，App 将先核对当前校园卡，再创建微信 H5 支付入口。'
+        ? '填写目标学工号和金额后，App 将核对当前校园卡，并由后端保持会话直接唤起微信。'
         : '填写目标学工号和金额后，App 将通过统一认证核对校园卡、目标账户与可充值状态。';
   }
 }
@@ -4878,7 +4878,7 @@ function activateRechargeMethod(method: RechargeMethod) {
   billingRechargeMethodDescription.textContent = alipay
     ? '支付宝先为当前校园卡充值，到账后 App 会继续把同一金额转入上方目标网费账户。'
     : wechat
-      ? '微信 H5 收银台先为当前校园卡充值，支付确认后 App 会继续把同一金额转入上方目标网费账户。'
+      ? '后端保持学校支付会话并直接唤起微信，支付确认后 App 会继续把同一金额转入上方目标网费账户。'
       : '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。';
   btnBillingRecharge.textContent = alipay
     ? '核对并前往支付宝'
@@ -4888,7 +4888,7 @@ function activateRechargeMethod(method: RechargeMethod) {
   billingRechargeState.textContent = alipay
     ? '目标和金额保持不变；确认后 Android 会优先直接打开支付宝，桌面端显示二维码。'
     : wechat
-      ? '目标和金额保持不变；确认后将用系统浏览器打开微信 H5 收银台，支付页不使用微信 UA。'
+      ? '目标和金额保持不变；后端将以同一会话进入 Tenpay，取得受信任的微信协议地址后直接唤起微信。'
       : '目标和金额保持不变；确认后从当前账号的校园卡直接转入网费。';
   if (activeAlipayPayment) {
     btnBillingAlipayShowPayment.hidden = IS_ANDROID || !alipay;
@@ -5391,15 +5391,20 @@ async function prepareAndOpenAlipayRecharge() {
   }
 }
 
-function isTrustedWechatPaymentUrl(value: string) {
+function isTrustedWechatLaunchUrl(value: string) {
   try {
     const url = new URL(value);
-    const keys = Array.from(url.searchParams.keys());
-    return url.protocol === 'https:'
-      && url.hostname === 'wx.tenpay.com'
-      && url.pathname === '/cgi-bin/mmpayweb-bin/checkmweb'
-      && keys.length === 4
-      && ['prepay_id', 'ct', 'sign', 'package'].every(key => Boolean(url.searchParams.get(key)));
+    const query = url.search.slice(1).toLowerCase();
+    return value.length <= 4096
+      && url.protocol === 'weixin:'
+      && url.hostname === 'wap'
+      && url.pathname === '/pay'
+      && !url.username
+      && !url.password
+      && !url.port
+      && !url.hash
+      && query.length >= 16
+      && ['prepay', 'package', 'sign'].every(marker => query.includes(marker));
   } catch {
     return false;
   }
@@ -5453,7 +5458,7 @@ function scheduleWechatAutomaticCompletionCheck() {
 
 async function openActiveWechatPayment() {
   const payment = activeWechatPayment;
-  if (!payment || !isTrustedWechatPaymentUrl(payment.paymentUrl)) {
+  if (!payment || !isTrustedWechatLaunchUrl(payment.launchUrl)) {
     await customAlert('当前没有可用的微信支付入口，请重新核对充值信息。', '微信充值');
     return false;
   }
@@ -5461,11 +5466,19 @@ async function openActiveWechatPayment() {
   wechatLastAutomaticCheckAt = 0;
   wechatAutomaticCheckCount = 0;
   try {
-    // Deliberately hand the H5 cashier URL to the system browser. The payment
-    // page must use a regular browser UA; only ITSApp authentication uses a
-    // WeChat UA in the Rust request chain.
-    await openUrl(payment.paymentUrl);
-    billingRechargeState.textContent = '微信 H5 收银台已交给系统浏览器打开；支付完成后返回 App，将自动确认订单并转入网费。';
+    // Rust has already visited Tenpay with the order-creation session and a
+    // regular UA. Only the validated weixin:// launch address reaches JS.
+    const androidBridge = (window as any).AndroidBridge as {
+      openWechat?: (url: string) => boolean;
+    } | undefined;
+    if (IS_ANDROID && androidBridge?.openWechat) {
+      if (!androidBridge.openWechat(payment.launchUrl)) {
+        throw new Error('未检测到可处理该订单的微信客户端');
+      }
+    } else {
+      await openUrl(payment.launchUrl);
+    }
+    billingRechargeState.textContent = '已直接唤起微信支付；支付完成后返回 App，将自动确认订单并转入网费。';
     updateRechargeProgress(55, '等待微信支付完成…');
     return true;
   } catch (error) {
@@ -5617,7 +5630,7 @@ async function prepareAndOpenWechatRecharge() {
     billingRechargePreview.hidden = false;
     updateRechargeProgress(34, '校园卡与目标网费账户已核对，等待确认…');
     const confirmed = await customConfirm(
-      `充值校园卡账号：${preview.payerAccount}\n当前校园卡余额：${formatBillingCurrency(preview.cardBalance)}\n微信支付金额：${formatBillingCurrency(preview.amount)}\n最终网费目标：${preview.targetAccount}\n目标当前余额：${formatBillingCurrency(preview.targetBalance)}\n\n确认后 App 将打开学校微信 H5 收银台；支付成功后会自动把同一金额从校园卡转入上述网费账户。`,
+      `充值校园卡账号：${preview.payerAccount}\n当前校园卡余额：${formatBillingCurrency(preview.cardBalance)}\n微信支付金额：${formatBillingCurrency(preview.amount)}\n最终网费目标：${preview.targetAccount}\n目标当前余额：${formatBillingCurrency(preview.targetBalance)}\n\n确认后后端将保持当前支付会话进入 Tenpay，并直接唤起微信；支付成功后会自动把同一金额从校园卡转入上述网费账户。`,
       '确认前往微信支付',
     );
     if (!confirmed) {
@@ -5635,14 +5648,14 @@ async function prepareAndOpenWechatRecharge() {
     const result = await invoke<WechatRechargeResult>('confirm_wechat_card_recharge', {
       confirmationId: preview.confirmationId,
     });
-    if (!isTrustedWechatPaymentUrl(result.paymentUrl)
+    if (!isTrustedWechatLaunchUrl(result.launchUrl)
       || result.payerAccount !== preview.payerAccount
       || result.targetAccount !== preview.targetAccount) {
       throw new Error('学校支付平台返回的微信订单信息未通过安全校验');
     }
     rememberActiveWechatPayment({
       paymentId: result.paymentId,
-      paymentUrl: result.paymentUrl,
+      launchUrl: result.launchUrl,
       payerAccount: result.payerAccount,
       amount: result.amount,
       targetAccount: result.targetAccount,
@@ -5651,7 +5664,7 @@ async function prepareAndOpenWechatRecharge() {
     billingRechargeState.textContent = `${result.message}。支付后返回 App，将自动确认并转入网费。`;
     updateRechargeProgress(55, '支付订单已创建，等待微信付款…');
     if (!await openActiveWechatPayment()) {
-      await customAlert('微信 H5 支付入口已创建，但系统浏览器未能打开。请稍后重试，避免重复创建订单。', '微信充值');
+      await customAlert('微信支付订单已创建，但未能直接唤起微信。请稍后重试现有订单，避免重复创建。', '微信充值');
     }
   } catch (error) {
     billingRechargeState.textContent = `微信充值未开始或支付入口未打开：${String(error)}`;

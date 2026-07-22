@@ -278,6 +278,34 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  private fun openWechatInternal(rawUrl: String): Boolean {
+    return try {
+      val launchUri = Uri.parse(rawUrl)
+      val query = launchUri.encodedQuery.orEmpty()
+      val normalizedQuery = query.lowercase(Locale.US)
+      val trusted = rawUrl.length <= 4096 &&
+        launchUri.scheme.equals("weixin", ignoreCase = true) &&
+        launchUri.host.equals("wap", ignoreCase = true) &&
+        launchUri.path == "/pay" &&
+        launchUri.port == -1 &&
+        launchUri.userInfo.isNullOrEmpty() &&
+        launchUri.fragment.isNullOrEmpty() &&
+        query.length in 16..3072 &&
+        listOf("prepay", "package", "sign").all { normalizedQuery.contains(it) }
+      if (!trusted) return false
+
+      val intent = Intent(Intent.ACTION_VIEW, launchUri)
+        .setPackage("com.tencent.mm")
+        .addCategory(Intent.CATEGORY_BROWSABLE)
+      if (intent.resolveActivity(packageManager) == null) return false
+      startActivity(intent)
+      true
+    } catch (error: Exception) {
+      KeepAliveJournal.append(this, "直接打开微信失败：${error.javaClass.simpleName}: ${error.message.orEmpty()}", "error")
+      false
+    }
+  }
+
   private fun permissionHealthJson(): String {
     fun granted(permission: String): Boolean =
       ContextCompat.checkSelfPermission(this, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -384,6 +412,25 @@ class MainActivity : TauriActivity() {
       activity.runOnUiThread {
         try {
           success = activity.openAlipayInternal(url)
+        } finally {
+          completed.countDown()
+        }
+      }
+      return try {
+        completed.await(2, java.util.concurrent.TimeUnit.SECONDS) && success
+      } catch (error: InterruptedException) {
+        Thread.currentThread().interrupt()
+        false
+      }
+    }
+
+    @JavascriptInterface
+    fun openWechat(url: String): Boolean {
+      val completed = java.util.concurrent.CountDownLatch(1)
+      var success = false
+      activity.runOnUiThread {
+        try {
+          success = activity.openWechatInternal(url)
         } finally {
           completed.countDown()
         }

@@ -5057,7 +5057,7 @@ async fn confirm_wechat_card_recharge(
                 &app,
                 &state,
                 "计费",
-                "微信 H5 支付入口已安全生成",
+                "Tenpay 会话已续接并取得受信任的微信唤起地址",
                 "success",
             );
             Ok(result)
