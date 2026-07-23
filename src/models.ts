@@ -143,4 +143,280 @@ export interface RecoverableRecharge {
 
 export interface DiscoveredCampusAccount {
   user: string;
+  token: string;
+}
+
+export interface GitHubReleaseAsset {
+  name: string;
+  browser_download_url: string;
+  size: number;
+}
+
+export interface GitHubRelease {
+  tag_name: string;
+  name: string | null;
+  body: string | null;
+  html_url: string;
+  prerelease: boolean;
+  draft: boolean;
+  assets: GitHubReleaseAsset[];
+}
+
+export interface UpdateTarget {
+  platform: 'android' | 'ios' | 'windows' | 'macos' | 'linux';
+  arch: string;
+  format: string;
+  currentVersion: string;
+}
+
+export interface UpdateProgress {
+  status: 'downloading' | 'installing';
+  received?: number;
+  total?: number;
+  percent?: number | null;
+}
+
+export interface AccountHealth {
+  user: string;
+  status: 'healthy' | 'cooling_down' | 'needs_attention' | 'degraded';
+  consecutiveFailures: number;
+  cooldownUntil: number | null;
+  cooldownSeconds: number;
+  lastSuccess: string | null;
+  lastFailure: string | null;
+  lastFailureReason: string | null;
+  failureKind: string | null;
+}
+
+export interface CredentialStorageHealth {
+  status: string;
+  backend: string;
+  persistent: boolean;
+  savedAccounts: number;
+  missingPasswordAccounts: string[];
+  message: string;
+}
+
+export interface DiagnosticStep {
+  id: string;
+  label: string;
+  status: 'success' | 'warning' | 'error' | 'skipped';
+  message: string;
+  durationMs: number;
+}
+
+export interface DiagnosticReport {
+  createdAt: string;
+  overall: 'healthy' | 'auth_required' | 'no_network' | 'offline';
+  summary: string;
+  ssid: string;
+  ip: string;
+  steps: DiagnosticStep[];
+}
+
+export interface AppLogEntry {
+  time: string;
+  module: string;
+  message: string;
+  type: 'info' | 'error' | 'success' | 'debug';
+}
+
+export interface CountdownPayload {
+  status: 'checking' | 'suspended' | 'ticking';
+  seconds: number;
+}
+
+export interface NetworkStatePayload {
+  state: 'Online' | 'BjutCampus' | 'Offline';
+  loginType?: string;
+  ssid?: string;
+  bssid?: string;
+  ip?: string;
+  timestamp?: string;
+}
+
+export interface BillingLoginRecord {
+  loginAt: string;
+  logoutAt: string;
+  ip: string;
+  ipv6: string;
+  mac: string;
+  durationMinutes: string;
+  usedFlowMb: string;
+  billingMode: string;
+  amount: string;
+}
+
+export interface BillingOnlineSession {
+  loginAt: string;
+  ip: string;
+  ipv6: string;
+  mac: string;
+  durationMinutes: string;
+  usedFlowMb: string;
+  sessionId: string;
+}
+
+export interface UserInfo {
+  account: string;
+  balance: string;
+  flow: string;
+  source: 'billing' | 'portal' | 'unavailable';
+  status?: string | null;
+  statusReason?: string | null;
+  package?: string | null;
+  packageDetail?: string | null;
+  usedFlow?: string | null;
+  billingCycle?: string | null;
+  updatedAt: string;
+  billingError?: string | null;
+  loginHistory: BillingLoginRecord[];
+  onlineSessions: BillingOnlineSession[];
+  offlineTip?: string | null;
+  mauthEnabled?: boolean | null;
+  billingWarnings: string[];
+}
+
+export interface BillingOverview {
+  account: string;
+  balance: string;
+  remainingFlow: string;
+  usedFlow?: string | null;
+  status?: string | null;
+  statusReason?: string | null;
+  package?: string | null;
+  packageDetail?: string | null;
+  billingCycle?: string | null;
+  updatedAt: string;
+  loginHistory: BillingLoginRecord[];
+  onlineSessions: BillingOnlineSession[];
+  offlineTip?: string | null;
+  mauthEnabled?: boolean | null;
+  warnings: string[];
+}
+
+export interface BillingTable {
+  total: number;
+  rows: Record<string, string>[];
+  summary: Record<string, string>;
+}
+
+export interface BillingPackageOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface BillingPasswordPolicy {
+  minLength: number;
+  maxLength: number;
+  requireUppercase: boolean;
+  requireLowercase: boolean;
+  requireDigit: boolean;
+  requireSpecial: boolean;
+}
+
+export interface BillingSecurityQuestion {
+  id: string;
+  text: string;
+}
+
+export interface BillingServiceState {
+  accountStatus?: string | null;
+  statusReason?: string | null;
+  currentPackageId?: string | null;
+  currentPackage?: string | null;
+  packageDetail?: string | null;
+  nextSettlementDate?: string | null;
+  canStopNow: boolean;
+  canReopenNow: boolean;
+  packageScheduled: boolean;
+  scheduledPackageId?: string | null;
+  scheduledPackage?: string | null;
+  consumeLimit?: string | null;
+  currentCycleSpend?: string | null;
+  balance?: string | null;
+  packageOptions: BillingPackageOption[];
+}
+
+export interface BillingCenterData {
+  account: string;
+  overview: BillingOverview;
+  fetchedAt: string;
+  queryStartDate: string;
+  queryEndDate: string;
+  queryYear: string;
+  usageRecords: BillingTable;
+  monthlyBills: BillingTable;
+  payments: BillingTable;
+  operations: BillingTable;
+  stopLogs: BillingTable;
+  reopenLogs: BillingTable;
+  packageLogs: BillingTable;
+  devices: BillingTable;
+  tariffGroups: BillingTable;
+  service: BillingServiceState;
+  passwordPolicy: BillingPasswordPolicy;
+  securityQuestions: BillingSecurityQuestion[];
+  rechargeAvailable: boolean;
+  warnings: string[];
+}
+
+export interface BillingQuestionAnswer {
+  questionId: string;
+  answer: string;
+}
+
+export interface BillingActionRequest {
+  action: string;
+  packageId?: string;
+  consumeLimit?: string;
+  mac?: string;
+  oldPassword?: string;
+  newPassword?: string;
+  questions?: BillingQuestionAnswer[];
+}
+
+export interface BillingActionResult {
+  message: string;
+  passwordChanged: boolean;
+}
+
+export type BillingRecordKind =
+  | 'usage'
+  | 'monthly'
+  | 'payments'
+  | 'operations'
+  | 'stopLogs'
+  | 'reopenLogs'
+  | 'packageLogs';
+
+export interface BillingRecordQuery {
+  kind: BillingRecordKind;
+  page: number;
+  pageSize: number;
+  startDate?: string;
+  endDate?: string;
+  year?: string;
+  all?: boolean;
+}
+
+export interface BillingRecordResult {
+  kind: BillingRecordKind;
+  page: number;
+  pageSize: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  year?: string | null;
+  all: boolean;
+  table: BillingTable;
+}
+
+export interface BillingRecordQueryState {
+  page: number;
+  pageSize: number;
+  startDate: string;
+  endDate: string;
+  year: string;
+  queried: boolean;
 }

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const MAX_TRANSACTION_HISTORY: usize = 32;
+const MAX_ARCHIVED_TRANSACTION_HISTORY: usize = 32;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +52,26 @@ impl RechargeStage {
     }
 }
 
+pub(crate) fn stage_after_payment_context_closed(
+    stage: RechargeStage,
+) -> Option<(RechargeStage, &'static str)> {
+    match stage {
+        RechargeStage::Prepared => Some((RechargeStage::Cancelled, "微信订单创建前已取消")),
+        RechargeStage::OrderCreated | RechargeStage::HandedOff => Some((
+            RechargeStage::Unknown,
+            "微信支付入口已关闭，订单最终结果仍需核对",
+        )),
+        RechargeStage::PaymentConfirmed => Some((
+            RechargeStage::PaymentConfirmed,
+            "微信付款已确认，仍等待转入目标网费账户",
+        )),
+        RechargeStage::TransferSubmitted | RechargeStage::Unknown => {
+            Some((RechargeStage::Unknown, "充值流程结果仍需核对"))
+        }
+        RechargeStage::Completed | RechargeStage::Cancelled => None,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RechargeTransaction {
@@ -75,6 +95,38 @@ pub(crate) struct RechargeTransaction {
     pub openid: String,
     #[serde(default)]
     pub note: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RechargeRecoveryView {
+    pub id: String,
+    pub method: String,
+    pub payer_account: String,
+    pub target_account: String,
+    pub amount: String,
+    pub stage: RechargeStage,
+    pub card_balance_before: String,
+    pub payment_url: String,
+    pub payment_id: String,
+    pub note: String,
+}
+
+impl From<&RechargeTransaction> for RechargeRecoveryView {
+    fn from(transaction: &RechargeTransaction) -> Self {
+        Self {
+            id: transaction.id.clone(),
+            method: transaction.method.clone(),
+            payer_account: transaction.payer_account.clone(),
+            target_account: transaction.target_account.clone(),
+            amount: transaction.amount.clone(),
+            stage: transaction.stage.clone(),
+            card_balance_before: transaction.card_balance_before.clone(),
+            payment_url: transaction.payment_url.clone(),
+            payment_id: transaction.payment_id.clone(),
+            note: transaction.note.clone(),
+        }
+    }
 }
 
 impl RechargeTransaction {
@@ -145,15 +197,15 @@ impl RechargeJournal {
         Ok(())
     }
 
-    pub(crate) fn recoverable(&self) -> Vec<RechargeTransaction> {
+    pub(crate) fn recovery_views(&self) -> Vec<RechargeRecoveryView> {
         let mut items = self
             .0
             .iter()
             .filter(|item| item.stage.is_recoverable())
-            .cloned()
+            .map(|item| (item.updated_at, RechargeRecoveryView::from(item)))
             .collect::<Vec<_>>();
-        items.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
-        items
+        items.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
+        items.into_iter().map(|(_, view)| view).collect()
     }
 
     pub(crate) fn find(&self, id: &str) -> Option<&RechargeTransaction> {
@@ -165,7 +217,18 @@ impl RechargeJournal {
     fn trim(&mut self) {
         self.0
             .sort_by_key(|item| std::cmp::Reverse(item.updated_at));
-        self.0.truncate(MAX_TRANSACTION_HISTORY);
+        let mut archived_kept = 0;
+        self.0.retain(|item| {
+            if matches!(
+                item.stage,
+                RechargeStage::Completed | RechargeStage::Cancelled
+            ) {
+                archived_kept += 1;
+                archived_kept <= MAX_ARCHIVED_TRANSACTION_HISTORY
+            } else {
+                true
+            }
+        });
     }
 }
 
@@ -204,7 +267,7 @@ mod tests {
         journal
             .transition("tx-1", RechargeStage::Completed, 6, "done")
             .unwrap();
-        assert!(journal.recoverable().is_empty());
+        assert!(journal.recovery_views().is_empty());
     }
 
     #[test]
@@ -217,23 +280,38 @@ mod tests {
         journal
             .transition("tx-1", RechargeStage::Unknown, 3, "timeout")
             .unwrap();
-        assert_eq!(journal.recoverable().len(), 1);
+        assert_eq!(journal.recovery_views().len(), 1);
         assert!(journal
             .transition("tx-1", RechargeStage::OrderCreated, 4, "invalid")
             .is_err());
     }
 
     #[test]
-    fn journal_is_bounded() {
+    fn archived_journal_is_bounded_without_dropping_recoverable_records() {
         let mut journal = RechargeJournal::default();
         for index in 0..40 {
             let mut item = transaction();
-            item.id = format!("tx-{index}");
+            item.id = format!("archived-{index}");
             item.updated_at = index;
+            item.stage = RechargeStage::Cancelled;
             journal.upsert(item);
         }
-        assert_eq!(journal.0.len(), MAX_TRANSACTION_HISTORY);
-        assert_eq!(journal.0[0].id, "tx-39");
+        for index in 0..40 {
+            let mut item = transaction();
+            item.id = format!("pending-{index}");
+            item.updated_at = 100 + index;
+            item.stage = RechargeStage::Unknown;
+            journal.upsert(item);
+        }
+        assert_eq!(
+            journal
+                .0
+                .iter()
+                .filter(|item| item.stage == RechargeStage::Cancelled)
+                .count(),
+            MAX_ARCHIVED_TRANSACTION_HISTORY
+        );
+        assert_eq!(journal.recovery_views().len(), 40);
     }
 
     #[test]
@@ -259,6 +337,38 @@ mod tests {
         restored
             .transition("wx-order-1", RechargeStage::Completed, 8, "transferred")
             .unwrap();
-        assert!(restored.recoverable().is_empty());
+        assert!(restored.recovery_views().is_empty());
+    }
+
+    #[test]
+    fn recovery_view_does_not_expose_session_secrets() {
+        let mut item = transaction();
+        item.stage = RechargeStage::HandedOff;
+        item.openid = "secret-openid".to_string();
+        item.partner_jour_no = "secret-journal".to_string();
+        let journal = RechargeJournal(vec![item]);
+
+        let serialized = serde_json::to_string(&journal.recovery_views()).unwrap();
+        assert!(!serialized.contains("openid"));
+        assert!(!serialized.contains("partnerJourNo"));
+        assert!(!serialized.contains("secret-openid"));
+        assert!(!serialized.contains("secret-journal"));
+    }
+
+    #[test]
+    fn closing_payment_context_never_marks_confirmed_payment_completed() {
+        assert_eq!(
+            stage_after_payment_context_closed(RechargeStage::PaymentConfirmed)
+                .map(|(stage, _)| stage),
+            Some(RechargeStage::PaymentConfirmed)
+        );
+        assert_eq!(
+            stage_after_payment_context_closed(RechargeStage::HandedOff).map(|(stage, _)| stage),
+            Some(RechargeStage::Unknown)
+        );
+        assert_eq!(
+            stage_after_payment_context_closed(RechargeStage::Completed),
+            None
+        );
     }
 }

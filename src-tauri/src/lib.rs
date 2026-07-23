@@ -1,5 +1,7 @@
 mod billing;
+mod billing_runtime;
 mod campus_services;
+mod config_model;
 mod cookie_jar;
 mod recharge_state;
 #[tauri::command]
@@ -524,23 +526,15 @@ fn write_clipboard(text: String) -> Result<(), String> {
     }
 }
 
+use config_model::{
+    default_android_notification_mode, default_balance_alert_threshold,
+    default_flow_alert_threshold, default_vpn_compatibility, Account, AppConfig, NetworkProfile,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::Emitter;
 use tauri::Manager;
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
-struct Account {
-    #[serde(alias = "username")]
-    user: String,
-    #[serde(alias = "password")]
-    pass: String,
-    #[serde(default, rename = "isDefault", alias = "is_default")]
-    is_default: bool,
-    #[serde(default, rename = "isDisabled", alias = "is_disabled")]
-    is_disabled: Option<bool>,
-}
 
 #[derive(serde::Serialize)]
 struct ManualLoginResult {
@@ -642,122 +636,6 @@ struct DiagnosticReport {
     steps: Vec<DiagnosticStep>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
-struct NetworkProfile {
-    id: String,
-    name: String,
-    #[serde(default = "default_true")]
-    enabled: bool,
-    #[serde(default)]
-    ssid: String,
-    #[serde(default)]
-    bssid: String,
-    #[serde(default = "default_profile_login_type")]
-    login_type: String,
-    #[serde(default)]
-    account_order: Vec<String>,
-    #[serde(default)]
-    auto_login: Option<bool>,
-    #[serde(default)]
-    auto_login_types: HashMap<String, bool>,
-    #[serde(default)]
-    check_interval: Option<i32>,
-    #[serde(default)]
-    check_interval_bg: Option<i32>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
-struct AppConfig {
-    #[serde(default)]
-    accounts: Vec<Account>,
-    #[serde(default = "default_auto_login", alias = "autoLogin")]
-    auto_login: bool,
-    #[serde(default = "default_check_interval", alias = "checkInterval")]
-    check_interval: i32,
-    #[serde(default = "default_check_interval_bg", alias = "checkIntervalBg")]
-    check_interval_bg: i32,
-    #[serde(default = "default_wifi_change_detect", alias = "wifiChangeDetect")]
-    wifi_change_detect: bool,
-    #[serde(default = "default_log_level", alias = "logLevel")]
-    log_level: String,
-    #[serde(default = "default_vpn_compatibility", alias = "vpnCompatibility")]
-    vpn_compatibility: String,
-    #[serde(default, alias = "vpnMaximumUntil")]
-    vpn_maximum_until: Option<i64>,
-    #[serde(default)]
-    whitelist: Vec<String>,
-    #[serde(default)]
-    blacklist: Vec<String>,
-    #[serde(default)]
-    network_profiles: Vec<NetworkProfile>,
-    #[serde(default = "default_usage_alerts")]
-    usage_alerts: bool,
-    #[serde(default = "default_balance_alert_threshold")]
-    balance_alert_threshold: f64,
-    #[serde(default = "default_flow_alert_threshold")]
-    flow_alert_threshold: f64,
-    #[serde(
-        default = "default_android_notification_mode",
-        alias = "androidNotificationMode"
-    )]
-    android_notification_mode: String,
-    #[serde(default = "default_true", alias = "androidNotifyNetworkStatus")]
-    android_notify_network_status: bool,
-    #[serde(default = "default_true", alias = "androidNotifyLoginResults")]
-    android_notify_login_results: bool,
-    #[serde(default = "default_true", alias = "androidNotifyBackgroundErrors")]
-    android_notify_background_errors: bool,
-    #[serde(
-        default,
-        rename = "campusServiceSessions",
-        alias = "campus_service_sessions"
-    )]
-    campus_service_sessions: Vec<campus_services::PersistedCampusSession>,
-    #[serde(
-        default,
-        rename = "rechargeTransactions",
-        alias = "recharge_transactions"
-    )]
-    recharge_transactions: recharge_state::RechargeJournal,
-}
-
-fn default_auto_login() -> bool {
-    false
-}
-fn default_check_interval() -> i32 {
-    15
-}
-fn default_check_interval_bg() -> i32 {
-    60
-}
-fn default_wifi_change_detect() -> bool {
-    true
-}
-fn default_log_level() -> String {
-    "info".to_string()
-}
-fn default_vpn_compatibility() -> String {
-    "high".to_string()
-}
-fn default_true() -> bool {
-    true
-}
-fn default_profile_login_type() -> String {
-    "auto".to_string()
-}
-fn default_usage_alerts() -> bool {
-    true
-}
-fn default_balance_alert_threshold() -> f64 {
-    10.0
-}
-fn default_flow_alert_threshold() -> f64 {
-    5.0
-}
-fn default_android_notification_mode() -> String {
-    "combined".to_string()
-}
-
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct LogEntry {
     time: String,
@@ -791,7 +669,13 @@ struct AppState {
         tokio::sync::Mutex<Option<campus_services::PendingWechatRecharge>>,
     campus_wechat_payment_pending:
         tokio::sync::Mutex<Option<campus_services::PendingWechatPayment>>,
-    pending_discovered_account: tokio::sync::Mutex<Option<Account>>,
+    pending_discovered_account: tokio::sync::Mutex<Option<PendingDiscoveredAccount>>,
+}
+
+struct PendingDiscoveredAccount {
+    account: Account,
+    token: String,
+    expires_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1057,47 +941,22 @@ fn app_is_in_background(app: &tauri::AppHandle, state: &AppState) -> bool {
     reported_background
 }
 
-const BILLING_BACKGROUND_MESSAGE: &str = "App 已进入后台，计费系统请求已停止；返回前台后可重新发起";
-
 fn ensure_billing_foreground(state: &AppState) -> Result<(), String> {
-    if state.is_in_background.load(Ordering::SeqCst) {
-        Err(BILLING_BACKGROUND_MESSAGE.to_string())
-    } else {
-        Ok(())
-    }
-}
-
-async fn wait_for_billing_background(state: &AppState) {
-    loop {
-        if state.is_in_background.load(Ordering::SeqCst) {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
+    billing_runtime::ensure_foreground(&state.is_in_background)
 }
 
 async fn run_billing_read_while_foreground<T, F>(state: &AppState, future: F) -> Result<T, String>
 where
     F: std::future::Future<Output = Result<T, String>>,
 {
-    ensure_billing_foreground(state)?;
-    let background = wait_for_billing_background(state);
-    futures_util::pin_mut!(future, background);
-    match futures_util::future::select(future, background).await {
-        futures_util::future::Either::Left((result, _)) => result,
-        futures_util::future::Either::Right((_, _)) => Err(BILLING_BACKGROUND_MESSAGE.to_string()),
-    }
+    billing_runtime::run_read_while_foreground(&state.is_in_background, future).await
 }
 
 async fn run_billing_mutation_to_completion<T, F>(state: &AppState, future: F) -> Result<T, String>
 where
     F: std::future::Future<Output = Result<T, String>>,
 {
-    // A write must only be rejected before it starts. Once the future is
-    // polled, dropping it when the window loses focus can leave the server-side
-    // result unknown and encourage a dangerous duplicate submission.
-    ensure_billing_foreground(state)?;
-    future.await
+    billing_runtime::run_mutation_to_completion(&state.is_in_background, future).await
 }
 
 fn url_encode(input: &str) -> String {
@@ -3525,6 +3384,51 @@ fn get_app_config(state: tauri::State<Arc<AppState>>) -> serde_json::Value {
     value
 }
 
+fn credential_snapshot_fingerprint(config: &AppConfig, users: &[String]) -> Option<String> {
+    use base64::Engine;
+    use sha2::Digest;
+
+    #[derive(serde::Serialize)]
+    struct CredentialSnapshot<'a> {
+        user: &'a str,
+        pass: &'a str,
+    }
+
+    if users.is_empty() {
+        return None;
+    }
+    let mut snapshot = Vec::with_capacity(users.len());
+    for user in users {
+        let account = config
+            .accounts
+            .iter()
+            .find(|account| account.user == *user)?;
+        if account.pass.is_empty() {
+            return None;
+        }
+        snapshot.push(CredentialSnapshot {
+            user: &account.user,
+            pass: &account.pass,
+        });
+    }
+    let serialized = serde_json::to_vec(&snapshot).ok()?;
+    let digest = sha2::Sha256::digest(serialized);
+    Some(base64::engine::general_purpose::STANDARD.encode(digest))
+}
+
+#[tauri::command]
+fn verify_legacy_credential_fingerprint(
+    state: tauri::State<Arc<AppState>>,
+    users: Vec<String>,
+    fingerprint: String,
+) -> bool {
+    if fingerprint.trim().is_empty() {
+        return false;
+    }
+    let config = state.config.read().unwrap();
+    credential_snapshot_fingerprint(&config, &users).is_some_and(|actual| actual == fingerprint)
+}
+
 #[tauri::command]
 fn get_account_password(
     state: tauri::State<Arc<AppState>>,
@@ -4334,6 +4238,7 @@ async fn discover_current_campus_account(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Option<serde_json::Value>, String> {
+    *state.pending_discovered_account.lock().await = None;
     if ensure_billing_foreground(&state).is_err() {
         return Ok(None);
     }
@@ -4345,7 +4250,7 @@ async fn discover_current_campus_account(
         std::time::Duration::from_secs(25),
         billing::discover_current_campus_account(compatibility),
     );
-    let background = wait_for_billing_background(&state);
+    let background = billing_runtime::wait_for_background(&state.is_in_background);
     futures_util::pin_mut!(request, background);
     let result = match futures_util::future::select(request, background).await {
         futures_util::future::Either::Left((result, _)) => Some(result),
@@ -4371,13 +4276,24 @@ async fn discover_current_campus_account(
                 "info",
             );
             let user = account.user.clone();
-            *state.pending_discovered_account.lock().await = Some(Account {
-                user: account.user,
-                pass: account.pass,
-                is_default: false,
-                is_disabled: Some(false),
+            let token_seed = format!(
+                "{}:{}:{:?}",
+                user,
+                chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+                std::thread::current().id()
+            );
+            let token = format!("{:x}", md5::compute(token_seed));
+            *state.pending_discovered_account.lock().await = Some(PendingDiscoveredAccount {
+                account: Account {
+                    user: account.user,
+                    pass: account.pass,
+                    is_default: false,
+                    is_disabled: Some(false),
+                },
+                token: token.clone(),
+                expires_at: std::time::Instant::now() + std::time::Duration::from_secs(120),
             });
-            Ok(Some(serde_json::json!({ "user": user })))
+            Ok(Some(serde_json::json!({ "user": user, "token": token })))
         }
         Ok(Ok(None)) => Ok(None),
         Ok(Err(billing::BillingError::Network(detail))) => {
@@ -4407,14 +4323,20 @@ async fn accept_discovered_campus_account(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     user: String,
+    token: String,
 ) -> Result<(), String> {
-    let discovered = state
+    let pending = state
         .pending_discovered_account
         .lock()
         .await
         .take()
-        .filter(|account| account.user == user)
+        .filter(|pending| {
+            pending.account.user == user
+                && pending.token == token
+                && std::time::Instant::now() <= pending.expires_at
+        })
         .ok_or_else(|| "待保存的校园网账号凭据已失效，请重新检测".to_string())?;
+    let discovered = pending.account;
     let mut config = state.config.read().unwrap().clone();
     if config
         .accounts
@@ -4434,6 +4356,21 @@ async fn accept_discovered_campus_account(
         "已将发现的校园网账号直接写入安全存储",
         "success",
     );
+    Ok(())
+}
+
+#[tauri::command]
+async fn reject_discovered_campus_account(
+    state: tauri::State<'_, Arc<AppState>>,
+    token: String,
+) -> Result<(), String> {
+    let mut pending = state.pending_discovered_account.lock().await;
+    if pending
+        .as_ref()
+        .is_some_and(|candidate| candidate.token == token)
+    {
+        *pending = None;
+    }
     Ok(())
 }
 
@@ -4729,7 +4666,24 @@ fn persist_recharge_transaction(
         config.recharge_transactions.upsert(transaction);
         config.clone()
     };
-    save_secure_config_verified(app, &snapshot)
+    save_recharge_snapshot_verified(app, &snapshot)
+}
+
+fn save_recharge_snapshot_verified(
+    app: &tauri::AppHandle,
+    snapshot: &AppConfig,
+) -> Result<(), String> {
+    let mut last_error = String::new();
+    for attempt in 0..3 {
+        match save_secure_config_verified(app, snapshot) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(40 * (attempt + 1)));
+        }
+    }
+    Err(format!("充值恢复记录连续写入失败：{last_error}"))
 }
 
 fn transition_recharge_transaction(
@@ -4746,19 +4700,19 @@ fn transition_recharge_transaction(
             .transition(id, stage, chrono::Utc::now().timestamp(), note)?;
         config.clone()
     };
-    save_secure_config_verified(app, &snapshot)
+    save_recharge_snapshot_verified(app, &snapshot)
 }
 
 #[tauri::command]
 fn get_recoverable_recharges(
     state: tauri::State<Arc<AppState>>,
-) -> Vec<recharge_state::RechargeTransaction> {
+) -> Vec<recharge_state::RechargeRecoveryView> {
     state
         .config
         .read()
         .unwrap()
         .recharge_transactions
-        .recoverable()
+        .recovery_views()
 }
 
 #[tauri::command]
@@ -5183,7 +5137,13 @@ async fn confirm_alipay_card_recharge(
                 }
                 config.clone()
             };
-            let _ = save_secure_config_verified(&app, &snapshot);
+            if let Err(error) = save_recharge_snapshot_verified(&app, &snapshot) {
+                let message = format!(
+                    "支付宝订单可能已经创建，但恢复记录未能安全保存（{error}）。本次不会打开支付入口；请勿重复创建订单，先刷新充值恢复状态"
+                );
+                rust_log(&app, &state, "计费", &message, "error");
+                return Err(message);
+            }
             rust_log(&app, &state, "计费", "支付宝支付入口已安全生成", "success")
         }
         Err(error) => {
@@ -5359,8 +5319,14 @@ async fn confirm_wechat_card_recharge(
                 }
                 config.clone()
             };
-            let _ = save_secure_config_verified(&app, &snapshot);
             *state.campus_wechat_payment_pending.lock().await = Some(payment);
+            if let Err(error) = save_recharge_snapshot_verified(&app, &snapshot) {
+                let message = format!(
+                    "微信订单可能已经创建，但恢复记录未能安全保存（{error}）。本次不会唤起微信；请勿重复创建订单，先刷新充值恢复状态"
+                );
+                rust_log(&app, &state, "计费", &message, "error");
+                return Err(message);
+            }
             rust_log(
                 &app,
                 &state,
@@ -5489,18 +5455,10 @@ async fn cancel_wechat_card_recharge(
             .recharge_transactions
             .find(&payment_id)
             .map(|transaction| transaction.stage.clone());
-        let next = if stage == Some(recharge_state::RechargeStage::PaymentConfirmed) {
-            recharge_state::RechargeStage::Completed
-        } else {
-            recharge_state::RechargeStage::Cancelled
-        };
-        let _ = transition_recharge_transaction(
-            &app,
-            &state,
-            &payment_id,
-            next,
-            "微信充值恢复记录已结束",
-        );
+        let transition = stage.and_then(recharge_state::stage_after_payment_context_closed);
+        if let Some((next, note)) = transition {
+            transition_recharge_transaction(&app, &state, &payment_id, next, note)?;
+        }
     }
     Ok(())
 }
@@ -6120,7 +6078,7 @@ pub fn run() {
                 }
             }
 
-            let tray = tray_builder
+            let _tray = tray_builder
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
                     if event.id == "show" {
@@ -6213,7 +6171,7 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             {
-                let _ = tray.set_icon_as_template(true);
+                let _ = _tray.set_icon_as_template(true);
             }
         }
         Ok(())
@@ -6247,6 +6205,7 @@ pub fn run() {
             write_clipboard,
             sync_config,
             get_app_config,
+            verify_legacy_credential_fingerprint,
             get_account_password,
             get_credential_storage_status,
             get_credential_storage_health,
@@ -6265,6 +6224,7 @@ pub fn run() {
             get_user_info,
             discover_current_campus_account,
             accept_discovered_campus_account,
+            reject_discovered_campus_account,
             get_billing_center,
             query_billing_records,
             perform_billing_action,
@@ -6459,6 +6419,21 @@ mod tests {
         assert!(public_config(&config).whitelist.is_empty());
         assert!(public_config(&config).blacklist.is_empty());
         assert!(public_config(&config).recharge_transactions.0.is_empty());
+    }
+
+    #[test]
+    fn credential_fingerprint_matches_frontend_canonical_json() {
+        let config: AppConfig = serde_json::from_value(serde_json::json!({
+            "accounts": [
+                {"user": "25000001", "pass": "secret", "isDefault": true}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            credential_snapshot_fingerprint(&config, &["25000001".to_string()]).as_deref(),
+            Some("RIaN0amLX2hGe8y+AWFlPi5loCz5luI2i2rvaEyF2m4=")
+        );
+        assert!(credential_snapshot_fingerprint(&config, &["missing".to_string()]).is_none());
     }
 
     #[test]

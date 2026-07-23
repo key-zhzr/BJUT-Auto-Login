@@ -10,13 +10,26 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
+import {
+  credentialSnapshotFingerprint, hasLegacyCredentialConflict, LEGACY_ACCOUNTS_KEY,
+  LEGACY_MIGRATION_PENDING_KEY, mergeLegacyAccounts, readLegacyAccounts,
+} from './account-migration';
+import { decryptExport, encryptExport } from './config-crypto';
+import { CustomSelect } from './custom-select';
+import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
+import { formatBytes, isVersionNewer, renderReleaseNotes, selectUpdateAsset } from './update-utils';
 import type {
   AccountView, ActiveAlipayPayment, ActiveWechatPayment, AlipayRechargePreview,
-  AlipayRechargeResult, BackendConfig, DiscoveredCampusAccount, LegacyAccount,
+  AlipayRechargeResult, AppLogEntry, BackendConfig, BillingActionRequest,
+  BillingActionResult, BillingCenterData, BillingPasswordPolicy, BillingQuestionAnswer,
+  BillingLoginRecord, BillingOnlineSession, BillingOverview, BillingPackageOption,
+  BillingRecordKind, BillingRecordQuery, BillingRecordQueryState, BillingRecordResult,
+  BillingServiceState, BillingTable, CountdownPayload, CredentialStorageHealth,
+  DiagnosticReport, DiscoveredCampusAccount, GitHubRelease, GitHubReleaseAsset,
+  NetworkStatePayload,
   NetworkProfile, RechargeBalanceSnapshot, RechargePreview, RechargeResult,
-  RecoverableRecharge, WechatPaymentStatus, WechatRechargePreview, WechatRechargeResult,
+  RecoverableRecharge, UpdateProgress, UpdateTarget, UserInfo, WechatPaymentStatus,
+  WechatRechargePreview, WechatRechargeResult, AccountHealth,
 } from './models';
 
 const icons = {
@@ -26,9 +39,6 @@ const icons = {
   QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
   WalletCards, WifiOff, X,
 };
-
-const IS_ANDROID = navigator.userAgent.toLowerCase().includes('android');
-const IS_WINDOWS = navigator.userAgent.includes('Windows');
 
 function renderIcons(root: Element | Document | DocumentFragment = document) {
   createIcons({ icons, root });
@@ -132,85 +142,6 @@ let vpnMaximumUntil = 0;
 let vpnMaximumRollbackTimer: number | null = null;
 let configSyncQueue: Promise<void> = Promise.resolve();
 let missingPasswordWarningShown = false;
-const LEGACY_ACCOUNTS_KEY = 'bjut_accounts';
-const LEGACY_XOR_KEY = 'bjut-al-secret-key-2026';
-const LEGACY_MIGRATION_PENDING_KEY = 'bjut_accounts_migration_pending';
-
-function readLegacyAccounts(): LegacyAccount[] | null {
-  const raw = localStorage.getItem(LEGACY_ACCOUNTS_KEY);
-  if (raw === null) return null;
-  try {
-    const json = raw.trim().startsWith('[')
-      ? raw
-      : Array.from(atob(raw), (character, index) => String.fromCharCode(
-          character.charCodeAt(0) ^ LEGACY_XOR_KEY.charCodeAt(index % LEGACY_XOR_KEY.length),
-        )).join('');
-    const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed)) return null;
-    return parsed
-      .map(account => ({
-        ...account,
-        user: account?.user ?? account?.username,
-        pass: account?.pass ?? account?.password,
-      }))
-      .filter(account => account && typeof account.user === 'string' && typeof account.pass === 'string')
-      .map((account, index) => ({
-        user: account.user,
-        pass: account.pass,
-        isDefault: account.isDefault ?? account.is_default ?? index === 0,
-        isDisabled: account.isDisabled ?? account.is_disabled ?? false,
-      }));
-  } catch (error) {
-    console.warn('Unable to decode legacy account storage:', error);
-    return null;
-  }
-}
-
-function mergeLegacyAccounts(current: AccountView[], legacy: LegacyAccount[]): { accounts: AccountView[], changed: boolean } {
-  let changed = false;
-  const accounts = current.map(account => ({ ...account }));
-  legacy.forEach(legacyAccount => {
-    const currentAccount = accounts.find(account => account.user === legacyAccount.user);
-    if (!currentAccount) {
-      accounts.push({
-        ...legacyAccount,
-        hasPassword: Boolean(legacyAccount.pass),
-        isDefault: accounts.some(account => account.isDefault) ? false : legacyAccount.isDefault,
-      });
-      changed = true;
-    } else if (!currentAccount.hasPassword && !currentAccount.pass && legacyAccount.pass) {
-      currentAccount.pass = legacyAccount.pass;
-      changed = true;
-    }
-  });
-  if (accounts.length > 0 && !accounts.some(account => account.isDefault)) {
-    accounts[0].isDefault = true;
-    changed = true;
-  }
-  return { accounts, changed };
-}
-
-function hasLegacyCredentialConflict(current: AccountView[], legacy: LegacyAccount[]): boolean {
-  return legacy.some(legacyAccount => {
-    if (!legacyAccount.pass) return false;
-    const currentAccount = current.find(account => account.user === legacyAccount.user);
-    return currentAccount?.hasPassword === true
-      || (currentAccount?.pass ? currentAccount.pass !== legacyAccount.pass : false);
-  });
-}
-
-async function credentialSnapshotFingerprint(accounts: Pick<AccountView, 'user' | 'pass'>[]): Promise<string> {
-  const snapshot = accounts.map(account => ({
-    user: String(account.user ?? ''),
-    pass: String(account.pass ?? ''),
-  }));
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(JSON.stringify(snapshot)),
-  );
-  return bytesToBase64(new Uint8Array(digest));
-}
-
 function warnAboutMissingPasswords(storageStatus = 'missing') {
   const missingPasswordUsers = accountsCache
     .filter(account => !account.hasPassword && !account.pass)
@@ -275,12 +206,16 @@ function scheduleCurrentCampusAccountDiscovery() {
 async function discoverAndOfferCurrentCampusAccount() {
   const candidate = await invoke<DiscoveredCampusAccount | null>('discover_current_campus_account');
   if (!candidate) return;
-  if (!candidate.user) return;
+  if (!candidate.user || !candidate.token) return;
   if (accountsCache.some(account => account.user === candidate.user)) {
+    await invoke('reject_discovered_campus_account', { token: candidate.token }).catch(() => undefined);
     localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
     return;
   }
-  if (sessionStorage.getItem(DISMISSED_DISCOVERED_ACCOUNT_KEY) === candidate.user) return;
+  if (sessionStorage.getItem(DISMISSED_DISCOVERED_ACCOUNT_KEY) === candidate.user) {
+    await invoke('reject_discovered_campus_account', { token: candidate.token }).catch(() => undefined);
+    return;
+  }
 
   const firstLaunch = localStorage.getItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY) === 'true';
   const confirmed = await customConfirm(
@@ -290,11 +225,15 @@ async function discoverAndOfferCurrentCampusAccount() {
   localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
   if (!confirmed) {
     sessionStorage.setItem(DISMISSED_DISCOVERED_ACCOUNT_KEY, candidate.user);
+    await invoke('reject_discovered_campus_account', { token: candidate.token }).catch(() => undefined);
     return;
   }
 
   try {
-    await invoke<void>('accept_discovered_campus_account', { user: candidate.user });
+    await invoke<void>('accept_discovered_campus_account', {
+      user: candidate.user,
+      token: candidate.token,
+    });
     await loadConfigFromRust();
     sessionStorage.removeItem(DISMISSED_DISCOVERED_ACCOUNT_KEY);
     renderAccounts();
@@ -306,421 +245,12 @@ async function discoverAndOfferCurrentCampusAccount() {
   }
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
-  return btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  return Uint8Array.from(atob(value), char => char.charCodeAt(0));
-}
-
-async function deriveExportKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
-  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' },
-    material,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  );
-}
-
-async function encryptExport(data: unknown, passphrase: string): Promise<string> {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveExportKey(passphrase, salt);
-  const plaintext = new TextEncoder().encode(JSON.stringify(data));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
-  return JSON.stringify({ version: 2, salt: bytesToBase64(salt), iv: bytesToBase64(iv), ciphertext: bytesToBase64(new Uint8Array(ciphertext)) });
-}
-
-async function decryptExport(value: string, passphrase: string): Promise<Record<string, unknown>> {
-  const envelope = JSON.parse(value) as Record<string, unknown>;
-  const salt = envelope.salt;
-  const iv = envelope.iv;
-  const ciphertext = envelope.ciphertext;
-  if (envelope.version !== 2 || typeof salt !== 'string' || typeof iv !== 'string' || typeof ciphertext !== 'string') {
-    throw new Error('不是受支持的加密配置格式');
-  }
-  const key = await deriveExportKey(passphrase, base64ToBytes(salt));
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64ToBytes(iv) },
-    key,
-    base64ToBytes(ciphertext)
-  );
-  const plaintextBytes = new Uint8Array(plaintext);
-  const decoded = new TextDecoder().decode(plaintextBytes);
-  plaintextBytes.fill(0);
-  const result: unknown = JSON.parse(decoded);
-  if (!result || typeof result !== 'object' || Array.isArray(result)) {
-    throw new Error('加密配置内容不是有效对象');
-  }
-  return result as Record<string, unknown>;
-}
-
-async function writeTextToClipboard(text: string): Promise<void> {
-  if (window.AndroidBridge) {
-    const copied = window.AndroidBridge.setClipboardText(text);
-    if (copied === false) throw new Error('Android 剪贴板写入失败');
-  } else if (window.__TAURI__) {
-    await invoke('write_clipboard', { text });
-  } else {
-    await navigator.clipboard.writeText(text);
-  }
-}
-
-async function readTextFromClipboard(): Promise<string> {
-  if (window.AndroidBridge) {
-    return window.AndroidBridge.getClipboardText();
-  }
-  if (window.__TAURI__) {
-    return invoke<string>('read_clipboard');
-  }
-  return navigator.clipboard.readText();
-}
-
-interface GitHubReleaseAsset {
-  name: string;
-  browser_download_url: string;
-  size: number;
-}
-
-interface GitHubRelease {
-  tag_name: string;
-  name: string | null;
-  body: string | null;
-  html_url: string;
-  prerelease: boolean;
-  draft: boolean;
-  assets: GitHubReleaseAsset[];
-}
-
-interface UpdateTarget {
-  platform: 'android' | 'ios' | 'windows' | 'macos' | 'linux';
-  arch: string;
-  format: string;
-  currentVersion: string;
-}
-
-interface UpdateProgress {
-  status: 'downloading' | 'installing';
-  received?: number;
-  total?: number;
-  percent?: number | null;
-}
-
-interface AccountHealth {
-  user: string;
-  status: 'healthy' | 'cooling_down' | 'needs_attention' | 'degraded';
-  consecutiveFailures: number;
-  cooldownUntil: number | null;
-  cooldownSeconds: number;
-  lastSuccess: string | null;
-  lastFailure: string | null;
-  lastFailureReason: string | null;
-  failureKind: string | null;
-}
-
-interface CredentialStorageHealth {
-  status: string;
-  backend: string;
-  persistent: boolean;
-  savedAccounts: number;
-  missingPasswordAccounts: string[];
-  message: string;
-}
-
-interface DiagnosticStep {
-  id: string;
-  label: string;
-  status: 'success' | 'warning' | 'error' | 'skipped';
-  message: string;
-  durationMs: number;
-}
-
-interface DiagnosticReport {
-  createdAt: string;
-  overall: 'healthy' | 'auth_required' | 'no_network' | 'offline';
-  summary: string;
-  ssid: string;
-  ip: string;
-  steps: DiagnosticStep[];
-}
-
-interface AppLogEntry {
-  time: string;
-  module: string;
-  message: string;
-  type: 'info' | 'error' | 'success' | 'debug';
-}
-
-interface CountdownPayload {
-  status: 'checking' | 'suspended' | 'ticking';
-  seconds: number;
-}
-
-interface NetworkStatePayload {
-  state: 'Online' | 'BjutCampus' | 'Offline';
-  loginType?: string;
-  ssid?: string;
-  bssid?: string;
-  ip?: string;
-  timestamp?: string;
-}
-
-interface UserInfo {
-  account: string;
-  balance: string;
-  flow: string;
-  source: 'billing' | 'portal' | 'unavailable';
-  status?: string | null;
-  statusReason?: string | null;
-  package?: string | null;
-  packageDetail?: string | null;
-  usedFlow?: string | null;
-  billingCycle?: string | null;
-  updatedAt: string;
-  billingError?: string | null;
-  loginHistory: BillingLoginRecord[];
-  onlineSessions: BillingOnlineSession[];
-  offlineTip?: string | null;
-  mauthEnabled?: boolean | null;
-  billingWarnings: string[];
-}
-
-interface BillingLoginRecord {
-  loginAt: string;
-  logoutAt: string;
-  ip: string;
-  ipv6: string;
-  mac: string;
-  durationMinutes: string;
-  usedFlowMb: string;
-  billingMode: string;
-  amount: string;
-}
-
-interface BillingOnlineSession {
-  loginAt: string;
-  ip: string;
-  ipv6: string;
-  mac: string;
-  durationMinutes: string;
-  usedFlowMb: string;
-  sessionId: string;
-}
-
-interface BillingOverview {
-  account: string;
-  balance: string;
-  remainingFlow: string;
-  usedFlow?: string | null;
-  status?: string | null;
-  statusReason?: string | null;
-  package?: string | null;
-  packageDetail?: string | null;
-  billingCycle?: string | null;
-  updatedAt: string;
-  loginHistory: BillingLoginRecord[];
-  onlineSessions: BillingOnlineSession[];
-  offlineTip?: string | null;
-  mauthEnabled?: boolean | null;
-  warnings: string[];
-}
-
-interface BillingTable {
-  total: number;
-  rows: Record<string, string>[];
-  summary: Record<string, string>;
-}
-
-interface BillingPackageOption {
-  id: string;
-  name: string;
-  description: string;
-}
-
-interface BillingPasswordPolicy {
-  minLength: number;
-  maxLength: number;
-  requireUppercase: boolean;
-  requireLowercase: boolean;
-  requireDigit: boolean;
-  requireSpecial: boolean;
-}
-
-interface BillingSecurityQuestion {
-  id: string;
-  text: string;
-}
-
-interface BillingServiceState {
-  accountStatus?: string | null;
-  statusReason?: string | null;
-  currentPackageId?: string | null;
-  currentPackage?: string | null;
-  packageDetail?: string | null;
-  nextSettlementDate?: string | null;
-  canStopNow: boolean;
-  canReopenNow: boolean;
-  packageScheduled: boolean;
-  scheduledPackageId?: string | null;
-  scheduledPackage?: string | null;
-  consumeLimit?: string | null;
-  currentCycleSpend?: string | null;
-  balance?: string | null;
-  packageOptions: BillingPackageOption[];
-}
-
-interface BillingCenterData {
-  account: string;
-  overview: BillingOverview;
-  fetchedAt: string;
-  queryStartDate: string;
-  queryEndDate: string;
-  queryYear: string;
-  usageRecords: BillingTable;
-  monthlyBills: BillingTable;
-  payments: BillingTable;
-  operations: BillingTable;
-  stopLogs: BillingTable;
-  reopenLogs: BillingTable;
-  packageLogs: BillingTable;
-  devices: BillingTable;
-  tariffGroups: BillingTable;
-  service: BillingServiceState;
-  passwordPolicy: BillingPasswordPolicy;
-  securityQuestions: BillingSecurityQuestion[];
-  rechargeAvailable: boolean;
-  warnings: string[];
-}
-
-interface BillingQuestionAnswer {
-  questionId: string;
-  answer: string;
-}
-
-interface BillingActionRequest {
-  action: string;
-  packageId?: string;
-  consumeLimit?: string;
-  mac?: string;
-  oldPassword?: string;
-  newPassword?: string;
-  questions?: BillingQuestionAnswer[];
-}
-
-interface BillingActionResult {
-  message: string;
-  passwordChanged: boolean;
-}
-
-type BillingRecordKind = 'usage' | 'monthly' | 'payments' | 'operations' | 'stopLogs' | 'reopenLogs' | 'packageLogs';
-
-interface BillingRecordQuery {
-  kind: BillingRecordKind;
-  page: number;
-  pageSize: number;
-  startDate?: string;
-  endDate?: string;
-  year?: string;
-  all?: boolean;
-}
-
-interface BillingRecordResult {
-  kind: BillingRecordKind;
-  page: number;
-  pageSize: number;
-  startDate?: string | null;
-  endDate?: string | null;
-  year?: string | null;
-  all: boolean;
-  table: BillingTable;
-}
-
-interface BillingRecordQueryState {
-  page: number;
-  pageSize: number;
-  startDate: string;
-  endDate: string;
-  year: string;
-  queried: boolean;
-}
-
 interface PermissionHealthItem {
   id: string;
   label: string;
   granted: boolean;
   required: boolean;
   detail?: string;
-}
-
-function isVersionNewer(current: string, latest: string): boolean {
-  const parseVersion = (value: string) => {
-    const withoutBuild = value.replace(/^v/i, '').split('+', 1)[0];
-    const [core, prerelease = ''] = withoutBuild.split('-', 2);
-    return {
-      core: core.split('.').map(part => Number.parseInt(part, 10) || 0),
-      prerelease: prerelease ? prerelease.split('.') : [],
-    };
-  };
-  const currentVersion = parseVersion(current);
-  const latestVersion = parseVersion(latest);
-  for (let index = 0; index < Math.max(currentVersion.core.length, latestVersion.core.length); index += 1) {
-    const currentPart = currentVersion.core[index] || 0;
-    const latestPart = latestVersion.core[index] || 0;
-    if (latestPart > currentPart) return true;
-    if (currentPart > latestPart) return false;
-  }
-  if (currentVersion.prerelease.length === 0) return false;
-  if (latestVersion.prerelease.length === 0) return true;
-  for (let index = 0; index < Math.max(currentVersion.prerelease.length, latestVersion.prerelease.length); index += 1) {
-    const currentPart = currentVersion.prerelease[index];
-    const latestPart = latestVersion.prerelease[index];
-    if (currentPart === undefined) return true;
-    if (latestPart === undefined) return false;
-    if (currentPart === latestPart) continue;
-    const currentNumber = /^\d+$/.test(currentPart) ? Number(currentPart) : null;
-    const latestNumber = /^\d+$/.test(latestPart) ? Number(latestPart) : null;
-    if (currentNumber !== null && latestNumber !== null) return latestNumber > currentNumber;
-    if (currentNumber !== null) return false;
-    if (latestNumber !== null) return true;
-    return latestPart.localeCompare(currentPart) > 0;
-  }
-  return false;
-}
-
-function selectUpdateAsset(assets: GitHubReleaseAsset[], target: UpdateTarget): GitHubReleaseAsset | undefined {
-  const expectedSuffix = (() => {
-    switch (target.platform) {
-      case 'android': return `_Android_${target.arch}.apk`;
-      case 'windows': return `_Windows_${target.arch}.exe`;
-      case 'macos': return `_macOS_${target.arch}.dmg`;
-      case 'linux': return `_Linux_${target.arch}.${target.format}`;
-      default: return '';
-    }
-  })().toLowerCase();
-  if (!expectedSuffix) return undefined;
-  return assets.find(asset => asset.name.toLowerCase().endsWith(expectedSuffix));
-}
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '未知大小';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
-
-async function renderReleaseNotes(markdown: string): Promise<string> {
-  const rendered = await marked.parse(markdown || '本次发布未提供更新说明。', { gfm: true, breaks: true });
-  return DOMPurify.sanitize(rendered, { USE_PROFILES: { html: true } });
 }
 
 function updateUpdateProgress(data: UpdateProgress) {
@@ -884,12 +414,12 @@ function syncConfigToRust(): Promise<void> {
     .catch(() => {})
     .then(async () => {
       await invoke<void>('sync_config', { config });
-      // While a recoverable legacy copy exists, record exactly what the
-      // backend accepted. The next cold start must return this snapshot before
-      // the legacy copy is deleted. Later account edits update the fingerprint,
-      // so deleted/renamed accounts are not resurrected by the old data.
-      if (localStorage.getItem(LEGACY_ACCOUNTS_KEY) !== null) {
-        const fingerprint = await credentialSnapshotFingerprint(config.accounts);
+      // Record the original recoverable snapshot once. The next cold start
+      // asks Rust to hash the actual secure credentials and only deletes the
+      // legacy copy when both fingerprints match.
+      const legacyAccounts = readLegacyAccounts();
+      if (legacyAccounts !== null && localStorage.getItem(LEGACY_MIGRATION_PENDING_KEY) === null) {
+        const fingerprint = await credentialSnapshotFingerprint(legacyAccounts);
         localStorage.setItem(LEGACY_MIGRATION_PENDING_KEY, fingerprint);
       }
     })
@@ -930,11 +460,18 @@ async function loadConfigFromRust() {
       && legacyAccounts
         .filter(account => account.pass)
         .every(account => backendAccounts.some(saved => saved.user === account.user && saved.hasPassword));
+    const migrationFingerprintMatches = credentialStorageStatus === 'available'
+      && legacyAccounts !== null
+      && pendingFingerprint !== null
+      && await invoke<boolean>('verify_legacy_credential_fingerprint', {
+        users: legacyAccounts.map(account => account.user),
+        fingerprint: pendingFingerprint,
+      }).catch(() => false);
     const migrationConfirmed = credentialStorageStatus === 'available'
       && secureBackendCoversLegacy
-      && (migrationWasPending || legacyAccounts !== null);
+      && migrationFingerprintMatches;
     const backendIsAuthoritative = credentialStorageStatus === 'available'
-      && (migrationWasPending || secureBackendCoversLegacy);
+      && migrationWasPending;
     const merged = legacyAccounts === null || backendIsAuthoritative
       ? { accounts: backendAccounts, changed: false }
       : mergeLegacyAccounts(backendAccounts, legacyAccounts);
@@ -1036,7 +573,7 @@ async function loadConfigFromRust() {
           } else if (credentialStorageStatus === 'available') {
             localStorage.setItem(
               LEGACY_MIGRATION_PENDING_KEY,
-              await credentialSnapshotFingerprint(accountsCache),
+              await credentialSnapshotFingerprint(legacyAccounts),
             );
           }
           log(
@@ -1475,160 +1012,6 @@ enum LoginType {
   Type2_251_3,
   Type3_172_30,
   Unknown
-}
-
-class CustomSelect {
-  private static instances = new Set<CustomSelect>();
-  private static outsideHandlerInstalled = false;
-  element: HTMLElement;
-  trigger: HTMLElement;
-  triggerSpan: HTMLSpanElement;
-  optionsContainer: HTMLElement;
-  private _value: string = '';
-  onChangeCallbacks: ((value: string) => void)[] = [];
-
-  private close() {
-    this.element.classList.remove('open');
-    this.trigger.setAttribute('aria-expanded', 'false');
-  }
-
-  constructor(elementId: string) {
-    this.element = document.getElementById(elementId)!;
-    this.trigger = this.element.querySelector('.custom-select-trigger')!;
-    this.triggerSpan = this.trigger.querySelector('span')!;
-    this.optionsContainer = this.element.querySelector('.custom-select-options')!;
-    CustomSelect.instances.add(this);
-    this.trigger.setAttribute('role', 'combobox');
-    this.trigger.setAttribute('aria-haspopup', 'listbox');
-    this.trigger.setAttribute('aria-expanded', 'false');
-    const accessibleLabel = this.element.getAttribute('aria-label');
-    if (accessibleLabel) this.trigger.setAttribute('aria-label', accessibleLabel);
-    this.optionsContainer.setAttribute('role', 'listbox');
-    this.optionsContainer.querySelectorAll<HTMLElement>('.custom-option').forEach(option => {
-      option.setAttribute('role', 'option');
-      option.setAttribute('aria-selected', String(option.classList.contains('selected')));
-    });
-
-    // Toggle open
-    this.trigger.addEventListener('click', (e) => {
-      e.stopPropagation();
-      // Close other dropdowns first
-      CustomSelect.instances.forEach(instance => {
-        if (instance !== this) instance.close();
-      });
-      this.element.classList.toggle('open');
-      this.trigger.setAttribute('aria-expanded', String(this.element.classList.contains('open')));
-    });
-
-    this.trigger.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        this.close();
-        return;
-      }
-      if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-      event.preventDefault();
-      if (!this.element.classList.contains('open')) {
-        this.trigger.click();
-        return;
-      }
-      const options = Array.from(this.optionsContainer.querySelectorAll<HTMLElement>('.custom-option'));
-      const selectedIndex = Math.max(0, options.findIndex(option => option.classList.contains('selected')));
-      const nextIndex = event.key === 'ArrowUp'
-        ? (selectedIndex - 1 + options.length) % options.length
-        : (selectedIndex + 1) % options.length;
-      if (event.key === 'Enter' || event.key === ' ') options[selectedIndex]?.click();
-      else options[nextIndex]?.click();
-    });
-
-    // Handle options click
-    this.optionsContainer.addEventListener('click', (e) => {
-      const option = (e.target as HTMLElement).closest('.custom-option') as HTMLElement;
-      if (option) {
-        const val = option.getAttribute('data-value') || '';
-        this.value = val;
-        this.close();
-        this.onChangeCallbacks.forEach(cb => cb(val));
-      }
-    });
-
-    // A single global listener closes every select. This avoids running one
-    // document listener per custom control on every tap.
-    if (!CustomSelect.outsideHandlerInstalled) {
-      document.addEventListener('click', () => {
-        CustomSelect.instances.forEach(instance => instance.close());
-      });
-      CustomSelect.outsideHandlerInstalled = true;
-    }
-
-    // Initial value
-    const selectedOption = this.optionsContainer.querySelector('.custom-option.selected') as HTMLElement;
-    if (selectedOption) {
-      this._value = selectedOption.getAttribute('data-value') || '';
-      this.triggerSpan.textContent = selectedOption.textContent;
-    }
-  }
-
-  get value(): string {
-    return this._value;
-  }
-
-  set value(val: string) {
-    this.setValue(val);
-  }
-
-  setValue(val: string) {
-    this._value = val;
-    let selectedText = '';
-    this.optionsContainer.querySelectorAll('.custom-option').forEach(opt => {
-      if (opt.getAttribute('data-value') === val) {
-        opt.classList.add('selected');
-        opt.setAttribute('aria-selected', 'true');
-        selectedText = opt.textContent || '';
-      } else {
-        opt.classList.remove('selected');
-        opt.setAttribute('aria-selected', 'false');
-      }
-    });
-    this.triggerSpan.textContent = selectedText || val;
-  }
-
-  setDisabled(disabled: boolean) {
-    this.element.classList.toggle('is-disabled', disabled);
-    this.trigger.setAttribute('aria-disabled', String(disabled));
-    this.trigger.tabIndex = disabled ? -1 : 0;
-    if (disabled) this.close();
-  }
-
-  addEventListener(event: 'change', callback: (event: { target: { value: string } }) => void) {
-    if (event === 'change') {
-      this.onChangeCallbacks.push((val) => {
-        callback({ target: { value: val } });
-      });
-    }
-  }
-
-  // Helper to set options dynamically (for override-account)
-  setOptions(options: { value: string, text: string }[]) {
-    this.optionsContainer.innerHTML = '';
-    options.forEach(opt => {
-      const div = document.createElement('div');
-      div.className = 'custom-option';
-      div.setAttribute('role', 'option');
-      div.setAttribute('aria-selected', 'false');
-      div.setAttribute('data-value', opt.value);
-      div.textContent = opt.text;
-      if (opt.value === this._value) {
-        div.classList.add('selected');
-        div.setAttribute('aria-selected', 'true');
-        this.triggerSpan.textContent = opt.text;
-      }
-      this.optionsContainer.appendChild(div);
-    });
-    // If no option is selected, select the first one
-    if (!this.optionsContainer.querySelector('.custom-option.selected') && options.length > 0) {
-      this.setValue(options[0].value);
-    }
-  }
 }
 
 // UI Elements
@@ -5630,6 +5013,25 @@ async function completeAlipayNetworkRecharge(automatic = false) {
       return;
     }
 
+    if (automatic) {
+      alipayAutomaticCheckCount = 180;
+      const message = `检测到校园卡余额增加 ${formatBillingCurrency(String(balanceNow - balanceBefore))}。余额变化本身不能证明对应订单已经到账，请点击“核对并转入网费”确认后再继续。`;
+      billingRechargeState.textContent = message;
+      alipayPaymentModalStatus.textContent = message;
+      billingRechargeProgress.hidden = true;
+      return;
+    }
+    const confirmedArrival = await customConfirm(
+      `检测到校园卡余额由 ${formatBillingCurrency(payment.cardBalanceBefore)} 增加到 ${formatBillingCurrency(snapshot.cardBalance)}。\n\n学校接口没有返回可核对的支付宝订单号。请确认这次余额增加确实来自当前 ${formatBillingCurrency(payment.amount)} 的支付宝订单；确认后才会继续转入目标网费账户 ${payment.targetAccount}。`,
+      '确认支付宝到账',
+    );
+    if (!confirmedArrival) {
+      billingRechargeState.textContent = '已暂停自动转入；请先核对校园卡充值记录，确认后再继续。';
+      alipayPaymentModalStatus.textContent = billingRechargeState.textContent;
+      billingRechargeProgress.hidden = true;
+      return;
+    }
+
     billingRechargeState.textContent = '已检测到支付宝到账，正在按首次确认的信息准备转入目标网费账户…';
     updateRechargeProgress(64, '支付宝已到账，正在准备网费转入…');
     const preview = await invoke<RechargePreview>('prepare_network_recharge', {
@@ -5977,6 +5379,11 @@ async function completeWechatNetworkRecharge(automatic = false) {
     });
     updateRechargeProgress(88, '网费转入完成，正在刷新双方余额…');
     const balanceError = await refreshRechargeBalancesOnce(payment.targetAccount, payment.payerAccount);
+    await invoke('finish_recharge_recovery', {
+      id: payment.paymentId,
+      completed: true,
+      note: '微信到账并已转入目标网费账户',
+    });
     await invoke('cancel_wechat_card_recharge', {
       confirmationId: null,
       paymentId: payment.paymentId,
