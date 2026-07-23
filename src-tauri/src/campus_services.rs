@@ -1,6 +1,8 @@
+#[cfg(test)]
+use reqwest::header::SET_COOKIE;
 use reqwest::header::{
     HeaderMap, ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN,
-    REFERER, SET_COOKIE, USER_AGENT,
+    REFERER, USER_AGENT,
 };
 use reqwest::{Client, Response, Url};
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,8 @@ use std::error::Error as StdError;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use crate::cookie_jar::{CookieJar, StoredCookie};
 
 const CAS_HOST: &str = "cas.bjut.edu.cn";
 const UC_HOST: &str = "uc.bjut.edu.cn";
@@ -132,18 +136,6 @@ fn request_stage(url: &Url) -> &'static str {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct StoredCookie {
-    name: String,
-    value: String,
-    domain: String,
-    host_only: bool,
-    path: String,
-    expires_at: Option<i64>,
-    secure: bool,
-    http_only: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct PersistedCampusSession {
     account: String,
     cookies: Vec<StoredCookie>,
@@ -156,170 +148,6 @@ impl PersistedCampusSession {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-struct DomainCookies {
-    values: BTreeMap<(String, String, String), StoredCookie>,
-}
-
-impl DomainCookies {
-    fn from_persisted(account: &str, persisted: Option<PersistedCampusSession>) -> Self {
-        let now = unix_timestamp();
-        let mut jar = Self::default();
-        let Some(persisted) = persisted.filter(|session| session.account == account) else {
-            return jar;
-        };
-        for cookie in persisted.cookies {
-            if cookie.domain != ITS_HOST
-                || !cookie.host_only
-                || !cookie.path.starts_with('/')
-                || cookie.value.is_empty()
-                || cookie.value.len() > 4096
-                || cookie.expires_at.is_none_or(|expires| expires <= now)
-                || !cookie.secure
-                || !cookie.http_only
-            {
-                continue;
-            }
-            let key = (
-                cookie.domain.clone(),
-                cookie.path.clone(),
-                cookie.name.clone(),
-            );
-            jar.values.insert(key, cookie);
-        }
-        jar
-    }
-
-    fn persistent_snapshot(&self, account: &str) -> PersistedCampusSession {
-        let now = unix_timestamp();
-        let cookies = self
-            .values
-            .values()
-            .filter(|cookie| {
-                cookie.domain == ITS_HOST
-                    && cookie.host_only
-                    && cookie.secure
-                    && cookie.http_only
-                    && cookie.expires_at.is_some_and(|expires| expires > now)
-            })
-            .cloned()
-            .collect();
-        PersistedCampusSession {
-            account: account.to_string(),
-            cookies,
-            saved_at: now,
-        }
-    }
-
-    fn absorb(&mut self, url: &Url, headers: &HeaderMap) {
-        let Some(response_host) = url.host_str().map(str::to_ascii_lowercase) else {
-            return;
-        };
-        for raw in headers.get_all(SET_COOKIE).iter() {
-            let Ok(raw) = raw.to_str() else { continue };
-            let mut parts = raw.split(';');
-            let Some(pair) = parts.next() else { continue };
-            let Some((name, value)) = pair.split_once('=') else {
-                continue;
-            };
-            let name = name.trim();
-            if name.is_empty()
-                || !name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
-            {
-                continue;
-            }
-            let mut domain = response_host.clone();
-            let mut host_only = true;
-            let mut path = default_cookie_path(url.path());
-            let mut expired = value.trim().is_empty();
-            let mut expires_at = None;
-            let mut secure = false;
-            let mut http_only = false;
-            for attribute in parts {
-                let (key, value) = attribute
-                    .trim()
-                    .split_once('=')
-                    .map(|(key, value)| (key.trim(), value.trim()))
-                    .unwrap_or((attribute.trim(), ""));
-                match key.to_ascii_lowercase().as_str() {
-                    "domain" => {
-                        let candidate = value.trim_start_matches('.').to_ascii_lowercase();
-                        if response_host == candidate
-                            || response_host.ends_with(&format!(".{candidate}"))
-                        {
-                            domain = candidate;
-                            host_only = false;
-                        } else {
-                            domain.clear();
-                        }
-                    }
-                    "path" if value.starts_with('/') => path = value.to_string(),
-                    "max-age" => match value.parse::<i64>() {
-                        Ok(age) if age <= 0 => expired = true,
-                        Ok(age) => expires_at = unix_timestamp().checked_add(age),
-                        Err(_) => {}
-                    },
-                    "secure" => secure = true,
-                    "httponly" => http_only = true,
-                    _ => {}
-                }
-            }
-            if domain.is_empty() {
-                continue;
-            }
-            let key = (domain.clone(), path.clone(), name.to_string());
-            if expired {
-                self.values.remove(&key);
-            } else {
-                self.values.insert(
-                    key,
-                    StoredCookie {
-                        name: name.to_string(),
-                        value: value.trim().to_string(),
-                        domain,
-                        host_only,
-                        path,
-                        expires_at,
-                        secure,
-                        http_only,
-                    },
-                );
-            }
-        }
-    }
-
-    fn header(&self, url: &Url) -> Option<String> {
-        let host = url.host_str()?.to_ascii_lowercase();
-        let path = url.path();
-        let mut cookies = self
-            .values
-            .values()
-            .filter(|cookie| {
-                let domain_matches = if cookie.host_only {
-                    host == cookie.domain
-                } else {
-                    host == cookie.domain || host.ends_with(&format!(".{}", cookie.domain))
-                };
-                domain_matches
-                    && cookie_path_matches(path, &cookie.path)
-                    && cookie
-                        .expires_at
-                        .is_none_or(|expires| expires > unix_timestamp())
-            })
-            .collect::<Vec<_>>();
-        cookies.sort_by_key(|cookie| std::cmp::Reverse(cookie.path.len()));
-        (!cookies.is_empty()).then(|| {
-            cookies
-                .into_iter()
-                .map(|cookie| format!("{}={}", cookie.name, cookie.value))
-                .collect::<Vec<_>>()
-                .join("; ")
-        })
-    }
-}
-
 fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -327,26 +155,49 @@ fn unix_timestamp() -> i64 {
         .as_secs() as i64
 }
 
-fn default_cookie_path(path: &str) -> String {
-    if !path.starts_with('/') || path == "/" {
-        return "/".to_string();
-    }
-    path.rsplit_once('/')
-        .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
-        .unwrap_or("/")
-        .to_string()
+fn restored_campus_cookies(account: &str, persisted: Option<PersistedCampusSession>) -> CookieJar {
+    let now = unix_timestamp();
+    let records = persisted
+        .filter(|session| session.account == account)
+        .into_iter()
+        .flat_map(|session| session.cookies)
+        .filter(|cookie| {
+            cookie.domain == ITS_HOST
+                && cookie.host_only
+                && cookie.path.starts_with('/')
+                && !cookie.value.is_empty()
+                && cookie.value.len() <= 4096
+                && cookie.expires_at.is_some_and(|expires| expires > now)
+                && cookie.secure
+                && cookie.http_only
+        });
+    CookieJar::from_records(records)
 }
 
-fn cookie_path_matches(request: &str, cookie: &str) -> bool {
-    request == cookie
-        || request.starts_with(cookie)
-            && (cookie.ends_with('/') || request.as_bytes().get(cookie.len()) == Some(&b'/'))
+fn persisted_campus_cookies(jar: &CookieJar, account: &str) -> PersistedCampusSession {
+    let now = unix_timestamp();
+    let cookies = jar
+        .records()
+        .filter(|cookie| {
+            cookie.domain == ITS_HOST
+                && cookie.host_only
+                && cookie.secure
+                && cookie.http_only
+                && cookie.expires_at.is_some_and(|expires| expires > now)
+        })
+        .cloned()
+        .collect();
+    PersistedCampusSession {
+        account: account.to_string(),
+        cookies,
+        saved_at: now,
+    }
 }
 
 #[derive(Clone, Debug)]
 struct CampusSession {
     client: Client,
-    cookies: DomainCookies,
+    cookies: CookieJar,
 }
 
 impl CampusSession {
@@ -358,12 +209,12 @@ impl CampusSession {
         headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9".parse().unwrap());
         Ok(Self {
             client: build_client(headers)?,
-            cookies: DomainCookies::from_persisted(account, persisted),
+            cookies: restored_campus_cookies(account, persisted),
         })
     }
 
     fn persisted(&self, account: &str) -> PersistedCampusSession {
-        self.cookies.persistent_snapshot(account)
+        persisted_campus_cookies(&self.cookies, account)
     }
 }
 
@@ -531,6 +382,15 @@ impl PendingWechatPayment {
 
     pub(crate) fn expired(&self) -> bool {
         self.created_at.elapsed() > WECHAT_PAYMENT_LIFETIME
+    }
+
+    pub(crate) fn recovery_fields(&self) -> (&str, &str, &str, &str) {
+        (
+            &self.payer_account,
+            &self.amount,
+            &self.openid,
+            &self.partner_jour_no,
+        )
     }
 }
 
@@ -1026,6 +886,40 @@ pub(crate) async fn check_wechat_card_recharge(
     })
 }
 
+pub(crate) async fn restore_wechat_card_recharge(
+    payment_id: &str,
+    account: &str,
+    password: &str,
+    amount: &str,
+    partner_jour_no: &str,
+    persisted: Option<PersistedCampusSession>,
+) -> Result<(PendingWechatPayment, PersistedCampusSession), CampusServiceError> {
+    if payment_id.is_empty()
+        || partner_jour_no.is_empty()
+        || !partner_jour_no
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+    {
+        return Err(CampusServiceError::protocol("微信恢复记录缺少有效订单标识"));
+    }
+    let amount = canonical_amount(amount)?;
+    let mut session = CampusSession::new(account, persisted)?;
+    let context = enter_recharge(&mut session, account, password).await?;
+    let persisted = session.persisted(account);
+    Ok((
+        PendingWechatPayment {
+            payment_id: payment_id.to_string(),
+            created_at: Instant::now(),
+            session,
+            payer_account: context.payer_account,
+            amount,
+            openid: context.openid,
+            partner_jour_no: partner_jour_no.to_string(),
+        },
+        persisted,
+    ))
+}
+
 async fn authenticate(account: &str, password: &str) -> Result<CampusSession, CampusServiceError> {
     if account.trim().is_empty() || password.is_empty() {
         return Err(CampusServiceError::rejected(
@@ -1037,7 +931,7 @@ async fn authenticate(account: &str, password: &str) -> Result<CampusSession, Ca
     let client = build_client(headers)?;
     let mut session = CampusSession {
         client,
-        cookies: DomainCookies::default(),
+        cookies: CookieJar::default(),
     };
     let (login_url, login_html) =
         get_follow_text(&mut session, parse_url(CAS_LOGIN_ENTRY)?, &[CAS_HOST], None).await?;
@@ -2484,7 +2378,7 @@ mod tests {
 
     #[test]
     fn cookie_jar_obeys_domain_and_path_boundaries() {
-        let mut jar = DomainCookies::default();
+        let mut jar = CookieJar::default();
         let url = Url::parse("https://cas.bjut.edu.cn/login").unwrap();
         let mut headers = HeaderMap::new();
         headers.append(SET_COOKIE, "CASTGC=secret; Path=/; Secure".parse().unwrap());
@@ -2539,7 +2433,7 @@ mod tests {
             ],
             saved_at: unix_timestamp(),
         };
-        let jar = DomainCookies::from_persisted("student", Some(persisted));
+        let jar = restored_campus_cookies("student", Some(persisted));
         assert_eq!(
             jar.header(&Url::parse("https://itsapp.bjut.edu.cn/uc/api/oauth/index").unwrap())
                 .as_deref(),
@@ -2548,7 +2442,7 @@ mod tests {
         assert!(jar
             .header(&Url::parse("https://ydapp.bjut.edu.cn/openV8HomePage").unwrap())
             .is_none());
-        assert_eq!(jar.persistent_snapshot("student").cookies.len(), 1);
+        assert_eq!(persisted_campus_cookies(&jar, "student").cookies.len(), 1);
     }
 
     #[test]

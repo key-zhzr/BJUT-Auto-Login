@@ -1,10 +1,11 @@
 {
-  "name": "tauri-app",
+  "name": "bjut-auto-login",
   "private": true,
   "version": "0.1.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "typecheck": "tsc --noEmit",
     "build": "tsc && vite build",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",

@@ -12,6 +12,12 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import type {
+  AccountView, ActiveAlipayPayment, ActiveWechatPayment, AlipayRechargePreview,
+  AlipayRechargeResult, BackendConfig, DiscoveredCampusAccount, LegacyAccount,
+  NetworkProfile, RechargeBalanceSnapshot, RechargePreview, RechargeResult,
+  RecoverableRecharge, WechatPaymentStatus, WechatRechargePreview, WechatRechargeResult,
+} from './models';
 
 const icons = {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
@@ -57,20 +63,31 @@ function showResumeMask() {
   }, 260);
 }
 
+function clearTransientWebviewPasswords() {
+  document.querySelectorAll<HTMLElement>('.password-text').forEach(element => {
+    if (element.textContent !== '*************') element.textContent = '*************';
+  });
+  document.querySelectorAll('.action-toggle-password').forEach(button => button.classList.add('hide-password'));
+  document.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input => {
+    input.value = '';
+  });
+}
+
 async function finishAppLaunch() {
   if (appLaunchRevealed) return;
   await macosDockPolicyReady;
   await new Promise(resolve => window.setTimeout(resolve, 40));
   appLaunchRevealed = true;
   setLoadingMaskVisible(false);
-  if ((window as any).__TAURI__) {
+  if (window.__TAURI__) {
     await invoke('frontend_ready').catch(error => console.error('Failed to reveal main window:', error));
   }
 }
 
-(window as any).__showResumeMask = showResumeMask;
+window.__showResumeMask = showResumeMask;
 let documentWasHidden = document.hidden;
 document.addEventListener('visibilitychange', () => {
+  if (document.hidden) clearTransientWebviewPasswords();
   if (documentWasHidden && !document.hidden) {
     showResumeMask();
     scheduleAlipayAutomaticCompletionCheck();
@@ -105,15 +122,21 @@ document.getElementById('titlebar-close')?.addEventListener('click', () => {
 });
 
 
-// Credentials live only in memory in the WebView. Rust persists them in the OS credential store.
-let accountsCache: any[] = [];
+// Passwords are normally absent from this cache. A password may enter a form
+// for a single edit/display operation and is erased immediately afterwards.
+let accountsCache: AccountView[] = [];
+const passwordRevealTimers = new WeakMap<HTMLElement, number>();
+let whitelistCache: string[] = [];
+let blacklistCache: string[] = [];
+let vpnMaximumUntil = 0;
+let vpnMaximumRollbackTimer: number | null = null;
 let configSyncQueue: Promise<void> = Promise.resolve();
 let missingPasswordWarningShown = false;
 const LEGACY_ACCOUNTS_KEY = 'bjut_accounts';
 const LEGACY_XOR_KEY = 'bjut-al-secret-key-2026';
 const LEGACY_MIGRATION_PENDING_KEY = 'bjut_accounts_migration_pending';
 
-function readLegacyAccounts(): any[] | null {
+function readLegacyAccounts(): LegacyAccount[] | null {
   const raw = localStorage.getItem(LEGACY_ACCOUNTS_KEY);
   if (raw === null) return null;
   try {
@@ -122,7 +145,7 @@ function readLegacyAccounts(): any[] | null {
       : Array.from(atob(raw), (character, index) => String.fromCharCode(
           character.charCodeAt(0) ^ LEGACY_XOR_KEY.charCodeAt(index % LEGACY_XOR_KEY.length),
         )).join('');
-    const parsed = JSON.parse(json);
+    const parsed: unknown = JSON.parse(json);
     if (!Array.isArray(parsed)) return null;
     return parsed
       .map(account => ({
@@ -143,7 +166,7 @@ function readLegacyAccounts(): any[] | null {
   }
 }
 
-function mergeLegacyAccounts(current: any[], legacy: any[]): { accounts: any[], changed: boolean } {
+function mergeLegacyAccounts(current: AccountView[], legacy: LegacyAccount[]): { accounts: AccountView[], changed: boolean } {
   let changed = false;
   const accounts = current.map(account => ({ ...account }));
   legacy.forEach(legacyAccount => {
@@ -151,10 +174,11 @@ function mergeLegacyAccounts(current: any[], legacy: any[]): { accounts: any[], 
     if (!currentAccount) {
       accounts.push({
         ...legacyAccount,
+        hasPassword: Boolean(legacyAccount.pass),
         isDefault: accounts.some(account => account.isDefault) ? false : legacyAccount.isDefault,
       });
       changed = true;
-    } else if (!currentAccount.pass && legacyAccount.pass) {
+    } else if (!currentAccount.hasPassword && !currentAccount.pass && legacyAccount.pass) {
       currentAccount.pass = legacyAccount.pass;
       changed = true;
     }
@@ -166,22 +190,16 @@ function mergeLegacyAccounts(current: any[], legacy: any[]): { accounts: any[], 
   return { accounts, changed };
 }
 
-function secureStorageContainsLegacyCredentials(current: any[], legacy: any[]): boolean {
-  const legacyWithPasswords = legacy.filter(account => account.pass);
-  return legacyWithPasswords.length > 0 && legacyWithPasswords.every(legacyAccount =>
-    current.some(account => account.user === legacyAccount.user && account.pass === legacyAccount.pass),
-  );
-}
-
-function hasLegacyCredentialConflict(current: any[], legacy: any[]): boolean {
+function hasLegacyCredentialConflict(current: AccountView[], legacy: LegacyAccount[]): boolean {
   return legacy.some(legacyAccount => {
     if (!legacyAccount.pass) return false;
     const currentAccount = current.find(account => account.user === legacyAccount.user);
-    return Boolean(currentAccount?.pass) && currentAccount.pass !== legacyAccount.pass;
+    return currentAccount?.hasPassword === true
+      || (currentAccount?.pass ? currentAccount.pass !== legacyAccount.pass : false);
   });
 }
 
-async function credentialSnapshotFingerprint(accounts: any[]): Promise<string> {
+async function credentialSnapshotFingerprint(accounts: Pick<AccountView, 'user' | 'pass'>[]): Promise<string> {
   const snapshot = accounts.map(account => ({
     user: String(account.user ?? ''),
     pass: String(account.pass ?? ''),
@@ -195,7 +213,7 @@ async function credentialSnapshotFingerprint(accounts: any[]): Promise<string> {
 
 function warnAboutMissingPasswords(storageStatus = 'missing') {
   const missingPasswordUsers = accountsCache
-    .filter(account => !account.pass)
+    .filter(account => !account.hasPassword && !account.pass)
     .map(account => account.user);
   if (missingPasswordUsers.length === 0 || missingPasswordWarningShown) return;
 
@@ -218,15 +236,23 @@ function warnAboutMissingPasswords(storageStatus = 'missing') {
   }, 300);
 }
 
-function getAccounts(): any[] {
+function getAccounts(): AccountView[] {
   return accountsCache;
 }
-function saveAccounts(accs: any[]): Promise<void> {
+async function saveAccounts(accs: AccountView[]): Promise<void> {
   accountsCache = accs;
-  return syncConfigToRust();
+  try {
+    await syncConfigToRust();
+  } finally {
+    accs.forEach(account => {
+      account.hasPassword = account.hasPassword || Boolean(account.pass);
+      account.pass = '';
+    });
+    accountsCache = accs;
+  }
 }
 
-function saveAccountsInBackground(accs: any[]) {
+function saveAccountsInBackground(accs: AccountView[]) {
   void saveAccounts(accs).catch(async error => {
     console.error('Failed to persist accounts:', error);
     await loadConfigFromRust();
@@ -236,7 +262,7 @@ function saveAccountsInBackground(accs: any[]) {
 }
 
 function scheduleCurrentCampusAccountDiscovery() {
-  if (!(window as any).__TAURI__ || currentNetworkState !== NetworkState.Online) return;
+  if (!window.__TAURI__ || currentNetworkState !== NetworkState.Online) return;
   if (campusAccountDiscoveryPromise) return;
   const now = Date.now();
   if (now - lastCampusAccountDiscoveryAt < 60_000) return;
@@ -249,7 +275,7 @@ function scheduleCurrentCampusAccountDiscovery() {
 async function discoverAndOfferCurrentCampusAccount() {
   const candidate = await invoke<DiscoveredCampusAccount | null>('discover_current_campus_account');
   if (!candidate) return;
-  if (!candidate.user || !candidate.pass) return;
+  if (!candidate.user) return;
   if (accountsCache.some(account => account.user === candidate.user)) {
     localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
     return;
@@ -267,23 +293,13 @@ async function discoverAndOfferCurrentCampusAccount() {
     return;
   }
 
-  const previousAccounts = accountsCache.map(account => ({ ...account }));
-  const nextAccounts = [
-    ...previousAccounts,
-    {
-      user: candidate.user,
-      pass: candidate.pass,
-      isDefault: previousAccounts.length === 0,
-      isDisabled: false,
-    },
-  ];
   try {
-    await saveAccounts(nextAccounts);
+    await invoke<void>('accept_discovered_campus_account', { user: candidate.user });
+    await loadConfigFromRust();
     sessionStorage.removeItem(DISMISSED_DISCOVERED_ACCOUNT_KEY);
     renderAccounts();
     await customAlert(`账号 ${candidate.user} 已保存到安全凭据存储。`, '账号已添加');
   } catch (error) {
-    accountsCache = previousAccounts;
     await loadConfigFromRust();
     renderAccounts();
     await customAlert(`当前账号保存失败，账号列表未更改：${String(error)}`, '添加账号失败');
@@ -320,25 +336,35 @@ async function encryptExport(data: unknown, passphrase: string): Promise<string>
   return JSON.stringify({ version: 2, salt: bytesToBase64(salt), iv: bytesToBase64(iv), ciphertext: bytesToBase64(new Uint8Array(ciphertext)) });
 }
 
-async function decryptExport(value: string, passphrase: string): Promise<any> {
-  const envelope = JSON.parse(value);
-  if (envelope.version !== 2 || !envelope.salt || !envelope.iv || !envelope.ciphertext) {
+async function decryptExport(value: string, passphrase: string): Promise<Record<string, unknown>> {
+  const envelope = JSON.parse(value) as Record<string, unknown>;
+  const salt = envelope.salt;
+  const iv = envelope.iv;
+  const ciphertext = envelope.ciphertext;
+  if (envelope.version !== 2 || typeof salt !== 'string' || typeof iv !== 'string' || typeof ciphertext !== 'string') {
     throw new Error('不是受支持的加密配置格式');
   }
-  const key = await deriveExportKey(passphrase, base64ToBytes(envelope.salt));
+  const key = await deriveExportKey(passphrase, base64ToBytes(salt));
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64ToBytes(envelope.iv) },
+    { name: 'AES-GCM', iv: base64ToBytes(iv) },
     key,
-    base64ToBytes(envelope.ciphertext)
+    base64ToBytes(ciphertext)
   );
-  return JSON.parse(new TextDecoder().decode(plaintext));
+  const plaintextBytes = new Uint8Array(plaintext);
+  const decoded = new TextDecoder().decode(plaintextBytes);
+  plaintextBytes.fill(0);
+  const result: unknown = JSON.parse(decoded);
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    throw new Error('加密配置内容不是有效对象');
+  }
+  return result as Record<string, unknown>;
 }
 
 async function writeTextToClipboard(text: string): Promise<void> {
-  if ((window as any).AndroidBridge) {
-    const copied = (window as any).AndroidBridge.setClipboardText(text);
+  if (window.AndroidBridge) {
+    const copied = window.AndroidBridge.setClipboardText(text);
     if (copied === false) throw new Error('Android 剪贴板写入失败');
-  } else if ((window as any).__TAURI__) {
+  } else if (window.__TAURI__) {
     await invoke('write_clipboard', { text });
   } else {
     await navigator.clipboard.writeText(text);
@@ -346,10 +372,10 @@ async function writeTextToClipboard(text: string): Promise<void> {
 }
 
 async function readTextFromClipboard(): Promise<string> {
-  if ((window as any).AndroidBridge) {
-    return (window as any).AndroidBridge.getClipboardText();
+  if (window.AndroidBridge) {
+    return window.AndroidBridge.getClipboardText();
   }
-  if ((window as any).__TAURI__) {
+  if (window.__TAURI__) {
     return invoke<string>('read_clipboard');
   }
   return navigator.clipboard.readText();
@@ -423,25 +449,25 @@ interface DiagnosticReport {
   steps: DiagnosticStep[];
 }
 
-interface NetworkProfile {
-  id: string;
-  name: string;
-  enabled: boolean;
-  ssid: string;
-  bssid: string;
-  login_type: string;
-  account_order: string[];
-  auto_login: boolean | null;
-  auto_login_types: Record<string, boolean>;
-  check_interval: number | null;
-  check_interval_bg: number | null;
-}
-
 interface AppLogEntry {
   time: string;
   module: string;
   message: string;
   type: 'info' | 'error' | 'success' | 'debug';
+}
+
+interface CountdownPayload {
+  status: 'checking' | 'suspended' | 'ticking';
+  seconds: number;
+}
+
+interface NetworkStatePayload {
+  state: 'Online' | 'BjutCampus' | 'Offline';
+  loginType?: string;
+  ssid?: string;
+  bssid?: string;
+  ip?: string;
+  timestamp?: string;
 }
 
 interface UserInfo {
@@ -589,95 +615,6 @@ interface BillingActionRequest {
 interface BillingActionResult {
   message: string;
   passwordChanged: boolean;
-}
-
-interface RechargePreview {
-  confirmationId: string;
-  payerAccount: string;
-  cardBalance: string;
-  targetAccount: string;
-  targetBalance: string;
-  targetStatus: string;
-  amount: string;
-  allowedTime: string;
-  expiresInSeconds: number;
-}
-
-interface RechargeResult {
-  message: string;
-  targetAccount: string;
-  amount: string;
-}
-
-interface RechargeBalanceSnapshot {
-  payerAccount: string;
-  cardBalance: string;
-  targetAccount: string;
-  targetBalance: string;
-  targetStatus: string;
-}
-
-interface AlipayRechargePreview {
-  confirmationId: string;
-  payerAccount: string;
-  cardBalance: string;
-  amount: string;
-  expiresInSeconds: number;
-}
-
-interface AlipayRechargeResult {
-  message: string;
-  payerAccount: string;
-  amount: string;
-  paymentUrl: string;
-}
-
-interface ActiveAlipayPayment {
-  paymentUrl: string;
-  payerAccount: string;
-  amount: string;
-  targetAccount: string;
-  cardBalanceBefore: string;
-}
-
-interface WechatRechargePreview {
-  confirmationId: string;
-  payerAccount: string;
-  cardBalance: string;
-  targetAccount: string;
-  targetBalance: string;
-  targetStatus: string;
-  amount: string;
-  allowedTime: string;
-  expiresInSeconds: number;
-}
-
-interface WechatRechargeResult {
-  message: string;
-  paymentId: string;
-  payerAccount: string;
-  targetAccount: string;
-  amount: string;
-  launchUrl: string;
-}
-
-interface WechatPaymentStatus {
-  status: 'pending' | 'paid';
-  message: string;
-}
-
-interface ActiveWechatPayment {
-  paymentId: string;
-  launchUrl: string;
-  payerAccount: string;
-  amount: string;
-  targetAccount: string;
-  cardBalanceBefore: string;
-}
-
-interface DiscoveredCampusAccount {
-  user: string;
-  pass: string;
 }
 
 type BillingRecordKind = 'usage' | 'monthly' | 'payments' | 'operations' | 'stopLogs' | 'reopenLogs' | 'packageLogs';
@@ -879,7 +816,7 @@ function renderAndroidNotificationModeDescription() {
 function refreshAndroidNotificationSettings() {
   if (!IS_ANDROID) return;
   try {
-    (window as any).AndroidBridge?.refreshNotificationSettings?.();
+    window.AndroidBridge?.refreshNotificationSettings?.();
   } catch (error) {
     console.error('Failed to refresh Android notification settings:', error);
   }
@@ -901,8 +838,24 @@ function saveUsageAlertSetting(enabled: boolean) {
   saveAndroidNotificationSetting('bjut_usage_alerts', String(enabled));
 }
 
+function scheduleVpnMaximumRollback() {
+  if (vpnMaximumRollbackTimer !== null) window.clearTimeout(vpnMaximumRollbackTimer);
+  vpnMaximumRollbackTimer = null;
+  if (!vpnMaximumUntil) return;
+  const delay = Math.max(0, vpnMaximumUntil * 1000 - Date.now());
+  vpnMaximumRollbackTimer = window.setTimeout(() => {
+    vpnMaximumRollbackTimer = null;
+    vpnMaximumUntil = 0;
+    localStorage.setItem('bjut_vpn_compatibility', 'high');
+    settingVpnCompatibility.value = 'high';
+    void syncConfigToRust();
+    log('安全', '最高 VPN 兼容模式已到期，自动回退为高兼容 HTTPS 模式', 'info');
+    void customAlert('最高 VPN 兼容模式已自动关闭，当前已恢复为“高兼容（HTTPS + 固定地址）”。', '安全模式已回退');
+  }, Math.min(delay, 2_147_000_000));
+}
+
 function syncConfigToRust(): Promise<void> {
-  if (!(window as any).__TAURI__) return Promise.resolve();
+  if (!window.__TAURI__) return Promise.resolve();
   const balanceThreshold = parseFloat(localStorage.getItem('bjut_balance_alert_threshold') || '10');
   const flowThreshold = parseFloat(localStorage.getItem('bjut_flow_alert_threshold') || '5');
   // Capture an immutable snapshot now. Serializing writes prevents an older,
@@ -915,8 +868,9 @@ function syncConfigToRust(): Promise<void> {
     wifi_change_detect: localStorage.getItem('bjut_wifi_change_detect') !== 'false',
     log_level: localStorage.getItem('bjut_log_level') || 'info',
     vpn_compatibility: localStorage.getItem('bjut_vpn_compatibility') || 'high',
-    whitelist: JSON.parse(localStorage.getItem('bjut_whitelist') || '[]'),
-    blacklist: JSON.parse(localStorage.getItem('bjut_blacklist') || '[]'),
+    vpn_maximum_until: vpnMaximumUntil || null,
+    whitelist: [...whitelistCache],
+    blacklist: [...blacklistCache],
     network_profiles: networkProfilesCache.map(profile => ({ ...profile, account_order: [...profile.account_order] })),
     usage_alerts: localStorage.getItem('bjut_usage_alerts') !== 'false',
     balance_alert_threshold: Number.isFinite(balanceThreshold) ? balanceThreshold : 10,
@@ -938,48 +892,88 @@ function syncConfigToRust(): Promise<void> {
         const fingerprint = await credentialSnapshotFingerprint(config.accounts);
         localStorage.setItem(LEGACY_MIGRATION_PENDING_KEY, fingerprint);
       }
+    })
+    .finally(() => {
+      config.accounts.forEach(account => { account.pass = ''; });
+      accountsCache = accountsCache.map(account => ({
+        ...account,
+        pass: '',
+        hasPassword: account.hasPassword || Boolean(account.pass),
+      }));
     });
   configSyncQueue = operation;
   return operation;
 }
 
 async function loadConfigFromRust() {
-  if (!(window as any).__TAURI__) return;
+  if (!window.__TAURI__) return;
   try {
-    const [config, credentialStorageStatus]: [any, string] = await Promise.all([
-      invoke<any>('get_app_config'),
+    const [config, credentialStorageStatus] = await Promise.all([
+      invoke<BackendConfig>('get_app_config'),
       invoke<string>('get_credential_storage_status'),
     ]);
     if (!config) return;
 
-    const backendAccounts = config.accounts || [];
+    const backendAccounts: AccountView[] = (config.accounts || []).map((account: Partial<AccountView>) => ({
+      user: String(account.user || ''),
+      pass: '',
+      hasPassword: account.hasPassword === true,
+      isDefault: account.isDefault === true,
+      isDisabled: account.isDisabled === true,
+    }));
     const legacyAccounts = readLegacyAccounts();
     const legacyConflict = legacyAccounts !== null
       && hasLegacyCredentialConflict(backendAccounts, legacyAccounts);
     const pendingFingerprint = localStorage.getItem(LEGACY_MIGRATION_PENDING_KEY);
     const migrationWasPending = pendingFingerprint !== null;
-    const backendFingerprint = migrationWasPending && credentialStorageStatus === 'available'
-      ? await credentialSnapshotFingerprint(backendAccounts)
-      : null;
-    const migrationConfirmed = legacyAccounts !== null
-      && migrationWasPending
-      && credentialStorageStatus === 'available'
-      && (pendingFingerprint === 'true'
-        ? secureStorageContainsLegacyCredentials(backendAccounts, legacyAccounts)
-        : backendFingerprint === pendingFingerprint);
-    const backendIsAuthoritative = migrationWasPending && credentialStorageStatus === 'available';
+    const secureBackendCoversLegacy = legacyAccounts !== null
+      && legacyAccounts
+        .filter(account => account.pass)
+        .every(account => backendAccounts.some(saved => saved.user === account.user && saved.hasPassword));
+    const migrationConfirmed = credentialStorageStatus === 'available'
+      && secureBackendCoversLegacy
+      && (migrationWasPending || legacyAccounts !== null);
+    const backendIsAuthoritative = credentialStorageStatus === 'available'
+      && (migrationWasPending || secureBackendCoversLegacy);
     const merged = legacyAccounts === null || backendIsAuthoritative
       ? { accounts: backendAccounts, changed: false }
       : mergeLegacyAccounts(backendAccounts, legacyAccounts);
-    accountsCache = backendIsAuthoritative ? backendAccounts : merged.accounts;
+    accountsCache = (backendIsAuthoritative ? backendAccounts : merged.accounts).map(account => ({
+      ...account,
+      pass: account.pass || '',
+      hasPassword: account.hasPassword === true || Boolean(account.pass),
+      isDefault: account.isDefault === true,
+      isDisabled: account.isDisabled === true,
+    }));
     localStorage.setItem('bjut_auto_login', config.auto_login.toString());
     localStorage.setItem('bjut_check_interval', config.check_interval.toString());
     localStorage.setItem('bjut_check_interval_bg', config.check_interval_bg.toString());
     localStorage.setItem('bjut_wifi_change_detect', config.wifi_change_detect.toString());
     localStorage.setItem('bjut_log_level', config.log_level);
-    localStorage.setItem('bjut_vpn_compatibility', config.vpn_compatibility || 'high');
-    localStorage.setItem('bjut_whitelist', JSON.stringify(config.whitelist || []));
-    localStorage.setItem('bjut_blacklist', JSON.stringify(config.blacklist || []));
+    const loadedVpnMode = config.vpn_compatibility || 'high';
+    vpnMaximumUntil = Number(config.vpn_maximum_until || 0);
+    localStorage.setItem('bjut_vpn_compatibility', loadedVpnMode);
+    if (loadedVpnMode === 'maximum' && vpnMaximumUntil <= Date.now() / 1000) {
+      vpnMaximumUntil = 0;
+      localStorage.setItem('bjut_vpn_compatibility', 'high');
+      config.vpn_compatibility = 'high';
+      config.vpn_maximum_until = null;
+      await syncConfigToRust();
+    }
+    const legacyWhitelist = JSON.parse(localStorage.getItem('bjut_whitelist') || '[]');
+    const legacyBlacklist = JSON.parse(localStorage.getItem('bjut_blacklist') || '[]');
+    whitelistCache = Array.isArray(config.whitelist) && config.whitelist.length
+      ? [...config.whitelist]
+      : Array.isArray(legacyWhitelist) ? legacyWhitelist : [];
+    blacklistCache = Array.isArray(config.blacklist) && config.blacklist.length
+      ? [...config.blacklist]
+      : Array.isArray(legacyBlacklist) ? legacyBlacklist : [];
+    if (localStorage.getItem('bjut_whitelist') !== null || localStorage.getItem('bjut_blacklist') !== null) {
+      await syncConfigToRust();
+      localStorage.removeItem('bjut_whitelist');
+      localStorage.removeItem('bjut_blacklist');
+      log('配置', 'Wi-Fi 信任规则已迁移到加密存储', 'success');
+    }
     networkProfilesCache = (config.network_profiles || []).map((profile: NetworkProfile) => ({ ...profile }));
     localStorage.setItem('bjut_usage_alerts', String(config.usage_alerts !== false));
     localStorage.setItem('bjut_balance_alert_threshold', String(config.balance_alert_threshold ?? 10));
@@ -998,7 +992,8 @@ async function loadConfigFromRust() {
     settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
     settingCheckInterval.value = checkInterval.toString();
     settingLogLevel.value = config.log_level;
-    settingVpnCompatibility.value = config.vpn_compatibility || 'high';
+    settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
+    scheduleVpnMaximumRollback();
     settingUsageAlerts.checked = config.usage_alerts !== false;
     settingAndroidNotifyUsageAlerts.checked = config.usage_alerts !== false;
     settingBalanceThreshold.value = String(config.balance_alert_threshold ?? 10);
@@ -1067,9 +1062,9 @@ async function loadConfigFromRust() {
 }
 
 async function listenToRustEvents() {
-  if (!(window as any).__TAURI__) return;
+  if (!window.__TAURI__) return;
   try {
-    listen('countdown-tick', (event: any) => {
+    listen<CountdownPayload>('countdown-tick', event => {
       const data = event.payload;
       const countdownText = document.getElementById('countdown-text');
       if (countdownText) {
@@ -1086,7 +1081,7 @@ async function listenToRustEvents() {
       }
     });
 
-    listen('network-state-change', (event: any) => {
+    listen<NetworkStatePayload>('network-state-change', event => {
       const data = event.payload;
       let state = NetworkState.Offline;
       if (data.state === 'Online') state = NetworkState.Online;
@@ -1118,7 +1113,7 @@ async function listenToRustEvents() {
       }
     });
 
-    listen('log-event', (event: any) => {
+    listen<AppLogEntry>('log-event', event => {
       const data = event.payload;
       renderLogEntry(data.module, data.message, data.type, data.time);
     });
@@ -1149,7 +1144,7 @@ async function listenToRustEvents() {
     });
 
     // Load initial logs
-    const initialLogs: any[] = await invoke('get_logs');
+    const initialLogs = await invoke<AppLogEntry[]>('get_logs');
     logEntriesCache = initialLogs.map(entry => ({
       time: entry.time,
       module: entry.module,
@@ -1161,7 +1156,7 @@ async function listenToRustEvents() {
 
     // Load initial network state
     try {
-      const currentState: any = await invoke('get_current_network_state');
+      const currentState = await invoke<NetworkStatePayload>('get_current_network_state');
       if (currentState) {
         let state = NetworkState.Offline;
         if (currentState.state === 'Online') state = NetworkState.Online;
@@ -1195,7 +1190,7 @@ async function listenToRustEvents() {
     }
 
     // Load initial countdown status
-    const cStatus: any = await invoke('get_countdown_status');
+    const cStatus = await invoke<CountdownPayload>('get_countdown_status');
     const countdownText = document.getElementById('countdown-text');
     if (countdownText) {
       if (cStatus.status === 'checking') countdownText.textContent = '检测中...';
@@ -1395,6 +1390,7 @@ function customPasswordPrompt(text: string, title = '配置密码'): Promise<str
 
     const cleanup = () => {
       modal.classList.add('hidden');
+      input.value = '';
       form.removeEventListener('submit', onSubmit);
       cancelButton.removeEventListener('click', onCancel);
     };
@@ -1603,7 +1599,7 @@ class CustomSelect {
     if (disabled) this.close();
   }
 
-  addEventListener(event: 'change', callback: (e: any) => void) {
+  addEventListener(event: 'change', callback: (event: { target: { value: string } }) => void) {
     if (event === 'change') {
       this.onChangeCallbacks.push((val) => {
         callback({ target: { value: val } });
@@ -1883,6 +1879,43 @@ let secondsToNextCheck = 0;
 let countdownInterval: number | null = null;
 let isLoopSuspended = false;
 
+async function restoreRecoverableRecharges() {
+  if (!window.__TAURI__) return;
+  const transactions = await invoke<RecoverableRecharge[]>('get_recoverable_recharges').catch(() => []);
+  const alipay = transactions.find(item => item.method === 'alipay' && isTrustedAlipayPaymentUrl(item.paymentUrl));
+  if (alipay) {
+    rememberActiveAlipayPayment({
+      recoveryId: alipay.id,
+      paymentUrl: alipay.paymentUrl,
+      payerAccount: alipay.payerAccount,
+      targetAccount: alipay.targetAccount,
+      amount: alipay.amount,
+      cardBalanceBefore: alipay.cardBalanceBefore,
+    });
+  }
+  const wechat = transactions.find(item => item.method === 'wechat'
+    && item.paymentId
+    && isTrustedWechatLaunchUrl(item.paymentUrl));
+  if (wechat) {
+    rememberActiveWechatPayment({
+      paymentId: wechat.paymentId,
+      launchUrl: wechat.paymentUrl,
+      payerAccount: wechat.payerAccount,
+      targetAccount: wechat.targetAccount,
+      amount: wechat.amount,
+      cardBalanceBefore: wechat.cardBalanceBefore,
+    });
+  }
+  const uncertain = transactions.find(item => item.stage === 'unknown' || item.stage === 'transferSubmitted');
+  if (uncertain) {
+    billingRechargeState.textContent = `检测到一笔结果待核对的充值：${uncertain.payerAccount} → ${uncertain.targetAccount}，${uncertain.amount} 元。请先查询余额和记录，不要创建重复订单。`;
+    log('计费', `已恢复待核对充值 ${uncertain.id}：${uncertain.note || uncertain.stage}`, 'error');
+  } else if (alipay || wechat) {
+    billingRechargeState.textContent = '已从安全存储恢复未完成的支付订单，可继续原订单或核对到账。';
+    log('计费', '已恢复未完成的充值订单', 'info');
+  }
+}
+
 // Initialize
 async function init() {
   // Instantiate Custom Selects
@@ -1943,7 +1976,7 @@ async function init() {
   settingCheckInterval.value = checkInterval.toString();
 
   // Handle autostart and quit element visibility and status
-  if (!(window as any).__TAURI__ || IS_ANDROID) {
+  if (!window.__TAURI__ || IS_ANDROID) {
     document.getElementById('setting-autostart-item')?.style.setProperty('display', 'none');
     document.getElementById('setting-quit-item')?.style.setProperty('display', 'none');
   } else {
@@ -1960,7 +1993,7 @@ async function init() {
   settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
   settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
   settingUpdateChannel.value = localStorage.getItem('bjut_update_channel') || 'release';
-  if ((window as any).__TAURI__) {
+  if (window.__TAURI__) {
     void invoke<UpdateTarget>('get_update_target')
       .then(target => {
         const versionLabel = document.getElementById('app-version');
@@ -1976,7 +2009,7 @@ async function init() {
   renderNetworkProfiles();
 
   // Register triggerAutoLogin globally for eval call from Rust
-  (window as any).triggerAutoLogin = () => {
+  window.triggerAutoLogin = () => {
     log('系统', '收到系统底层网络连通事件触发 (Eval)');
     if (autoLoginEnabled && !isLoggingIn) {
       manualLogin();
@@ -1995,10 +2028,10 @@ async function init() {
       log('系统', '已同意用户协议与隐私政策');
       
       // Request foreground permissions
-      if ((window as any).__TAURI__) {
+      if (window.__TAURI__) {
         try {
-          if (IS_ANDROID && (window as any).AndroidBridge) {
-            (window as any).AndroidBridge.requestForegroundPermissions();
+          if (IS_ANDROID && window.AndroidBridge) {
+            window.AndroidBridge.requestForegroundPermissions();
           } else if (IS_ANDROID) {
             await invoke('request_foreground_permissions');
           }
@@ -2009,9 +2042,10 @@ async function init() {
         // Load the secure backend configuration before the first sync so accepting the
         // terms cannot overwrite an existing account set with the empty WebView cache.
         await loadConfigFromRust();
+        await restoreRecoverableRecharges();
         await listenToRustEvents();
-        if ((window as any).AndroidBridge && autoLoginEnabled) {
-          (window as any).AndroidBridge.startKeepAliveService();
+        if (window.AndroidBridge && autoLoginEnabled) {
+          window.AndroidBridge.startKeepAliveService();
         }
         log('系统', '应用启动');
       } else {
@@ -2022,7 +2056,7 @@ async function init() {
     });
     
     document.getElementById('btn-tos-disagree')!.addEventListener('click', async () => {
-      if ((window as any).__TAURI__) {
+      if (window.__TAURI__) {
         try {
           getCurrentWindow().close();
         } catch (e) {
@@ -2034,22 +2068,23 @@ async function init() {
     });
   } else {
     // Already accepted
-    if ((window as any).__TAURI__) {
-      if (IS_ANDROID && !(window as any).AndroidBridge) {
+    if (window.__TAURI__) {
+      if (IS_ANDROID && !window.AndroidBridge) {
         invoke('request_foreground_permissions').catch(e => {
           console.error('Failed to request foreground permissions:', e);
         });
       }
       try {
         await loadConfigFromRust();
+        await restoreRecoverableRecharges();
         await listenToRustEvents();
         log('系统', '应用启动');
-        if ((window as any).AndroidBridge) {
+        if (window.AndroidBridge) {
           if (autoLoginEnabled) {
-            (window as any).AndroidBridge.startKeepAliveService();
+            window.AndroidBridge.startKeepAliveService();
             log('系统', '后台保活服务已启动');
           } else {
-            (window as any).AndroidBridge.stopKeepAliveService();
+            window.AndroidBridge.stopKeepAliveService();
           }
         }
       } catch (error) {
@@ -2152,7 +2187,7 @@ function renderAccountHealthPanel() {
 }
 
 async function refreshAccountHealth() {
-  if (!(window as any).__TAURI__) return;
+  if (!window.__TAURI__) return;
   try {
     setAccountHealth(await invoke<AccountHealth[]>('get_account_health'));
   } catch (error) {
@@ -2161,7 +2196,7 @@ async function refreshAccountHealth() {
 }
 
 async function refreshCredentialStorageHealth() {
-  if (!(window as any).__TAURI__) return;
+  if (!window.__TAURI__) return;
   const backend = document.getElementById('credential-health-backend')!;
   const badge = document.getElementById('credential-health-badge')!;
   const message = document.getElementById('credential-health-message')!;
@@ -2244,7 +2279,7 @@ function diagnosticReportText(report: DiagnosticReport): string {
 }
 
 async function runDiagnostics() {
-  if (!(window as any).__TAURI__) {
+  if (!window.__TAURI__) {
     await customAlert('网络诊断仅在桌面或移动应用中可用。');
     return;
   }
@@ -2343,7 +2378,7 @@ async function persistNetworkProfiles() {
 
 function setupEventDrivenNetworkDetection() {
   const notify = (source: string) => {
-    if (!(window as any).__TAURI__) return;
+    if (!window.__TAURI__) return;
     if (networkEventDebounce !== null) window.clearTimeout(networkEventDebounce);
     networkEventDebounce = window.setTimeout(() => {
       networkEventDebounce = null;
@@ -2352,18 +2387,18 @@ function setupEventDrivenNetworkDetection() {
   };
   window.addEventListener('online', () => notify('浏览器 online'));
   window.addEventListener('offline', () => notify('浏览器 offline'));
-  const connection = (navigator as any).connection;
+  const connection = navigator.connection;
   connection?.addEventListener?.('change', () => notify('系统连接属性'));
-  (window as any).__nativeNetworkChanged = (source = 'Android NetworkCallback') => notify(source);
-  (window as any).__nativeNotificationAction = async (action: 'check' | 'pause' | 'resume') => {
-    if (!(window as any).__TAURI__) return;
+  window.__nativeNetworkChanged = (source = 'Android NetworkCallback') => notify(source);
+  window.__nativeNotificationAction = async (action: 'check' | 'pause' | 'resume') => {
+    if (!window.__TAURI__) return;
     if (action === 'check') {
       await invoke('notify_network_change', { source: 'Android 常驻通知' });
     } else {
       await invoke('set_auto_login_pause', { minutes: action === 'pause' ? 60 : 0 });
     }
   };
-  const pausedUntil = Number((window as any).AndroidBridge?.getAutoLoginPausedUntil?.() || 0);
+  const pausedUntil = Number(window.AndroidBridge?.getAutoLoginPausedUntil?.() || 0);
   if (pausedUntil > Date.now()) {
     const remainingMinutes = Math.max(1, Math.ceil((pausedUntil - Date.now()) / 60000));
     void invoke('set_auto_login_pause', { minutes: remainingMinutes });
@@ -2371,7 +2406,7 @@ function setupEventDrivenNetworkDetection() {
 }
 
 async function readPermissionHealth(): Promise<PermissionHealthItem[]> {
-  const androidBridge = (window as any).AndroidBridge;
+  const androidBridge = window.AndroidBridge;
   if (androidBridge?.getPermissionHealth) {
     const raw = androidBridge.getPermissionHealth();
     const parsed = JSON.parse(raw || '[]');
@@ -2579,7 +2614,7 @@ function handleAndroidBack() {
 }
 
 if (IS_ANDROID) {
-  (window as any).__handleAndroidBack = handleAndroidBack;
+  window.__handleAndroidBack = handleAndroidBack;
 }
 
 function setupNavigation() {
@@ -2810,7 +2845,7 @@ function setupEventListeners() {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.action-permission-settings');
     const permission = button?.dataset.permission;
     if (!permission) return;
-    const androidBridge = (window as any).AndroidBridge;
+    const androidBridge = window.AndroidBridge;
     if (androidBridge?.openPermissionSettings) {
       androidBridge.openPermissionSettings(permission);
       return;
@@ -2841,7 +2876,7 @@ function setupEventListeners() {
     }
   });
   btnResetAllHealth.addEventListener('click', async () => {
-    if (!(window as any).__TAURI__) return;
+    if (!window.__TAURI__) return;
     btnResetAllHealth.setAttribute('disabled', '');
     try {
       await invoke('reset_account_health', { user: null });
@@ -2853,7 +2888,7 @@ function setupEventListeners() {
   });
   accountHealthList.addEventListener('click', async event => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.action-reset-health');
-    if (!button?.dataset.user || !(window as any).__TAURI__) return;
+    if (!button?.dataset.user || !window.__TAURI__) return;
     button.disabled = true;
     try {
       await invoke('reset_account_health', { user: button.dataset.user });
@@ -2945,8 +2980,25 @@ function setupEventListeners() {
   });
   settingUsageAlerts.addEventListener('change', () => saveUsageAlertSetting(settingUsageAlerts.checked));
   settingAndroidNotifyUsageAlerts.addEventListener('change', () => saveUsageAlertSetting(settingAndroidNotifyUsageAlerts.checked));
-  settingVpnCompatibility.addEventListener('change', () => {
+  settingVpnCompatibility.addEventListener('change', async () => {
     const value = settingVpnCompatibility.value || 'high';
+    const previous = localStorage.getItem('bjut_vpn_compatibility') || 'high';
+    if (value === 'maximum') {
+      const confirmed = await customConfirm(
+        '最高兼容模式会通过 HTTP + IP 发送校园网账号和密码，链路不具备 TLS 加密。\n\n该模式仅临时启用 15 分钟，随后自动回退到 HTTPS 高兼容模式。是否继续？',
+        '确认启用明文传输',
+      );
+      if (!confirmed) {
+        settingVpnCompatibility.value = previous;
+        return;
+      }
+      vpnMaximumUntil = Math.floor(Date.now() / 1000) + 15 * 60;
+      scheduleVpnMaximumRollback();
+    } else {
+      vpnMaximumUntil = 0;
+      if (vpnMaximumRollbackTimer !== null) window.clearTimeout(vpnMaximumRollbackTimer);
+      vpnMaximumRollbackTimer = null;
+    }
     saveSetting('bjut_vpn_compatibility', value);
     const labels: Record<string, string> = {
       minimum: '最低兼容（HTTPS + 系统 DNS）',
@@ -2983,13 +3035,13 @@ function setupEventListeners() {
     
     if (user && pass) {
       const previousAccounts = getAccounts();
-      if (previousAccounts.find((a:any) => a.user === user)) {
+      if (previousAccounts.find(account => account.user === user)) {
         customAlert('该账号已存在');
         return;
       }
       const nextAccounts = [
         ...previousAccounts.map(account => ({ ...account })),
-        { user, pass, isDefault: previousAccounts.length === 0 },
+        { user, pass, hasPassword: true, isDefault: previousAccounts.length === 0, isDisabled: false },
       ];
       const submitButton = addAccountForm.querySelector<HTMLButtonElement>('button[type="submit"]');
       if (submitButton) submitButton.disabled = true;
@@ -3018,10 +3070,10 @@ function setupEventListeners() {
     renderedLogLimit = IS_ANDROID ? ANDROID_LOG_RENDER_BATCH : Number.MAX_SAFE_INTEGER;
     logFilterSignature = '';
     renderFilteredLogs({ resetWindow: true });
-    if ((window as any).__TAURI__) {
+    if (window.__TAURI__) {
       invoke('clear_all_logs').catch(e => console.error(e));
     }
-    (window as any).AndroidBridge?.clearServiceLogs?.();
+    window.AndroidBridge?.clearServiceLogs?.();
   });
 
   logSearch.addEventListener('input', () => renderFilteredLogs({ resetWindow: true }));
@@ -3030,7 +3082,7 @@ function setupEventListeners() {
   getLogsScroller()?.addEventListener('scroll', loadOlderLogsNearTop, { passive: true });
 
   btnDiagnosticBundle.addEventListener('click', async () => {
-    if (!(window as any).__TAURI__) return;
+    if (!window.__TAURI__) return;
     btnDiagnosticBundle.disabled = true;
     try {
       const bundle = await invoke<string>('create_diagnostic_bundle');
@@ -3045,13 +3097,13 @@ function setupEventListeners() {
 
   btnExportLogs.addEventListener('click', async () => {
     try {
-      const androidBridge = (window as any).AndroidBridge;
-      if ((window as any).__TAURI__ && androidBridge?.exportLogs) {
+      const androidBridge = window.AndroidBridge;
+      if (window.__TAURI__ && androidBridge?.exportLogs) {
         const launched = Boolean(androidBridge.exportLogs());
         if (!launched) await customAlert('当前没有可导出的日志，或系统分享窗口启动失败。');
         return;
       }
-      if ((window as any).__TAURI__) {
+      if (window.__TAURI__) {
         const destination = await invoke<string>('export_logs');
         await customAlert(`完整日志已导出到：\n${destination}`);
         return;
@@ -3085,24 +3137,24 @@ function setupEventListeners() {
     saveSetting('bjut_auto_login', autoLoginEnabled.toString());
     log('设置', `自动登录已${autoLoginEnabled ? '开启' : '关闭'}`);
     
-    if ((window as any).__TAURI__) {
+    if (window.__TAURI__) {
       if (autoLoginEnabled) {
-        if ((window as any).AndroidBridge) {
+        if (window.AndroidBridge) {
           await customAlert('开启后，App 会申请后台位置与通知权限，并启动前台服务，以便在界面关闭后继续检测校园网。系统还会询问是否忽略电池优化；你可以稍后在权限健康中心调整这些权限。', 'Android 后台自动登录');
           
           try {
-            (window as any).AndroidBridge.requestBackgroundPermissions();
-            (window as any).AndroidBridge.requestBatteryOptimizations();
-            (window as any).AndroidBridge.startKeepAliveService();
+            window.AndroidBridge.requestBackgroundPermissions();
+            window.AndroidBridge.requestBatteryOptimizations();
+            window.AndroidBridge.startKeepAliveService();
             log('系统', '已开启后台保活服务，并申请后台权限');
           } catch (e) {
             console.error('Failed to request background services:', e);
           }
         }
       } else {
-        if ((window as any).AndroidBridge) {
+        if (window.AndroidBridge) {
           try {
-            (window as any).AndroidBridge.stopKeepAliveService();
+            window.AndroidBridge.stopKeepAliveService();
             log('系统', '已停止后台保活服务');
           } catch (e) {
             console.error('Failed to stop background service:', e);
@@ -3141,7 +3193,7 @@ function setupEventListeners() {
   if (settingAutostart) {
     settingAutostart.addEventListener('change', async (e) => {
       const enabled = (e.target as HTMLInputElement).checked;
-      if ((window as any).__TAURI__) {
+      if (window.__TAURI__) {
         try {
           const { enable, disable } = await import('@tauri-apps/plugin-autostart');
           if (enabled) {
@@ -3183,7 +3235,7 @@ function setupEventListeners() {
     settingMacosDock.checked = dockEnabled;
     // Regular is already the default policy. Re-applying it while the hidden
     // cold-start window is being created can make macOS deactivate the window.
-    if ((window as any).__TAURI__ && isMacos && !dockEnabled) {
+    if (window.__TAURI__ && isMacos && !dockEnabled) {
       macosDockPolicyReady = invoke<void>('set_dock_visible', { visible: false })
         .catch(error => console.error('Failed to initialize macOS dock policy:', error));
     }
@@ -3191,7 +3243,7 @@ function setupEventListeners() {
       const enabled = (e.target as HTMLInputElement).checked;
       localStorage.setItem('bjut_macos_dock', enabled.toString());
       log('设置', `已${enabled ? '启用' : '关闭'}在程序坞显示图标`);
-      if ((window as any).__TAURI__ && isMacos) {
+      if (window.__TAURI__ && isMacos) {
         try {
           await invoke('set_dock_visible', { visible: enabled });
         } catch (err) {
@@ -3249,7 +3301,7 @@ function setupEventListeners() {
         if (btnIcon) btnIcon.style.animation = '';
       }, 10000);
 
-      if ((window as any).__TAURI__) {
+      if (window.__TAURI__) {
         try {
           await invoke('trigger_manual_check');
         } catch (err) {
@@ -3282,7 +3334,7 @@ function setupEventListeners() {
   if (btnQuitApp) {
     btnQuitApp.addEventListener('click', async () => {
       if (await customConfirm('确定要退出应用吗？这将彻底关闭后台网络自动登录服务。')) {
-        if ((window as any).__TAURI__) {
+        if (window.__TAURI__) {
           try {
             await invoke('exit_app');
           } catch (e) {
@@ -3316,7 +3368,7 @@ function setupEventListeners() {
       btnCheckUpdate.textContent = '检查中…';
 
       try {
-        if (!(window as any).__TAURI__) {
+        if (!window.__TAURI__) {
           throw new Error('仅应用内支持自动更新');
         }
         const target = await invoke<UpdateTarget>('get_update_target');
@@ -3397,16 +3449,20 @@ function setupEventListeners() {
   const btnManageWhitelist = document.getElementById('btn-manage-whitelist');
   if (btnManageWhitelist) {
     btnManageWhitelist.addEventListener('click', () => {
-      const w = JSON.parse(localStorage.getItem('bjut_whitelist') || '[]');
-      showListManageModal('信任的 WiFi (白名单)', w, (newList) => saveSetting('bjut_whitelist', JSON.stringify(newList)));
+      showListManageModal('信任的 WiFi (白名单)', [...whitelistCache], (newList) => {
+        whitelistCache = [...newList];
+        void syncConfigToRust();
+      });
     });
   }
 
   const btnManageBlacklist = document.getElementById('btn-manage-blacklist');
   if (btnManageBlacklist) {
     btnManageBlacklist.addEventListener('click', () => {
-      const b = JSON.parse(localStorage.getItem('bjut_blacklist') || '[]');
-      showListManageModal('拒绝的 WiFi (黑名单)', b, (newList) => saveSetting('bjut_blacklist', JSON.stringify(newList)));
+      showListManageModal('拒绝的 WiFi (黑名单)', [...blacklistCache], (newList) => {
+        blacklistCache = [...newList];
+        void syncConfigToRust();
+      });
     });
   }
 
@@ -3424,8 +3480,8 @@ function setupEventListeners() {
           autoLogin: localStorage.getItem('bjut_auto_login'),
           checkInterval: localStorage.getItem('bjut_check_interval'),
           checkIntervalBg: localStorage.getItem('bjut_check_interval_bg'),
-          whitelist: localStorage.getItem('bjut_whitelist'),
-          blacklist: localStorage.getItem('bjut_blacklist'),
+          whitelist: JSON.stringify(whitelistCache),
+          blacklist: JSON.stringify(blacklistCache),
           moreOptions: localStorage.getItem('bjut_more_options'),
           networkProfiles: networkProfilesCache,
           usageAlerts: localStorage.getItem('bjut_usage_alerts'),
@@ -3439,7 +3495,7 @@ function setupEventListeners() {
         };
         const encrypted = await encryptExport(config, passphrase);
         await writeTextToClipboard(encrypted);
-        customAlert('配置已使用你设置的密码加密并复制到剪贴板。');
+        customAlert('配置已使用你设置的密码加密并复制到剪贴板。账号密码由 Rust 安全存储管理，不会进入导出内容。');
       } catch (e) {
         console.error('Export config failed:', e);
         customAlert('导出失败：' + String(e));
@@ -3462,24 +3518,58 @@ function setupEventListeners() {
         const passphrase = await customPasswordPrompt('输入导出该配置时设置的密码。', '导入配置');
         if (!passphrase) return;
         const config = await decryptExport(text.trim(), passphrase);
-        if (config.accounts) {
-          accountsCache = config.accounts;
+        if (Array.isArray(config.accounts)) {
+          accountsCache = config.accounts.flatMap((value): AccountView[] => {
+            if (!value || typeof value !== 'object') return [];
+            const account = value as Partial<AccountView>;
+            if (typeof account.user !== 'string') return [];
+            return [{
+              user: account.user,
+              pass: typeof account.pass === 'string' ? account.pass : '',
+              hasPassword: account.hasPassword === true || Boolean(account.pass),
+              isDefault: account.isDefault === true,
+              isDisabled: account.isDisabled === true,
+            }];
+          });
+          config.accounts.forEach(value => {
+            if (value && typeof value === 'object' && 'pass' in value) {
+              (value as { pass?: unknown }).pass = '';
+            }
+          });
         }
-        if (config.autoLogin !== undefined && config.autoLogin !== null) localStorage.setItem('bjut_auto_login', config.autoLogin);
-        if (config.checkInterval !== undefined && config.checkInterval !== null) localStorage.setItem('bjut_check_interval', config.checkInterval);
-        if (config.checkIntervalBg !== undefined && config.checkIntervalBg !== null) localStorage.setItem('bjut_check_interval_bg', config.checkIntervalBg);
-        if (config.whitelist) localStorage.setItem('bjut_whitelist', config.whitelist);
-        if (config.blacklist) localStorage.setItem('bjut_blacklist', config.blacklist);
-        if (config.moreOptions !== undefined && config.moreOptions !== null) localStorage.setItem('bjut_more_options', config.moreOptions);
-        if (Array.isArray(config.networkProfiles)) networkProfilesCache = config.networkProfiles;
-        if (config.usageAlerts !== undefined && config.usageAlerts !== null) localStorage.setItem('bjut_usage_alerts', config.usageAlerts);
-        if (config.balanceAlertThreshold !== undefined && config.balanceAlertThreshold !== null) localStorage.setItem('bjut_balance_alert_threshold', config.balanceAlertThreshold);
-        if (config.flowAlertThreshold !== undefined && config.flowAlertThreshold !== null) localStorage.setItem('bjut_flow_alert_threshold', config.flowAlertThreshold);
-        if (config.vpnCompatibility !== undefined && config.vpnCompatibility !== null) localStorage.setItem('bjut_vpn_compatibility', config.vpnCompatibility);
-        if (config.androidNotificationMode !== undefined && config.androidNotificationMode !== null) localStorage.setItem('bjut_android_notification_mode', config.androidNotificationMode);
-        if (config.androidNotifyNetworkStatus !== undefined && config.androidNotifyNetworkStatus !== null) localStorage.setItem('bjut_android_notify_network_status', config.androidNotifyNetworkStatus);
-        if (config.androidNotifyLoginResults !== undefined && config.androidNotifyLoginResults !== null) localStorage.setItem('bjut_android_notify_login_results', config.androidNotifyLoginResults);
-        if (config.androidNotifyBackgroundErrors !== undefined && config.androidNotifyBackgroundErrors !== null) localStorage.setItem('bjut_android_notify_background_errors', config.androidNotifyBackgroundErrors);
+        const restoreString = (source: string, destination: string) => {
+          const value = config[source];
+          if (typeof value === 'string') localStorage.setItem(destination, value);
+        };
+        restoreString('autoLogin', 'bjut_auto_login');
+        restoreString('checkInterval', 'bjut_check_interval');
+        restoreString('checkIntervalBg', 'bjut_check_interval_bg');
+        restoreString('moreOptions', 'bjut_more_options');
+        restoreString('usageAlerts', 'bjut_usage_alerts');
+        restoreString('balanceAlertThreshold', 'bjut_balance_alert_threshold');
+        restoreString('flowAlertThreshold', 'bjut_flow_alert_threshold');
+        restoreString('vpnCompatibility', 'bjut_vpn_compatibility');
+        restoreString('androidNotificationMode', 'bjut_android_notification_mode');
+        restoreString('androidNotifyNetworkStatus', 'bjut_android_notify_network_status');
+        restoreString('androidNotifyLoginResults', 'bjut_android_notify_login_results');
+        restoreString('androidNotifyBackgroundErrors', 'bjut_android_notify_background_errors');
+        if (typeof config.whitelist === 'string') {
+          const values: unknown = JSON.parse(config.whitelist);
+          if (Array.isArray(values)) whitelistCache = values.filter((item): item is string => typeof item === 'string');
+        }
+        if (typeof config.blacklist === 'string') {
+          const values: unknown = JSON.parse(config.blacklist);
+          if (Array.isArray(values)) blacklistCache = values.filter((item): item is string => typeof item === 'string');
+        }
+        if (Array.isArray(config.networkProfiles)) {
+          networkProfilesCache = config.networkProfiles.filter((profile): profile is NetworkProfile => {
+            if (!profile || typeof profile !== 'object') return false;
+            const item = profile as Partial<NetworkProfile>;
+            return typeof item.id === 'string' && typeof item.name === 'string'
+              && typeof item.ssid === 'string' && typeof item.bssid === 'string'
+              && typeof item.login_type === 'string' && Array.isArray(item.account_order);
+          });
+        }
         
         syncConfigToRust().then(() => {
           customAlert('导入成功，请刷新以应用更改！');
@@ -3510,6 +3600,7 @@ function setupEventListeners() {
 
   // Edit Modal events
   btnCancelEdit.addEventListener('click', () => {
+    editAccPassword.value = '';
     editModal.classList.add('hidden');
   });
 
@@ -3525,17 +3616,18 @@ function setupEventListeners() {
         await customAlert('要修改的账号不存在，请刷新后重试。');
         return;
       }
-      if (previousAccounts.findIndex((a:any, i) => a.user === user && i !== index) !== -1) {
+      if (previousAccounts.findIndex((account, accountIndex) => account.user === user && accountIndex !== index) !== -1) {
         customAlert('该账号名已存在');
         return;
       }
       const nextAccounts = previousAccounts.map((account, accountIndex) => accountIndex === index
-        ? { ...account, user, pass }
+        ? { ...account, user, pass, hasPassword: true }
         : { ...account });
       const submitButton = editAccountForm.querySelector<HTMLButtonElement>('button[type="submit"]');
       if (submitButton) submitButton.disabled = true;
       try {
         await saveAccounts(nextAccounts);
+        editAccPassword.value = '';
         renderAccounts();
         editModal.classList.add('hidden');
         log('账号管理', `已修改并保存账号: ${user}`);
@@ -3550,7 +3642,7 @@ function setupEventListeners() {
   });
 
   // Account List Event Delegation
-  accountsList.addEventListener('click', (e) => {
+  accountsList.addEventListener('click', async (e) => {
     const target = e.target as HTMLElement;
     
     // Toggle account disabled state
@@ -3585,11 +3677,25 @@ function setupEventListeners() {
     if (btn.classList.contains('action-toggle-password')) {
       const parent = btn.closest('div');
       const textSpan = parent?.querySelector('.password-text') as HTMLElement;
-      if (textSpan) {
+      if (textSpan && index >= 0) {
         if (textSpan.textContent === '*************') {
-          textSpan.textContent = textSpan.getAttribute('data-password') || '';
+          const account = getAccounts()[index];
+          if (!account?.hasPassword) return;
+          const password = await invoke<string>('get_account_password', { user: account.user });
+          textSpan.textContent = password;
           btn.classList.remove('hide-password');
+          const previousTimer = passwordRevealTimers.get(textSpan);
+          if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+          const timer = window.setTimeout(() => {
+            textSpan.textContent = '*************';
+            btn.classList.add('hide-password');
+            passwordRevealTimers.delete(textSpan);
+          }, 15_000);
+          passwordRevealTimers.set(textSpan, timer);
         } else {
+          const timer = passwordRevealTimers.get(textSpan);
+          if (timer !== undefined) window.clearTimeout(timer);
+          passwordRevealTimers.delete(textSpan);
           textSpan.textContent = '*************';
           btn.classList.add('hide-password');
         }
@@ -3618,7 +3724,7 @@ function setupEventListeners() {
       const accounts = getAccounts();
       const account = accounts.splice(index, 1)[0];
       accounts.unshift(account);
-      accounts.forEach((a:any, i:any) => a.isDefault = (i === 0));
+      accounts.forEach((account, accountIndex) => account.isDefault = accountIndex === 0);
       saveAccountsInBackground(accounts);
       
       // Move DOM element to top
@@ -3684,8 +3790,13 @@ function setupEventListeners() {
       const accounts = getAccounts();
       editAccIndex.value = index.toString();
       editAccUsername.value = accounts[index].user;
-      editAccPassword.value = accounts[index].pass;
-      editModal.classList.remove('hidden');
+      editAccPassword.value = '';
+      try {
+        editAccPassword.value = await invoke<string>('get_account_password', { user: accounts[index].user });
+        editModal.classList.remove('hidden');
+      } catch (error) {
+        await customAlert(`无法读取该账号密码：${String(error)}`);
+      }
     }
   });
 
@@ -3706,7 +3817,7 @@ function setupEventListeners() {
         const accounts = getAccounts();
         log('账号管理', `已删除账号 ${accounts[index].user}`);
         accounts.splice(index, 1);
-        if (accounts.length > 0 && !accounts.find((a:any) => a.isDefault)) {
+        if (accounts.length > 0 && !accounts.find(account => account.isDefault)) {
           accounts[0].isDefault = true;
         }
         saveAccountsInBackground(accounts);
@@ -3723,10 +3834,16 @@ function setupEventListeners() {
   let dragGrabOffset: { x: number, y: number } | null = null;
   let draggedCardSize: { width: number, height: number } | null = null;
   let fallbackCaptureFrame: number | null = null;
-  const pointFromDragEvent = (event: any): { clientX: number, clientY: number } | null => {
-    const point = event?.touches?.[0] || event?.changedTouches?.[0] || event;
+  const pointFromDragEvent = (event: unknown): { clientX: number, clientY: number } | null => {
+    const candidate = event as {
+      clientX?: number;
+      clientY?: number;
+      touches?: ArrayLike<{ clientX: number; clientY: number }>;
+      changedTouches?: ArrayLike<{ clientX: number; clientY: number }>;
+    } | null;
+    const point = candidate?.touches?.[0] || candidate?.changedTouches?.[0] || candidate;
     return Number.isFinite(point?.clientX) && Number.isFinite(point?.clientY)
-      ? { clientX: point.clientX, clientY: point.clientY }
+      ? { clientX: point!.clientX!, clientY: point!.clientY! }
       : null;
   };
   const captureDragPoint = (event: Event) => {
@@ -3760,7 +3877,7 @@ function setupEventListeners() {
       lastFallbackRect = null;
       const itemRect = evt.item.getBoundingClientRect();
       draggedCardSize = { width: itemRect.width, height: itemRect.height };
-      lastDragPoint = pointFromDragEvent((evt as any).originalEvent);
+      lastDragPoint = pointFromDragEvent((evt as { originalEvent?: Event }).originalEvent);
       dragGrabOffset = lastDragPoint
         ? { x: lastDragPoint.clientX - itemRect.left, y: lastDragPoint.clientY - itemRect.top }
         : null;
@@ -3780,7 +3897,7 @@ function setupEventListeners() {
 
       if (fallbackCaptureFrame !== null) cancelAnimationFrame(fallbackCaptureFrame);
       fallbackCaptureFrame = null;
-      const releasePoint = pointFromDragEvent((evt as any).originalEvent);
+      const releasePoint = pointFromDragEvent((evt as { originalEvent?: Event }).originalEvent);
       if (releasePoint) lastDragPoint = releasePoint;
       stopPointerCapture();
       const pointerRect = lastDragPoint && dragGrabOffset && draggedCardSize
@@ -3861,7 +3978,7 @@ function setupEventListeners() {
           const accounts = getAccounts();
           const accItem = accounts.splice(oldIndex, 1)[0];
           accounts.splice(newIndex, 0, accItem);
-          accounts.forEach((a:any, i:number) => a.isDefault = (i === 0));
+          accounts.forEach((account, accountIndex) => account.isDefault = accountIndex === 0);
           saveAccountsInBackground(accounts);
           
           // Update DOM in-place
@@ -3903,7 +4020,7 @@ function setupEventListeners() {
 
 // Logging
 function log(module: string, message: string, type: 'info' | 'error' | 'success' | 'debug' = 'info') {
-  if ((window as any).__TAURI__) {
+  if (window.__TAURI__) {
     invoke('log_from_js', { module, message, logType: type }).catch(() => {});
     return;
   }
@@ -3946,8 +4063,8 @@ function renderAccounts() {
       </div>
       <div class="account-right">
         <div class="account-password">
-          <span class="password-text${acc.pass ? '' : ' password-missing'}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted); display: inline-block; width: 7.5em; text-align: left;"></span>
-          <button class="btn-icon action-toggle-password hide-password" style="padding: 0.2rem;" title="显示/隐藏密码"${acc.pass ? '' : ' disabled'}><i data-lucide="eye"></i></button>
+          <span class="password-text${acc.hasPassword ? '' : ' password-missing'}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted); display: inline-block; width: 7.5em; text-align: left;"></span>
+          <button class="btn-icon action-toggle-password hide-password" style="padding: 0.2rem;" data-index="${index}" title="临时显示密码"${acc.hasPassword ? '' : ' disabled'}><i data-lucide="eye"></i></button>
         </div>
         <div class="account-desktop-actions">
           <button class="btn-icon action-edit" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
@@ -3959,8 +4076,7 @@ function renderAccounts() {
     item.querySelector('.account-avatar')!.textContent = avatarText;
     item.querySelector('.account-user h4')!.textContent = acc.user;
     const passwordText = item.querySelector('.password-text') as HTMLElement;
-    passwordText.dataset.password = acc.pass;
-    passwordText.textContent = acc.pass ? '*************' : '未保存密码';
+    passwordText.textContent = acc.hasPassword ? '*************' : '未保存密码';
     const health = accountHealthCache.get(acc.user);
     if (health) {
       const healthBadge = item.querySelector('.account-health-badge') as HTMLElement;
@@ -3993,7 +4109,7 @@ function updateOverrideOptions() {
 }
 
 function enabledBillingAccounts() {
-  return getAccounts().filter(account => !account.isDisabled && account.user && account.pass);
+  return getAccounts().filter(account => !account.isDisabled && account.user && account.hasPassword);
 }
 
 function defaultBillingAccountUser(): string {
@@ -4067,7 +4183,7 @@ function updateBillingAccountOptions() {
 // Split Network Check Loops
 async function isAppInBackground(): Promise<boolean> {
   if (document.hidden) return true;
-  if (!(window as any).__TAURI__) {
+  if (!window.__TAURI__) {
     return !IS_ANDROID && !document.hasFocus();
   }
   try {
@@ -4089,7 +4205,7 @@ async function ensureBillingRequestForeground(): Promise<boolean> {
 }
 
 function startWifiChangeCheckLoop() {
-  if ((window as any).__TAURI__) return;
+  if (window.__TAURI__) return;
   if (wifiChangeTimer) {
     clearTimeout(wifiChangeTimer);
     wifiChangeTimer = null;
@@ -4097,7 +4213,7 @@ function startWifiChangeCheckLoop() {
   if (!wifiChangeDetectEnabled) return;
 
   const tick = async () => {
-    if ((window as any).__TAURI__) {
+    if (window.__TAURI__) {
       try {
         const currentIp: string = await invoke('get_local_ip');
         log('网络', `[DEBUG] 执行 Wi-Fi 变更检测。当前 IP: ${currentIp || '未分配'} (上次 IP: ${lastKnownIp || '空'})`, 'debug');
@@ -4113,7 +4229,7 @@ function startWifiChangeCheckLoop() {
         console.warn('Failed in Wi-Fi change check:', e);
       }
     }
-    wifiChangeTimer = setTimeout(tick, 3000) as any;
+    wifiChangeTimer = window.setTimeout(tick, 3000);
   };
 
   tick();
@@ -4121,8 +4237,8 @@ function startWifiChangeCheckLoop() {
 
 // Native keep-alive hook for Android: called from Kotlin Handler every 10s
 // to counteract Chromium's internal background timer throttling.
-(window as any).__nativeKeepAlive = () => {
-  if ((window as any).__TAURI__) return;
+window.__nativeKeepAlive = () => {
+  if (window.__TAURI__) return;
   // Re-kick the Wi-Fi change detection loop if its timer died
   if (wifiChangeDetectEnabled && !wifiChangeTimer) {
     startWifiChangeCheckLoop();
@@ -4134,7 +4250,7 @@ function startWifiChangeCheckLoop() {
 };
 
 function startConnectivityCheckLoop() {
-  if ((window as any).__TAURI__) return;
+  if (window.__TAURI__) return;
   if (connectivityTimer) {
     clearTimeout(connectivityTimer);
     connectivityTimer = null;
@@ -4148,7 +4264,7 @@ function startConnectivityCheckLoop() {
     await checkNetwork();
   };
 
-  countdownInterval = setInterval(async () => {
+  countdownInterval = window.setInterval(async () => {
     if (isLoggingIn || isChecking) return;
 
     const isBg = await isAppInBackground();
@@ -4183,7 +4299,7 @@ function startConnectivityCheckLoop() {
         runCheck();
       }
     }
-  }, 1000) as any;
+  }, 1000);
 
   runCheck();
 }
@@ -4202,7 +4318,7 @@ function updateCountdownUI() {
 }
 
 async function checkNetwork() {
-  if (!(window as any).__TAURI__) return;
+  if (!window.__TAURI__) return;
   try {
     await invoke('trigger_manual_check');
   } catch (error) {
@@ -4239,13 +4355,13 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType) {
     infoFlow.textContent = '--';
     infoAccountLabel.textContent = '当前登录账号';
   }
-  if (IS_ANDROID && (window as any).AndroidBridge?.updateKeepAliveStatus) {
+  if (IS_ANDROID && window.AndroidBridge?.updateKeepAliveStatus) {
     const notification = state === NetworkState.Online
       ? '互联网已连接，后台自动登录正常'
       : state === NetworkState.BjutCampus
         ? '校园网需要认证，自动登录正在处理'
         : '网络离线或不在校园网环境';
-    (window as any).AndroidBridge.updateKeepAliveStatus(notification);
+    window.AndroidBridge.updateKeepAliveStatus(notification);
   }
   renderIcons(networkIcon);
 }
@@ -5026,9 +5142,9 @@ function buildBillingCsv(
 }
 
 async function saveBillingCsv(kind: BillingRecordKind, title: string, csv: string) {
-  if ((window as any).__TAURI__) {
+  if (window.__TAURI__) {
     const destination = await invoke<string>('export_billing_csv', { kind, csv });
-    const androidBridge = (window as any).AndroidBridge;
+    const androidBridge = window.AndroidBridge;
     if (IS_ANDROID && androidBridge?.shareExportFile) {
       const launched = Boolean(androidBridge.shareExportFile(destination, `BJUT-AL ${title}`));
       if (!launched) throw new Error('系统分享窗口启动失败');
@@ -5438,7 +5554,7 @@ async function openActiveAlipayPayment() {
   alipayAutomaticCheckCount = 0;
   scheduleAlipayAutomaticCompletionCheck(3500);
   try {
-    const androidBridge = (window as any).AndroidBridge;
+    const androidBridge = window.AndroidBridge;
     if (IS_ANDROID && androidBridge?.openAlipay) {
       const launched = Boolean(androidBridge.openAlipay(payment.paymentUrl));
       if (launched) {
@@ -5543,6 +5659,11 @@ async function completeAlipayNetworkRecharge(automatic = false) {
     });
     updateRechargeProgress(84, '网费转入完成，正在刷新双方余额…');
     const balanceError = await refreshRechargeBalancesOnce(payment.targetAccount, payment.payerAccount);
+    await invoke('finish_recharge_recovery', {
+      id: payment.recoveryId,
+      completed: true,
+      note: '支付宝到账并已转入目标网费账户',
+    }).catch(() => undefined);
     clearActiveAlipayPayment();
     billingRechargeAmount.value = '';
     billingRechargeState.textContent = balanceError
@@ -5555,7 +5676,14 @@ async function completeAlipayNetworkRecharge(automatic = false) {
       await invoke('cancel_network_recharge', { confirmationId: preparedConfirmationId }).catch(() => undefined);
     }
     const detail = String(error);
-    if (transferSubmitted) clearActiveAlipayPayment();
+    if (transferSubmitted) {
+      await invoke('finish_recharge_recovery', {
+        id: payment.recoveryId,
+        completed: false,
+        note: detail,
+      }).catch(() => undefined);
+      clearActiveAlipayPayment();
+    }
     const message = transferSubmitted
       ? `网费转入已提交，但结果未能确认：${detail}。为避免重复扣费，App 不会自动重试；请先查询校园卡和网费记录。`
       : automatic
@@ -5623,6 +5751,7 @@ async function prepareAndOpenAlipayRecharge() {
   updateRechargeProgress(10, '正在登录统一认证并读取校园卡…');
   try {
     const preview = await invoke<AlipayRechargePreview>('prepare_alipay_card_recharge', {
+      targetAccount,
       amount,
       accountUser,
     });
@@ -5656,6 +5785,7 @@ async function prepareAndOpenAlipayRecharge() {
       throw new Error('支付平台返回了不受信任的跳转地址');
     }
     rememberActiveAlipayPayment({
+      recoveryId: preview.confirmationId,
       paymentUrl: result.paymentUrl,
       payerAccount: result.payerAccount,
       amount: result.amount,
@@ -5761,9 +5891,7 @@ async function openActiveWechatPayment() {
   try {
     // Rust has already visited Tenpay with the order-creation session and a
     // regular UA. Only the validated weixin:// launch address reaches JS.
-    const androidBridge = (window as any).AndroidBridge as {
-      openWechat?: (url: string) => boolean;
-    } | undefined;
+    const androidBridge = window.AndroidBridge;
     if (IS_ANDROID && androidBridge?.openWechat) {
       if (!androidBridge.openWechat(payment.launchUrl)) {
         throw new Error('未检测到可处理该订单的微信客户端');
@@ -5987,7 +6115,12 @@ async function performConfirmedBillingAction(
   confirmation: string,
   button: HTMLButtonElement,
 ) {
-  if (!await customConfirm(confirmation, title)) return;
+  if (!await customConfirm(confirmation, title)) {
+    request.oldPassword = undefined;
+    request.newPassword = undefined;
+    clearBillingSecretInputs();
+    return;
+  }
   if (request.action !== 'changePassword' && !await ensureBillingRequestForeground()) return;
   const original = button.textContent;
   const wasDisabled = button.disabled;
@@ -6010,6 +6143,10 @@ async function performConfirmedBillingAction(
     clearBillingSecretInputs();
     await customAlert(`操作失败：${String(error)}`, title);
   } finally {
+    request.oldPassword = undefined;
+    request.newPassword = undefined;
+    request.questions = undefined;
+    clearBillingSecretInputs();
     button.textContent = original;
     if (billingCenterData) {
       renderBillingService(billingCenterData);
@@ -6219,7 +6356,7 @@ async function manualLogin() {
 }
 
 async function checkNetworkSecurity(): Promise<boolean> {
-  if (!(window as any).__TAURI__) return true; 
+  if (!window.__TAURI__) return true;
 
   try {
     const netInfo: { ssid: string, bssid: string, ip: string } = await invoke('get_network_info');
@@ -6258,8 +6395,8 @@ async function checkNetworkSecurity(): Promise<boolean> {
     if (isSafe) return true;
     
     const netKey = `${netInfo.ssid}|${netInfo.bssid}`;
-    const whitelist: string[] = JSON.parse(localStorage.getItem('bjut_whitelist') || '[]');
-    const blacklist: string[] = JSON.parse(localStorage.getItem('bjut_blacklist') || '[]');
+    const whitelist = whitelistCache;
+    const blacklist = blacklistCache;
     
     if (whitelist.includes(netKey)) return true;
     if (blacklist.includes(netKey)) return false;
@@ -6285,8 +6422,8 @@ async function checkNetworkSecurity(): Promise<boolean> {
       
       const btnCancelBlack = document.getElementById('btn-sec-cancel-black')!;
       const onCancelBlack = () => {
-        blacklist.push(netKey);
-        localStorage.setItem('bjut_blacklist', JSON.stringify(blacklist));
+        blacklistCache = [...blacklistCache, netKey];
+        void syncConfigToRust();
         log('安全', `已将 ${netInfo.ssid} 加入黑名单`, 'info');
         cleanup(); resolve(false);
       };
@@ -6298,8 +6435,8 @@ async function checkNetworkSecurity(): Promise<boolean> {
       
       const btnTrustWhite = document.getElementById('btn-sec-trust-white')!;
       const onTrustWhite = () => {
-        whitelist.push(netKey);
-        localStorage.setItem('bjut_whitelist', JSON.stringify(whitelist));
+        whitelistCache = [...whitelistCache, netKey];
+        void syncConfigToRust();
         log('安全', `已将 ${netInfo.ssid} 加入白名单`, 'info');
         cleanup(); resolve(true);
       };

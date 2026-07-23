@@ -1,8 +1,8 @@
 [package]
-name = "tauri-app"
+name = "bjut-auto-login"
 version = "0.1.4"
-description = "A Tauri App"
-authors = ["you"]
+description = "BJUT campus network auto-login and billing companion"
+authors = ["key-zhzr"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

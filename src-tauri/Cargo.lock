@@ -331,6 +331,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "bjut-auto-login"
+version = "0.1.4"
+dependencies = [
+ "aes-gcm",
+ "arboard",
+ "chrono",
+ "corewlan",
+ "futures-util",
+ "jni 0.21.1",
+ "keyring",
+ "md5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-updater",
+ "tokio",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4408,30 +4432,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy",
  "windows",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.1.4"
-dependencies = [
- "aes-gcm",
- "arboard",
- "chrono",
- "corewlan",
- "futures-util",
- "jni 0.21.1",
- "keyring",
- "md5",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-updater",
- "tokio",
 ]
 
 [[package]]

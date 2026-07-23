@@ -1,15 +1,17 @@
 use super::{query_campus_dns_ipv4, redact_request_error, VpnCompatibility, LGN_HOST};
 use chrono::Datelike;
 use futures_util::{stream::FuturesUnordered, StreamExt};
-use reqwest::header::{
-    HeaderMap, ACCEPT, ACCEPT_LANGUAGE, COOKIE, LOCATION, ORIGIN, REFERER, SET_COOKIE,
-};
+#[cfg(test)]
+use reqwest::header::SET_COOKIE;
+use reqwest::header::{HeaderMap, ACCEPT, ACCEPT_LANGUAGE, COOKIE, LOCATION, ORIGIN, REFERER};
 use reqwest::{Client, Response, Url};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::cookie_jar::CookieJar;
 
 const BILLING_HOST: &str = "jfself.bjut.edu.cn";
 const BILLING_FIXED_ADDRESS: Ipv4Addr = Ipv4Addr::new(172, 21, 0, 16);
@@ -243,78 +245,8 @@ impl BillingError {
     }
 }
 
-#[derive(Clone, Default)]
-struct SessionCookies {
-    values: BTreeMap<String, String>,
-}
-
-impl SessionCookies {
-    fn absorb(&mut self, headers: &HeaderMap) {
-        for value in headers.get_all(SET_COOKIE).iter() {
-            let Ok(raw) = value.to_str() else { continue };
-            let Some(pair) = raw.split(';').next() else {
-                continue;
-            };
-            let Some((name, value)) = pair.split_once('=') else {
-                continue;
-            };
-            let name = name.trim();
-            if name.is_empty()
-                || !name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
-            {
-                continue;
-            }
-            if value.is_empty() {
-                self.values.remove(name);
-            } else {
-                self.values
-                    .insert(name.to_string(), value.trim().to_string());
-            }
-        }
-    }
-
-    fn header(&self) -> Option<String> {
-        if self.values.is_empty() {
-            None
-        } else {
-            Some(
-                self.values
-                    .iter()
-                    .map(|(name, value)| format!("{name}={value}"))
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            )
-        }
-    }
-
-    fn merge(&mut self, other: Self) {
-        self.values.extend(other.values);
-    }
-}
-
-#[derive(Clone, Default)]
-struct HostCookies {
-    values: BTreeMap<String, SessionCookies>,
-}
-
-impl HostCookies {
-    fn absorb(&mut self, url: &Url, headers: &HeaderMap) {
-        if let Some(host) = url.host_str() {
-            self.values
-                .entry(host.to_ascii_lowercase())
-                .or_default()
-                .absorb(headers);
-        }
-    }
-
-    fn header(&self, url: &Url) -> Option<String> {
-        self.values
-            .get(&url.host_str()?.to_ascii_lowercase())
-            .and_then(SessionCookies::header)
-    }
-}
+type SessionCookies = CookieJar;
+type HostCookies = CookieJar;
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1892,11 +1824,11 @@ async fn post_form_action(
         .header("Sec-Fetch-Mode", "cors")
         .header("Sec-Fetch-Site", "same-origin")
         .form(&fields);
-    if let Some(value) = session.cookies.header() {
+    if let Some(value) = session.cookies.header(&url) {
         request = request.header(COOKIE, value);
     }
     let response = request.send().await.map_err(network_error)?;
-    session.cookies.absorb(response.headers());
+    session.cookies.absorb(&url, response.headers());
     if response.status().is_redirection() {
         if matches!(response.status().as_u16(), 307 | 308) {
             return Err(BillingError::Protocol(
@@ -2634,14 +2566,14 @@ async fn get_follow(
         if destination == "empty" {
             request = request.header("X-Requested-With", "XMLHttpRequest");
         }
-        if let Some(value) = cookies.header() {
+        if let Some(value) = cookies.header(&url) {
             request = request.header(COOKIE, value);
         }
         if let Some(value) = current_referer.as_deref() {
             request = request.header(REFERER, value);
         }
         let response = request.send().await.map_err(network_error)?;
-        cookies.absorb(response.headers());
+        cookies.absorb(&url, response.headers());
         if response.status().is_redirection() {
             let next = redirect_target(&url, &response)?;
             current_referer = Some(url.to_string());
@@ -2687,11 +2619,11 @@ async fn post_login(
         .header("Sec-Fetch-Mode", "navigate")
         .header("Sec-Fetch-Site", "same-origin")
         .form(&form);
-    if let Some(value) = cookies.header() {
+    if let Some(value) = cookies.header(&verify_url) {
         request = request.header(COOKIE, value);
     }
     let response = request.send().await.map_err(network_error)?;
-    cookies.absorb(response.headers());
+    cookies.absorb(&verify_url, response.headers());
     if response.status().is_redirection() {
         if matches!(response.status().as_u16(), 307 | 308) {
             return Err(BillingError::Protocol(
@@ -4212,9 +4144,10 @@ mod tests {
         );
         headers.append(SET_COOKIE, "theme=blue; Path=/".parse().unwrap());
         let mut cookies = SessionCookies::default();
-        cookies.absorb(&headers);
+        let url = Url::parse("https://jfself.bjut.edu.cn/Self/dashboard").unwrap();
+        cookies.absorb(&url, &headers);
         assert_eq!(
-            cookies.header().as_deref(),
+            cookies.header(&url).as_deref(),
             Some("JSESSIONID=abc123; theme=blue")
         );
     }
