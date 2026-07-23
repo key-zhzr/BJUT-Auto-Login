@@ -1274,7 +1274,9 @@ let isLoopSuspended = false;
 async function restoreRecoverableRecharges() {
   if (!window.__TAURI__) return;
   const transactions = await invoke<RecoverableRecharge[]>('get_recoverable_recharges').catch(() => []);
-  const alipay = transactions.find(item => item.method === 'alipay' && isTrustedAlipayPaymentUrl(item.paymentUrl));
+  const alipay = transactions.find(item => item.method === 'alipay'
+    && ['orderCreated', 'handedOff', 'paymentConfirmed'].includes(item.stage)
+    && isTrustedAlipayPaymentUrl(item.paymentUrl));
   if (alipay) {
     rememberActiveAlipayPayment({
       recoveryId: alipay.id,
@@ -1284,8 +1286,14 @@ async function restoreRecoverableRecharges() {
       amount: alipay.amount,
       cardBalanceBefore: alipay.cardBalanceBefore,
     });
+    restoreRechargeForm(alipay, 'alipay');
+    if (alipay.stage === 'paymentConfirmed') {
+      setAlipayArrivalReady(true);
+      scheduleAlipayAutomaticCompletionCheck(800);
+    }
   }
   const wechat = transactions.find(item => item.method === 'wechat'
+    && ['orderCreated', 'handedOff', 'paymentConfirmed'].includes(item.stage)
     && item.paymentId
     && isTrustedWechatLaunchUrl(item.paymentUrl));
   if (wechat) {
@@ -1297,6 +1305,7 @@ async function restoreRecoverableRecharges() {
       amount: wechat.amount,
       cardBalanceBefore: wechat.cardBalanceBefore,
     });
+    restoreRechargeForm(wechat, 'wechat');
   }
   const uncertain = transactions.find(item => item.stage === 'unknown' || item.stage === 'transferSubmitted');
   if (uncertain) {
@@ -1306,6 +1315,19 @@ async function restoreRecoverableRecharges() {
     billingRechargeState.textContent = '已从安全存储恢复未完成的支付订单，可继续原订单或核对到账。';
     log('计费', '已恢复未完成的充值订单', 'info');
   }
+}
+
+function restoreRechargeForm(transaction: RecoverableRecharge, method: RechargeMethod) {
+  const payerExists = enabledBillingAccounts().some(account => account.user === transaction.payerAccount);
+  if (payerExists) {
+    billingRechargeCardAccountSelect.setValue(transaction.payerAccount);
+  }
+  const targetExists = enabledBillingAccounts().some(account => account.user === transaction.targetAccount);
+  billingRechargeTargetAccountSelect.setValue(targetExists ? transaction.targetAccount : '__custom__');
+  syncRechargeTargetAccountInput();
+  billingRechargeAccount.value = transaction.targetAccount;
+  billingRechargeAmount.value = transaction.amount;
+  activateRechargeMethod(method);
 }
 
 // Initialize
@@ -1373,17 +1395,21 @@ async function init() {
   settingCheckInterval.value = checkInterval.toString();
 
   // Handle autostart and quit element visibility and status
-  if (!window.__TAURI__ || IS_ANDROID) {
+  if (!window.__TAURI__) {
     document.getElementById('setting-autostart-item')?.style.setProperty('display', 'none');
     document.getElementById('setting-quit-item')?.style.setProperty('display', 'none');
   } else {
-    import('@tauri-apps/plugin-autostart').then(async ({ isEnabled }) => {
-      try {
-        settingAutostart.checked = await isEnabled();
-      } catch (e) {
-        console.warn('Failed to query autostart status:', e);
-      }
-    });
+    if (IS_ANDROID) {
+      document.getElementById('setting-autostart-item')?.style.setProperty('display', 'none');
+    } else {
+      import('@tauri-apps/plugin-autostart').then(async ({ isEnabled }) => {
+        try {
+          settingAutostart.checked = await isEnabled();
+        } catch (e) {
+          console.warn('Failed to query autostart status:', e);
+        }
+      });
+    }
   }
 
   // Initialize selectors values
@@ -1401,6 +1427,11 @@ async function init() {
   
   setupNavigation();
   setupEventListeners();
+  if (window.__TAURI__ && navigator.userAgent.includes('Mac OS X')) {
+    void invoke('frontend_ready').catch(error => {
+      console.error('Failed to reveal macOS launch window:', error);
+    });
+  }
   setupEventDrivenNetworkDetection();
   renderAccounts();
   renderNetworkProfiles();
@@ -2735,9 +2766,22 @@ function setupEventListeners() {
   const btnQuitApp = document.getElementById('btn-quit-app');
   if (btnQuitApp) {
     btnQuitApp.addEventListener('click', async () => {
-      if (await customConfirm('确定要退出应用吗？这将彻底关闭后台网络自动登录服务。')) {
+      if (await customConfirm(
+        '完全退出会停止后台网络检测与 Android 常驻保活服务，直到你再次手动启动应用。',
+        '完全退出应用',
+        '停止服务并完全退出',
+        '继续运行',
+      )) {
         if (window.__TAURI__) {
           try {
+            if (IS_ANDROID && window.AndroidBridge?.exitApplication) {
+              window.AndroidBridge.exitApplication();
+              return;
+            }
+            if (IS_ANDROID) {
+              window.AndroidBridge?.stopKeepAliveService();
+              await invoke('stop_keep_alive_service').catch(() => undefined);
+            }
             await invoke('exit_app');
           } catch (e) {
             console.error('Failed to exit app:', e);
@@ -2766,8 +2810,8 @@ function setupEventListeners() {
       const channel = settingUpdateChannel.value;
       log('系统', `正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...`);
       btnCheckUpdate.disabled = true;
-      const originalText = btnCheckUpdate.textContent || '检查更新';
-      btnCheckUpdate.textContent = '检查中…';
+      const label = btnCheckUpdate.querySelector('span');
+      if (label) label.textContent = '检查中…';
 
       try {
         if (!window.__TAURI__) {
@@ -2843,7 +2887,48 @@ function setupEventListeners() {
         log('系统', `检查更新失败: ${String(err)}`, 'error');
       } finally {
         btnCheckUpdate.disabled = false;
-        btnCheckUpdate.textContent = originalText;
+        if (label) label.textContent = '检查更新';
+      }
+    });
+  }
+
+  const btnRedownloadPackage = document.getElementById('btn-redownload-package') as HTMLButtonElement | null;
+  if (btnRedownloadPackage) {
+    btnRedownloadPackage.addEventListener('click', async () => {
+      const label = btnRedownloadPackage.querySelector('span');
+      btnRedownloadPackage.disabled = true;
+      if (label) label.textContent = '正在查找完整包…';
+      try {
+        if (!window.__TAURI__) throw new Error('仅应用内支持识别当前设备安装包');
+        const target = await invoke<UpdateTarget>('get_update_target');
+        const response = await fetch('https://api.github.com/repos/key-zhzr/BJUT-Auto-Login/releases?per_page=20', {
+          headers: { Accept: 'application/vnd.github+json' },
+        });
+        if (!response.ok) throw new Error(`GitHub API 返回 HTTP ${response.status}`);
+        const releases = await response.json() as GitHubRelease[];
+        const currentTag = target.currentVersion.replace(/^v/i, '');
+        const release = releases.find(item =>
+          !item.draft && item.tag_name.replace(/^v/i, '') === currentTag);
+        if (!release) throw new Error(`未找到当前版本 v${target.currentVersion} 的 GitHub Release`);
+        const asset = selectUpdateAsset(release.assets, target);
+        if (!asset) {
+          throw new Error(`当前版本未提供 ${target.platform}/${target.arch}/${target.format} 完整包`);
+        }
+        const confirmed = await customConfirm(
+          `将使用系统浏览器重新下载当前版本完整安装包：\n${asset.name}\n${formatBytes(asset.size)}\n\n现有设置和账号不会因此被删除。`,
+          '重新下载完整包',
+          '打开浏览器下载完整包',
+          '取消',
+        );
+        if (!confirmed) return;
+        await openUrl(asset.browser_download_url);
+        log('系统', `已打开当前版本完整包下载：${asset.name}`, 'success');
+      } catch (error) {
+        await customAlert(`无法重新下载完整包：${String(error)}`, '重新下载完整包');
+        log('系统', `重新下载完整包失败：${String(error)}`, 'error');
+      } finally {
+        btnRedownloadPackage.disabled = false;
+        if (label) label.textContent = '重新下载完整包';
       }
     });
   }
@@ -4644,7 +4729,7 @@ function activateRechargeMethod(method: RechargeMethod) {
       ? '微信充值网费'
       : '从校园卡转入网费';
   billingRechargeMethodDescription.textContent = alipay
-    ? '支付宝先为所选校园卡充值；检测到账后会显示“从校园卡转入网费”按钮，并标明目标账户和金额。'
+    ? '支付宝先为所选校园卡充值；检测到余额增量与订单金额完全一致后，App 会自动把同一金额转入目标网费账户。'
     : wechat
       ? '后端保持学校支付会话并直接唤起微信，支付确认后 App 会继续把同一金额转入目标网费账户。'
       : '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。';
@@ -4658,7 +4743,7 @@ function activateRechargeMethod(method: RechargeMethod) {
       ? '核对并前往微信支付'
       : '核对充值信息';
   billingRechargeState.textContent = alipay
-    ? '支付宝页会保留原会话；检测到账后，页面会直接显示下一步的网费转入按钮。'
+    ? '支付宝页会保留原会话；回到 App 后将自动核对到账并继续转入目标网费账户。'
     : wechat
       ? '目标和金额保持不变；后端将以同一会话进入 Tenpay，取得受信任的微信协议地址后直接唤起微信。'
       : '校园卡、目标和金额保持不变；确认后从所选账号的校园卡直接转入网费。';
@@ -4941,7 +5026,7 @@ function scheduleAlipayAutomaticCompletionCheck(delay = 650) {
     if (!activeAlipayPayment || alipayCompletionBusy) return;
     if (await isAppInBackground()) return;
     alipayAutomaticCheckCount += 1;
-    void completeAlipayNetworkRecharge(true);
+    void completeAlipayNetworkRecharge(true, alipayArrivalReady);
   }, delay);
 }
 
@@ -5015,7 +5100,7 @@ async function openActiveAlipayPayment() {
       const launched = Boolean(androidBridge.openAlipay(payment.paymentUrl));
       if (launched) {
         alipayPaymentModalStatus.textContent = '已直接打开支付宝；支付页会保留原会话，并在完成后按学校流程返回 ydapp。';
-        billingRechargeState.textContent = '已直接打开支付宝；返回 App 后会自动检测到账，并显示“从校园卡转入网费”按钮。';
+        billingRechargeState.textContent = '已直接打开支付宝；返回 App 后会自动检测到账，并继续转入目标网费账户。';
         return true;
       }
     }
@@ -5076,12 +5161,14 @@ async function completeAlipayNetworkRecharge(
     const paidAmount = parseBillingCents(payment.amount);
     const balanceComparable = [balanceBefore, balanceNow, paidAmount].every(Number.isFinite);
     const balanceIncrease = balanceNow - balanceBefore;
-    const arrivalDetected = balanceComparable && balanceIncrease >= paidAmount;
+    const arrivalDetected = balanceComparable && balanceIncrease === paidAmount;
     const previouslyApprovedArrival = transferApproved && alipayArrivalReady;
 
     if (!arrivalDetected && !previouslyApprovedArrival) {
-      const message = balanceComparable
-        ? `支付宝页面仍保留本次会话；暂未检测到到账（校园卡余额 ${formatBillingCurrency(snapshot.cardBalance)}），App 会在前台继续自动检查。`
+      const message = balanceComparable && balanceIncrease > 0
+        ? `检测到校园卡余额变化 ${formatBillingCents(balanceIncrease)}，但与当前订单 ${formatBillingCents(paidAmount)} 不一致，已停止自动转入。`
+        : balanceComparable
+          ? `支付宝页面仍保留本次会话；暂未检测到到账（校园卡余额 ${formatBillingCurrency(snapshot.cardBalance)}），App 会在前台继续自动检查。`
         : '暂时无法比较校园卡余额；支付宝页面仍保留本次会话，App 会在前台继续自动检查。';
       billingRechargeState.textContent = message;
       alipayPaymentModalStatus.textContent = message;
@@ -5093,11 +5180,10 @@ async function completeAlipayNetworkRecharge(
     if (!previouslyApprovedArrival) {
       alipayAutomaticCheckCount = 180;
       setAlipayArrivalReady(true);
-      const message = `检测到校园卡余额增加 ${formatBillingCents(balanceIncrease)}。下一步：点击“从校园卡转入 ${payment.targetAccount} 网费（${formatBillingCurrency(payment.amount)}）”。`;
+      const message = `检测到校园卡余额增加 ${formatBillingCents(balanceIncrease)}，与当前支付宝订单金额一致，正在自动转入 ${payment.targetAccount} 网费账户…`;
       billingRechargeState.textContent = message;
       alipayPaymentModalStatus.textContent = message;
-      billingRechargeProgress.hidden = true;
-      return;
+      updateRechargeProgress(58, '支付宝已到账，正在自动转入目标网费账户…');
     }
 
     billingRechargeState.textContent = `正在把 ${formatBillingCurrency(payment.amount)} 从校园卡转入 ${payment.targetAccount} 网费账户…`;
@@ -5106,6 +5192,7 @@ async function completeAlipayNetworkRecharge(
       targetAccount: payment.targetAccount,
       amount: payment.amount,
       accountUser: payment.payerAccount,
+      recoverySourceId: payment.recoveryId,
     });
     preparedConfirmationId = preview.confirmationId;
     if (activeAlipayPayment !== payment) {

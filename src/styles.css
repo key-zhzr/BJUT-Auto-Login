@@ -2252,7 +2252,27 @@ input:checked + .slider:before { transform: translateX(24px); }
   }
 
   .billing-record-toolbar {
-    grid-template-columns: minmax(10rem, 0.8fr) minmax(20rem, 1.4fr) minmax(8.5rem, 0.62fr) auto;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+  }
+
+  .billing-record-kind-field {
+    flex: 1 1 9rem;
+  }
+
+  .billing-record-date-filter {
+    flex: 2 1 19rem;
+  }
+
+  .billing-record-year-field,
+  .billing-page-size-field {
+    flex: 1 1 8rem;
+  }
+
+  .billing-record-query-field {
+    flex: 0 1 6rem;
+    width: auto;
   }
 }
 

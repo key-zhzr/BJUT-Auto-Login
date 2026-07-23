@@ -4703,16 +4703,51 @@ fn transition_recharge_transaction(
     save_recharge_snapshot_verified(app, &snapshot)
 }
 
+fn transition_recharge_transaction_with_parent(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    id: &str,
+    stage: recharge_state::RechargeStage,
+    note: impl Into<String>,
+) -> Result<(), String> {
+    let snapshot = {
+        let mut config = state.config.write().unwrap();
+        config.recharge_transactions.transition_with_parent(
+            id,
+            stage,
+            chrono::Utc::now().timestamp(),
+            note,
+        )?;
+        config.clone()
+    };
+    save_recharge_snapshot_verified(app, &snapshot)
+}
+
 #[tauri::command]
 fn get_recoverable_recharges(
+    app: tauri::AppHandle,
     state: tauri::State<Arc<AppState>>,
 ) -> Vec<recharge_state::RechargeRecoveryView> {
-    state
-        .config
-        .read()
-        .unwrap()
-        .recharge_transactions
-        .recovery_views()
+    let (views, reconciled_snapshot) = {
+        let mut config = state.config.write().unwrap();
+        let changed = config
+            .recharge_transactions
+            .reconcile_legacy_completed_transfers();
+        let views = config.recharge_transactions.recovery_views();
+        (views, changed.then(|| config.clone()))
+    };
+    if let Some(snapshot) = reconciled_snapshot {
+        if let Err(error) = save_recharge_snapshot_verified(&app, &snapshot) {
+            rust_log(
+                &app,
+                &state,
+                "计费",
+                &format!("旧版充值恢复状态已在内存修复，但持久化失败：{error}"),
+                "error",
+            );
+        }
+    }
+    views
 }
 
 #[tauri::command]
@@ -4769,6 +4804,7 @@ async fn prepare_network_recharge(
     target_account: String,
     amount: String,
     account_user: Option<String>,
+    recovery_source_id: Option<String>,
 ) -> Result<campus_services::RechargePreview, String> {
     ensure_campus_recharge_open()?;
     let account = campus_service_target(&state, account_user.as_deref())?;
@@ -4821,19 +4857,49 @@ async fn prepare_network_recharge(
     match prepared {
         Ok((pending, preview, persisted)) => {
             persist_campus_service_session(&app, &state, persisted);
-            persist_recharge_transaction(
-                &app,
-                &state,
-                recharge_state::RechargeTransaction::prepared(
-                    preview.confirmation_id.clone(),
-                    "campusCard",
-                    preview.payer_account.clone(),
-                    preview.target_account.clone(),
-                    preview.amount.clone(),
-                    preview.card_balance.clone(),
-                    chrono::Utc::now().timestamp(),
-                ),
-            )?;
+            let mut transaction = recharge_state::RechargeTransaction::prepared(
+                preview.confirmation_id.clone(),
+                "campusCard",
+                preview.payer_account.clone(),
+                preview.target_account.clone(),
+                preview.amount.clone(),
+                preview.card_balance.clone(),
+                chrono::Utc::now().timestamp(),
+            );
+            let snapshot = {
+                let mut config = state.config.write().unwrap();
+                if let Some(source_id) = recovery_source_id.as_deref() {
+                    let source = config
+                        .recharge_transactions
+                        .find(source_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            "找不到对应的支付恢复记录，请重新打开充值页面".to_string()
+                        })?;
+                    let source_amount = source.amount.parse::<f64>().unwrap_or(f64::NAN);
+                    let transfer_amount = preview.amount.parse::<f64>().unwrap_or(f64::NAN);
+                    if !matches!(source.method.as_str(), "alipay" | "wechat")
+                        || !source.stage.is_recoverable()
+                        || source.payer_account != preview.payer_account
+                        || source.target_account != preview.target_account
+                        || !source_amount.is_finite()
+                        || !transfer_amount.is_finite()
+                        || (source_amount - transfer_amount).abs() >= 0.005
+                    {
+                        return Err("支付恢复记录与本次网费转入信息不一致，已停止操作".to_string());
+                    }
+                    transaction.parent_id = source_id.to_string();
+                    config.recharge_transactions.transition(
+                        source_id,
+                        recharge_state::RechargeStage::PaymentConfirmed,
+                        chrono::Utc::now().timestamp(),
+                        "已确认支付到账，等待转入目标网费账户",
+                    )?;
+                }
+                config.recharge_transactions.upsert(transaction);
+                config.clone()
+            };
+            save_recharge_snapshot_verified(&app, &snapshot)?;
             *state.campus_recharge_pending.lock().await = Some(pending);
             rust_log(
                 &app,
@@ -4884,7 +4950,7 @@ async fn confirm_network_recharge(
         "用户已二次确认校园卡网费充值，正在提交一次性订单",
         "info",
     );
-    transition_recharge_transaction(
+    transition_recharge_transaction_with_parent(
         &app,
         &state,
         &confirmation_id,
@@ -4902,7 +4968,7 @@ async fn confirm_network_recharge(
             let message =
                 "充值提交超过 45 秒，结果未知；请先查询校园卡和网费记录，不要立即重复充值"
                     .to_string();
-            let _ = transition_recharge_transaction(
+            let _ = transition_recharge_transaction_with_parent(
                 &app,
                 &state,
                 &confirmation_id,
@@ -4914,7 +4980,7 @@ async fn confirm_network_recharge(
     };
     match &result {
         Ok(_) => {
-            let _ = transition_recharge_transaction(
+            let _ = transition_recharge_transaction_with_parent(
                 &app,
                 &state,
                 &confirmation_id,
@@ -4924,7 +4990,7 @@ async fn confirm_network_recharge(
             rust_log(&app, &state, "计费", "校园卡网费充值成功", "success")
         }
         Err(error) => {
-            let _ = transition_recharge_transaction(
+            let _ = transition_recharge_transaction_with_parent(
                 &app,
                 &state,
                 &confirmation_id,

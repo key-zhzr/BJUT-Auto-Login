@@ -8,6 +8,7 @@ interface AndroidBridgeApi {
   requestBatteryOptimizations(): void;
   startKeepAliveService(): void;
   stopKeepAliveService(): void;
+  exitApplication?(): void;
   getPermissionHealth?(): string;
   openPermissionSettings?(permission: string): void;
   clearServiceLogs?(): void;

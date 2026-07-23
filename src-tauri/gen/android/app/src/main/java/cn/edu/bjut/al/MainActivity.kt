@@ -391,6 +391,17 @@ class MainActivity : TauriActivity() {
     }
 
     @JavascriptInterface
+    fun exitApplication() {
+      activity.runOnUiThread {
+        activity.stopKeepAliveServiceInternal()
+        activity.finishAndRemoveTask()
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+          android.os.Process.killProcess(android.os.Process.myPid())
+        }, 180L)
+      }
+    }
+
+    @JavascriptInterface
     fun updateKeepAliveStatus(status: String): Boolean =
       activity.updateKeepAliveStatusInternal(status)
 

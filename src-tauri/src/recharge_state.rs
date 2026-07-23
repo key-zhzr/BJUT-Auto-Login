@@ -95,6 +95,8 @@ pub(crate) struct RechargeTransaction {
     pub openid: String,
     #[serde(default)]
     pub note: String,
+    #[serde(default)]
+    pub parent_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -154,6 +156,7 @@ impl RechargeTransaction {
             partner_jour_no: String::new(),
             openid: String::new(),
             note: String::new(),
+            parent_id: String::new(),
         }
     }
 }
@@ -212,6 +215,77 @@ impl RechargeJournal {
         self.0
             .iter()
             .find(|item| item.id == id || (!item.payment_id.is_empty() && item.payment_id == id))
+    }
+
+    pub(crate) fn transition_with_parent(
+        &mut self,
+        id: &str,
+        stage: RechargeStage,
+        now: i64,
+        note: impl Into<String>,
+    ) -> Result<(), String> {
+        let note = note.into();
+        let parent_id = self
+            .find(id)
+            .map(|item| item.parent_id.clone())
+            .unwrap_or_default();
+        self.transition(id, stage.clone(), now, &note)?;
+        if !parent_id.is_empty() {
+            self.transition(&parent_id, stage, now, note)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reconcile_legacy_completed_transfers(&mut self) -> bool {
+        const LEGACY_TRANSFER_WINDOW_SECONDS: i64 = 30 * 60;
+        let mut completed_transfers = self
+            .0
+            .iter()
+            .filter(|item| {
+                item.method == "campusCard"
+                    && item.stage == RechargeStage::Completed
+                    && item.parent_id.is_empty()
+            })
+            .map(|item| {
+                (
+                    item.created_at,
+                    item.payer_account.clone(),
+                    item.target_account.clone(),
+                    item.amount.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        completed_transfers.sort_by_key(|(created_at, ..)| *created_at);
+        let mut changed = false;
+        for (created_at, payer_account, target_account, amount) in completed_transfers {
+            let matching_payment = self
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(_, payment)| {
+                    matches!(payment.method.as_str(), "alipay" | "wechat")
+                        && payment.stage.is_recoverable()
+                        && payment.parent_id.is_empty()
+                        && created_at >= payment.updated_at
+                        && created_at - payment.updated_at <= LEGACY_TRANSFER_WINDOW_SECONDS
+                        && payer_account == payment.payer_account
+                        && target_account == payment.target_account
+                        && amount == payment.amount
+                })
+                .max_by_key(|(_, payment)| payment.updated_at)
+                .map(|(index, _)| index);
+            if let Some(index) = matching_payment {
+                let payment = &mut self.0[index];
+                payment.stage = RechargeStage::Completed;
+                payment.updated_at = created_at;
+                payment.note = "已根据紧随支付订单的网费转入成功记录完成旧版恢复状态".to_string();
+                changed = true;
+            }
+        }
+        if changed {
+            self.trim();
+        }
+        changed
     }
 
     fn trim(&mut self) {
@@ -370,5 +444,72 @@ mod tests {
             stage_after_payment_context_closed(RechargeStage::Completed),
             None
         );
+    }
+
+    #[test]
+    fn linked_transfer_completes_its_payment_parent_atomically() {
+        let mut payment = transaction();
+        payment.id = "payment-1".to_string();
+        payment.method = "alipay".to_string();
+        payment.stage = RechargeStage::PaymentConfirmed;
+        let mut transfer = transaction();
+        transfer.id = "transfer-1".to_string();
+        transfer.method = "campusCard".to_string();
+        transfer.stage = RechargeStage::TransferSubmitted;
+        transfer.parent_id = payment.id.clone();
+        let mut journal = RechargeJournal(vec![payment, transfer]);
+
+        journal
+            .transition_with_parent("transfer-1", RechargeStage::Completed, 10, "done")
+            .unwrap();
+
+        assert!(journal.recovery_views().is_empty());
+        assert!(journal
+            .0
+            .iter()
+            .all(|item| item.stage == RechargeStage::Completed));
+    }
+
+    #[test]
+    fn legacy_completed_transfer_archives_matching_payment() {
+        let mut payment = transaction();
+        payment.id = "payment-1".to_string();
+        payment.method = "alipay".to_string();
+        payment.stage = RechargeStage::HandedOff;
+        payment.updated_at = 100;
+        let mut transfer = transaction();
+        transfer.id = "transfer-1".to_string();
+        transfer.method = "campusCard".to_string();
+        transfer.stage = RechargeStage::Completed;
+        transfer.created_at = 200;
+        transfer.updated_at = 201;
+        let mut journal = RechargeJournal(vec![payment, transfer]);
+
+        assert!(journal.reconcile_legacy_completed_transfers());
+        assert!(journal.recovery_views().is_empty());
+    }
+
+    #[test]
+    fn one_legacy_transfer_only_archives_the_nearest_matching_payment() {
+        let mut older_payment = transaction();
+        older_payment.id = "payment-older".to_string();
+        older_payment.method = "alipay".to_string();
+        older_payment.stage = RechargeStage::HandedOff;
+        older_payment.updated_at = 100;
+        let mut newer_payment = older_payment.clone();
+        newer_payment.id = "payment-newer".to_string();
+        newer_payment.updated_at = 150;
+        let mut transfer = transaction();
+        transfer.id = "transfer-1".to_string();
+        transfer.method = "campusCard".to_string();
+        transfer.stage = RechargeStage::Completed;
+        transfer.created_at = 200;
+        transfer.updated_at = 201;
+        let mut journal = RechargeJournal(vec![older_payment, newer_payment, transfer]);
+
+        assert!(journal.reconcile_legacy_completed_transfers());
+        let recoverable = journal.recovery_views();
+        assert_eq!(recoverable.len(), 1);
+        assert_eq!(recoverable[0].id, "payment-older");
     }
 }
