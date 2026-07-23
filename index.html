@@ -566,6 +566,9 @@
                 <button id="btn-billing-alipay-show-payment" class="btn btn-secondary btn-sm" type="button" hidden>
                   <i data-lucide="qr-code"></i> 显示支付二维码
                 </button>
+                <button id="btn-billing-alipay-transfer" class="btn btn-primary btn-sm" type="button" hidden>
+                  <i data-lucide="arrow-right"></i><span>从校园卡转入网费</span>
+                </button>
                 <button id="btn-billing-wechat-continue" class="btn btn-primary btn-sm" type="button" hidden>
                   <i data-lucide="check-circle"></i> 检测微信支付并转入网费
                 </button>
@@ -1248,7 +1251,7 @@
             <span class="alipay-payment-modal-icon"><i data-lucide="qr-code"></i></span>
             <div>
               <h3 id="alipay-payment-modal-title">支付宝订单已创建</h3>
-              <p>支付页面保持原会话，付款后学校页面会自动返回 ydapp；App 前台时自动核对到账。</p>
+              <p>支付页面保持原会话，付款后学校页面会自动返回 ydapp；App 检测到账后会显示明确的网费转入按钮。</p>
             </div>
           </div>
           <button id="btn-alipay-payment-close-icon" class="btn-icon" type="button" aria-label="关闭支付窗口">
@@ -1271,7 +1274,7 @@
             <div><span>充值校园卡</span><strong id="alipay-payment-payer">--</strong></div>
             <div><span>支付金额</span><strong id="alipay-payment-amount">--</strong></div>
             <div><span>后续网费目标</span><strong id="alipay-payment-target">--</strong></div>
-            <p>支付链接包含本次订单的签名信息，请勿公开分享。检测到校园卡到账后，App 会按已确认的目标和金额自动转入网费。</p>
+            <p>支付链接包含本次订单的签名信息，请勿公开分享。检测到校园卡到账后，请点击明确标有目标账号和金额的按钮转入网费。</p>
           </div>
         </div>
         <p id="alipay-payment-modal-status" class="alipay-payment-modal-status" aria-live="polite">等待扫码或选择其他支付方式。</p>
@@ -1284,7 +1287,7 @@
             <i data-lucide="external-link"></i><span>打开支付页面</span>
           </button>
           <button type="button" class="btn btn-primary" id="btn-alipay-payment-complete">
-            <i data-lucide="refresh-cw"></i><span>立即重新检测</span>
+            <i data-lucide="refresh-cw"></i><span>重新检测校园卡到账</span>
           </button>
         </div>
       </div>

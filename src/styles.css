@@ -1388,6 +1388,12 @@ body.is-android .billing-payment-method.android-only-payment-method { display: f
   display: none;
 }
 
+@media (max-width: 768px) {
+  .billing-alipay-result-actions .btn {
+    width: 100%;
+  }
+}
+
 .billing-recharge-form {
   display: block;
   margin-top: 0.75rem;

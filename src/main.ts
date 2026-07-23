@@ -889,7 +889,12 @@ function customAlert(text: string, title = '提示'): Promise<void> {
     modal.classList.remove('hidden');
   });
 }
-function customConfirm(text: string, title = '确认'): Promise<boolean> {
+function customConfirm(
+  text: string,
+  title = '确认',
+  confirmLabel = '确定',
+  cancelLabel = '取消',
+): Promise<boolean> {
   return new Promise(resolve => {
     const modal = document.getElementById('confirm-modal');
     if (!modal) { resolve(confirm(text)); return; }
@@ -897,6 +902,8 @@ function customConfirm(text: string, title = '确认'): Promise<boolean> {
     document.getElementById('confirm-modal-text')!.textContent = text;
     const btnOk = document.getElementById('btn-confirm-ok')!;
     const btnCancel = document.getElementById('btn-confirm-cancel')!;
+    btnOk.textContent = confirmLabel;
+    btnCancel.textContent = cancelLabel;
     const cleanup = () => {
       modal.classList.add('hidden');
       btnOk.removeEventListener('click', onOk);
@@ -1094,6 +1101,7 @@ const billingRechargeMethodButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('[data-recharge-method-target]'),
 );
 const btnBillingAlipayShowPayment = document.getElementById('btn-billing-alipay-show-payment') as HTMLButtonElement;
+const btnBillingAlipayTransfer = document.getElementById('btn-billing-alipay-transfer') as HTMLButtonElement;
 const btnBillingWechatContinue = document.getElementById('btn-billing-wechat-continue') as HTMLButtonElement;
 const alipayPaymentModal = document.getElementById('alipay-payment-modal')!;
 const alipayPaymentQr = document.getElementById('alipay-payment-qr') as HTMLCanvasElement;
@@ -1198,6 +1206,7 @@ let alipayCompletionBusy = false;
 let alipayExternalHandoffAt = 0;
 let alipayAutomaticCheckTimer: number | null = null;
 let alipayAutomaticCheckCount = 0;
+let alipayArrivalReady = false;
 let wechatCompletionBusy = false;
 let wechatExternalHandoffAt = 0;
 let wechatLastAutomaticCheckAt = 0;
@@ -1344,8 +1353,13 @@ async function init() {
     void refreshBillingCenterData();
   });
   billingRechargeCardAccountSelect.addEventListener('change', () => {
+    const payerAccount = selectedRechargePayerAccount();
+    billingRechargeTargetAccountSelect.setValue(payerAccount || '__custom__');
+    syncRechargeTargetAccountInput();
     billingRechargePreview.hidden = true;
-    billingRechargeState.textContent = `已选择校园卡账户 ${selectedRechargePayerAccount() || '--'}，请继续核对目标账户和金额。`;
+    billingRechargeState.textContent = payerAccount
+      ? `校园卡与默认网费目标均已切换为 ${payerAccount}；如需为他人充值，可再修改目标账户。`
+      : '当前没有可用的校园卡账户。';
   });
   billingRechargeTargetAccountSelect.addEventListener('change', () => {
     syncRechargeTargetAccountInput();
@@ -2183,9 +2197,14 @@ function setupEventListeners() {
   btnBillingAlipayShowPayment.addEventListener('click', () => {
     void showAlipayPaymentModal(btnBillingAlipayShowPayment);
   });
+  btnBillingAlipayTransfer.addEventListener('click', () => {
+    void completeAlipayNetworkRecharge(false, true);
+  });
   btnAlipayPaymentOpen.addEventListener('click', () => void openActiveAlipayPayment());
   btnAlipayPaymentCopy.addEventListener('click', () => void copyActiveAlipayPayment());
-  btnAlipayPaymentComplete.addEventListener('click', () => void completeAlipayNetworkRecharge(false));
+  btnAlipayPaymentComplete.addEventListener('click', () => {
+    void completeAlipayNetworkRecharge(false, alipayArrivalReady);
+  });
   btnAlipayPaymentClose.addEventListener('click', closeAlipayPaymentModal);
   btnAlipayPaymentCloseIcon.addEventListener('click', closeAlipayPaymentModal);
   alipayPaymentModal.addEventListener('click', event => {
@@ -3552,7 +3571,7 @@ function updateBillingAccountOptions() {
   billingRechargeTargetAccountSelect.setValue(
     targetOptions.some(option => option.value === previousTarget)
       ? previousTarget
-      : (currentBilling || '__custom__'),
+      : (currentPayer || '__custom__'),
   );
   syncRechargeTargetAccountInput();
   syncStandaloneBillingSecurity();
@@ -4625,17 +4644,21 @@ function activateRechargeMethod(method: RechargeMethod) {
       ? '微信充值网费'
       : '从校园卡转入网费';
   billingRechargeMethodDescription.textContent = alipay
-    ? '支付宝先为所选校园卡充值，到账后 App 会继续把同一金额转入目标网费账户。'
+    ? '支付宝先为所选校园卡充值；检测到账后会显示“从校园卡转入网费”按钮，并标明目标账户和金额。'
     : wechat
       ? '后端保持学校支付会话并直接唤起微信，支付确认后 App 会继续把同一金额转入目标网费账户。'
       : '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。';
   btnBillingRecharge.textContent = alipay
-    ? '核对并前往支付宝'
+    ? activeAlipayPayment
+      ? alipayArrivalReady
+        ? '从校园卡转入目标网费账户'
+        : '继续当前支付宝订单'
+      : '核对并前往支付宝'
     : wechat
       ? '核对并前往微信支付'
       : '核对充值信息';
   billingRechargeState.textContent = alipay
-    ? '目标和金额保持不变；支付宝页会保留原会话，支付完成后按学校流程自动回到 ydapp，App 会自动核对到账。'
+    ? '支付宝页会保留原会话；检测到账后，页面会直接显示下一步的网费转入按钮。'
     : wechat
       ? '目标和金额保持不变；后端将以同一会话进入 Tenpay，取得受信任的微信协议地址后直接唤起微信。'
       : '校园卡、目标和金额保持不变；确认后从所选账号的校园卡直接转入网费。';
@@ -4644,18 +4667,24 @@ function activateRechargeMethod(method: RechargeMethod) {
   } else {
     btnBillingAlipayShowPayment.hidden = true;
   }
+  updateAlipayTransferAction();
   btnBillingWechatContinue.hidden = !wechat || !activeWechatPayment;
 }
 
 function setRechargeBusy(busy: boolean, label?: string) {
   btnBillingRecharge.disabled = busy;
+  btnBillingAlipayTransfer.disabled = busy;
   billingRechargeCardAccountSelect.setDisabled(busy);
   billingRechargeTargetAccountSelect.setDisabled(busy);
   billingRechargeAccount.disabled = busy || billingRechargeTargetAccountSelect.value !== '__custom__';
   billingRechargeAmount.disabled = busy;
   billingRechargeMethodButtons.forEach(button => { button.disabled = busy; });
   btnBillingRecharge.textContent = label || (activeRechargeMethod === 'alipay'
-    ? '核对并前往支付宝'
+    ? activeAlipayPayment
+      ? alipayArrivalReady
+        ? '从校园卡转入目标网费账户'
+        : '继续当前支付宝订单'
+      : '核对并前往支付宝'
     : activeRechargeMethod === 'wechat'
       ? '核对并前往微信支付'
       : '核对充值信息');
@@ -4687,6 +4716,15 @@ function formatBillingCurrency(value: string) {
 function parseBillingCurrency(value: string) {
   const matched = value.replaceAll(',', '').match(/-?\d+(?:\.\d+)?/);
   return matched ? Number(matched[0]) : Number.NaN;
+}
+
+function parseBillingCents(value: string) {
+  const amount = parseBillingCurrency(value);
+  return Number.isFinite(amount) ? Math.round(amount * 100) : Number.NaN;
+}
+
+function formatBillingCents(cents: number) {
+  return `${(cents / 100).toFixed(2)} 元`;
 }
 
 function rechargeServiceIsOpen(now = Date.now()) {
@@ -4770,6 +4808,8 @@ async function prepareAndConfirmNetworkRecharge() {
     const confirmed = await customConfirm(
       `付款校园卡：${preview.payerAccount}\n校园卡余额：${formatBillingCurrency(preview.cardBalance)}\n目标学工号：${preview.targetAccount}\n目标网费余额：${formatBillingCurrency(preview.targetBalance)}\n充值金额：${formatBillingCurrency(preview.amount)}\n\n确认后将创建一次订单并从校园卡扣费。`,
       '确认校园卡充值',
+      `从校园卡转入 ${preview.targetAccount} 网费`,
+      '返回修改',
     );
     if (!confirmed) {
       await invoke('cancel_network_recharge', {
@@ -4825,12 +4865,42 @@ function closeAlipayPaymentModal() {
   }
 }
 
+function updateAlipayTransferAction() {
+  const payment = activeAlipayPayment;
+  const available = Boolean(payment && alipayArrivalReady);
+  btnBillingAlipayTransfer.hidden = !available || activeRechargeMethod !== 'alipay';
+  const targetLabel = payment
+    ? `从校园卡转入 ${payment.targetAccount} 网费（${formatBillingCurrency(payment.amount)}）`
+    : '从校园卡转入网费';
+  const mainLabel = btnBillingAlipayTransfer.querySelector('span');
+  if (mainLabel) mainLabel.textContent = targetLabel;
+  const modalLabel = btnAlipayPaymentComplete.querySelector('span');
+  if (modalLabel) {
+    modalLabel.textContent = available ? targetLabel : '重新检测校园卡到账';
+  }
+  if (
+    activeRechargeMethod === 'alipay'
+    && !btnBillingRecharge.disabled
+    && payment
+  ) {
+    btnBillingRecharge.textContent = available
+      ? '从校园卡转入目标网费账户'
+      : '继续当前支付宝订单';
+  }
+}
+
+function setAlipayArrivalReady(ready: boolean) {
+  alipayArrivalReady = ready;
+  updateAlipayTransferAction();
+}
+
 function clearActiveAlipayPayment() {
   if (alipayAutomaticCheckTimer !== null) {
     window.clearTimeout(alipayAutomaticCheckTimer);
     alipayAutomaticCheckTimer = null;
   }
   activeAlipayPayment = null;
+  setAlipayArrivalReady(false);
   alipayExternalHandoffAt = 0;
   alipayAutomaticCheckCount = 0;
   alipayCompletionBusy = false;
@@ -4845,6 +4915,7 @@ function clearActiveAlipayPayment() {
 
 function rememberActiveAlipayPayment(payment: ActiveAlipayPayment) {
   activeAlipayPayment = payment;
+  setAlipayArrivalReady(false);
   alipayExternalHandoffAt = Date.now();
   alipayAutomaticCheckCount = 0;
   btnBillingAlipayShowPayment.hidden = IS_ANDROID;
@@ -4854,6 +4925,7 @@ function rememberActiveAlipayPayment(payment: ActiveAlipayPayment) {
 function setAlipayCompletionBusy(busy: boolean) {
   alipayCompletionBusy = busy;
   btnAlipayPaymentComplete.disabled = busy;
+  btnBillingAlipayTransfer.disabled = busy;
   setRechargeBusy(busy, busy ? '正在完成充值…' : undefined);
 }
 
@@ -4885,6 +4957,7 @@ async function showAlipayPaymentModal(returnFocus?: HTMLElement) {
   alipayPaymentPayer.textContent = payment.payerAccount;
   alipayPaymentAmount.textContent = formatBillingCurrency(payment.amount);
   alipayPaymentTarget.textContent = payment.targetAccount;
+  updateAlipayTransferAction();
   alipayPaymentQrShell.classList.remove('has-error');
   alipayPaymentQrFallback.hidden = true;
   alipayPaymentModalStatus.textContent = '正在本机生成支付二维码…';
@@ -4942,7 +5015,7 @@ async function openActiveAlipayPayment() {
       const launched = Boolean(androidBridge.openAlipay(payment.paymentUrl));
       if (launched) {
         alipayPaymentModalStatus.textContent = '已直接打开支付宝；支付页会保留原会话，并在完成后按学校流程返回 ydapp。';
-        billingRechargeState.textContent = '已直接打开支付宝；返回 App 后会自动检测到账，无需再点“支付完成”。';
+        billingRechargeState.textContent = '已直接打开支付宝；返回 App 后会自动检测到账，并显示“从校园卡转入网费”按钮。';
         return true;
       }
     }
@@ -4959,7 +5032,10 @@ async function openActiveAlipayPayment() {
   }
 }
 
-async function completeAlipayNetworkRecharge(automatic = false) {
+async function completeAlipayNetworkRecharge(
+  automatic = false,
+  transferApproved = false,
+) {
   if (alipayCompletionBusy) return;
   if (!rechargeServiceIsOpen()) {
     if (!automatic) await ensureRechargeServiceOpen('支付宝充值');
@@ -4995,14 +5071,15 @@ async function completeAlipayNetworkRecharge(automatic = false) {
     }
     renderRechargeBalances(snapshot);
 
-    const balanceBefore = parseBillingCurrency(payment.cardBalanceBefore);
-    const balanceNow = parseBillingCurrency(snapshot.cardBalance);
-    const paidAmount = parseBillingCurrency(payment.amount);
+    const balanceBefore = parseBillingCents(payment.cardBalanceBefore);
+    const balanceNow = parseBillingCents(snapshot.cardBalance);
+    const paidAmount = parseBillingCents(payment.amount);
     const balanceComparable = [balanceBefore, balanceNow, paidAmount].every(Number.isFinite);
-    const arrivalDetected = balanceComparable
-      && balanceNow - balanceBefore >= paidAmount - 0.005;
+    const balanceIncrease = balanceNow - balanceBefore;
+    const arrivalDetected = balanceComparable && balanceIncrease >= paidAmount;
+    const previouslyApprovedArrival = transferApproved && alipayArrivalReady;
 
-    if (!arrivalDetected) {
+    if (!arrivalDetected && !previouslyApprovedArrival) {
       const message = balanceComparable
         ? `支付宝页面仍保留本次会话；暂未检测到到账（校园卡余额 ${formatBillingCurrency(snapshot.cardBalance)}），App 会在前台继续自动检查。`
         : '暂时无法比较校园卡余额；支付宝页面仍保留本次会话，App 会在前台继续自动检查。';
@@ -5013,26 +5090,17 @@ async function completeAlipayNetworkRecharge(automatic = false) {
       return;
     }
 
-    if (automatic) {
+    if (!previouslyApprovedArrival) {
       alipayAutomaticCheckCount = 180;
-      const message = `检测到校园卡余额增加 ${formatBillingCurrency(String(balanceNow - balanceBefore))}。余额变化本身不能证明对应订单已经到账，请点击“核对并转入网费”确认后再继续。`;
+      setAlipayArrivalReady(true);
+      const message = `检测到校园卡余额增加 ${formatBillingCents(balanceIncrease)}。下一步：点击“从校园卡转入 ${payment.targetAccount} 网费（${formatBillingCurrency(payment.amount)}）”。`;
       billingRechargeState.textContent = message;
       alipayPaymentModalStatus.textContent = message;
       billingRechargeProgress.hidden = true;
       return;
     }
-    const confirmedArrival = await customConfirm(
-      `检测到校园卡余额由 ${formatBillingCurrency(payment.cardBalanceBefore)} 增加到 ${formatBillingCurrency(snapshot.cardBalance)}。\n\n学校接口没有返回可核对的支付宝订单号。请确认这次余额增加确实来自当前 ${formatBillingCurrency(payment.amount)} 的支付宝订单；确认后才会继续转入目标网费账户 ${payment.targetAccount}。`,
-      '确认支付宝到账',
-    );
-    if (!confirmedArrival) {
-      billingRechargeState.textContent = '已暂停自动转入；请先核对校园卡充值记录，确认后再继续。';
-      alipayPaymentModalStatus.textContent = billingRechargeState.textContent;
-      billingRechargeProgress.hidden = true;
-      return;
-    }
 
-    billingRechargeState.textContent = '已检测到支付宝到账，正在按首次确认的信息准备转入目标网费账户…';
+    billingRechargeState.textContent = `正在把 ${formatBillingCurrency(payment.amount)} 从校园卡转入 ${payment.targetAccount} 网费账户…`;
     updateRechargeProgress(64, '支付宝已到账，正在准备网费转入…');
     const preview = await invoke<RechargePreview>('prepare_network_recharge', {
       targetAccount: payment.targetAccount,
@@ -5126,11 +5194,27 @@ async function prepareAndOpenAlipayRecharge() {
     const sameOrder = activeAlipayPayment.payerAccount === accountUser
       && activeAlipayPayment.targetAccount === targetAccount
       && Number(activeAlipayPayment.amount) === Number(amount);
+    if (sameOrder && alipayArrivalReady) {
+      await completeAlipayNetworkRecharge(false, true);
+      return;
+    }
+    if (sameOrder) {
+      if (IS_ANDROID) {
+        const opened = await openActiveAlipayPayment();
+        if (!opened) {
+          btnBillingAlipayShowPayment.hidden = false;
+          await showAlipayPaymentModal(btnBillingRecharge);
+        }
+      } else {
+        await showAlipayPaymentModal(btnBillingRecharge);
+      }
+      return;
+    }
     const replace = await customConfirm(
-      sameOrder
-        ? '当前仍保留着相同金额和目标的支付宝支付入口。仅在原入口已经失效或确定不再支付时才应创建新订单。\n\n选择“取消”将继续使用原支付入口，选择“确定”将创建新订单。'
-        : '当前仍保留着另一个支付宝支付入口。仅在确认原订单不再支付时才应创建新订单。\n\n选择“取消”将继续使用原支付入口，选择“确定”将替换它。',
-      '替换现有支付订单',
+      `当前订单：${activeAlipayPayment.payerAccount} → ${activeAlipayPayment.targetAccount}，${formatBillingCurrency(activeAlipayPayment.amount)}\n新订单：${accountUser} → ${targetAccount}，${formatBillingCurrency(amount)}\n\n旧订单可能仍可付款。只有确认不再使用旧订单时，才创建新订单。`,
+      '已有支付宝订单',
+      '放弃旧订单并创建新订单',
+      '继续使用旧订单',
     );
     if (!replace) {
       if (IS_ANDROID) {
@@ -5165,8 +5249,10 @@ async function prepareAndOpenAlipayRecharge() {
     billingRechargeState.textContent = `校园卡信息已核对；确认信息将在 ${preview.expiresInSeconds} 秒后失效。`;
     updateRechargeProgress(32, '校园卡已核对，等待确认创建支付订单…');
     const confirmed = await customConfirm(
-      `充值校园卡账号：${preview.payerAccount}\n支付宝金额：${formatBillingCurrency(preview.amount)}\n最终网费目标：${targetAccount}\n\nApp 将先创建“支付宝 → 当前校园卡”订单。支付宝页会保留本次学校会话，支付完成后自动跳回 ydapp；检测到账后，App 会按本次确认的信息自动转入目标网费账户，不再要求点击“支付完成”。`,
+      `充值校园卡账号：${preview.payerAccount}\n支付宝金额：${formatBillingCurrency(preview.amount)}\n最终网费目标：${targetAccount}\n\n下一步会创建支付宝订单并打开支付页。付款到账后，App 会显示“从校园卡转入 ${targetAccount} 网费”的独立按钮。`,
       '确认前往支付宝',
+      '创建订单并打开支付宝',
+      '返回修改',
     );
     if (!confirmed) {
       await invoke('cancel_alipay_card_recharge', {
@@ -5194,7 +5280,7 @@ async function prepareAndOpenAlipayRecharge() {
       targetAccount,
       cardBalanceBefore: preview.cardBalance,
     });
-    billingRechargeState.textContent = `${result.message}。支付宝页会在支付完成后自动返回 ydapp；App 保持前台时会自动检测到账并衔接网费转入。`;
+    billingRechargeState.textContent = `${result.message}。支付宝页支付完成后会返回 ydapp；检测到账后会显示明确的网费转入按钮。`;
     updateRechargeProgress(55, '支付订单已创建，等待支付宝付款…');
     if (IS_ANDROID) {
       const opened = await openActiveAlipayPayment();
@@ -5439,9 +5525,11 @@ async function prepareAndOpenWechatRecharge() {
       && Number(activeWechatPayment.amount) === Number(amount);
     const replace = await customConfirm(
       sameOrder
-        ? '当前仍保留着相同金额和目标的微信支付入口。仅在原入口已经失效或确定不再支付时才应创建新订单。\n\n选择“取消”将继续使用原支付入口，选择“确定”将创建新订单。'
-        : '当前仍保留着另一个微信支付入口。仅在确认原订单不再支付时才应创建新订单。\n\n选择“取消”将继续使用原支付入口，选择“确定”将替换它。',
+        ? '当前仍保留着相同金额和目标的微信支付入口。只有确认原入口已经失效或不再支付时，才创建新订单。'
+        : '当前仍保留着另一个微信支付入口。旧订单可能仍可付款，只有确认不再使用时才创建新订单。',
       '替换现有微信订单',
+      '放弃旧订单并创建新订单',
+      '继续使用旧订单',
     );
     if (!replace) {
       await openActiveWechatPayment();
@@ -5473,6 +5561,8 @@ async function prepareAndOpenWechatRecharge() {
     const confirmed = await customConfirm(
       `充值校园卡账号：${preview.payerAccount}\n当前校园卡余额：${formatBillingCurrency(preview.cardBalance)}\n微信支付金额：${formatBillingCurrency(preview.amount)}\n最终网费目标：${preview.targetAccount}\n目标当前余额：${formatBillingCurrency(preview.targetBalance)}\n\n确认后后端将保持当前支付会话进入 Tenpay，并直接唤起微信；支付成功后会自动把同一金额从校园卡转入上述网费账户。`,
       '确认前往微信支付',
+      '创建订单并打开微信',
+      '返回修改',
     );
     if (!confirmed) {
       await invoke('cancel_wechat_card_recharge', {
