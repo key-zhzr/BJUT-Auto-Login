@@ -1317,9 +1317,6 @@ button.billing-package-option:hover,
   white-space: normal;
 }
 
-.billing-payment-method.android-only-payment-method { display: none; }
-body.is-android .billing-payment-method.android-only-payment-method { display: flex; }
-
 .billing-payment-panel {
   padding: 0.9rem;
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -2853,6 +2850,11 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
   background: rgba(37, 99, 235, 0.15);
 }
 
+.wechat-payment-modal-icon {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.15);
+}
+
 .alipay-payment-modal-header > .btn-icon {
   width: 2rem;
   height: 2rem;
@@ -2979,7 +2981,8 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
   min-width: 0;
 }
 
-#btn-alipay-payment-complete {
+#btn-alipay-payment-complete,
+#btn-wechat-payment-complete {
   flex: 1 1 100%;
 }
 
@@ -3062,7 +3065,9 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
   }
 
   #btn-alipay-payment-open,
-  #btn-alipay-payment-complete {
+  #btn-alipay-payment-complete,
+  #btn-wechat-payment-open,
+  #btn-wechat-payment-complete {
     grid-column: 1 / -1;
   }
 }

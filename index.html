@@ -426,10 +426,10 @@
             <div class="billing-action-group">
               <div class="billing-action-copy">
                 <h3>消费保护</h3>
-                <p>输入非负金额，最多三位小数；999999 表示不限制。</p>
+                <p>输入非负金额，最多两位小数；999999 表示不限制。</p>
               </div>
               <div class="billing-action-controls">
-                <input id="billing-consume-limit" inputmode="decimal" placeholder="例如 50 或 999999" maxlength="12">
+                <input id="billing-consume-limit" inputmode="decimal" placeholder="例如 50.00 或 999999" maxlength="12">
                 <button id="btn-billing-consume-limit" class="btn btn-primary btn-sm" type="button" disabled>更新限额</button>
               </div>
             </div>
@@ -500,9 +500,9 @@
                         <i data-lucide="smartphone"></i>
                         <span><strong>支付宝</strong><small>先充值校园卡</small></span>
                       </button>
-                      <button class="billing-payment-method android-only-payment-method" type="button" role="tab" aria-selected="false" data-recharge-method-target="wechat">
+                      <button class="billing-payment-method" type="button" role="tab" aria-selected="false" data-recharge-method-target="wechat">
                         <i data-lucide="qr-code"></i>
-                        <span><strong>微信支付</strong><small>直接唤起微信</small></span>
+                        <span><strong>微信支付</strong><small>扫码或直接唤起</small></span>
                       </button>
                     </div>
                     <p id="billing-recharge-method-description" class="billing-inline-note">将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。</p>
@@ -570,7 +570,10 @@
                   <i data-lucide="arrow-right"></i><span>从校园卡转入网费</span>
                 </button>
                 <button id="btn-billing-wechat-continue" class="btn btn-primary btn-sm" type="button" hidden>
-                  <i data-lucide="check-circle"></i> 检测微信支付并转入网费
+                  <i data-lucide="check-circle"></i> 确认已支付并转入网费
+                </button>
+                <button id="btn-billing-wechat-show-payment" class="btn btn-secondary btn-sm" type="button" hidden>
+                  <i data-lucide="qr-code"></i> 显示微信支付二维码
                 </button>
               </div>
               <p class="billing-inline-note">到账状态可自动查询，但任何扣费或网费转入订单只提交一次，结果不明确时不会自动重复扣费。支付宝与微信均由学校支付平台发起，App 不读取支付密码。</p>
@@ -1123,7 +1126,7 @@
                 </div>
               </div>
               <div class="settings-about-meta">
-                <div><span>当前版本</span><strong id="app-version">v0.1.4</strong></div>
+                <div><span>当前版本</span><strong id="app-version">v0.1.5</strong></div>
                 <div><span>数据原则</span><strong>账号凭据仅保存在本机安全存储</strong></div>
                 <div><span>项目性质</span><strong>开源第三方工具，非学校官方应用</strong></div>
               </div>
@@ -1252,7 +1255,7 @@
             <span class="alipay-payment-modal-icon"><i data-lucide="qr-code"></i></span>
             <div>
               <h3 id="alipay-payment-modal-title">支付宝订单已创建</h3>
-              <p>支付页面保持原会话，付款后学校页面会自动返回 ydapp；App 检测到账后会显示明确的网费转入按钮。</p>
+              <p>支付页面保持原会话；返回 App 后可继续支付或确认已支付，到账金额一致时自动转入网费。</p>
             </div>
           </div>
           <button id="btn-alipay-payment-close-icon" class="btn-icon" type="button" aria-label="关闭支付窗口">
@@ -1275,7 +1278,7 @@
             <div><span>充值校园卡</span><strong id="alipay-payment-payer">--</strong></div>
             <div><span>支付金额</span><strong id="alipay-payment-amount">--</strong></div>
             <div><span>后续网费目标</span><strong id="alipay-payment-target">--</strong></div>
-            <p>支付链接包含本次订单的签名信息，请勿公开分享。检测到校园卡到账后，请点击明确标有目标账号和金额的按钮转入网费。</p>
+            <p>支付链接包含本次订单的签名信息，请勿公开分享。App 仅在到账金额与本订单完全一致时自动转入网费。</p>
           </div>
         </div>
         <p id="alipay-payment-modal-status" class="alipay-payment-modal-status" aria-live="polite">等待扫码或选择其他支付方式。</p>
@@ -1285,10 +1288,60 @@
             <i data-lucide="copy"></i><span>复制支付链接</span>
           </button>
           <button type="button" class="btn btn-secondary" id="btn-alipay-payment-open">
-            <i data-lucide="external-link"></i><span>打开支付页面</span>
+            <i data-lucide="external-link"></i><span>继续支付</span>
           </button>
           <button type="button" class="btn btn-primary" id="btn-alipay-payment-complete">
-            <i data-lucide="refresh-cw"></i><span>重新检测校园卡到账</span>
+            <i data-lucide="refresh-cw"></i><span>确认已支付并检测到账</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- WeChat Payment Handoff Modal -->
+    <div id="wechat-payment-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="wechat-payment-modal-title" aria-hidden="true">
+      <div class="modal-content glass-card alipay-payment-modal-content">
+        <div class="alipay-payment-modal-header">
+          <div class="alipay-payment-modal-title">
+            <span class="alipay-payment-modal-icon wechat-payment-modal-icon"><i data-lucide="qr-code"></i></span>
+            <div>
+              <h3 id="wechat-payment-modal-title">微信支付订单已创建</h3>
+              <p>桌面端可用手机浏览器扫描二维码；Android 可继续直接唤起微信。订单状态始终由学校支付平台确认。</p>
+            </div>
+          </div>
+          <button id="btn-wechat-payment-close-icon" class="btn-icon" type="button" aria-label="关闭支付窗口">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="alipay-payment-modal-body">
+          <div class="alipay-payment-qr-column">
+            <div id="wechat-payment-qr-shell" class="alipay-payment-qr-shell">
+              <canvas id="wechat-payment-qr" role="img" aria-label="微信支付接力二维码"></canvas>
+              <div id="wechat-payment-qr-fallback" class="alipay-payment-qr-fallback" hidden>
+                <i data-lucide="alert-circle"></i>
+                <span>二维码生成失败，请复制支付接力链接</span>
+              </div>
+            </div>
+            <strong>手机浏览器扫码后唤起微信</strong>
+            <small>接力页：bjutdown.work</small>
+          </div>
+          <div class="alipay-payment-order-card">
+            <div><span>充值校园卡</span><strong id="wechat-payment-payer">--</strong></div>
+            <div><span>支付金额</span><strong id="wechat-payment-amount">--</strong></div>
+            <div><span>后续网费目标</span><strong id="wechat-payment-target">--</strong></div>
+            <p>接力链接包含本次订单的签名参数，请勿公开分享。付款结果以学校 orderRefreshPage 返回为准。</p>
+          </div>
+        </div>
+        <p id="wechat-payment-modal-status" class="alipay-payment-modal-status" aria-live="polite">等待扫码或继续支付。</p>
+        <div class="modal-actions alipay-payment-modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-wechat-payment-close">稍后处理</button>
+          <button type="button" class="btn btn-secondary" id="btn-wechat-payment-copy">
+            <i data-lucide="copy"></i><span>复制接力链接</span>
+          </button>
+          <button type="button" class="btn btn-secondary" id="btn-wechat-payment-open">
+            <i data-lucide="external-link"></i><span>继续支付</span>
+          </button>
+          <button type="button" class="btn btn-primary" id="btn-wechat-payment-complete">
+            <i data-lucide="refresh-cw"></i><span>确认已支付并继续</span>
           </button>
         </div>
       </div>

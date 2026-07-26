@@ -4220,6 +4220,20 @@ fn selected_billing_account(config: &AppConfig, account_user: Option<&str>) -> O
     }
 }
 
+fn promote_default_account(accounts: &mut Vec<Account>, index: usize) -> Option<String> {
+    if index >= accounts.len() {
+        return None;
+    }
+    let mut preferred = accounts.remove(index);
+    preferred.is_default = true;
+    let preferred_user = preferred.user.clone();
+    for account in accounts.iter_mut() {
+        account.is_default = false;
+    }
+    accounts.insert(0, preferred);
+    Some(preferred_user)
+}
+
 fn emit_billing_center_progress(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -6196,15 +6210,14 @@ pub fn run() {
                     {
                         let state = app.state::<Arc<AppState>>();
                         let mut config = state.config.read().unwrap().clone();
-                        if index < config.accounts.len() {
-                            for (account_index, account) in config.accounts.iter_mut().enumerate() {
-                                account.is_default = account_index == index;
-                            }
+                        if let Some(preferred_user) =
+                            promote_default_account(&mut config.accounts, index)
+                        {
                             if save_config(app, &state, config).is_ok() {
                                 rust_log(app, &state, "托盘", "已切换首选账号", "info");
                                 let _ = app.emit(
                                     "preferred-account-change",
-                                    serde_json::json!({ "index": index }),
+                                    serde_json::json!({ "index": 0, "user": preferred_user }),
                                 );
                                 refresh_tray_menu(app, &state);
                             }
@@ -6429,6 +6442,50 @@ mod tests {
         );
         assert!(selected_billing_account(&config, Some("20260003")).is_none());
         assert!(selected_billing_account(&config, Some("missing")).is_none());
+    }
+
+    #[test]
+    fn promoting_default_account_moves_it_to_the_front() {
+        let mut accounts = vec![
+            Account {
+                user: "20260001".to_string(),
+                pass: "first".to_string(),
+                is_default: true,
+                is_disabled: None,
+            },
+            Account {
+                user: "20260002".to_string(),
+                pass: "second".to_string(),
+                is_default: false,
+                is_disabled: None,
+            },
+            Account {
+                user: "20260003".to_string(),
+                pass: "third".to_string(),
+                is_default: false,
+                is_disabled: None,
+            },
+        ];
+
+        assert_eq!(
+            promote_default_account(&mut accounts, 2),
+            Some("20260003".to_string())
+        );
+        assert_eq!(
+            accounts
+                .iter()
+                .map(|account| account.user.as_str())
+                .collect::<Vec<_>>(),
+            vec!["20260003", "20260001", "20260002"]
+        );
+        assert_eq!(
+            accounts
+                .iter()
+                .map(|account| account.is_default)
+                .collect::<Vec<_>>(),
+            vec![true, false, false]
+        );
+        assert_eq!(promote_default_account(&mut accounts, 9), None);
     }
 
     #[test]

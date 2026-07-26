@@ -1,6 +1,6 @@
 [package]
 name = "bjut-auto-login"
-version = "0.1.4"
+version = "0.1.5"
 description = "BJUT campus network auto-login and billing companion"
 authors = ["key-zhzr"]
 edition = "2021"

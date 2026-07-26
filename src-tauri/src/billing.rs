@@ -965,7 +965,7 @@ async fn set_consume_limit(
     let page = get_page_text(session, "/Self/service/consumeProtect").await?;
     let page_user = dashboard_user(&page);
     let numeric = requested.parse::<f64>().map_err(|_| {
-        BillingError::InvalidRequest("消费限额必须是非负数字，最多三位小数".to_string())
+        BillingError::InvalidRequest("消费限额必须是非负数字，最多两位小数".to_string())
     })?;
     if numeric != 999_999.0 && page_user.use_money.is_some_and(|spent| numeric < spent) {
         return Err(BillingError::InvalidRequest(
@@ -1946,13 +1946,13 @@ fn validate_consume_limit(value: Option<&str>) -> Result<String, BillingError> {
             }
         } else {
             return Err(BillingError::InvalidRequest(
-                "消费限额必须是非负数字，最多三位小数".to_string(),
+                "消费限额必须是非负数字，最多两位小数".to_string(),
             ));
         }
     }
     if value.starts_with('.')
         || value.ends_with('.')
-        || fraction_digits > 3
+        || fraction_digits > 2
         || value
             .parse::<f64>()
             .ok()
@@ -1960,7 +1960,7 @@ fn validate_consume_limit(value: Option<&str>) -> Result<String, BillingError> {
             .is_none()
     {
         return Err(BillingError::InvalidRequest(
-            "消费限额必须是非负数字，最多三位小数".to_string(),
+            "消费限额必须是非负数字，最多两位小数".to_string(),
         ));
     }
     let numeric = value.parse::<f64>().unwrap_or(-1.0);
@@ -4446,8 +4446,8 @@ mod tests {
 
     #[test]
     fn validates_billing_action_inputs_locally() {
-        assert_eq!(validate_consume_limit(Some("12.345")).unwrap(), "12.345");
-        assert!(validate_consume_limit(Some("12.3456")).is_err());
+        assert_eq!(validate_consume_limit(Some("12.34")).unwrap(), "12.34");
+        assert!(validate_consume_limit(Some("12.345")).is_err());
         assert_eq!(
             validate_mac_input(Some("aa-bb-cc-dd-ee-ff")).unwrap(),
             "AABBCCDDEEFF"
