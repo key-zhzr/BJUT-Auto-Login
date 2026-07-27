@@ -2758,27 +2758,28 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             );
         }
 
-        let make_payload = |state_str: &str, login_type: Option<&LoginType>| {
-            #[allow(unused_mut)]
-            let mut payload = serde_json::json!({
-                "state": state_str,
-                "loginType": login_type.map(LoginType::as_str),
-                "ssid": current_ssid.clone(),
-                "bssid": current_bssid.clone(),
-                "ip": current_ip.clone(),
-                "timestamp": timestamp.clone()
-            });
-            #[cfg(target_os = "android")]
-            if let Some(object) = payload.as_object_mut() {
-                object.insert(
-                    "transport".to_string(),
-                    serde_json::json!(transport.clone()),
-                );
-                object.insert("validated".to_string(), serde_json::json!(system_validated));
-                object.insert("metered".to_string(), serde_json::json!(metered));
-            }
-            payload
-        };
+        let make_payload =
+            |state_str: &str, login_type: Option<&LoginType>, ssid: &str, bssid: &str, ip: &str| {
+                #[allow(unused_mut)]
+                let mut payload = serde_json::json!({
+                    "state": state_str,
+                    "loginType": login_type.map(LoginType::as_str),
+                    "ssid": ssid,
+                    "bssid": bssid,
+                    "ip": ip,
+                    "timestamp": timestamp.clone()
+                });
+                #[cfg(target_os = "android")]
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert(
+                        "transport".to_string(),
+                        serde_json::json!(transport.clone()),
+                    );
+                    object.insert("validated".to_string(), serde_json::json!(system_validated));
+                    object.insert("metered".to_string(), serde_json::json!(metered));
+                }
+                payload
+            };
 
         let is_online = if system_validated {
             rust_log(
@@ -2817,7 +2818,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             );
             state.is_checking.store(false, Ordering::SeqCst);
             state.non_campus_count.store(0, Ordering::SeqCst);
-            let payload = make_payload("Online", None);
+            let payload = make_payload("Online", None, &current_ssid, &current_bssid, &current_ip);
             {
                 let mut last_state = state.last_network_state.lock().unwrap();
                 *last_state = payload.clone();
@@ -2838,7 +2839,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             );
             state.is_checking.store(false, Ordering::SeqCst);
             state.non_campus_count.store(0, Ordering::SeqCst);
-            let payload = make_payload("Offline", None);
+            let payload = make_payload("Offline", None, &current_ssid, &current_bssid, &current_ip);
             {
                 let mut last_state = state.last_network_state.lock().unwrap();
                 *last_state = payload.clone();
@@ -2948,7 +2949,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                     "网络检测完毕: 离线或非校园网 (Offline)",
                     "info",
                 );
-                let payload = make_payload("Offline", None);
+                let payload =
+                    make_payload("Offline", None, &current_ssid, &current_bssid, &current_ip);
                 {
                     let mut last_state = state.last_network_state.lock().unwrap();
                     *last_state = payload.clone();
@@ -3145,9 +3147,15 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                     state.non_campus_count.store(0, Ordering::SeqCst);
                 }
                 let payload = if login_succeeded {
-                    make_payload("Online", None)
+                    make_payload("Online", None, &current_ssid, &current_bssid, &current_ip)
                 } else {
-                    make_payload("BjutCampus", Some(&login_type))
+                    make_payload(
+                        "BjutCampus",
+                        Some(&login_type),
+                        &current_ssid,
+                        &current_bssid,
+                        &current_ip,
+                    )
                 };
                 {
                     let mut last_state = state.last_network_state.lock().unwrap();
