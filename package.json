@@ -7,6 +7,7 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "tsc && vite build",
+    "test:frontend": "node --experimental-strip-types scripts/test-update-utils.mjs",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "tauri": "tauri"

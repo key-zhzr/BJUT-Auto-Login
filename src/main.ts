@@ -17,7 +17,9 @@ import {
 import { decryptExport, encryptExport } from './config-crypto';
 import { CustomSelect } from './custom-select';
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
+import { requestNetworkTrustApproval } from './network-trust';
 import { formatBytes, isVersionNewer, renderReleaseNotes, selectUpdateAsset } from './update-utils';
+import { buildWechatPaymentRelayUrl, isTrustedWechatLaunchUrl } from './wechat-payment';
 import type {
   AccountView, ActiveAlipayPayment, ActiveWechatPayment, AlipayRechargePreview,
   AlipayRechargeResult, AppLogEntry, BackendConfig, BillingActionRequest,
@@ -4773,7 +4775,7 @@ function activateRechargeMethod(method: RechargeMethod) {
     : wechat
       ? IS_ANDROID
         ? '后端保持学校支付会话并直接唤起微信；若返回后仍未确认付款，将提供二维码、继续支付和确认已支付入口。'
-        : '后端保持学校支付会话；桌面端生成 bjutdown.work 支付接力二维码，付款确认后自动转入目标网费账户。'
+        : '后端保持学校支付会话；桌面端生成 red.bjutdown.work 安全接力二维码，付款确认后自动转入目标网费账户。'
       : '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。';
   btnBillingRecharge.textContent = alipay
     ? activeAlipayPayment
@@ -5440,33 +5442,9 @@ async function prepareAndOpenAlipayRecharge() {
   }
 }
 
-function isTrustedWechatLaunchUrl(value: string) {
-  try {
-    const url = new URL(value);
-    const query = url.search.slice(1).toLowerCase();
-    return value.length <= 4096
-      && url.protocol === 'weixin:'
-      && url.hostname === 'wap'
-      && url.pathname === '/pay'
-      && !url.username
-      && !url.password
-      && !url.port
-      && !url.hash
-      && query.length >= 16
-      && ['prepay', 'package', 'sign'].every(marker => query.includes(marker));
-  } catch {
-    return false;
-  }
-}
-
-const WECHAT_PAYMENT_RELAY_ORIGIN = 'https://bjutdown.work/';
-
 function activeWechatPaymentRelayUrl() {
   const payment = activeWechatPayment;
-  if (!payment || !isTrustedWechatLaunchUrl(payment.launchUrl)) return '';
-  const relay = new URL(WECHAT_PAYMENT_RELAY_ORIGIN);
-  relay.searchParams.set('url', payment.launchUrl);
-  return relay.toString();
+  return payment ? buildWechatPaymentRelayUrl(payment.launchUrl) : '';
 }
 
 function closeWechatPaymentModal() {
@@ -5514,7 +5492,7 @@ async function showWechatPaymentModal(returnFocus?: HTMLElement) {
       },
     });
     if (activeWechatPayment !== payment) return;
-    wechatPaymentModalStatus.textContent = '二维码已在本机生成；手机浏览器将通过 bjutdown.work 接力唤起微信。';
+    wechatPaymentModalStatus.textContent = '二维码已在本机生成；手机浏览器将通过 red.bjutdown.work 安全接力页唤起微信，支付参数不会随网页请求上传。';
   } catch {
     if (activeWechatPayment !== payment) return;
     wechatPaymentQrShell.classList.add('has-error');
@@ -5807,7 +5785,7 @@ async function prepareAndOpenWechatRecharge() {
     billingRechargePreview.hidden = false;
     updateRechargeProgress(34, '校园卡与目标网费账户已核对，等待确认…');
     const confirmed = await customConfirm(
-      `充值校园卡账号：${preview.payerAccount}\n当前校园卡余额：${formatBillingCurrency(preview.cardBalance)}\n微信支付金额：${formatBillingCurrency(preview.amount)}\n最终网费目标：${preview.targetAccount}\n目标当前余额：${formatBillingCurrency(preview.targetBalance)}\n\n确认后后端将保持当前支付会话进入 Tenpay；${IS_ANDROID ? '取得受信任地址后直接唤起微信' : '桌面端将生成 bjutdown.work 支付接力二维码'}。支付成功后会自动把同一金额从校园卡转入上述网费账户。`,
+      `充值校园卡账号：${preview.payerAccount}\n当前校园卡余额：${formatBillingCurrency(preview.cardBalance)}\n微信支付金额：${formatBillingCurrency(preview.amount)}\n最终网费目标：${preview.targetAccount}\n目标当前余额：${formatBillingCurrency(preview.targetBalance)}\n\n确认后后端将保持当前支付会话进入 Tenpay；${IS_ANDROID ? '取得受信任地址后直接唤起微信' : '桌面端将生成 red.bjutdown.work 安全接力二维码'}。支付成功后会自动把同一金额从校园卡转入上述网费账户。`,
       '确认前往微信支付',
       IS_ANDROID ? '创建订单并打开微信' : '创建订单并显示二维码',
       '返回修改',
@@ -6062,9 +6040,19 @@ async function manualLogin() {
   btnLogin.disabled = true;
   btnLogin.innerHTML = '<i data-lucide="loader"></i> 安全检查中...';
   renderIcons(btnLogin);
-  
-  const isSafe = await checkNetworkSecurity();
-  if (!isSafe) {
+
+  const overrideAcc = overrideAccountSelect?.value || 'auto';
+  const overrideMethod = overrideMethodSelect?.value || 'auto';
+  const trustApproval = await requestNetworkTrustApproval({
+    loginTypeOverride: overrideMethod === 'auto' ? null : overrideMethod,
+    onLog: log,
+    onAlert: customAlert,
+    onListsChanged: lists => {
+      whitelistCache = lists.whitelist;
+      blacklistCache = lists.blacklist;
+    },
+  });
+  if (!trustApproval.allowed) {
     log('安全', '已取消登录：安全检查未通过', 'error');
     isLoggingIn = false;
     btnLogin.disabled = false;
@@ -6075,15 +6063,14 @@ async function manualLogin() {
   
   btnLogin.innerHTML = '<i data-lucide="loader"></i> 登录中...';
   renderIcons(btnLogin);
-  
-  let overrideAcc = overrideAccountSelect?.value || 'auto';
-  let overrideMethod = overrideMethodSelect?.value || 'auto';
-  
+
   const accountIndex = overrideAcc !== 'auto' && overrideAcc !== 'add' ? parseInt(overrideAcc, 10) : null;
   try {
     const result: { success: boolean, message: string } = await invoke('manual_login', {
       accountIndex: Number.isNaN(accountIndex) ? null : accountIndex,
-      loginTypeOverride: overrideMethod === 'auto' ? null : overrideMethod
+      loginTypeOverride: overrideMethod === 'auto' ? null : overrideMethod,
+      trustNetworkOnce: trustApproval.trustOnce,
+      expectedNetworkKey: trustApproval.networkKey,
     });
     if (!result.success) {
       log('登录', `登录失败: ${result.message}`, 'error');
@@ -6101,102 +6088,6 @@ async function manualLogin() {
   } finally {
     renderIcons(btnLogin);
     isLoggingIn = false;
-  }
-}
-
-async function checkNetworkSecurity(): Promise<boolean> {
-  if (!window.__TAURI__) return true;
-
-  try {
-    const netInfo: { ssid: string, bssid: string, ip: string } = await invoke('get_network_info');
-    if (!netInfo || (!netInfo.ssid && !netInfo.ip)) {
-      log('安全', '无法获取当前网络身份，已阻止发送账号密码', 'error');
-      return false;
-    }
-    
-    const normalizedSsid = netInfo.ssid.trim().toLowerCase().replaceAll('_', '-');
-    const isBjutWifi = normalizedSsid === 'bjut-wifi' || normalizedSsid === 'bjut-sushe';
-    let isSafe = false;
-    
-    // Check vlan
-    if (netInfo.ip) {
-      const parts = netInfo.ip.split('.');
-      if (parts.length === 4) {
-        const p1 = parseInt(parts[0], 10);
-        const p2 = parseInt(parts[1], 10);
-        
-        if (p1 === 10) {
-          if ((p2 >= 17 && p2 <= 27) || p2 === 121 || p2 === 126 || p2 === 226) {
-            isSafe = true;
-          }
-        } else if (p1 === 172) {
-          if (p2 >= 17 && p2 <= 27) {
-            isSafe = true;
-          }
-        }
-      }
-    }
-    
-    if (isBjutWifi && isSafe) return true;
-    if (!isBjutWifi && netInfo.ssid !== '<unknown ssid>') {
-      isSafe = false; // direct unsafe if completely unmatching
-    }
-    if (isSafe) return true;
-    
-    const netKey = `${netInfo.ssid}|${netInfo.bssid}`;
-    const whitelist = whitelistCache;
-    const blacklist = blacklistCache;
-    
-    if (whitelist.includes(netKey)) return true;
-    if (blacklist.includes(netKey)) return false;
-    
-    // Prompt
-    return new Promise(resolve => {
-      const modal = document.getElementById('security-modal')!;
-      document.getElementById('sec-ssid')!.textContent = netInfo.ssid;
-      document.getElementById('sec-bssid')!.textContent = netInfo.bssid;
-      document.getElementById('sec-ip')!.textContent = netInfo.ip;
-      
-      const cleanup = () => {
-        modal.classList.add('hidden');
-        btnCancel.removeEventListener('click', onCancel);
-        btnCancelBlack.removeEventListener('click', onCancelBlack);
-        btnTrustOnce.removeEventListener('click', onTrustOnce);
-        btnTrustWhite.removeEventListener('click', onTrustWhite);
-      };
-      
-      const btnCancel = document.getElementById('btn-sec-cancel')!;
-      const onCancel = () => { cleanup(); resolve(false); };
-      btnCancel.addEventListener('click', onCancel);
-      
-      const btnCancelBlack = document.getElementById('btn-sec-cancel-black')!;
-      const onCancelBlack = () => {
-        blacklistCache = [...blacklistCache, netKey];
-        void syncConfigToRust();
-        log('安全', `已将 ${netInfo.ssid} 加入黑名单`, 'info');
-        cleanup(); resolve(false);
-      };
-      btnCancelBlack.addEventListener('click', onCancelBlack);
-      
-      const btnTrustOnce = document.getElementById('btn-sec-trust-once')!;
-      const onTrustOnce = () => { cleanup(); resolve(true); };
-      btnTrustOnce.addEventListener('click', onTrustOnce);
-      
-      const btnTrustWhite = document.getElementById('btn-sec-trust-white')!;
-      const onTrustWhite = () => {
-        whitelistCache = [...whitelistCache, netKey];
-        void syncConfigToRust();
-        log('安全', `已将 ${netInfo.ssid} 加入白名单`, 'info');
-        cleanup(); resolve(true);
-      };
-      btnTrustWhite.addEventListener('click', onTrustWhite);
-      
-      modal.classList.remove('hidden');
-    });
-  } catch (e) {
-    console.error('Security check error', e);
-    log('安全', '网络安全检查失败，已阻止发送账号密码', 'error');
-    return false;
   }
 }
 
