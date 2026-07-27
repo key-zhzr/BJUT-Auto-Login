@@ -3,6 +3,8 @@ mod billing_runtime;
 mod campus_services;
 mod config_model;
 mod cookie_jar;
+mod network_trust;
+mod portal_auth;
 mod recharge_state;
 #[tauri::command]
 fn get_network_info(
@@ -530,6 +532,16 @@ use config_model::{
     default_android_notification_mode, default_balance_alert_threshold,
     default_flow_alert_threshold, default_vpn_compatibility, Account, AppConfig, NetworkProfile,
 };
+use network_trust::{
+    evaluate_network_trust, is_campus_local_ip, is_known_campus_ssid, normalize_trust_lists,
+    set_network_trust, NetworkTrustDecision, NetworkTrustInput,
+};
+#[cfg(test)]
+use portal_auth::portal_probe_urls;
+use portal_auth::{
+    detect_login_type_rust, lgn_user_info_url, login_result_is_ambiguous,
+    login_to_campus_network_rust, portal_client, LoginType,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -540,6 +552,23 @@ use tauri::Manager;
 struct ManualLoginResult {
     success: bool,
     message: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkTrustEvaluation {
+    decision: String,
+    reason: String,
+    network_key: String,
+    ssid: String,
+    bssid: String,
+    ip: String,
+}
+
+#[derive(serde::Serialize)]
+struct NetworkTrustLists {
+    whitelist: Vec<String>,
+    blacklist: Vec<String>,
 }
 
 #[derive(serde::Serialize, Clone, Debug, PartialEq)]
@@ -678,14 +707,6 @@ struct PendingDiscoveredAccount {
     expires_at: std::time::Instant,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum LoginType {
-    Type1, // 10.21.221.98 (eportal)
-    Type2, // 10.21.251.3 (drcom)
-    Type3, // lgn.bjut.edu.cn
-    Unknown,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VpnCompatibility {
     /// HTTPS and the operating system resolver.
@@ -734,37 +755,6 @@ fn effective_vpn_compatibility(config: &AppConfig) -> VpnCompatibility {
     }
 }
 
-impl LoginType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Type1 => "Type1_221_98",
-            Self::Type2 => "Type2_251_3",
-            Self::Type3 => "Type3_172_30",
-            Self::Unknown => "Unknown",
-        }
-    }
-}
-
-fn is_campus_local_ip(ip: &str) -> bool {
-    let octets: Vec<u8> = ip
-        .split('.')
-        .map(str::parse::<u8>)
-        .collect::<Result<_, _>>()
-        .unwrap_or_default();
-    if octets.len() != 4 {
-        return false;
-    }
-    matches!(
-        (octets[0], octets[1]),
-        (10, 17..=27) | (10, 121) | (10, 126) | (10, 226) | (172, 17..=27)
-    )
-}
-
-fn is_known_campus_ssid(ssid: &str) -> bool {
-    let normalized = ssid.trim().to_ascii_lowercase().replace('_', "-");
-    normalized == "bjut-wifi" || normalized == "bjut-sushe"
-}
-
 const MOBILE_DATA_CHECK_INTERVAL_FOREGROUND: i32 = 120;
 const MOBILE_DATA_CHECK_INTERVAL_BACKGROUND: i32 = 300;
 
@@ -802,6 +792,21 @@ fn network_is_system_validated(network: &serde_json::Value) -> bool {
     }
 }
 
+fn network_identity_is_fresh(network: &serde_json::Value) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        return network
+            .get("identityFresh")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = network;
+        true
+    }
+}
+
 fn mobile_data_check_interval(configured: i32, is_background: bool) -> i32 {
     configured.max(if is_background {
         MOBILE_DATA_CHECK_INTERVAL_BACKGROUND
@@ -810,44 +815,13 @@ fn mobile_data_check_interval(configured: i32, is_background: bool) -> i32 {
     })
 }
 
-fn automatic_login_network_allowed(
-    login_type: &LoginType,
-    ssid: &str,
-    bssid: &str,
-    ip: &str,
-    transport: &str,
-    whitelist: &[String],
-    blacklist: &[String],
-) -> Result<(), String> {
-    let normalized_ssid = ssid.trim();
-    let net_key = format!("{}|{}", normalized_ssid, bssid);
-    if blacklist.contains(&net_key) {
-        return Err(format!("当前网络 ({normalized_ssid}) 在黑名单中"));
-    }
-    if whitelist.contains(&net_key) {
-        return Ok(());
-    }
-    if !is_campus_local_ip(ip) {
-        return Err("本地 IP 不属于已知校园网网段".to_string());
-    }
-
-    match login_type {
-        LoginType::Type1 | LoginType::Type2 if is_known_campus_ssid(normalized_ssid) => Ok(()),
-        LoginType::Type3
-            if (transport.is_empty()
-                || transport.eq_ignore_ascii_case("unknown")
-                || transport.eq_ignore_ascii_case("ethernet"))
-                && (normalized_ssid.is_empty()
-                    || normalized_ssid.eq_ignore_ascii_case("unknown")
-                    || normalized_ssid.eq_ignore_ascii_case("<unknown ssid>")) =>
-        {
-            Ok(())
+fn automatic_login_network_allowed(input: NetworkTrustInput<'_>) -> Result<(), String> {
+    let result = evaluate_network_trust(input);
+    match result.decision {
+        NetworkTrustDecision::Allowed => Ok(()),
+        NetworkTrustDecision::Blocked | NetworkTrustDecision::NeedsConfirmation => {
+            Err(result.reason)
         }
-        LoginType::Type1 | LoginType::Type2 => {
-            Err("无线网络名称未经识别，且未加入白名单".to_string())
-        }
-        LoginType::Type3 => Err("lgn 协议仅允许有线连接，当前网络未加入白名单".to_string()),
-        LoginType::Unknown => Err("未识别到校园网认证协议".to_string()),
     }
 }
 
@@ -856,6 +830,15 @@ fn login_type_from_profile(value: &str) -> Option<LoginType> {
         "bjut-sushe" | "bjut_sushe" | "type1" => Some(LoginType::Type1),
         "bjut-wifi" | "bjut_wifi" | "type2" => Some(LoginType::Type2),
         "wired" | "type3" => Some(LoginType::Type3),
+        _ => None,
+    }
+}
+
+fn parse_login_type_override(value: Option<&str>) -> Option<LoginType> {
+    match value {
+        Some("bjut-sushe") | Some("bjut_sushe") => Some(LoginType::Type1),
+        Some("bjut-wifi") | Some("bjut_wifi") => Some(LoginType::Type2),
+        Some("wired") => Some(LoginType::Type3),
         _ => None,
     }
 }
@@ -957,67 +940,6 @@ where
     F: std::future::Future<Output = Result<T, String>>,
 {
     billing_runtime::run_mutation_to_completion(&state.is_in_background, future).await
-}
-
-fn url_encode(input: &str) -> String {
-    let mut output = String::new();
-    for b in input.as_bytes() {
-        match *b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                output.push(*b as char);
-            }
-            _ => {
-                output.push_str(&format!("%{:02X}", b));
-            }
-        }
-    }
-    output
-}
-
-fn find_v6ip(html: &str) -> String {
-    if let Some(name_pos) = html.find("name=\"v6ip\"") {
-        let substring = &html[name_pos..];
-        if let Some(val_pos) = substring.find("value=\"") {
-            let val_start = val_pos + 7;
-            if let Some(val_end) = substring[val_start..].find('"') {
-                return substring[val_start..val_start + val_end].to_string();
-            }
-        }
-    }
-    if let Some(name_pos) = html.find("name='v6ip'") {
-        let substring = &html[name_pos..];
-        if let Some(val_pos) = substring.find("value='") {
-            let val_start = val_pos + 7;
-            if let Some(val_end) = substring[val_start..].find('\'') {
-                return substring[val_start..val_start + val_end].to_string();
-            }
-        }
-    }
-    String::new()
-}
-
-fn parse_dr_response(text: &str) -> (bool, String) {
-    if let Some(start_idx) = text.find('(') {
-        if let Some(end_idx) = text.rfind(')') {
-            let json_str = &text[start_idx + 1..end_idx];
-            if let Ok(data) = serde_json::from_str::<serde_json::Value>(json_str) {
-                if let Some(result) = data.get("result").and_then(|v| v.as_i64()) {
-                    if result == 1 {
-                        return (true, "Portal协议认证成功！".to_string());
-                    } else {
-                        let msg = data
-                            .get("msg")
-                            .or_else(|| data.get("msga"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("未知错误")
-                            .to_string();
-                        return (false, msg);
-                    }
-                }
-            }
-        }
-    }
-    (false, "解析响应数据失败".to_string())
 }
 
 async fn check_internet_rust() -> bool {
@@ -1183,246 +1105,6 @@ fn query_campus_dns_ipv4(host: &str) -> Result<Vec<std::net::Ipv4Addr>, String> 
     }
 }
 
-async fn portal_client(
-    compatibility: VpnCompatibility,
-    login_type: &LoginType,
-    timeout: std::time::Duration,
-) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
-        .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::none())
-        .use_rustls_tls();
-    let hosts: Vec<(&str, Vec<std::net::Ipv4Addr>)> = match login_type {
-        LoginType::Type2 => vec![(WLGN_HOST, vec![std::net::Ipv4Addr::new(10, 21, 251, 3)])],
-        LoginType::Type3 => vec![
-            (
-                LGN_HOST,
-                vec![
-                    std::net::Ipv4Addr::new(172, 30, 201, 2),
-                    std::net::Ipv4Addr::new(172, 30, 201, 10),
-                ],
-            ),
-            (
-                LGN6_HOST,
-                vec![
-                    std::net::Ipv4Addr::new(172, 30, 201, 2),
-                    std::net::Ipv4Addr::new(172, 30, 201, 10),
-                ],
-            ),
-        ],
-        _ => Vec::new(),
-    };
-    if matches!(
-        compatibility,
-        VpnCompatibility::Low | VpnCompatibility::High
-    ) {
-        for (host, fixed_addresses) in hosts {
-            let ipv4_addresses = if compatibility == VpnCompatibility::Low {
-                let host_owned = host.to_string();
-                tokio::task::spawn_blocking(move || query_campus_dns_ipv4(&host_owned))
-                    .await
-                    .map_err(|error| format!("校园网 DNS 任务失败：{error}"))??
-            } else {
-                fixed_addresses
-            };
-            let socket_addresses: Vec<std::net::SocketAddr> = ipv4_addresses
-                .into_iter()
-                .map(|address| std::net::SocketAddr::new(std::net::IpAddr::V4(address), 443))
-                .collect();
-            builder = builder.resolve_to_addrs(host, &socket_addresses);
-        }
-    }
-    builder.build().map_err(redact_request_error)
-}
-
-fn portal_probe_urls(compatibility: VpnCompatibility, login_type: &LoginType) -> Vec<String> {
-    match login_type {
-        LoginType::Type1 if compatibility == VpnCompatibility::Maximum => {
-            vec!["http://10.21.221.98:801/eportal/portal/login".to_string()]
-        }
-        LoginType::Type1 => vec!["https://10.21.221.98:802/eportal/portal/login".to_string()],
-        LoginType::Type2 if compatibility == VpnCompatibility::Maximum => {
-            vec!["http://10.21.251.3/drcom/login".to_string()]
-        }
-        LoginType::Type2 => vec!["https://wlgn.bjut.edu.cn/drcom/login".to_string()],
-        LoginType::Type3 if compatibility == VpnCompatibility::Maximum => vec![
-            "http://172.30.201.2".to_string(),
-            "http://172.30.201.10".to_string(),
-        ],
-        LoginType::Type3 => vec!["https://lgn.bjut.edu.cn".to_string()],
-        LoginType::Unknown => Vec::new(),
-    }
-}
-
-async fn probe_login_type(
-    compatibility: VpnCompatibility,
-    login_type: LoginType,
-) -> Option<LoginType> {
-    let client = portal_client(
-        compatibility,
-        &login_type,
-        std::time::Duration::from_millis(1800),
-    )
-    .await
-    .ok()?;
-    for url in portal_probe_urls(compatibility, &login_type) {
-        if client
-            .get(url)
-            .header("Cache-Control", "no-cache")
-            .send()
-            .await
-            .is_ok()
-        {
-            return Some(login_type);
-        }
-    }
-    None
-}
-
-async fn detect_login_type_rust(compatibility: VpnCompatibility) -> LoginType {
-    let probes = [LoginType::Type1, LoginType::Type2, LoginType::Type3]
-        .into_iter()
-        .map(|login_type| probe_login_type(compatibility, login_type));
-    futures_util::future::join_all(probes)
-        .await
-        .into_iter()
-        .flatten()
-        .next()
-        .unwrap_or(LoginType::Unknown)
-}
-
-async fn login_lgn_once(
-    client: &reqwest::Client,
-    first_url: &str,
-    second_url: &str,
-    user: &str,
-    pass: &str,
-) -> Result<(bool, String), String> {
-    let mut first_form = std::collections::HashMap::new();
-    first_form.insert("DDDDD", user);
-    first_form.insert("upass", pass);
-    first_form.insert("v46s", "0");
-    first_form.insert("0MKKey", "");
-    let first_response = client
-        .post(first_url)
-        .form(&first_form)
-        .send()
-        .await
-        .map_err(redact_request_error)?;
-    let html = first_response.text().await.map_err(redact_request_error)?;
-    let v6ip = find_v6ip(&html);
-    if v6ip.is_empty() {
-        return Err("有线登录页未返回动态 IPv6 地址".to_string());
-    }
-
-    let mut second_form = std::collections::HashMap::new();
-    second_form.insert("DDDDD", user);
-    second_form.insert("upass", pass);
-    second_form.insert("0MKKey", "Login");
-    second_form.insert("v6ip", v6ip.as_str());
-    let final_response = client
-        .post(second_url)
-        .form(&second_form)
-        .send()
-        .await
-        .map_err(redact_request_error)?;
-    let final_html = final_response.text().await.map_err(redact_request_error)?;
-    if final_html.contains("DispQianFei") || final_html.contains("Msg=") {
-        Ok((false, "登录失败，请检查账号密码或余额".to_string()))
-    } else {
-        Ok((true, "Portal协议认证成功！".to_string()))
-    }
-}
-
-async fn login_to_campus_network_rust(
-    login_type: LoginType,
-    user: &str,
-    pass: &str,
-    compatibility: VpnCompatibility,
-) -> Result<(bool, String), String> {
-    let client = portal_client(
-        compatibility,
-        &login_type,
-        std::time::Duration::from_secs(5),
-    )
-    .await?;
-    match login_type {
-        LoginType::Type1 => {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let v = format!("{:04}", nanos % 9000 + 1000);
-            let user_encoded = url_encode(&(format!("{}@campus", user)));
-            let pass_encoded = url_encode(pass);
-            let base = if compatibility == VpnCompatibility::Maximum {
-                "http://10.21.221.98:801/eportal/portal/login"
-            } else {
-                "https://10.21.221.98:802/eportal/portal/login"
-            };
-            let url = format!(
-                "{base}?callback=dr1003&login_method=1&user_account={}&user_password={}&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=000000000000&wlan_ac_ip=&wlan_ac_name=&jsVersion=4.2.1&terminal_type=1&lang=zh-cn&v={}",
-                user_encoded, pass_encoded, v
-            );
-            let response = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(redact_request_error)?;
-            let text = response.text().await.map_err(redact_request_error)?;
-            Ok(parse_dr_response(&text))
-        }
-        LoginType::Type2 => {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let v = format!("{:04}", nanos % 9000 + 1000);
-            let user_encoded = url_encode(user);
-            let pass_encoded = url_encode(pass);
-            let base = if compatibility == VpnCompatibility::Maximum {
-                "http://10.21.251.3/drcom/login"
-            } else {
-                "https://wlgn.bjut.edu.cn/drcom/login"
-            };
-            let url = format!(
-                "{base}?callback=dr1002&DDDDD={}&upass={}&0MKKey=123456&R1=0&R2=&R3=0&R6=0&para=00&v6ip=&terminal_type=1&lang=zh-cn&jsVersion=4.1&v={}",
-                user_encoded, pass_encoded, v
-            );
-            let response = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(redact_request_error)?;
-            let text = response.text().await.map_err(redact_request_error)?;
-            Ok(parse_dr_response(&text))
-        }
-        LoginType::Type3 if compatibility == VpnCompatibility::Maximum => {
-            let mut last_error = "有线登录网关不可达".to_string();
-            for address in ["172.30.201.2", "172.30.201.10"] {
-                let first_url = format!("http://{address}/V6?http://{address}");
-                let second_url = format!("http://{address}");
-                match login_lgn_once(&client, &first_url, &second_url, user, pass).await {
-                    Ok(result) => return Ok(result),
-                    Err(error) => last_error = error,
-                }
-            }
-            Err(last_error)
-        }
-        LoginType::Type3 => {
-            login_lgn_once(
-                &client,
-                "https://lgn6.bjut.edu.cn/V6?https://lgn.bjut.edu.cn",
-                "https://lgn.bjut.edu.cn",
-                user,
-                pass,
-            )
-            .await
-        }
-        LoginType::Unknown => Err("未设定的登录类型".to_string()),
-    }
-}
-
 #[cfg(target_os = "android")]
 #[derive(serde::Serialize)]
 struct HeadlessLog {
@@ -1457,6 +1139,14 @@ async fn run_headless_network_check(
     let transport = network_transport(&network).to_string();
     let validated = network
         .get("validated")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let identity_requested = network
+        .get("identityRequested")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let identity_fresh = network
+        .get("identityFresh")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     let ssid = network
@@ -1511,7 +1201,66 @@ async fn run_headless_network_check(
         });
     }
 
-    let detected = detect_login_type_rust(compatibility).await;
+    if transport.eq_ignore_ascii_case("wifi") && !identity_fresh && is_campus_local_ip(&ip) {
+        let (status, notification, message_type) = if identity_requested {
+            (
+                "blocked",
+                "无法确认当前 Wi-Fi 身份，已阻止自动登录",
+                "error",
+            )
+        } else {
+            (
+                "needs_fresh_identity",
+                "检测到校园网地址，准备核对当前 Wi-Fi 身份",
+                "debug",
+            )
+        };
+        headless_log(
+            &mut logs,
+            "安全",
+            if identity_requested {
+                "系统未能返回有效的当前 SSID/BSSID，已阻止发送账号密码"
+            } else {
+                "发送凭据前需要读取一次当前 SSID/BSSID"
+            },
+            message_type,
+        );
+        return serde_json::json!({
+            "status": status,
+            "notification_category": if identity_requested { "login" } else { "network" },
+            "notification": notification,
+            "logs": logs,
+        });
+    }
+
+    let detected = detect_login_type_rust(compatibility, &ssid, &transport).await;
+    if detected != LoginType::Unknown && transport.eq_ignore_ascii_case("wifi") && !identity_fresh {
+        let status = if identity_requested {
+            "blocked"
+        } else {
+            "needs_fresh_identity"
+        };
+        headless_log(
+            &mut logs,
+            "安全",
+            if identity_requested {
+                "校园网认证网关可达，但无法确认当前 Wi-Fi 身份；已阻止发送账号密码"
+            } else {
+                "校园网认证网关可达；发送凭据前需要读取一次当前 SSID/BSSID"
+            },
+            if identity_requested { "error" } else { "debug" },
+        );
+        return serde_json::json!({
+            "status": status,
+            "notification_category": if identity_requested { "login" } else { "network" },
+            "notification": if identity_requested {
+                "无法确认当前 Wi-Fi 身份，已阻止自动登录"
+            } else {
+                "准备核对当前 Wi-Fi 身份"
+            },
+            "logs": logs,
+        });
+    }
     let profile = matching_network_profile(&config, &ssid, &bssid, &detected);
     let login_type = profile
         .as_ref()
@@ -1546,15 +1295,16 @@ async fn run_headless_network_check(
             "logs": logs,
         });
     }
-    if let Err(reason) = automatic_login_network_allowed(
-        &login_type,
-        &ssid,
-        &bssid,
-        &ip,
-        &transport,
-        &config.whitelist,
-        &config.blacklist,
-    ) {
+    if let Err(reason) = automatic_login_network_allowed(NetworkTrustInput {
+        login_type: &login_type,
+        ssid: &ssid,
+        bssid: &bssid,
+        ip: &ip,
+        transport: &transport,
+        identity_fresh,
+        whitelist: &config.whitelist,
+        blacklist: &config.blacklist,
+    }) {
         headless_log(
             &mut logs,
             "安全",
@@ -1626,6 +1376,23 @@ async fn run_headless_network_check(
             }
             Err(error) => {
                 last_message = error.clone();
+                if login_result_is_ambiguous(&error) {
+                    headless_log(
+                        &mut logs,
+                        "网络",
+                        format!(
+                            "无界面登录结果无法确认：账号 {}，{}；本轮不再尝试其他账号",
+                            account.user, error
+                        ),
+                        "error",
+                    );
+                    return serde_json::json!({
+                        "status": "login_unknown",
+                        "notification_category": "login",
+                        "notification": "校园网登录请求已发送，但结果无法确认；请勿立即重试",
+                        "logs": logs,
+                    });
+                }
                 headless_log(
                     &mut logs,
                     "网络",
@@ -1701,12 +1468,6 @@ fn redact_request_error(error: reqwest::Error) -> String {
     error.without_url().to_string()
 }
 
-fn lgn_user_info_url(random: u16) -> String {
-    format!(
-        "https://{LGN_HOST}:802/eportal/portal/page/loadUserInfo?callback=726427262624&lang=6c7e3b7578&program_index=79225954737327212323222f212e2723&page_index=755e577b7c4e27212323222f212e2320&user_account=&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=262626262626262626262626&jsVersion=22384e&encrypt=1&v={random:04}&lang=zh"
-    )
-}
-
 async fn fetch_portal_user_info(
     local_ip: Option<&str>,
     compatibility: VpnCompatibility,
@@ -1724,11 +1485,7 @@ async fn fetch_portal_user_info(
     )
     .await
     .ok()?;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let url = lgn_user_info_url((nanos % 9000 + 1000) as u16);
+    let url = lgn_user_info_url(compatibility);
     let text = client.get(url).send().await.ok()?.text().await.ok()?;
     let start = text.find('(')?;
     let end = text.rfind(')')?;
@@ -2732,6 +2489,7 @@ fn save_config(
     if new_cfg.android_notification_mode != "separate" {
         new_cfg.android_notification_mode = default_android_notification_mode();
     }
+    normalize_trust_lists(&mut new_cfg.whitelist, &mut new_cfg.blacklist);
     let previous_cfg = {
         let state_cfg = state.config.read().unwrap();
         fill_missing_passwords(&mut new_cfg, &state_cfg);
@@ -2869,8 +2627,11 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         let raw_ssid = net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or("");
         let raw_bssid = net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or("");
         let raw_ip = net_info.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+        #[cfg(target_os = "android")]
+        let preserve_wifi_identity = false;
+        #[cfg(not(target_os = "android"))]
         let preserve_wifi_identity = !full_details && transport.eq_ignore_ascii_case("wifi");
-        let current_ssid = if preserve_wifi_identity && raw_ssid.is_empty() {
+        let initial_ssid = if preserve_wifi_identity && raw_ssid.is_empty() {
             previous_network
                 .get("ssid")
                 .and_then(|value| value.as_str())
@@ -2879,7 +2640,12 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             raw_ssid
         }
         .to_string();
-        let current_bssid = if preserve_wifi_identity && raw_bssid.is_empty() {
+        #[cfg(target_os = "android")]
+        let mut current_ssid = initial_ssid;
+        #[cfg(not(target_os = "android"))]
+        let current_ssid = initial_ssid;
+
+        let initial_bssid = if preserve_wifi_identity && raw_bssid.is_empty() {
             previous_network
                 .get("bssid")
                 .and_then(|value| value.as_str())
@@ -2888,7 +2654,12 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             raw_bssid
         }
         .to_string();
-        let current_ip = if preserve_wifi_identity && raw_ip.is_empty() {
+        #[cfg(target_os = "android")]
+        let mut current_bssid = initial_bssid;
+        #[cfg(not(target_os = "android"))]
+        let current_bssid = initial_bssid;
+
+        let initial_ip = if preserve_wifi_identity && raw_ip.is_empty() {
             previous_network
                 .get("ip")
                 .and_then(|value| value.as_str())
@@ -2897,6 +2668,17 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             raw_ip
         }
         .to_string();
+        #[cfg(target_os = "android")]
+        let mut current_ip = initial_ip;
+        #[cfg(not(target_os = "android"))]
+        let current_ip = initial_ip;
+        #[cfg(target_os = "android")]
+        let mut identity_fresh = net_info
+            .get("identityFresh")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        #[cfg(not(target_os = "android"))]
+        let identity_fresh = true;
         let preliminary_profile = {
             let cfg = state.config.read().unwrap();
             matching_network_profile(&cfg, &current_ssid, &current_bssid, &LoginType::Unknown)
@@ -3077,7 +2859,45 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             ),
             "debug",
         );
-        let detected_login_type = detect_login_type_rust(compatibility).await;
+        let detected_login_type =
+            detect_login_type_rust(compatibility, &current_ssid, &transport).await;
+        #[cfg(target_os = "android")]
+        if !full_details
+            && transport.eq_ignore_ascii_case("wifi")
+            && detected_login_type != LoginType::Unknown
+        {
+            let fresh_network = get_network_info(app.clone(), Some(true));
+            current_ssid = fresh_network
+                .get("ssid")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string();
+            current_bssid = fresh_network
+                .get("bssid")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string();
+            current_ip = fresh_network
+                .get("ip")
+                .and_then(|value| value.as_str())
+                .unwrap_or(&current_ip)
+                .to_string();
+            identity_fresh = fresh_network
+                .get("identityFresh")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            rust_log(
+                &app,
+                &state,
+                "安全",
+                if identity_fresh {
+                    "检测到认证网关，已在发送凭据前重新读取当前 Wi-Fi 身份"
+                } else {
+                    "检测到认证网关，但系统未能返回有效的当前 SSID/BSSID"
+                },
+                if identity_fresh { "debug" } else { "error" },
+            );
+        }
         let profile = {
             let cfg = state.config.read().unwrap();
             matching_network_profile(&cfg, &current_ssid, &current_bssid, &detected_login_type)
@@ -3155,15 +2975,16 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                         let cfg = state.config.read().unwrap();
                         (cfg.whitelist.clone(), cfg.blacklist.clone())
                     };
-                    let proceed = match automatic_login_network_allowed(
-                        &login_type,
-                        &current_ssid,
-                        &current_bssid,
-                        &current_ip,
-                        &transport,
-                        &whitelist,
-                        &blacklist,
-                    ) {
+                    let proceed = match automatic_login_network_allowed(NetworkTrustInput {
+                        login_type: &login_type,
+                        ssid: &current_ssid,
+                        bssid: &current_bssid,
+                        ip: &current_ip,
+                        transport: &transport,
+                        identity_fresh,
+                        whitelist: &whitelist,
+                        blacklist: &blacklist,
+                    }) {
                         Ok(()) => true,
                         Err(reason) => {
                             rust_log(
@@ -3207,6 +3028,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             );
                         } else {
                             let mut success = false;
+                            let mut result_uncertain = false;
                             for acc in active_accounts {
                                 rust_log(
                                     &app,
@@ -3254,6 +3076,24 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                         );
                                     }
                                     Err(err) => {
+                                        if login_result_is_ambiguous(&err) {
+                                            result_uncertain = true;
+                                            state.auto_login_paused_until.store(
+                                                chrono::Utc::now().timestamp() + 60,
+                                                Ordering::SeqCst,
+                                            );
+                                            rust_log(
+                                                &app,
+                                                &state,
+                                                "网络",
+                                                &format!(
+                                                    "账号 {} 的登录请求已发送，但结果无法确认；为避免重复认证，本轮不再尝试其他账号：{}",
+                                                    acc.user, err
+                                                ),
+                                                "error",
+                                            );
+                                            break;
+                                        }
                                         record_account_failure(
                                             &app,
                                             &state,
@@ -3270,7 +3110,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                     }
                                 }
                             }
-                            if !success {
+                            if !success && !result_uncertain {
                                 rust_log(
                                     &app,
                                     &state,
@@ -3667,7 +3507,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let login_type = if online || mobile_data {
         LoginType::Unknown
     } else {
-        detect_login_type_rust(compatibility).await
+        detect_login_type_rust(compatibility, &ssid, network_transport(&network)).await
     };
     let (portal_status, portal_message) = if mobile_data {
         (
@@ -3977,11 +3817,125 @@ fn trigger_manual_check(app: tauri::AppHandle, state: tauri::State<Arc<AppState>
 }
 
 #[tauri::command]
+async fn evaluate_manual_network_trust(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    login_type_override: Option<String>,
+) -> Result<NetworkTrustEvaluation, String> {
+    let network = get_network_info(app, Some(true));
+    let transport = network_transport(&network);
+    let ssid = network
+        .get("ssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let bssid = network
+        .get("bssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let ip = network
+        .get("ip")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let config = state.config.read().unwrap().clone();
+    let compatibility = effective_vpn_compatibility(&config);
+    let detected = detect_login_type_rust(compatibility, ssid, transport).await;
+    let login_type = parse_login_type_override(login_type_override.as_deref()).unwrap_or(detected);
+    let result = if login_type == LoginType::Unknown {
+        network_trust::NetworkTrustResult {
+            decision: NetworkTrustDecision::Blocked,
+            reason: "未检测到可确认的校园网认证协议".to_string(),
+            network_key: network_trust::network_key(ssid, bssid),
+        }
+    } else {
+        evaluate_network_trust(NetworkTrustInput {
+            login_type: &login_type,
+            ssid,
+            bssid,
+            ip,
+            transport,
+            identity_fresh: network_identity_is_fresh(&network),
+            whitelist: &config.whitelist,
+            blacklist: &config.blacklist,
+        })
+    };
+    Ok(NetworkTrustEvaluation {
+        decision: match result.decision {
+            NetworkTrustDecision::Allowed => "allowed",
+            NetworkTrustDecision::Blocked => "blocked",
+            NetworkTrustDecision::NeedsConfirmation => "confirm",
+        }
+        .to_string(),
+        reason: result.reason,
+        network_key: result.network_key,
+        ssid: ssid.to_string(),
+        bssid: bssid.to_string(),
+        ip: ip.to_string(),
+    })
+}
+
+#[tauri::command]
+fn set_current_network_trust(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    trusted: bool,
+    expected_network_key: String,
+) -> Result<NetworkTrustLists, String> {
+    let network = get_network_info(app.clone(), Some(true));
+    let transport = network_transport(&network);
+    let ssid = network
+        .get("ssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let bssid = network
+        .get("bssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if !transport.eq_ignore_ascii_case("wifi")
+        || !network_identity_is_fresh(&network)
+        || ssid.trim().is_empty()
+        || bssid.trim().is_empty()
+        || bssid == "00:00:00:00:00:00"
+    {
+        return Err("无法确认当前 Wi-Fi 的有效 SSID/BSSID，未更改信任设置".to_string());
+    }
+    if network_trust::network_key(ssid, bssid) != expected_network_key {
+        return Err("确认期间网络已经切换，未更改信任设置".to_string());
+    }
+    let mut updated = state.config.read().unwrap().clone();
+    let key = set_network_trust(
+        &mut updated.whitelist,
+        &mut updated.blacklist,
+        ssid,
+        bssid,
+        trusted,
+    );
+    save_secure_config_verified(&app, &updated)?;
+    let lists = NetworkTrustLists {
+        whitelist: updated.whitelist.clone(),
+        blacklist: updated.blacklist.clone(),
+    };
+    *state.config.write().unwrap() = updated;
+    rust_log(
+        &app,
+        &state,
+        "安全",
+        &format!(
+            "已将网络 {key} 设置为{}",
+            if trusted { "信任" } else { "拒绝" }
+        ),
+        "info",
+    );
+    Ok(lists)
+}
+
+#[tauri::command]
 async fn manual_login(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     account_index: Option<usize>,
     login_type_override: Option<String>,
+    trust_network_once: Option<bool>,
+    expected_network_key: Option<String>,
 ) -> Result<ManualLoginResult, String> {
     let network = get_network_info(app.clone(), Some(true));
     if is_mobile_data_network(&network) {
@@ -3997,17 +3951,19 @@ async fn manual_login(
             message: "当前使用移动数据，未连接 Wi-Fi；已停止校园网网关探测".to_string(),
         });
     }
-    let compatibility = {
-        let config = state.config.read().unwrap();
-        effective_vpn_compatibility(&config)
-    };
-    let detected_type = detect_login_type_rust(compatibility).await;
-    let login_type = match login_type_override.as_deref() {
-        Some("bjut_sushe") | Some("bjut-sushe") => LoginType::Type1,
-        Some("bjut-wifi") | Some("bjut_wifi") => LoginType::Type2,
-        Some("wired") => LoginType::Type3,
-        _ => detected_type,
-    };
+    let config = state.config.read().unwrap().clone();
+    let compatibility = effective_vpn_compatibility(&config);
+    let detected_type = detect_login_type_rust(
+        compatibility,
+        network
+            .get("ssid")
+            .and_then(|value| value.as_str())
+            .unwrap_or(""),
+        network_transport(&network),
+    )
+    .await;
+    let login_type =
+        parse_login_type_override(login_type_override.as_deref()).unwrap_or(detected_type);
     if login_type == LoginType::Unknown {
         return Ok(ManualLoginResult {
             success: false,
@@ -4015,7 +3971,62 @@ async fn manual_login(
         });
     }
 
-    let configured_accounts = state.config.read().unwrap().accounts.clone();
+    let ssid = network
+        .get("ssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let bssid = network
+        .get("bssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let ip = network
+        .get("ip")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let trust = evaluate_network_trust(NetworkTrustInput {
+        login_type: &login_type,
+        ssid,
+        bssid,
+        ip,
+        transport: network_transport(&network),
+        identity_fresh: network_identity_is_fresh(&network),
+        whitelist: &config.whitelist,
+        blacklist: &config.blacklist,
+    });
+    match trust.decision {
+        NetworkTrustDecision::Allowed => {}
+        NetworkTrustDecision::Blocked => {
+            return Ok(ManualLoginResult {
+                success: false,
+                message: format!("网络安全检查未通过：{}", trust.reason),
+            });
+        }
+        NetworkTrustDecision::NeedsConfirmation if trust_network_once != Some(true) => {
+            return Ok(ManualLoginResult {
+                success: false,
+                message: format!("当前网络需要用户确认：{}", trust.reason),
+            });
+        }
+        NetworkTrustDecision::NeedsConfirmation
+            if expected_network_key.as_deref() != Some(trust.network_key.as_str()) =>
+        {
+            return Ok(ManualLoginResult {
+                success: false,
+                message: "确认期间网络已经切换，请重新确认当前网络".to_string(),
+            });
+        }
+        NetworkTrustDecision::NeedsConfirmation => {
+            rust_log(
+                &app,
+                &state,
+                "安全",
+                &format!("用户已确认仅本次信任当前网络：{}", trust.network_key),
+                "info",
+            );
+        }
+    }
+
+    let configured_accounts = config.accounts;
     let accounts: Vec<Account> = match account_index {
         Some(index) => configured_accounts
             .get(index)
@@ -4110,6 +4121,22 @@ async fn manual_login(
                 );
             }
             Err(error) => {
+                if login_result_is_ambiguous(&error) {
+                    rust_log(
+                        &app,
+                        &state,
+                        "登录",
+                        &format!(
+                            "账号 {} 的登录结果无法确认；已停止继续尝试其他账号：{}",
+                            account.user, error
+                        ),
+                        "error",
+                    );
+                    return Ok(ManualLoginResult {
+                        success: false,
+                        message: error,
+                    });
+                }
                 record_account_failure(&app, &state, &account.user, &format!("请求出错: {error}"));
                 rust_log(&app, &state, "登录", &format!("请求出错: {error}"), "error");
             }
@@ -5808,7 +5835,7 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         .to_string();
     let config = state.config.read().unwrap().clone();
     let compatibility = effective_vpn_compatibility(&config);
-    let detected = detect_login_type_rust(compatibility).await;
+    let detected = detect_login_type_rust(compatibility, &ssid, &transport).await;
     let profile = matching_network_profile(&config, &ssid, &bssid, &detected);
     let login_type = profile
         .as_ref()
@@ -5818,15 +5845,16 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         let _ = show_native_notification(&app, "校园网登录", "未检测到可用的校园网认证网关");
         return;
     }
-    if let Err(reason) = automatic_login_network_allowed(
-        &login_type,
-        &ssid,
-        &bssid,
-        &ip,
-        &transport,
-        &config.whitelist,
-        &config.blacklist,
-    ) {
+    if let Err(reason) = automatic_login_network_allowed(NetworkTrustInput {
+        login_type: &login_type,
+        ssid: &ssid,
+        bssid: &bssid,
+        ip: &ip,
+        transport: &transport,
+        identity_fresh: true,
+        whitelist: &config.whitelist,
+        blacklist: &config.blacklist,
+    }) {
         rust_log(
             &app,
             &state,
@@ -5892,6 +5920,21 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
             let _ = show_native_notification(&app, "校园网登录失败", &message);
         }
         Err(error) => {
+            if login_result_is_ambiguous(&error) {
+                rust_log(
+                    &app,
+                    &state,
+                    "托盘",
+                    &format!("快捷登录结果无法确认：{error}"),
+                    "error",
+                );
+                let _ = show_native_notification(
+                    &app,
+                    "校园网登录结果待确认",
+                    "请求已经发送，请先检查网络状态，不要立即重复登录",
+                );
+                return;
+            }
             record_account_failure(&app, &state, &account.user, &format!("请求出错: {error}"));
             rust_log(
                 &app,
@@ -6299,6 +6342,8 @@ pub fn run() {
             clear_all_logs,
             get_countdown_status,
             trigger_manual_check,
+            evaluate_manual_network_trust,
+            set_current_network_trust,
             manual_login,
             get_user_info,
             discover_current_campus_account,
@@ -6383,42 +6428,6 @@ mod tests {
         assert_eq!(mobile_data_check_interval(60, true), 300);
         assert_eq!(mobile_data_check_interval(600, false), 600);
         assert_eq!(mobile_data_check_interval(600, true), 600);
-    }
-
-    #[test]
-    fn encodes_portal_query_values() {
-        assert_eq!(
-            url_encode("a b@北工大"),
-            "a%20b%40%E5%8C%97%E5%B7%A5%E5%A4%A7"
-        );
-    }
-
-    #[test]
-    fn parses_success_and_failure_portal_responses() {
-        assert_eq!(
-            parse_dr_response("dr1003({\"result\":1})"),
-            (true, "Portal协议认证成功！".to_string())
-        );
-        assert_eq!(
-            parse_dr_response("dr1002({\"result\":0,\"msga\":\"密码错误\"})"),
-            (false, "密码错误".to_string())
-        );
-        assert_eq!(
-            parse_dr_response("not json"),
-            (false, "解析响应数据失败".to_string())
-        );
-    }
-
-    #[test]
-    fn extracts_v6ip_from_both_html_quote_styles() {
-        assert_eq!(
-            find_v6ip("<input name=\"v6ip\" value=\"2001:db8::1\">"),
-            "2001:db8::1"
-        );
-        assert_eq!(
-            find_v6ip("<input name='v6ip' value='2001:db8::2'>"),
-            "2001:db8::2"
-        );
     }
 
     #[test]
@@ -6723,45 +6732,49 @@ mod tests {
     fn automatic_login_requires_a_recognized_or_explicitly_trusted_network() {
         let whitelist = vec!["custom-campus|aa:bb".to_string()];
         assert!(!is_known_campus_ssid("evil-bjut-wifi"));
-        assert!(automatic_login_network_allowed(
-            &LoginType::Type1,
-            "bjut_wifi",
-            "11:22",
-            "10.21.2.3",
-            "wifi",
-            &[],
-            &[],
-        )
+        assert!(automatic_login_network_allowed(NetworkTrustInput {
+            login_type: &LoginType::Type1,
+            ssid: "bjut_wifi",
+            bssid: "11:22",
+            ip: "10.21.2.3",
+            transport: "wifi",
+            identity_fresh: true,
+            whitelist: &[],
+            blacklist: &[],
+        })
         .is_ok());
-        assert!(automatic_login_network_allowed(
-            &LoginType::Type1,
-            "evil-ap",
-            "11:22",
-            "10.21.2.3",
-            "wifi",
-            &[],
-            &[],
-        )
+        assert!(automatic_login_network_allowed(NetworkTrustInput {
+            login_type: &LoginType::Type1,
+            ssid: "evil-ap",
+            bssid: "11:22",
+            ip: "10.21.2.3",
+            transport: "wifi",
+            identity_fresh: true,
+            whitelist: &[],
+            blacklist: &[],
+        })
         .is_err());
-        assert!(automatic_login_network_allowed(
-            &LoginType::Type2,
-            "custom-campus",
-            "aa:bb",
-            "10.21.2.3",
-            "wifi",
-            &whitelist,
-            &[],
-        )
+        assert!(automatic_login_network_allowed(NetworkTrustInput {
+            login_type: &LoginType::Type2,
+            ssid: "custom-campus",
+            bssid: "aa:bb",
+            ip: "10.21.2.3",
+            transport: "wifi",
+            identity_fresh: true,
+            whitelist: &whitelist,
+            blacklist: &[],
+        })
         .is_ok());
-        assert!(automatic_login_network_allowed(
-            &LoginType::Type3,
-            "",
-            "",
-            "192.168.1.5",
-            "ethernet",
-            &[],
-            &[],
-        )
+        assert!(automatic_login_network_allowed(NetworkTrustInput {
+            login_type: &LoginType::Type3,
+            ssid: "",
+            bssid: "",
+            ip: "192.168.1.5",
+            transport: "ethernet",
+            identity_fresh: true,
+            whitelist: &[],
+            blacklist: &[],
+        })
         .is_err());
     }
 
@@ -6899,55 +6912,59 @@ mod tests {
             portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type2),
             vec!["http://10.21.251.3/drcom/login"]
         );
-        assert_eq!(
-            portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3),
-            vec!["http://172.30.201.2", "http://172.30.201.10"]
-        );
+        let wired = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3);
+        assert_eq!(wired.len(), 2);
+        assert!(wired[0].starts_with("http://172.30.201.2:801/eportal/portal/page/loadUserInfo?"));
+        assert!(wired[1].starts_with("http://172.30.201.10:801/eportal/portal/page/loadUserInfo?"));
     }
 
     #[test]
-    fn dashboard_user_info_uses_the_lgn_https_host() {
-        let url = reqwest::Url::parse(&lgn_user_info_url(1234)).unwrap();
+    fn dashboard_user_info_uses_the_correct_protocol_for_vpn_mode() {
+        let url = reqwest::Url::parse(&lgn_user_info_url(VpnCompatibility::Minimum)).unwrap();
         assert_eq!(url.scheme(), "https");
         assert_eq!(url.host_str(), Some("lgn.bjut.edu.cn"));
         assert_eq!(url.port(), Some(802));
-        assert_eq!(
-            url.query_pairs().find(|(key, _)| key == "v").unwrap().1,
-            "1234"
-        );
+
+        let direct = reqwest::Url::parse(&lgn_user_info_url(VpnCompatibility::Maximum)).unwrap();
+        assert_eq!(direct.scheme(), "http");
+        assert_eq!(direct.host_str(), Some("172.30.201.2"));
+        assert_eq!(direct.port(), Some(801));
     }
 
     #[test]
     fn lgn_protocol_is_wired_only_unless_explicitly_trusted() {
-        assert!(automatic_login_network_allowed(
-            &LoginType::Type3,
-            "bjut_wifi",
-            "11:22",
-            "10.21.2.3",
-            "wifi",
-            &[],
-            &[],
-        )
+        assert!(automatic_login_network_allowed(NetworkTrustInput {
+            login_type: &LoginType::Type3,
+            ssid: "bjut_wifi",
+            bssid: "11:22",
+            ip: "10.21.2.3",
+            transport: "wifi",
+            identity_fresh: true,
+            whitelist: &[],
+            blacklist: &[],
+        })
         .is_err());
-        assert!(automatic_login_network_allowed(
-            &LoginType::Type3,
-            "",
-            "",
-            "10.21.2.3",
-            "ethernet",
-            &[],
-            &[],
-        )
+        assert!(automatic_login_network_allowed(NetworkTrustInput {
+            login_type: &LoginType::Type3,
+            ssid: "",
+            bssid: "",
+            ip: "10.21.2.3",
+            transport: "ethernet",
+            identity_fresh: true,
+            whitelist: &[],
+            blacklist: &[],
+        })
         .is_ok());
-        assert!(automatic_login_network_allowed(
-            &LoginType::Type3,
-            "",
-            "",
-            "10.21.2.3",
-            "wifi",
-            &[],
-            &[],
-        )
+        assert!(automatic_login_network_allowed(NetworkTrustInput {
+            login_type: &LoginType::Type3,
+            ssid: "",
+            bssid: "",
+            ip: "10.21.2.3",
+            transport: "wifi",
+            identity_fresh: true,
+            whitelist: &[],
+            blacklist: &[],
+        })
         .is_err());
     }
 

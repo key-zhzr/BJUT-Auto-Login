@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
+import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -141,25 +142,31 @@ class NetworkHelper {
                 val capabilities = activeNetwork?.let(connectivityManager::getNetworkCapabilities)
                 val vpnActive = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
                 // A VPN becomes Android's active routed network. Inspect its physical
-                // underlay so mobile-data throttling and cached Wi-Fi identity still
-                // work without asking for location-protected SSID/BSSID details.
-                val physicalCapabilities = if (vpnActive) {
+                // underlay so mobile-data throttling works without asking for
+                // location-protected SSID/BSSID details on every check.
+                val physicalNetwork = if (vpnActive) {
                     connectivityManager.allNetworks
                         .asSequence()
                         .filter { it != activeNetwork }
-                        .mapNotNull(connectivityManager::getNetworkCapabilities)
-                        .filter { !it.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
-                        .filter { it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
-                        .sortedByDescending {
+                        .mapNotNull { network ->
+                            connectivityManager.getNetworkCapabilities(network)
+                                ?.let { network to it }
+                        }
+                        .filter { (_, item) -> !item.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+                        .filter { (_, item) -> item.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+                        .sortedByDescending { (_, item) ->
                             when {
-                                it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 3
-                                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 2
-                                it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> 1
+                                item.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 3
+                                item.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 2
+                                item.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> 1
                                 else -> 0
                             }
                         }
                         .firstOrNull()
-                } else capabilities
+                        ?.first
+                } else activeNetwork
+                val physicalCapabilities = physicalNetwork
+                    ?.let(connectivityManager::getNetworkCapabilities)
                 val transport = when {
                     physicalCapabilities == null -> if (vpnActive) "vpn" else "none"
                     physicalCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
@@ -175,6 +182,8 @@ class NetworkHelper {
                 val metered = connectivityManager.isActiveNetworkMetered
                 var ssid = ""
                 var bssid = ""
+                var identityFresh = false
+                var identityObservedAt = 0L
                 // LinkProperties belongs to the active routed network. When a VPN is
                 // enabled it may expose the TUN/Fake-IP address instead of the Wi-Fi
                 // or cellular interface address. Reuse the physical-interface lookup
@@ -186,13 +195,11 @@ class NetworkHelper {
                     val wifiInfo = wifiManager.connectionInfo
                     ssid = wifiInfo.ssid?.removeSurrounding("\"") ?: "Unknown"
                     bssid = wifiInfo.bssid ?: "00:00:00:00:00:00"
-                    if (ssid.isNotEmpty() && !ssid.contains("unknown", ignoreCase = true)) {
-                        appContext.getSharedPreferences("service_state", Context.MODE_PRIVATE)
-                            .edit()
-                            .putString("last_ssid", ssid)
-                            .putString("last_bssid", bssid)
-                            .apply()
-                    }
+                    identityFresh = ssid.isNotEmpty()
+                        && !ssid.contains("unknown", ignoreCase = true)
+                        && bssid.isNotEmpty()
+                        && bssid != "00:00:00:00:00:00"
+                    if (identityFresh) identityObservedAt = SystemClock.elapsedRealtime()
                     // WifiInfo reports the address assigned to the physical Wi-Fi
                     // interface and is therefore preferred over any routed/VPN IP.
                     val ipAddress = wifiInfo.ipAddress
@@ -211,6 +218,10 @@ class NetworkHelper {
                     .put("bssid", bssid)
                     .put("ip", ipString)
                     .put("transport", transport)
+                    .put("networkId", physicalNetwork?.hashCode()?.toString() ?: "")
+                    .put("identityRequested", includeWifiDetails)
+                    .put("identityFresh", identityFresh)
+                    .put("identityObservedAt", identityObservedAt)
                     .put("vpnActive", vpnActive)
                     .put("validated", validated)
                     .put("captivePortal", captivePortal)
@@ -222,6 +233,10 @@ class NetworkHelper {
                     .put("bssid", "")
                     .put("ip", "")
                     .put("transport", "unknown")
+                    .put("networkId", "")
+                    .put("identityRequested", includeWifiDetails)
+                    .put("identityFresh", false)
+                    .put("identityObservedAt", 0)
                     .put("vpnActive", false)
                     .put("validated", false)
                     .put("captivePortal", false)

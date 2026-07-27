@@ -5,22 +5,29 @@ import type { GitHubReleaseAsset, UpdateTarget } from './models';
 
 export function isVersionNewer(current: string, latest: string): boolean {
   const parseVersion = (value: string) => {
-    const withoutBuild = value.replace(/^v/i, '').split('+', 1)[0];
-    const [core, prerelease = ''] = withoutBuild.split('-', 2);
+    const match = value.trim().match(
+      /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+    );
+    if (!match) return null;
+    const prerelease = match[4]?.split('.') ?? [];
+    if (prerelease.some(identifier => /^\d+$/.test(identifier) && /^0\d+/.test(identifier))) {
+      return null;
+    }
     return {
-      core: core.split('.').map(part => Number.parseInt(part, 10) || 0),
-      prerelease: prerelease ? prerelease.split('.') : [],
+      core: [BigInt(match[1]), BigInt(match[2]), BigInt(match[3])],
+      prerelease,
     };
   };
   const currentVersion = parseVersion(current);
   const latestVersion = parseVersion(latest);
+  if (!currentVersion || !latestVersion) return false;
   for (
     let index = 0;
-    index < Math.max(currentVersion.core.length, latestVersion.core.length);
+    index < currentVersion.core.length;
     index += 1
   ) {
-    const currentPart = currentVersion.core[index] || 0;
-    const latestPart = latestVersion.core[index] || 0;
+    const currentPart = currentVersion.core[index];
+    const latestPart = latestVersion.core[index];
     if (latestPart > currentPart) return true;
     if (currentPart > latestPart) return false;
   }
@@ -36,12 +43,14 @@ export function isVersionNewer(current: string, latest: string): boolean {
     if (currentPart === undefined) return true;
     if (latestPart === undefined) return false;
     if (currentPart === latestPart) continue;
-    const currentNumber = /^\d+$/.test(currentPart) ? Number(currentPart) : null;
-    const latestNumber = /^\d+$/.test(latestPart) ? Number(latestPart) : null;
+    const currentNumber = /^\d+$/.test(currentPart) ? BigInt(currentPart) : null;
+    const latestNumber = /^\d+$/.test(latestPart) ? BigInt(latestPart) : null;
     if (currentNumber !== null && latestNumber !== null) return latestNumber > currentNumber;
-    if (currentNumber !== null) return false;
-    if (latestNumber !== null) return true;
-    return latestPart.localeCompare(currentPart) > 0;
+    // SemVer 2.0.0: numeric identifiers always have lower precedence than
+    // non-numeric identifiers.
+    if (currentNumber !== null) return true;
+    if (latestNumber !== null) return false;
+    return latestPart > currentPart;
   }
   return false;
 }

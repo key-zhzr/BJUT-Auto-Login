@@ -435,6 +435,10 @@ class KeepAliveService : Service() {
 
     @Synchronized
     private fun notifyNetworkChanged(signature: String) {
+        // A cached Wi-Fi identity must never cross a default-network event.
+        // Older releases persisted these fields, so remove them before the
+        // debounce check as a one-time compatibility cleanup.
+        preferences.edit().remove("last_ssid").remove("last_bssid").apply()
         val now = SystemClock.elapsedRealtime()
         if (signature == lastNetworkSignature || now - lastNetworkEventAt < 1_500L) return
         lastNetworkSignature = signature
@@ -474,17 +478,6 @@ class KeepAliveService : Service() {
 
     private fun networkInfoForCheck(fullDetails: Boolean): String {
         val network = JSONObject(NetworkHelper.getNetworkInfo(this, fullDetails))
-        val transport = network.optString("transport")
-        if (fullDetails && transport == "wifi") {
-            val ssid = network.optString("ssid")
-            val bssid = network.optString("bssid")
-            if (ssid.isNotEmpty() && !ssid.contains("unknown", ignoreCase = true)) {
-                preferences.edit().putString("last_ssid", ssid).putString("last_bssid", bssid).apply()
-            }
-        } else if (!fullDetails && transport == "wifi") {
-            network.put("ssid", preferences.getString("last_ssid", "") ?: "")
-            network.put("bssid", preferences.getString("last_bssid", "") ?: "")
-        }
         val physicalIp = NetworkHelper.getLocalIpAddress()
         if (physicalIp.isNotEmpty()) network.put("ip", physicalIp)
         return network.toString()
@@ -500,9 +493,41 @@ class KeepAliveService : Service() {
                     KeepAliveJournal.append(this, "$engineState，Rust 无界面核心开始执行：$reason", "debug")
                     val config = NetworkHelper.getSecureConfig(this)
                     if (config.isBlank()) throw IllegalStateException("安全存储中没有应用配置")
-                    val networkInfo = networkInfoForCheck(fullDetails)
-                    val rawResult = NativeKeepAlive.runHeadlessCheck(config, networkInfo, reason)
-                    val result = JSONObject(rawResult)
+                    var networkInfo = networkInfoForCheck(fullDetails)
+                    val initialNetwork = JSONObject(networkInfo)
+                    var result = JSONObject(
+                        NativeKeepAlive.runHeadlessCheck(config, networkInfo, reason)
+                    )
+                    if (!fullDetails && result.optString("status") == "needs_fresh_identity") {
+                        KeepAliveJournal.append(
+                            this,
+                            "检测到可能需要校园网认证，正在发送凭据前读取一次当前 Wi-Fi 身份",
+                            "debug"
+                        )
+                        val freshNetworkInfo = networkInfoForCheck(true)
+                        val freshNetwork = JSONObject(freshNetworkInfo)
+                        val initialNetworkId = initialNetwork.optString("networkId")
+                        val freshNetworkId = freshNetwork.optString("networkId")
+                        result = if (
+                            initialNetworkId.isNotEmpty()
+                            && freshNetworkId.isNotEmpty()
+                            && initialNetworkId != freshNetworkId
+                        ) {
+                            JSONObject()
+                                .put("status", "network_changed")
+                                .put("notification_category", "network")
+                                .put("notification", "网络正在切换，已取消本次自动登录")
+                        } else {
+                            networkInfo = freshNetworkInfo
+                            JSONObject(
+                                NativeKeepAlive.runHeadlessCheck(
+                                    config,
+                                    networkInfo,
+                                    "$reason（发送凭据前身份复核）"
+                                )
+                            )
+                        }
+                    }
                     val logs = result.optJSONArray("logs")
                     if (logs != null) {
                         for (index in 0 until logs.length()) {
