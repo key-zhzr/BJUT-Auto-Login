@@ -18,6 +18,7 @@ import { decryptExport, encryptExport } from './config-crypto';
 import { CustomSelect } from './custom-select';
 import {
   applyAppearance, normalizeAccentColor, normalizeAppearanceColorMode, normalizeAppTheme,
+  observeSystemColorScheme,
 } from './appearance';
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
 import { requestNetworkTrustApproval } from './network-trust';
@@ -55,8 +56,7 @@ applyAppearance(
   normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode')),
 );
 
-const systemColorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
-systemColorSchemeQuery.addEventListener('change', () => {
+observeSystemColorScheme(() => {
   if (normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode')) !== 'system') return;
   applyAppearance(
     normalizeAppTheme(localStorage.getItem('bjut_theme')),

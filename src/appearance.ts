@@ -223,11 +223,68 @@ export function resolveColorScheme(
 ): ResolvedColorScheme {
   const mode = normalizeAppearanceColorMode(modeValue);
   if (mode === 'dark' || mode === 'light') return mode;
-  const prefersDark = systemPrefersDark
-    ?? (typeof window !== 'undefined'
-      && typeof window.matchMedia === 'function'
-      && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  let prefersDark = systemPrefersDark ?? false;
+  if (
+    systemPrefersDark === undefined
+    && typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+  ) {
+    try {
+      prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    } catch {
+      prefersDark = false;
+    }
+  }
   return prefersDark ? 'dark' : 'light';
+}
+
+interface ColorSchemeMediaQuery {
+  matches: boolean;
+  addEventListener?: (type: 'change', listener: () => void) => void;
+  removeEventListener?: (type: 'change', listener: () => void) => void;
+  addListener?: (listener: () => void) => void;
+  removeListener?: (listener: () => void) => void;
+}
+
+export function observeSystemColorScheme(
+  callback: (scheme: ResolvedColorScheme) => void,
+  matchMediaFactory?: (query: string) => ColorSchemeMediaQuery,
+): () => void {
+  const factory = matchMediaFactory
+    ?? (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? (query: string) => window.matchMedia(query)
+      : undefined);
+  if (!factory) return () => {};
+
+  let mediaQuery: ColorSchemeMediaQuery;
+  try {
+    mediaQuery = factory('(prefers-color-scheme: dark)');
+  } catch {
+    return () => {};
+  }
+  if (!mediaQuery || typeof mediaQuery.matches !== 'boolean') return () => {};
+
+  const listener = () => callback(mediaQuery.matches ? 'dark' : 'light');
+  if (typeof mediaQuery.addEventListener === 'function') {
+    try {
+      mediaQuery.addEventListener('change', listener);
+      return () => mediaQuery.removeEventListener?.('change', listener);
+    } catch {
+      // Some Android WebViews expose EventTarget methods but throw when they
+      // are used on MediaQueryList. Fall through to the legacy listener API.
+    }
+  }
+  if (typeof mediaQuery.addListener === 'function') {
+    // Android System WebView versions predating MediaQueryList EventTarget
+    // support expose only the legacy listener API.
+    try {
+      mediaQuery.addListener(listener);
+      return () => mediaQuery.removeListener?.(listener);
+    } catch {
+      return () => {};
+    }
+  }
+  return () => {};
 }
 
 export function applyColorMode(

@@ -15,8 +15,7 @@
   --theme-font:
     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --theme-bg: #0f172a;
-  --theme-body-bg:
-    radial-gradient(circle at 0% 0%, #1e1b4b 0%, #0f172a 62%);
+  --theme-body-bg: #0f172a;
   --theme-nav-bg: rgba(15, 23, 42, 0.88);
   --theme-titlebar-bg: rgba(15, 23, 42, 0.88);
   --theme-card-bg: rgba(30, 41, 59, 0.74);
@@ -52,8 +51,7 @@
 /* Basic keeps the established BJUT-AL visual language. */
 :root[data-theme="basic"][data-color-scheme="dark"] {
   --theme-bg: #0f172a;
-  --theme-body-bg:
-    radial-gradient(circle at 0% 0%, #1e1b4b 0%, #0f172a 62%);
+  --theme-body-bg: #0f172a;
   --theme-nav-bg: rgba(15, 23, 42, 0.88);
   --theme-titlebar-bg: rgba(15, 23, 42, 0.88);
   --theme-card-bg: rgba(30, 41, 59, 0.74);
@@ -81,9 +79,7 @@
 
 :root[data-theme="basic"][data-color-scheme="light"] {
   --theme-bg: #eef2f7;
-  --theme-body-bg:
-    radial-gradient(circle at 2% -8%, rgba(var(--accent-rgb), 0.12), transparent 36%),
-    linear-gradient(145deg, #f8fafc 0%, #edf2f8 58%, #e9eef6 100%);
+  --theme-body-bg: #eef2f7;
   --theme-nav-bg: rgba(248, 250, 252, 0.9);
   --theme-titlebar-bg: rgba(248, 250, 252, 0.92);
   --theme-card-bg: rgba(255, 255, 255, 0.82);
@@ -118,64 +114,55 @@
   --theme-font:
     "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont,
     "Helvetica Neue", sans-serif;
-  --theme-card-radius: 22px;
-  --theme-panel-radius: 16px;
-  --theme-control-radius: 14px;
-  --theme-modal-radius: 25px;
-  --theme-blur: 34px;
-  --theme-menu-blur: 44px;
-  --theme-saturation: 1.42;
+  --theme-card-radius: 16px;
+  --theme-panel-radius: 12px;
+  --theme-control-radius: 10px;
+  --theme-modal-radius: 18px;
+  --theme-blur: 28px;
+  --theme-menu-blur: 36px;
+  --theme-saturation: 1.3;
 }
 
 :root[data-theme="apple27"][data-color-scheme="dark"] {
-  --theme-bg: #0d0d10;
-  --theme-body-bg:
-    radial-gradient(ellipse at 7% -10%, rgba(var(--accent-rgb), 0.3), transparent 34%),
-    radial-gradient(ellipse at 96% 8%, rgba(167, 139, 250, 0.18), transparent 30%),
-    linear-gradient(155deg, #19191e 0%, #0d0d10 56%, #15151a 100%);
-  --theme-nav-bg:
-    linear-gradient(145deg, rgba(70, 70, 78, 0.42), rgba(25, 25, 31, 0.55));
-  --theme-titlebar-bg: rgba(31, 31, 37, 0.58);
-  --theme-card-bg: rgba(30, 30, 35, 0.9);
-  --theme-card-solid: #202025;
-  --theme-raised-bg: rgba(48, 48, 55, 0.76);
+  --theme-bg: #000000;
+  --theme-body-bg: #000000;
+  --theme-nav-bg: rgba(18, 18, 20, 0.82);
+  --theme-titlebar-bg: rgba(0, 0, 0, 0.88);
+  --theme-card-bg: rgba(28, 28, 30, 0.94);
+  --theme-card-solid: #1c1c1e;
+  --theme-raised-bg: rgba(44, 44, 46, 0.88);
   --theme-subtle-bg: rgba(255, 255, 255, 0.045);
-  --theme-input-bg: rgba(118, 118, 128, 0.12);
-  --theme-button-bg: rgba(255, 255, 255, 0.09);
-  --theme-hover-bg: rgba(255, 255, 255, 0.085);
+  --theme-input-bg: rgba(118, 118, 128, 0.16);
+  --theme-button-bg: rgba(118, 118, 128, 0.18);
+  --theme-hover-bg: rgba(255, 255, 255, 0.075);
   --theme-overlay-bg: rgba(0, 0, 0, 0.48);
   --theme-code-bg: rgba(0, 0, 0, 0.22);
   --theme-scrollbar: rgba(255, 255, 255, 0.2);
   --theme-scrollbar-hover: rgba(255, 255, 255, 0.32);
-  --theme-border: rgba(255, 255, 255, 0.12);
-  --theme-border-strong: rgba(255, 255, 255, 0.24);
+  --theme-border: rgba(255, 255, 255, 0.1);
+  --theme-border-strong: rgba(255, 255, 255, 0.18);
   --theme-text: #f5f5f7;
   --theme-text-muted: #a1a1aa;
   --theme-heading-gradient: linear-gradient(108deg, #ffffff 4%, #c7c7cc 78%);
   --theme-card-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.045),
-    0 18px 46px rgba(0, 0, 0, 0.24);
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 24px rgba(0, 0, 0, 0.28);
   --theme-raised-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
-    0 30px 78px rgba(0, 0, 0, 0.5);
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 22px 60px rgba(0, 0, 0, 0.54);
   --theme-control-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 5px 18px rgba(0, 0, 0, 0.2);
 }
 
 :root[data-theme="apple27"][data-color-scheme="light"] {
-  --theme-bg: #ececf0;
-  --theme-body-bg:
-    radial-gradient(ellipse at 6% -8%, rgba(var(--accent-rgb), 0.18), transparent 35%),
-    radial-gradient(ellipse at 98% 6%, rgba(175, 150, 255, 0.17), transparent 29%),
-    linear-gradient(155deg, #f7f7f9 0%, #ededf1 58%, #e7e7ec 100%);
-  --theme-nav-bg:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.67), rgba(241, 241, 246, 0.55));
-  --theme-titlebar-bg: rgba(248, 248, 251, 0.62);
-  --theme-card-bg: rgba(255, 255, 255, 0.88);
-  --theme-card-solid: #f9f9fb;
-  --theme-raised-bg: rgba(255, 255, 255, 0.76);
+  --theme-bg: #f5f5f7;
+  --theme-body-bg: #f5f5f7;
+  --theme-nav-bg: rgba(255, 255, 255, 0.76);
+  --theme-titlebar-bg: rgba(245, 245, 247, 0.86);
+  --theme-card-bg: rgba(255, 255, 255, 0.96);
+  --theme-card-solid: #ffffff;
+  --theme-raised-bg: rgba(255, 255, 255, 0.9);
   --theme-subtle-bg: rgba(118, 118, 128, 0.075);
   --theme-input-bg: rgba(118, 118, 128, 0.08);
   --theme-button-bg: rgba(255, 255, 255, 0.68);
@@ -190,11 +177,11 @@
   --theme-text-muted: #6e6e73;
   --theme-heading-gradient: linear-gradient(108deg, #161617 4%, #6e6e73 78%);
   --theme-card-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.86),
-    0 18px 44px rgba(58, 58, 66, 0.1);
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 8px 24px rgba(58, 58, 66, 0.09);
   --theme-raised-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.95),
-    0 28px 72px rgba(58, 58, 66, 0.2);
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 22px 60px rgba(58, 58, 66, 0.18);
   --theme-control-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.78),
     0 4px 14px rgba(58, 58, 66, 0.1);
@@ -218,25 +205,23 @@
 }
 
 :root[data-theme="winui"][data-color-scheme="dark"] {
-  --theme-bg: #202020;
-  --theme-body-bg:
-    radial-gradient(circle at 2% -5%, rgba(var(--accent-rgb), 0.12), transparent 32%),
-    linear-gradient(145deg, #252932 0%, #202020 52%, #22252b 100%);
-  --theme-nav-bg: rgba(32, 32, 32, 0.92);
-  --theme-titlebar-bg: rgba(32, 32, 32, 0.95);
-  --theme-card-bg: #2b2b2b;
-  --theme-card-solid: #2b2b2b;
-  --theme-raised-bg: rgba(44, 44, 44, 0.94);
+  --theme-bg: #000000;
+  --theme-body-bg: #000000;
+  --theme-nav-bg: rgba(12, 12, 12, 0.96);
+  --theme-titlebar-bg: #000000;
+  --theme-card-bg: #1c1c1c;
+  --theme-card-solid: #1c1c1c;
+  --theme-raised-bg: rgba(37, 37, 37, 0.96);
   --theme-subtle-bg: rgba(255, 255, 255, 0.035);
-  --theme-input-bg: rgba(255, 255, 255, 0.055);
+  --theme-input-bg: #1f1f1f;
   --theme-button-bg: rgba(255, 255, 255, 0.075);
   --theme-hover-bg: rgba(255, 255, 255, 0.065);
   --theme-overlay-bg: rgba(0, 0, 0, 0.52);
   --theme-code-bg: rgba(0, 0, 0, 0.2);
   --theme-scrollbar: rgba(255, 255, 255, 0.18);
   --theme-scrollbar-hover: rgba(255, 255, 255, 0.3);
-  --theme-border: rgba(255, 255, 255, 0.083);
-  --theme-border-strong: rgba(255, 255, 255, 0.16);
+  --theme-border: rgba(255, 255, 255, 0.09);
+  --theme-border-strong: rgba(255, 255, 255, 0.17);
   --theme-text: #ffffff;
   --theme-text-muted: #c5c5c5;
   --theme-heading-gradient: linear-gradient(90deg, #ffffff, #c8c8c8);
@@ -249,9 +234,7 @@
 
 :root[data-theme="winui"][data-color-scheme="light"] {
   --theme-bg: #f3f3f3;
-  --theme-body-bg:
-    radial-gradient(circle at 2% -5%, rgba(var(--accent-rgb), 0.09), transparent 32%),
-    linear-gradient(145deg, #f7f7f7 0%, #f3f3f3 54%, #eeeeee 100%);
+  --theme-body-bg: #f3f3f3;
   --theme-nav-bg: rgba(243, 243, 243, 0.93);
   --theme-titlebar-bg: rgba(243, 243, 243, 0.96);
   --theme-card-bg: #fbfbfb;
@@ -281,9 +264,7 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-color-scheme]) {
     --theme-bg: #eef2f7;
-    --theme-body-bg:
-      radial-gradient(circle at 2% -8%, rgba(var(--accent-rgb), 0.12), transparent 36%),
-      linear-gradient(145deg, #f8fafc 0%, #edf2f8 58%, #e9eef6 100%);
+    --theme-body-bg: #eef2f7;
     --theme-nav-bg: rgba(248, 250, 252, 0.9);
     --theme-titlebar-bg: rgba(248, 250, 252, 0.92);
     --theme-card-bg: rgba(255, 255, 255, 0.82);
@@ -371,9 +352,7 @@ html:root[data-theme] {
 }
 
 :root[data-theme] .settings-about-card {
-  background:
-    radial-gradient(circle at 92% 10%, rgba(var(--accent-rgb), 0.13), transparent 34%),
-    var(--theme-card-bg);
+  background: var(--theme-card-bg);
 }
 
 :root[data-theme] .billing-payment-panel,
@@ -596,14 +575,11 @@ html:root[data-theme] {
 :root[data-theme="apple27"] .titlebar,
 :root[data-theme="apple27"] .billing-mobile-nav {
   border: 1px solid var(--theme-border-strong);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.12), transparent 38%),
-    radial-gradient(circle at 14% 0%, rgba(var(--accent-rgb), 0.12), transparent 34%),
-    var(--theme-nav-bg);
+  background: var(--theme-nav-bg);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
     inset 0 -1px 0 rgba(0, 0, 0, 0.08),
-    0 18px 52px rgba(0, 0, 0, 0.18);
+    0 10px 32px rgba(0, 0, 0, 0.18);
   -webkit-backdrop-filter:
     blur(var(--theme-blur)) saturate(var(--theme-saturation));
   backdrop-filter:
@@ -615,9 +591,7 @@ html:root[data-theme] {
 :root[data-theme="apple27"] .diagnostic-panel,
 :root[data-theme="apple27"] .diagnostic-summary,
 :root[data-theme="apple27"] .log-filters {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.035), transparent 36%),
-    var(--theme-card-bg);
+  background: var(--theme-card-bg);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -625,21 +599,20 @@ html:root[data-theme] {
 :root[data-theme="apple27"] .custom-select-options,
 :root[data-theme="apple27"] .modal-content {
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.15), transparent 34%),
-    radial-gradient(circle at 100% 0%, rgba(var(--accent-rgb), 0.1), transparent 35%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 42%),
     var(--theme-raised-bg);
 }
 
 :root[data-theme="apple27"] .btn {
   min-height: 2.45rem;
-  border-radius: 999px;
+  border-radius: var(--theme-control-radius);
   letter-spacing: -0.01em;
 }
 
 :root[data-theme="apple27"] .btn-icon,
 :root[data-theme="apple27"] .billing-back-button,
 :root[data-theme="apple27"] .titlebar-button {
-  border-radius: 999px;
+  border-radius: 50%;
 }
 
 :root[data-theme="apple27"] .btn-secondary {
@@ -656,7 +629,7 @@ html:root[data-theme] {
 :root[data-theme="apple27"] .nav-tree-link,
 :root[data-theme="apple27"] .billing-section-nav-button,
 :root[data-theme="apple27"] .custom-option {
-  border-radius: 999px;
+  border-radius: var(--theme-control-radius);
 }
 
 :root[data-theme="apple27"] .nav-item.active,
@@ -676,6 +649,11 @@ html:root[data-theme] {
 :root[data-theme="apple27"] input,
 :root[data-theme="apple27"] textarea {
   border-color: var(--theme-border-strong);
+}
+
+:root[data-theme="apple27"] body.is-android #nav,
+:root[data-theme="apple27"] body.is-android .billing-mobile-nav {
+  border-radius: 14px;
 }
 
 @media (hover: hover) {
@@ -772,6 +750,11 @@ html:root[data-theme] {
   box-shadow: none;
 }
 
+:root[data-theme="winui"] body.is-android #nav,
+:root[data-theme="winui"] body.is-android .billing-mobile-nav {
+  border-radius: 8px;
+}
+
 /*
  * Android keeps the same geometry and palette but avoids long-lived live blur.
  * Transient menus retain a small blur so the visual hierarchy stays intact.
@@ -802,14 +785,7 @@ html:root[data-theme] {
 :root[data-theme] body.is-android .diagnostic-panel,
 :root[data-theme] body.is-android .diagnostic-summary,
 :root[data-theme] body.is-android .log-filters {
-  background:
-    linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.045),
-      rgba(var(--accent-rgb), 0.018) 55%,
-      transparent
-    ),
-    var(--theme-card-solid);
+  background: var(--theme-card-solid);
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.14);
 }
 

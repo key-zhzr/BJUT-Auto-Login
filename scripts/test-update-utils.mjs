@@ -9,6 +9,7 @@ const {
   normalizeAppTheme,
   normalizeAccentColor,
   normalizeAppearanceColorMode,
+  observeSystemColorScheme,
   resolveColorScheme,
 } = await import('../src/appearance.ts');
 
@@ -53,4 +54,47 @@ assert.equal(normalizeAppearanceColorMode('unsupported-mode'), 'system');
 assert.equal(resolveColorScheme('system', true), 'dark');
 assert.equal(resolveColorScheme('system', false), 'light');
 assert.equal(resolveColorScheme('light', true), 'light');
+
+let legacyColorSchemeListener;
+let legacyColorSchemeResult = '';
+let legacyListenerRemoved = false;
+const stopLegacyColorSchemeObserver = observeSystemColorScheme(
+  scheme => {
+    legacyColorSchemeResult = scheme;
+  },
+  () => ({
+    matches: true,
+    addListener(listener) {
+      legacyColorSchemeListener = listener;
+    },
+    removeListener(listener) {
+      legacyListenerRemoved = listener === legacyColorSchemeListener;
+    },
+  }),
+);
+assert.equal(typeof legacyColorSchemeListener, 'function');
+legacyColorSchemeListener();
+assert.equal(legacyColorSchemeResult, 'dark');
+stopLegacyColorSchemeObserver();
+assert.equal(legacyListenerRemoved, true);
+
+let partialWebViewListener;
+let partialWebViewResult = '';
+observeSystemColorScheme(
+  scheme => {
+    partialWebViewResult = scheme;
+  },
+  () => ({
+    matches: false,
+    addEventListener() {
+      throw new Error('MediaQueryList EventTarget is unavailable');
+    },
+    addListener(listener) {
+      partialWebViewListener = listener;
+    },
+  }),
+);
+assert.equal(typeof partialWebViewListener, 'function');
+partialWebViewListener();
+assert.equal(partialWebViewResult, 'light');
 console.log('Appearance normalization regression cases passed');
