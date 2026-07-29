@@ -8,6 +8,8 @@ const {
 const {
   normalizeAppTheme,
   normalizeAccentColor,
+  normalizeAppearanceColorMode,
+  resolveColorScheme,
 } = await import('../src/appearance.ts');
 
 const cases = [
@@ -41,9 +43,14 @@ assert.equal(relay.search, '');
 assert.equal(decodeURIComponent(relay.hash.slice(1)), paymentUrl);
 console.log('WeChat relay regression cases passed');
 
-assert.equal(normalizeAppTheme('Apple OS 26'), 'apple26');
+assert.equal(normalizeAppTheme('Apple OS 26'), 'apple27');
 assert.equal(normalizeAppTheme('windows'), 'winui');
 assert.equal(normalizeAppTheme('unsupported-theme'), 'basic');
 assert.equal(normalizeAccentColor('orange'), 'orange');
 assert.equal(normalizeAccentColor('unsupported-accent'), 'blue');
+assert.equal(normalizeAppearanceColorMode('auto'), 'system');
+assert.equal(normalizeAppearanceColorMode('unsupported-mode'), 'system');
+assert.equal(resolveColorScheme('system', true), 'dark');
+assert.equal(resolveColorScheme('system', false), 'light');
+assert.equal(resolveColorScheme('light', true), 'light');
 console.log('Appearance normalization regression cases passed');

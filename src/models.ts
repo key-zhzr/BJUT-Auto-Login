@@ -31,6 +31,7 @@ export interface BackendConfig {
   log_level: string;
   theme?: string;
   accent_color?: string;
+  color_mode?: string;
   vpn_compatibility?: string;
   vpn_maximum_until?: number | null;
   whitelist?: string[];

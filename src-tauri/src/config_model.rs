@@ -56,6 +56,8 @@ pub(crate) struct AppConfig {
     pub(crate) theme: String,
     #[serde(default = "default_accent_color", alias = "accentColor")]
     pub(crate) accent_color: String,
+    #[serde(default = "default_color_mode", alias = "colorMode")]
+    pub(crate) color_mode: String,
     #[serde(default = "default_vpn_compatibility", alias = "vpnCompatibility")]
     pub(crate) vpn_compatibility: String,
     #[serde(default, alias = "vpnMaximumUntil")]
@@ -123,6 +125,10 @@ pub(crate) fn default_theme() -> String {
 
 pub(crate) fn default_accent_color() -> String {
     "blue".to_string()
+}
+
+pub(crate) fn default_color_mode() -> String {
+    "system".to_string()
 }
 
 pub(crate) fn default_vpn_compatibility() -> String {

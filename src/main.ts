@@ -17,7 +17,7 @@ import {
 import { decryptExport, encryptExport } from './config-crypto';
 import { CustomSelect } from './custom-select';
 import {
-  applyAppearance, normalizeAccentColor, normalizeAppTheme,
+  applyAppearance, normalizeAccentColor, normalizeAppearanceColorMode, normalizeAppTheme,
 } from './appearance';
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
 import { requestNetworkTrustApproval } from './network-trust';
@@ -52,7 +52,18 @@ function renderIcons(root: Element | Document | DocumentFragment = document) {
 applyAppearance(
   normalizeAppTheme(localStorage.getItem('bjut_theme')),
   normalizeAccentColor(localStorage.getItem('bjut_accent_color')),
+  normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode')),
 );
+
+const systemColorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+systemColorSchemeQuery.addEventListener('change', () => {
+  if (normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode')) !== 'system') return;
+  applyAppearance(
+    normalizeAppTheme(localStorage.getItem('bjut_theme')),
+    normalizeAccentColor(localStorage.getItem('bjut_accent_color')),
+    'system',
+  );
+});
 
 if (IS_ANDROID) {
   document.body.classList.add('is-android');
@@ -450,6 +461,7 @@ function syncConfigToRust(): Promise<void> {
     log_level: localStorage.getItem('bjut_log_level') || 'info',
     theme: normalizeAppTheme(localStorage.getItem('bjut_theme')),
     accent_color: normalizeAccentColor(localStorage.getItem('bjut_accent_color')),
+    color_mode: normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode')),
     vpn_compatibility: localStorage.getItem('bjut_vpn_compatibility') || 'high',
     vpn_maximum_until: vpnMaximumUntil || null,
     whitelist: [...whitelistCache],
@@ -542,9 +554,11 @@ async function loadConfigFromRust() {
     localStorage.setItem('bjut_log_level', config.log_level);
     const loadedTheme = normalizeAppTheme(config.theme);
     const loadedAccentColor = normalizeAccentColor(config.accent_color);
+    const loadedColorMode = normalizeAppearanceColorMode(config.color_mode);
     localStorage.setItem('bjut_theme', loadedTheme);
     localStorage.setItem('bjut_accent_color', loadedAccentColor);
-    applyAppearance(loadedTheme, loadedAccentColor);
+    localStorage.setItem('bjut_color_mode', loadedColorMode);
+    applyAppearance(loadedTheme, loadedAccentColor, loadedColorMode);
     const loadedVpnMode = config.vpn_compatibility || 'high';
     vpnMaximumUntil = Number(config.vpn_maximum_until || 0);
     localStorage.setItem('bjut_vpn_compatibility', loadedVpnMode);
@@ -588,6 +602,7 @@ async function loadConfigFromRust() {
     settingCheckInterval.value = checkInterval.toString();
     settingTheme.value = loadedTheme;
     settingAccentColor.value = loadedAccentColor;
+    settingColorMode.value = loadedColorMode;
     settingLogLevel.value = config.log_level;
     settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
     scheduleVpnMaximumRollback();
@@ -1268,6 +1283,7 @@ const settingCheckInterval = document.getElementById('setting-check-interval') a
 let settingLogLevel: CustomSelect;
 let settingTheme: CustomSelect;
 let settingAccentColor: CustomSelect;
+let settingColorMode: CustomSelect;
 let overrideAccountSelect: CustomSelect;
 let overrideMethodSelect: CustomSelect;
 let settingUpdateChannel: CustomSelect;
@@ -1436,6 +1452,7 @@ async function init() {
   overrideMethodSelect = new CustomSelect('override-method');
   settingTheme = new CustomSelect('setting-theme');
   settingAccentColor = new CustomSelect('setting-accent-color');
+  settingColorMode = new CustomSelect('setting-color-mode');
   settingUpdateChannel = new CustomSelect('setting-update-channel');
   settingLogLevel = new CustomSelect('setting-log-level');
   settingVpnCompatibility = new CustomSelect('setting-vpn-compatibility');
@@ -1532,6 +1549,7 @@ async function init() {
   // Initialize selectors values
   settingTheme.value = normalizeAppTheme(localStorage.getItem('bjut_theme'));
   settingAccentColor.value = normalizeAccentColor(localStorage.getItem('bjut_accent_color'));
+  settingColorMode.value = normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode'));
   settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
   settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
   settingUpdateChannel.value = localStorage.getItem('bjut_update_channel') || 'release';
@@ -2870,39 +2888,49 @@ function setupEventListeners() {
   const persistAppearanceSelection = async (
     theme: ReturnType<typeof normalizeAppTheme>,
     accent: ReturnType<typeof normalizeAccentColor>,
+    colorMode: ReturnType<typeof normalizeAppearanceColorMode>,
     previousTheme: ReturnType<typeof normalizeAppTheme>,
     previousAccent: ReturnType<typeof normalizeAccentColor>,
+    previousColorMode: ReturnType<typeof normalizeAppearanceColorMode>,
     label: string,
   ) => {
     settingTheme.setDisabled(true);
     settingAccentColor.setDisabled(true);
+    settingColorMode.setDisabled(true);
     localStorage.setItem('bjut_theme', theme);
     localStorage.setItem('bjut_accent_color', accent);
-    applyAppearance(theme, accent);
+    localStorage.setItem('bjut_color_mode', colorMode);
+    applyAppearance(theme, accent, colorMode);
     try {
       await syncConfigToRust();
     } catch (error) {
       localStorage.setItem('bjut_theme', previousTheme);
       localStorage.setItem('bjut_accent_color', previousAccent);
+      localStorage.setItem('bjut_color_mode', previousColorMode);
       settingTheme.value = previousTheme;
       settingAccentColor.value = previousAccent;
-      applyAppearance(previousTheme, previousAccent);
+      settingColorMode.value = previousColorMode;
+      applyAppearance(previousTheme, previousAccent, previousColorMode);
       console.error(`Failed to persist ${label}:`, error);
       await customAlert(`${label}保存失败，已恢复原设置：${String(error)}`);
     } finally {
       settingTheme.setDisabled(false);
       settingAccentColor.setDisabled(false);
+      settingColorMode.setDisabled(false);
     }
   };
 
   settingTheme.addEventListener('change', event => {
     const previousTheme = normalizeAppTheme(localStorage.getItem('bjut_theme'));
     const previousAccent = normalizeAccentColor(localStorage.getItem('bjut_accent_color'));
+    const previousColorMode = normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode'));
     void persistAppearanceSelection(
       normalizeAppTheme(event.target.value),
       previousAccent,
+      previousColorMode,
       previousTheme,
       previousAccent,
+      previousColorMode,
       '主题',
     );
   });
@@ -2910,12 +2938,30 @@ function setupEventListeners() {
   settingAccentColor.addEventListener('change', event => {
     const previousTheme = normalizeAppTheme(localStorage.getItem('bjut_theme'));
     const previousAccent = normalizeAccentColor(localStorage.getItem('bjut_accent_color'));
+    const previousColorMode = normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode'));
     void persistAppearanceSelection(
       previousTheme,
       normalizeAccentColor(event.target.value),
+      previousColorMode,
       previousTheme,
       previousAccent,
+      previousColorMode,
       '强调色',
+    );
+  });
+
+  settingColorMode.addEventListener('change', event => {
+    const previousTheme = normalizeAppTheme(localStorage.getItem('bjut_theme'));
+    const previousAccent = normalizeAccentColor(localStorage.getItem('bjut_accent_color'));
+    const previousColorMode = normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode'));
+    void persistAppearanceSelection(
+      previousTheme,
+      previousAccent,
+      normalizeAppearanceColorMode(event.target.value),
+      previousTheme,
+      previousAccent,
+      previousColorMode,
+      '明暗模式',
     );
   });
 
@@ -3197,6 +3243,7 @@ function setupEventListeners() {
           checkIntervalBg: localStorage.getItem('bjut_check_interval_bg'),
           theme: localStorage.getItem('bjut_theme'),
           accentColor: localStorage.getItem('bjut_accent_color'),
+          colorMode: localStorage.getItem('bjut_color_mode'),
           whitelist: JSON.stringify(whitelistCache),
           blacklist: JSON.stringify(blacklistCache),
           moreOptions: localStorage.getItem('bjut_more_options'),
@@ -3263,6 +3310,7 @@ function setupEventListeners() {
         restoreString('checkIntervalBg', 'bjut_check_interval_bg');
         restoreString('theme', 'bjut_theme');
         restoreString('accentColor', 'bjut_accent_color');
+        restoreString('colorMode', 'bjut_color_mode');
         restoreString('moreOptions', 'bjut_more_options');
         restoreString('usageAlerts', 'bjut_usage_alerts');
         restoreString('balanceAlertThreshold', 'bjut_balance_alert_threshold');

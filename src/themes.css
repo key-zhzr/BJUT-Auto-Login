@@ -1,7 +1,9 @@
 /*
- * Appearance themes deliberately keep layout and accent color independent:
- * themes own materials, typography, radii and elevation; appearance.ts owns
- * --accent-* / --primary-*.
+ * Appearance architecture
+ * -----------------------
+ * Theme controls geometry and material hierarchy.
+ * Color mode controls semantic light/dark colors.
+ * Accent remains independent and is supplied by appearance.ts.
  */
 :root {
   --accent-color: #3b82f6;
@@ -15,13 +17,19 @@
   --theme-bg: #0f172a;
   --theme-body-bg:
     radial-gradient(circle at 0% 0%, #1e1b4b 0%, #0f172a 62%);
-  --theme-nav-bg: rgba(15, 23, 42, 0.84);
-  --theme-titlebar-bg: rgba(15, 23, 42, 0.84);
-  --theme-card-bg: rgba(30, 41, 59, 0.72);
+  --theme-nav-bg: rgba(15, 23, 42, 0.88);
+  --theme-titlebar-bg: rgba(15, 23, 42, 0.88);
+  --theme-card-bg: rgba(30, 41, 59, 0.74);
   --theme-card-solid: #1b273b;
   --theme-raised-bg: rgba(26, 31, 54, 0.98);
   --theme-subtle-bg: rgba(0, 0, 0, 0.13);
-  --theme-input-bg: rgba(7, 12, 24, 0.34);
+  --theme-input-bg: rgba(7, 12, 24, 0.36);
+  --theme-button-bg: rgba(255, 255, 255, 0.09);
+  --theme-hover-bg: rgba(255, 255, 255, 0.075);
+  --theme-overlay-bg: rgba(2, 5, 12, 0.58);
+  --theme-code-bg: rgba(0, 0, 0, 0.22);
+  --theme-scrollbar: rgba(255, 255, 255, 0.16);
+  --theme-scrollbar-hover: rgba(255, 255, 255, 0.26);
   --theme-border: rgba(255, 255, 255, 0.1);
   --theme-border-strong: rgba(255, 255, 255, 0.2);
   --theme-text: #f8fafc;
@@ -32,7 +40,7 @@
   --theme-control-radius: 8px;
   --theme-modal-radius: 16px;
   --theme-blur: 12px;
-  --theme-menu-blur: 16px;
+  --theme-menu-blur: 18px;
   --theme-saturation: 1;
   --theme-card-shadow:
     0 4px 6px -1px rgba(0, 0, 0, 0.1),
@@ -41,154 +49,263 @@
   --theme-control-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-:root[data-theme="basic"] {
-  --theme-font:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+/* Basic keeps the established BJUT-AL visual language. */
+:root[data-theme="basic"][data-color-scheme="dark"] {
   --theme-bg: #0f172a;
   --theme-body-bg:
     radial-gradient(circle at 0% 0%, #1e1b4b 0%, #0f172a 62%);
-  --theme-nav-bg: rgba(15, 23, 42, 0.84);
-  --theme-titlebar-bg: rgba(15, 23, 42, 0.84);
-  --theme-card-bg: rgba(30, 41, 59, 0.72);
+  --theme-nav-bg: rgba(15, 23, 42, 0.88);
+  --theme-titlebar-bg: rgba(15, 23, 42, 0.88);
+  --theme-card-bg: rgba(30, 41, 59, 0.74);
   --theme-card-solid: #1b273b;
   --theme-raised-bg: rgba(26, 31, 54, 0.98);
   --theme-subtle-bg: rgba(0, 0, 0, 0.13);
-  --theme-input-bg: rgba(7, 12, 24, 0.34);
+  --theme-input-bg: rgba(7, 12, 24, 0.36);
+  --theme-button-bg: rgba(255, 255, 255, 0.09);
+  --theme-hover-bg: rgba(255, 255, 255, 0.075);
+  --theme-overlay-bg: rgba(2, 5, 12, 0.58);
+  --theme-code-bg: rgba(0, 0, 0, 0.22);
+  --theme-scrollbar: rgba(255, 255, 255, 0.16);
+  --theme-scrollbar-hover: rgba(255, 255, 255, 0.26);
   --theme-border: rgba(255, 255, 255, 0.1);
   --theme-border-strong: rgba(255, 255, 255, 0.2);
   --theme-text: #f8fafc;
   --theme-text-muted: #94a3b8;
   --theme-heading-gradient: linear-gradient(90deg, #ffffff, #94a3b8);
-  --theme-card-radius: 16px;
-  --theme-panel-radius: 12px;
-  --theme-control-radius: 8px;
-  --theme-modal-radius: 16px;
-  --theme-blur: 12px;
-  --theme-menu-blur: 16px;
-  --theme-saturation: 1;
   --theme-card-shadow:
     0 4px 6px -1px rgba(0, 0, 0, 0.1),
     0 2px 4px -1px rgba(0, 0, 0, 0.06);
   --theme-raised-shadow: 0 18px 48px rgba(0, 0, 0, 0.44);
+  --theme-control-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-:root[data-theme="apple26"] {
-  --theme-font:
-    "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
-  --theme-bg: #0a1020;
+:root[data-theme="basic"][data-color-scheme="light"] {
+  --theme-bg: #eef2f7;
   --theme-body-bg:
-    radial-gradient(circle at 10% -10%, rgba(var(--accent-rgb), 0.3), transparent 38%),
-    radial-gradient(circle at 98% 2%, rgba(122, 92, 255, 0.2), transparent 34%),
-    linear-gradient(148deg, #111a31 0%, #0b1120 56%, #10162a 100%);
-  --theme-nav-bg:
-    linear-gradient(155deg, rgba(31, 42, 68, 0.72), rgba(13, 21, 39, 0.68));
-  --theme-titlebar-bg: rgba(18, 27, 48, 0.68);
-  --theme-card-bg:
-    linear-gradient(145deg, rgba(49, 62, 91, 0.66), rgba(25, 35, 58, 0.54));
-  --theme-card-solid: #202d46;
-  --theme-raised-bg: rgba(31, 42, 67, 0.96);
-  --theme-subtle-bg: rgba(9, 16, 31, 0.25);
-  --theme-input-bg: rgba(9, 16, 31, 0.42);
-  --theme-border: rgba(255, 255, 255, 0.15);
-  --theme-border-strong: rgba(255, 255, 255, 0.27);
-  --theme-text: #f7f9ff;
-  --theme-text-muted: #a8b4cc;
-  --theme-heading-gradient: linear-gradient(105deg, #ffffff 8%, #cdd8ee 78%);
-  --theme-card-radius: 21px;
-  --theme-panel-radius: 16px;
-  --theme-control-radius: 13px;
-  --theme-modal-radius: 22px;
-  --theme-blur: 22px;
-  --theme-menu-blur: 28px;
-  --theme-saturation: 1.18;
+    radial-gradient(circle at 2% -8%, rgba(var(--accent-rgb), 0.12), transparent 36%),
+    linear-gradient(145deg, #f8fafc 0%, #edf2f8 58%, #e9eef6 100%);
+  --theme-nav-bg: rgba(248, 250, 252, 0.9);
+  --theme-titlebar-bg: rgba(248, 250, 252, 0.92);
+  --theme-card-bg: rgba(255, 255, 255, 0.82);
+  --theme-card-solid: #f8fafc;
+  --theme-raised-bg: rgba(255, 255, 255, 0.98);
+  --theme-subtle-bg: rgba(30, 41, 59, 0.045);
+  --theme-input-bg: rgba(255, 255, 255, 0.88);
+  --theme-button-bg: rgba(255, 255, 255, 0.82);
+  --theme-hover-bg: rgba(15, 23, 42, 0.055);
+  --theme-overlay-bg: rgba(30, 41, 59, 0.32);
+  --theme-code-bg: rgba(15, 23, 42, 0.065);
+  --theme-scrollbar: rgba(51, 65, 85, 0.2);
+  --theme-scrollbar-hover: rgba(51, 65, 85, 0.32);
+  --theme-border: rgba(15, 23, 42, 0.1);
+  --theme-border-strong: rgba(15, 23, 42, 0.18);
+  --theme-text: #172033;
+  --theme-text-muted: #64748b;
+  --theme-heading-gradient: linear-gradient(90deg, #0f172a, #64748b);
   --theme-card-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 16px 42px rgba(0, 0, 0, 0.24);
-  --theme-raised-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 28px 70px rgba(0, 0, 0, 0.48);
-  --theme-control-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.045),
-    0 4px 14px rgba(0, 0, 0, 0.16);
+    0 10px 28px rgba(71, 85, 105, 0.09),
+    0 2px 5px rgba(71, 85, 105, 0.05);
+  --theme-raised-shadow: 0 24px 62px rgba(51, 65, 85, 0.2);
+  --theme-control-shadow: 0 1px 3px rgba(51, 65, 85, 0.1);
 }
 
+/*
+ * Apple OS 27
+ * Standard materials form the content layer. Liquid Glass is reserved for
+ * navigation, controls and transient surfaces, matching Apple's hierarchy.
+ */
 :root[data-theme="apple27"] {
   --theme-font:
-    "SF Pro Rounded", "SF Pro Display", "SF Pro Text", -apple-system,
-    BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --theme-bg: #070b17;
-  --theme-body-bg:
-    radial-gradient(ellipse at 14% -8%, rgba(var(--accent-rgb), 0.38), transparent 35%),
-    radial-gradient(ellipse at 90% 18%, rgba(146, 112, 255, 0.24), transparent 31%),
-    radial-gradient(ellipse at 55% 110%, rgba(37, 99, 235, 0.16), transparent 44%),
-    linear-gradient(155deg, #11182d 0%, #080d1b 54%, #11162a 100%);
-  --theme-nav-bg:
-    linear-gradient(160deg, rgba(34, 44, 70, 0.61), rgba(11, 17, 32, 0.56));
-  --theme-titlebar-bg: rgba(15, 21, 39, 0.58);
-  --theme-card-bg:
-    linear-gradient(142deg, rgba(60, 73, 104, 0.58), rgba(21, 29, 50, 0.46));
-  --theme-card-solid: #202a43;
-  --theme-raised-bg: rgba(30, 38, 62, 0.965);
-  --theme-subtle-bg: rgba(5, 10, 23, 0.28);
-  --theme-input-bg: rgba(4, 9, 21, 0.46);
-  --theme-border: rgba(255, 255, 255, 0.17);
-  --theme-border-strong: rgba(255, 255, 255, 0.31);
-  --theme-text: #fbfcff;
-  --theme-text-muted: #acb7ce;
-  --theme-heading-gradient: linear-gradient(112deg, #ffffff 5%, #d7ddf0 72%);
-  --theme-card-radius: 25px;
-  --theme-panel-radius: 19px;
-  --theme-control-radius: 15px;
-  --theme-modal-radius: 26px;
-  --theme-blur: 30px;
-  --theme-menu-blur: 34px;
-  --theme-saturation: 1.28;
-  --theme-card-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.095),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.16),
-    0 22px 52px rgba(0, 0, 0, 0.29);
-  --theme-raised-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.11),
-    0 34px 84px rgba(0, 0, 0, 0.54);
-  --theme-control-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.065),
-    0 7px 20px rgba(0, 0, 0, 0.2);
+    "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont,
+    "Helvetica Neue", sans-serif;
+  --theme-card-radius: 22px;
+  --theme-panel-radius: 16px;
+  --theme-control-radius: 14px;
+  --theme-modal-radius: 25px;
+  --theme-blur: 34px;
+  --theme-menu-blur: 44px;
+  --theme-saturation: 1.42;
 }
 
+:root[data-theme="apple27"][data-color-scheme="dark"] {
+  --theme-bg: #0d0d10;
+  --theme-body-bg:
+    radial-gradient(ellipse at 7% -10%, rgba(var(--accent-rgb), 0.3), transparent 34%),
+    radial-gradient(ellipse at 96% 8%, rgba(167, 139, 250, 0.18), transparent 30%),
+    linear-gradient(155deg, #19191e 0%, #0d0d10 56%, #15151a 100%);
+  --theme-nav-bg:
+    linear-gradient(145deg, rgba(70, 70, 78, 0.42), rgba(25, 25, 31, 0.55));
+  --theme-titlebar-bg: rgba(31, 31, 37, 0.58);
+  --theme-card-bg: rgba(30, 30, 35, 0.9);
+  --theme-card-solid: #202025;
+  --theme-raised-bg: rgba(48, 48, 55, 0.76);
+  --theme-subtle-bg: rgba(255, 255, 255, 0.045);
+  --theme-input-bg: rgba(118, 118, 128, 0.12);
+  --theme-button-bg: rgba(255, 255, 255, 0.09);
+  --theme-hover-bg: rgba(255, 255, 255, 0.085);
+  --theme-overlay-bg: rgba(0, 0, 0, 0.48);
+  --theme-code-bg: rgba(0, 0, 0, 0.22);
+  --theme-scrollbar: rgba(255, 255, 255, 0.2);
+  --theme-scrollbar-hover: rgba(255, 255, 255, 0.32);
+  --theme-border: rgba(255, 255, 255, 0.12);
+  --theme-border-strong: rgba(255, 255, 255, 0.24);
+  --theme-text: #f5f5f7;
+  --theme-text-muted: #a1a1aa;
+  --theme-heading-gradient: linear-gradient(108deg, #ffffff 4%, #c7c7cc 78%);
+  --theme-card-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 18px 46px rgba(0, 0, 0, 0.24);
+  --theme-raised-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    0 30px 78px rgba(0, 0, 0, 0.5);
+  --theme-control-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 5px 18px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-theme="apple27"][data-color-scheme="light"] {
+  --theme-bg: #ececf0;
+  --theme-body-bg:
+    radial-gradient(ellipse at 6% -8%, rgba(var(--accent-rgb), 0.18), transparent 35%),
+    radial-gradient(ellipse at 98% 6%, rgba(175, 150, 255, 0.17), transparent 29%),
+    linear-gradient(155deg, #f7f7f9 0%, #ededf1 58%, #e7e7ec 100%);
+  --theme-nav-bg:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.67), rgba(241, 241, 246, 0.55));
+  --theme-titlebar-bg: rgba(248, 248, 251, 0.62);
+  --theme-card-bg: rgba(255, 255, 255, 0.88);
+  --theme-card-solid: #f9f9fb;
+  --theme-raised-bg: rgba(255, 255, 255, 0.76);
+  --theme-subtle-bg: rgba(118, 118, 128, 0.075);
+  --theme-input-bg: rgba(118, 118, 128, 0.08);
+  --theme-button-bg: rgba(255, 255, 255, 0.68);
+  --theme-hover-bg: rgba(60, 60, 67, 0.075);
+  --theme-overlay-bg: rgba(28, 28, 30, 0.28);
+  --theme-code-bg: rgba(60, 60, 67, 0.075);
+  --theme-scrollbar: rgba(60, 60, 67, 0.2);
+  --theme-scrollbar-hover: rgba(60, 60, 67, 0.32);
+  --theme-border: rgba(60, 60, 67, 0.11);
+  --theme-border-strong: rgba(60, 60, 67, 0.2);
+  --theme-text: #1d1d1f;
+  --theme-text-muted: #6e6e73;
+  --theme-heading-gradient: linear-gradient(108deg, #161617 4%, #6e6e73 78%);
+  --theme-card-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    0 18px 44px rgba(58, 58, 66, 0.1);
+  --theme-raised-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 28px 72px rgba(58, 58, 66, 0.2);
+  --theme-control-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 4px 14px rgba(58, 58, 66, 0.1);
+}
+
+/*
+ * WinUI
+ * The window background is a muted Mica approximation. Long-lived content is
+ * opaque; Acrylic is limited to flyouts and modal surfaces.
+ */
 :root[data-theme="winui"] {
   --theme-font:
     "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", sans-serif;
-  --theme-bg: #101319;
-  --theme-body-bg:
-    radial-gradient(circle at 3% 0%, rgba(var(--accent-rgb), 0.13), transparent 31%),
-    linear-gradient(145deg, #171b24, #101319 58%, #131720);
-  --theme-nav-bg: rgba(21, 25, 34, 0.94);
-  --theme-titlebar-bg: rgba(20, 24, 32, 0.96);
-  --theme-card-bg: rgba(31, 36, 47, 0.91);
-  --theme-card-solid: #20252f;
-  --theme-raised-bg: rgba(39, 44, 56, 0.985);
-  --theme-subtle-bg: rgba(12, 15, 21, 0.36);
-  --theme-input-bg: rgba(14, 17, 23, 0.74);
-  --theme-border: rgba(255, 255, 255, 0.09);
-  --theme-border-strong: rgba(255, 255, 255, 0.18);
-  --theme-text: #f3f3f3;
-  --theme-text-muted: #aab0ba;
-  --theme-heading-gradient: linear-gradient(90deg, #ffffff, #b9bec8);
-  --theme-card-radius: 10px;
-  --theme-panel-radius: 8px;
-  --theme-control-radius: 5px;
-  --theme-modal-radius: 10px;
-  --theme-blur: 14px;
-  --theme-menu-blur: 22px;
-  --theme-saturation: 1.1;
-  --theme-card-shadow: 0 8px 26px rgba(0, 0, 0, 0.2);
-  --theme-raised-shadow:
-    0 22px 64px rgba(0, 0, 0, 0.52),
-    0 0 0 1px rgba(0, 0, 0, 0.3);
-  --theme-control-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --theme-card-radius: 8px;
+  --theme-panel-radius: 6px;
+  --theme-control-radius: 4px;
+  --theme-modal-radius: 8px;
+  --theme-blur: 0px;
+  --theme-menu-blur: 30px;
+  --theme-saturation: 1.22;
 }
 
+:root[data-theme="winui"][data-color-scheme="dark"] {
+  --theme-bg: #202020;
+  --theme-body-bg:
+    radial-gradient(circle at 2% -5%, rgba(var(--accent-rgb), 0.12), transparent 32%),
+    linear-gradient(145deg, #252932 0%, #202020 52%, #22252b 100%);
+  --theme-nav-bg: rgba(32, 32, 32, 0.92);
+  --theme-titlebar-bg: rgba(32, 32, 32, 0.95);
+  --theme-card-bg: #2b2b2b;
+  --theme-card-solid: #2b2b2b;
+  --theme-raised-bg: rgba(44, 44, 44, 0.94);
+  --theme-subtle-bg: rgba(255, 255, 255, 0.035);
+  --theme-input-bg: rgba(255, 255, 255, 0.055);
+  --theme-button-bg: rgba(255, 255, 255, 0.075);
+  --theme-hover-bg: rgba(255, 255, 255, 0.065);
+  --theme-overlay-bg: rgba(0, 0, 0, 0.52);
+  --theme-code-bg: rgba(0, 0, 0, 0.2);
+  --theme-scrollbar: rgba(255, 255, 255, 0.18);
+  --theme-scrollbar-hover: rgba(255, 255, 255, 0.3);
+  --theme-border: rgba(255, 255, 255, 0.083);
+  --theme-border-strong: rgba(255, 255, 255, 0.16);
+  --theme-text: #ffffff;
+  --theme-text-muted: #c5c5c5;
+  --theme-heading-gradient: linear-gradient(90deg, #ffffff, #c8c8c8);
+  --theme-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --theme-raised-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(0, 0, 0, 0.28);
+  --theme-control-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-theme="winui"][data-color-scheme="light"] {
+  --theme-bg: #f3f3f3;
+  --theme-body-bg:
+    radial-gradient(circle at 2% -5%, rgba(var(--accent-rgb), 0.09), transparent 32%),
+    linear-gradient(145deg, #f7f7f7 0%, #f3f3f3 54%, #eeeeee 100%);
+  --theme-nav-bg: rgba(243, 243, 243, 0.93);
+  --theme-titlebar-bg: rgba(243, 243, 243, 0.96);
+  --theme-card-bg: #fbfbfb;
+  --theme-card-solid: #fbfbfb;
+  --theme-raised-bg: rgba(252, 252, 252, 0.94);
+  --theme-subtle-bg: rgba(0, 0, 0, 0.028);
+  --theme-input-bg: rgba(255, 255, 255, 0.76);
+  --theme-button-bg: rgba(255, 255, 255, 0.78);
+  --theme-hover-bg: rgba(0, 0, 0, 0.045);
+  --theme-overlay-bg: rgba(0, 0, 0, 0.28);
+  --theme-code-bg: rgba(0, 0, 0, 0.055);
+  --theme-scrollbar: rgba(0, 0, 0, 0.18);
+  --theme-scrollbar-hover: rgba(0, 0, 0, 0.3);
+  --theme-border: rgba(0, 0, 0, 0.075);
+  --theme-border-strong: rgba(0, 0, 0, 0.15);
+  --theme-text: #1b1b1b;
+  --theme-text-muted: #616161;
+  --theme-heading-gradient: linear-gradient(90deg, #1b1b1b, #616161);
+  --theme-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.075);
+  --theme-raised-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.18),
+    0 0 0 1px rgba(0, 0, 0, 0.07);
+  --theme-control-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Use the system palette before JavaScript restores the persisted selection. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-color-scheme]) {
+    --theme-bg: #eef2f7;
+    --theme-body-bg:
+      radial-gradient(circle at 2% -8%, rgba(var(--accent-rgb), 0.12), transparent 36%),
+      linear-gradient(145deg, #f8fafc 0%, #edf2f8 58%, #e9eef6 100%);
+    --theme-nav-bg: rgba(248, 250, 252, 0.9);
+    --theme-titlebar-bg: rgba(248, 250, 252, 0.92);
+    --theme-card-bg: rgba(255, 255, 255, 0.82);
+    --theme-card-solid: #f8fafc;
+    --theme-raised-bg: rgba(255, 255, 255, 0.98);
+    --theme-subtle-bg: rgba(30, 41, 59, 0.045);
+    --theme-input-bg: rgba(255, 255, 255, 0.88);
+    --theme-button-bg: rgba(255, 255, 255, 0.82);
+    --theme-hover-bg: rgba(15, 23, 42, 0.055);
+    --theme-overlay-bg: rgba(30, 41, 59, 0.32);
+    --theme-code-bg: rgba(15, 23, 42, 0.065);
+    --theme-scrollbar: rgba(51, 65, 85, 0.2);
+    --theme-scrollbar-hover: rgba(51, 65, 85, 0.32);
+    --theme-border: rgba(15, 23, 42, 0.1);
+    --theme-border-strong: rgba(15, 23, 42, 0.18);
+    --theme-text: #172033;
+    --theme-text-muted: #64748b;
+    --theme-heading-gradient: linear-gradient(90deg, #0f172a, #64748b);
+  }
+}
+
+/* Map theme tokens onto the legacy stylesheet API. */
 :root[data-theme] {
   --primary-color: var(--accent-color);
   --primary-hover: var(--accent-hover);
@@ -197,7 +314,6 @@
   --card-border: var(--theme-border);
   --text-main: var(--theme-text);
   --text-muted: var(--theme-text-muted);
-  color-scheme: dark;
 }
 
 html:root[data-theme] {
@@ -207,7 +323,13 @@ html:root[data-theme] {
 :root[data-theme] body {
   color: var(--theme-text);
   background: var(--theme-body-bg);
+  background-attachment: fixed;
   font-family: var(--theme-font);
+}
+
+:root[data-theme] .app-loading-mask {
+  color: var(--theme-text);
+  background: var(--theme-body-bg);
 }
 
 :root[data-theme] body nav {
@@ -236,7 +358,8 @@ html:root[data-theme] {
 :root[data-theme] .account-item,
 :root[data-theme] .diagnostic-panel,
 :root[data-theme] .diagnostic-summary,
-:root[data-theme] .log-filters {
+:root[data-theme] .log-filters,
+:root[data-theme] .status-card {
   border-color: var(--theme-border);
   border-radius: var(--theme-card-radius);
   background: var(--theme-card-bg);
@@ -249,12 +372,8 @@ html:root[data-theme] {
 
 :root[data-theme] .settings-about-card {
   background:
-    radial-gradient(circle at 92% 10%, rgba(var(--accent-rgb), 0.15), transparent 34%),
+    radial-gradient(circle at 92% 10%, rgba(var(--accent-rgb), 0.13), transparent 34%),
     var(--theme-card-bg);
-}
-
-:root[data-theme] .status-card {
-  background: var(--theme-card-bg);
 }
 
 :root[data-theme] .billing-payment-panel,
@@ -264,13 +383,15 @@ html:root[data-theme] {
 :root[data-theme] .billing-empty,
 :root[data-theme] .billing-action-group:not(.billing-package-action),
 :root[data-theme] .billing-package-option,
+:root[data-theme] .billing-payment-method,
 :root[data-theme] .billing-recharge-preview > div,
 :root[data-theme] .diagnostic-metrics > div,
 :root[data-theme] .account-health-row,
 :root[data-theme] .diagnostic-step,
 :root[data-theme] .network-profile-row,
 :root[data-theme] .permission-health-row,
-:root[data-theme] .settings-about-meta > div {
+:root[data-theme] .settings-about-meta > div,
+:root[data-theme] .alipay-payment-order-card {
   border-color: var(--theme-border);
   border-radius: var(--theme-panel-radius);
   background: var(--theme-subtle-bg);
@@ -283,10 +404,15 @@ html:root[data-theme] {
   border-radius: var(--theme-control-radius);
 }
 
+:root[data-theme] .custom-select-trigger {
+  outline: none;
+}
+
 :root[data-theme] input[type="text"],
 :root[data-theme] input[type="password"],
 :root[data-theme] input[type="number"],
 :root[data-theme] input[type="date"],
+:root[data-theme] input[type="search"],
 :root[data-theme] textarea,
 :root[data-theme] .billing-action-controls input,
 :root[data-theme] .billing-security-form input,
@@ -294,11 +420,18 @@ html:root[data-theme] {
 :root[data-theme] .log-filters input,
 :root[data-theme] .profile-form-grid input,
 :root[data-theme] .network-profile-modal-content > form > .form-group input,
-:root[data-theme] .custom-select-trigger {
+:root[data-theme] .custom-select-trigger,
+:root[data-theme] .custom-select.form-select .custom-select-trigger {
   border-color: var(--theme-border);
   color: var(--theme-text);
   background: var(--theme-input-bg);
   box-shadow: var(--theme-control-shadow);
+}
+
+:root[data-theme] input::placeholder,
+:root[data-theme] textarea::placeholder {
+  color: var(--theme-text-muted);
+  opacity: 0.82;
 }
 
 :root[data-theme] input:focus,
@@ -307,14 +440,24 @@ html:root[data-theme] {
 :root[data-theme] .billing-security-form input:focus,
 :root[data-theme] .billing-recharge-form input:focus,
 :root[data-theme] .custom-select.open .custom-select-trigger {
-  border-color: rgba(var(--accent-rgb), 0.7);
+  border-color: rgba(var(--accent-rgb), 0.72);
   box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.16);
+}
+
+:root[data-theme] .btn:focus-visible,
+:root[data-theme] .btn-icon:focus-visible,
+:root[data-theme] .nav-item:focus-visible,
+:root[data-theme] .nav-tree-link:focus-visible,
+:root[data-theme] .custom-select-trigger:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), 0.82);
+  outline-offset: 2px;
 }
 
 :root[data-theme] .custom-select-options,
 :root[data-theme] .modal-content {
   border: 1px solid var(--theme-border-strong);
   border-radius: var(--theme-modal-radius);
+  color: var(--theme-text);
   background: var(--theme-raised-bg);
   box-shadow: var(--theme-raised-shadow);
   -webkit-backdrop-filter:
@@ -324,7 +467,7 @@ html:root[data-theme] {
 }
 
 :root[data-theme] .modal-overlay {
-  background: rgba(2, 5, 12, 0.58);
+  background: var(--theme-overlay-bg);
   -webkit-backdrop-filter: blur(5px);
   backdrop-filter: blur(5px);
 }
@@ -342,14 +485,30 @@ html:root[data-theme] {
 
 :root[data-theme] .nav-tree-link:hover,
 :root[data-theme] .nav-item:hover,
-:root[data-theme] .custom-option:hover {
-  background: rgba(var(--accent-rgb), 0.08);
+:root[data-theme] .billing-section-nav-button:hover:not(:disabled),
+:root[data-theme] .custom-option:hover,
+:root[data-theme] .custom-select-trigger:hover,
+:root[data-theme] .btn-icon:hover {
+  color: var(--theme-text);
+  border-color: var(--theme-border-strong);
+  background: var(--theme-hover-bg);
+}
+
+:root[data-theme] .btn-secondary {
+  color: var(--theme-text);
+  border: 1px solid var(--theme-border);
+  background: var(--theme-button-bg);
+}
+
+:root[data-theme] .btn-secondary:hover:not(:disabled) {
+  color: var(--theme-text);
+  background: var(--theme-hover-bg);
 }
 
 :root[data-theme] .btn-primary {
   color: var(--accent-contrast);
   background: var(--accent-color);
-  box-shadow: 0 8px 24px rgba(var(--accent-rgb), 0.28);
+  box-shadow: 0 8px 24px rgba(var(--accent-rgb), 0.26);
 }
 
 :root[data-theme] .btn-primary:hover:not(:disabled) {
@@ -362,14 +521,14 @@ html:root[data-theme] {
 }
 
 :root[data-theme] .logo {
-  box-shadow: 0 0 18px rgba(var(--accent-rgb), 0.4);
+  box-shadow: 0 0 18px rgba(var(--accent-rgb), 0.35);
 }
 
 :root[data-theme] .billing-flow-step-number {
   color: var(--accent-contrast);
   background:
     linear-gradient(135deg, var(--accent-hover), var(--accent-color));
-  box-shadow: 0 7px 18px rgba(var(--accent-rgb), 0.25);
+  box-shadow: 0 7px 18px rgba(var(--accent-rgb), 0.24);
 }
 
 :root[data-theme] .billing-flow-connector,
@@ -391,79 +550,240 @@ html:root[data-theme] {
     linear-gradient(90deg, var(--accent-hover), var(--accent-color));
 }
 
-:root[data-theme="apple26"] .glass-card {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.055), transparent 42%),
-    var(--theme-card-bg);
+:root[data-theme] .markdown-body,
+:root[data-theme] .markdown-body code,
+:root[data-theme] .markdown-body pre {
+  background: var(--theme-code-bg);
 }
 
-:root[data-theme="apple26"] .custom-select-options,
-:root[data-theme="apple26"] .modal-content {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.055), transparent 42%),
-    var(--theme-raised-bg);
+:root[data-theme] .update-progress-track,
+:root[data-theme] .slider {
+  background: var(--theme-border);
 }
 
-:root[data-theme="apple27"] .glass-card {
+:root[data-theme] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:root[data-theme] ::-webkit-scrollbar-thumb {
+  background: var(--theme-scrollbar);
+}
+
+:root[data-theme] ::-webkit-scrollbar-thumb:hover {
+  background: var(--theme-scrollbar-hover);
+}
+
+:root[data-color-scheme="light"] .billing-record-date-filter input {
+  color-scheme: light;
+}
+
+:root[data-color-scheme="dark"] .billing-record-date-filter input {
+  color-scheme: dark;
+}
+
+:root[data-color-scheme="light"] .appearance-accent-select .custom-option::before {
+  border-color: rgba(0, 0, 0, 0.16);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.58);
+}
+
+:root[data-color-scheme="light"] .toggle-password::after,
+:root[data-color-scheme="light"] .action-toggle-password::after {
+  box-shadow: 0 0 0 2px var(--theme-card-solid);
+}
+
+/* Apple: content remains calm while the functional layer floats above it. */
+:root[data-theme="apple27"] body nav,
+:root[data-theme="apple27"] .titlebar,
+:root[data-theme="apple27"] .billing-mobile-nav {
+  border: 1px solid var(--theme-border-strong);
   background:
-    linear-gradient(138deg, rgba(255, 255, 255, 0.085), transparent 34%),
-    radial-gradient(circle at 100% 0%, rgba(var(--accent-rgb), 0.1), transparent 36%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.12), transparent 38%),
+    radial-gradient(circle at 14% 0%, rgba(var(--accent-rgb), 0.12), transparent 34%),
+    var(--theme-nav-bg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.08),
+    0 18px 52px rgba(0, 0, 0, 0.18);
+  -webkit-backdrop-filter:
+    blur(var(--theme-blur)) saturate(var(--theme-saturation));
+  backdrop-filter:
+    blur(var(--theme-blur)) saturate(var(--theme-saturation));
+}
+
+:root[data-theme="apple27"] .glass-card,
+:root[data-theme="apple27"] .account-item,
+:root[data-theme="apple27"] .diagnostic-panel,
+:root[data-theme="apple27"] .diagnostic-summary,
+:root[data-theme="apple27"] .log-filters {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.035), transparent 36%),
     var(--theme-card-bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 :root[data-theme="apple27"] .custom-select-options,
 :root[data-theme="apple27"] .modal-content {
   background:
-    linear-gradient(138deg, rgba(255, 255, 255, 0.085), transparent 34%),
-    radial-gradient(circle at 100% 0%, rgba(var(--accent-rgb), 0.1), transparent 36%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.15), transparent 34%),
+    radial-gradient(circle at 100% 0%, rgba(var(--accent-rgb), 0.1), transparent 35%),
     var(--theme-raised-bg);
 }
 
-:root[data-theme="apple26"] .btn-secondary,
-:root[data-theme="apple27"] .btn-secondary {
-  border: 1px solid var(--theme-border);
-  background: rgba(255, 255, 255, 0.085);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+:root[data-theme="apple27"] .btn {
+  min-height: 2.45rem;
+  border-radius: 999px;
+  letter-spacing: -0.01em;
 }
 
-:root[data-theme="apple27"] .billing-mobile-nav {
+:root[data-theme="apple27"] .btn-icon,
+:root[data-theme="apple27"] .billing-back-button,
+:root[data-theme="apple27"] .titlebar-button {
+  border-radius: 999px;
+}
+
+:root[data-theme="apple27"] .btn-secondary {
+  border-color: var(--theme-border-strong);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.13), transparent 54%),
+    var(--theme-button-bg);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.09),
-    0 18px 48px rgba(0, 0, 0, 0.32);
+    inset 0 1px 0 rgba(255, 255, 255, 0.17),
+    var(--theme-control-shadow);
+}
+
+:root[data-theme="apple27"] .nav-item,
+:root[data-theme="apple27"] .nav-tree-link,
+:root[data-theme="apple27"] .billing-section-nav-button,
+:root[data-theme="apple27"] .custom-option {
+  border-radius: 999px;
+}
+
+:root[data-theme="apple27"] .nav-item.active,
+:root[data-theme="apple27"] .nav-tree-link.active,
+:root[data-theme="apple27"] .billing-section-nav-button.active {
+  color: var(--theme-text);
+  border-color: rgba(var(--accent-rgb), 0.32);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.13), transparent 52%),
+    rgba(var(--accent-rgb), 0.2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.13),
+    0 7px 20px rgba(var(--accent-rgb), 0.16);
+}
+
+:root[data-theme="apple27"] .custom-select-trigger,
+:root[data-theme="apple27"] input,
+:root[data-theme="apple27"] textarea {
+  border-color: var(--theme-border-strong);
+}
+
+@media (hover: hover) {
+  :root[data-theme="apple27"] .btn:hover:not(:disabled),
+  :root[data-theme="apple27"] .nav-item:hover,
+  :root[data-theme="apple27"] .nav-tree-link:hover {
+    transform: translateY(-1px) scale(1.012);
+  }
+}
+
+/* WinUI: one Mica base, opaque content, Acrylic only for transient surfaces. */
+:root[data-theme="winui"] body nav,
+:root[data-theme="winui"] .titlebar {
+  border-color: var(--theme-border);
+  background: var(--theme-nav-bg);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-theme="winui"] .glass-card,
+:root[data-theme="winui"] .account-item,
+:root[data-theme="winui"] .diagnostic-panel,
+:root[data-theme="winui"] .diagnostic-summary,
+:root[data-theme="winui"] .log-filters {
+  outline: 1px solid rgba(0, 0, 0, 0.08);
+  outline-offset: -1px;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-theme="winui"][data-color-scheme="dark"] .glass-card,
+:root[data-theme="winui"][data-color-scheme="dark"] .account-item {
+  outline-color: rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme="winui"] .custom-select-options,
+:root[data-theme="winui"] .modal-content,
+:root[data-theme="winui"] .billing-mobile-nav {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.04), transparent 50%),
+    var(--theme-raised-bg);
+  -webkit-backdrop-filter:
+    blur(var(--theme-menu-blur)) saturate(var(--theme-saturation));
+  backdrop-filter:
+    blur(var(--theme-menu-blur)) saturate(var(--theme-saturation));
 }
 
 :root[data-theme="winui"] .btn {
   border: 1px solid var(--theme-border);
+  border-bottom-color: var(--theme-border-strong);
   box-shadow: var(--theme-control-shadow);
 }
 
 :root[data-theme="winui"] .btn-primary {
-  border-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  border-bottom-color: rgba(0, 0, 0, 0.32);
+}
+
+:root[data-theme="winui"] .nav-item,
+:root[data-theme="winui"] .nav-tree-link {
+  position: relative;
 }
 
 :root[data-theme="winui"] .nav-item.active,
 :root[data-theme="winui"] .nav-tree-link.active {
-  box-shadow: inset 3px 0 0 var(--accent-color);
+  color: var(--theme-text);
+  border-color: transparent;
+  background: var(--theme-hover-bg);
+  box-shadow: none;
 }
 
-:root[data-theme="winui"] .glass-card,
-:root[data-theme="winui"] .modal-content {
-  outline: 1px solid rgba(0, 0, 0, 0.22);
-  outline-offset: -1px;
+:root[data-theme="winui"] .nav-item.active::before,
+:root[data-theme="winui"] .nav-tree-link.active::before {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 3px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--accent-color);
+  transform: translateY(-50%);
+  content: "";
+}
+
+:root[data-theme="winui"] .custom-select-trigger,
+:root[data-theme="winui"] input,
+:root[data-theme="winui"] textarea {
+  border-bottom-color: var(--theme-border-strong);
+}
+
+:root[data-theme="winui"] .billing-flow-step-number {
+  border-radius: 50%;
+  box-shadow: none;
 }
 
 /*
- * Android's WebView remains visually aligned with the selected theme, but it
- * uses opaque surfaces and no full-surface live blur. Small static gradients
- * and borders are retained because they do not require continuous backdrop
- * recomposition while scrolling.
+ * Android keeps the same geometry and palette but avoids long-lived live blur.
+ * Transient menus retain a small blur so the visual hierarchy stays intact.
  */
 :root[data-theme] body.is-android {
   --card-bg: var(--theme-card-solid);
 }
 
 :root[data-theme] body.is-android nav,
+:root[data-theme] body.is-android #nav,
 :root[data-theme] body.is-android .titlebar,
+:root[data-theme] body.is-android .billing-mobile-nav,
 :root[data-theme] body.is-android .glass-card,
 :root[data-theme] body.is-android .account-item,
 :root[data-theme] body.is-android .diagnostic-panel,
@@ -475,6 +795,8 @@ html:root[data-theme] {
 }
 
 :root[data-theme] body.is-android nav,
+:root[data-theme] body.is-android #nav,
+:root[data-theme] body.is-android .billing-mobile-nav,
 :root[data-theme] body.is-android .glass-card,
 :root[data-theme] body.is-android .account-item,
 :root[data-theme] body.is-android .diagnostic-panel,
@@ -485,31 +807,39 @@ html:root[data-theme] {
       135deg,
       rgba(255, 255, 255, 0.045),
       rgba(var(--accent-rgb), 0.018) 55%,
-      rgba(15, 23, 42, 0.04)
+      transparent
     ),
     var(--theme-card-solid);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.14);
 }
 
 :root[data-theme] body.is-android .custom-select-options,
 :root[data-theme] body.is-android .modal-content {
   background: var(--theme-raised-bg);
+  -webkit-backdrop-filter: blur(4px) !important;
+  backdrop-filter: blur(4px) !important;
 }
 
 @media (prefers-reduced-transparency: reduce) {
   :root[data-theme] body nav,
   :root[data-theme] .titlebar,
+  :root[data-theme] .billing-mobile-nav,
   :root[data-theme] .glass-card,
   :root[data-theme] .account-item,
   :root[data-theme] .custom-select-options,
   :root[data-theme] .modal-overlay,
   :root[data-theme] .modal-content {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
   }
 
   :root[data-theme] .glass-card,
   :root[data-theme] .account-item {
     background: var(--theme-card-solid);
+  }
+
+  :root[data-theme] .custom-select-options,
+  :root[data-theme] .modal-content {
+    background: var(--theme-raised-bg);
   }
 }

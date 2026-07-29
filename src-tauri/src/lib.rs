@@ -530,8 +530,8 @@ fn write_clipboard(text: String) -> Result<(), String> {
 
 use config_model::{
     default_accent_color, default_android_notification_mode, default_balance_alert_threshold,
-    default_flow_alert_threshold, default_theme, default_vpn_compatibility, Account, AppConfig,
-    NetworkProfile,
+    default_color_mode, default_flow_alert_threshold, default_theme, default_vpn_compatibility,
+    Account, AppConfig, NetworkProfile,
 };
 use network_trust::{
     evaluate_network_trust, is_campus_local_ip, is_known_campus_ssid, normalize_trust_lists,
@@ -2561,10 +2561,9 @@ fn save_config(
     if new_cfg.android_notification_mode != "separate" {
         new_cfg.android_notification_mode = default_android_notification_mode();
     }
-    if !matches!(
-        new_cfg.theme.as_str(),
-        "basic" | "apple26" | "apple27" | "winui"
-    ) {
+    if new_cfg.theme == "apple26" {
+        new_cfg.theme = "apple27".to_string();
+    } else if !matches!(new_cfg.theme.as_str(), "basic" | "apple27" | "winui") {
         new_cfg.theme = default_theme();
     }
     if !matches!(
@@ -2572,6 +2571,9 @@ fn save_config(
         "blue" | "violet" | "cyan" | "green" | "orange" | "rose"
     ) {
         new_cfg.accent_color = default_accent_color();
+    }
+    if !matches!(new_cfg.color_mode.as_str(), "system" | "dark" | "light") {
+        new_cfg.color_mode = default_color_mode();
     }
     normalize_trust_lists(&mut new_cfg.whitelist, &mut new_cfg.blacklist);
     let previous_cfg = {
@@ -6052,6 +6054,7 @@ pub fn run() {
                 log_level: "info".to_string(),
                 theme: default_theme(),
                 accent_color: default_accent_color(),
+                color_mode: default_color_mode(),
                 vpn_compatibility: default_vpn_compatibility(),
                 vpn_maximum_until: None,
                 whitelist: Vec::new(),
@@ -6624,6 +6627,7 @@ mod tests {
             log_level: "info".to_string(),
             theme: default_theme(),
             accent_color: default_accent_color(),
+            color_mode: default_color_mode(),
             vpn_compatibility: default_vpn_compatibility(),
             vpn_maximum_until: None,
             whitelist: vec!["campus|trusted".to_string()],

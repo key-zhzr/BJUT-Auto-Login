@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
     <title>BJUT-Auto-Login</title>
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="stylesheet" href="/src/themes.css" />
@@ -866,7 +867,7 @@
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>界面主题</h4>
-                  <p>Basic 保留当前视觉；Apple OS 与 WinUI 主题会调整材质、圆角和层次。</p>
+                  <p>Basic 保留项目视觉；Apple OS 27 与 WinUI 分别遵循 Liquid Glass 和 Fluent 材质层级。</p>
                 </div>
                 <div class="custom-select" id="setting-theme" aria-label="界面主题">
                   <div class="custom-select-trigger" tabindex="0">
@@ -875,9 +876,25 @@
                   </div>
                   <div class="custom-select-options">
                     <div class="custom-option selected" data-value="basic">Basic</div>
-                    <div class="custom-option" data-value="apple26">Apple OS 26</div>
                     <div class="custom-option" data-value="apple27">Apple OS 27</div>
                     <div class="custom-option" data-value="winui">WinUI</div>
+                  </div>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>明暗模式</h4>
+                  <p>跟随系统会实时响应设备的深色或浅色外观变化。</p>
+                </div>
+                <div class="custom-select" id="setting-color-mode" aria-label="明暗模式">
+                  <div class="custom-select-trigger" tabindex="0">
+                    <span>跟随系统</span>
+                    <i data-lucide="chevron-down"></i>
+                  </div>
+                  <div class="custom-select-options">
+                    <div class="custom-option selected" data-value="system">跟随系统</div>
+                    <div class="custom-option" data-value="dark">深色</div>
+                    <div class="custom-option" data-value="light">浅色</div>
                   </div>
                 </div>
               </div>
