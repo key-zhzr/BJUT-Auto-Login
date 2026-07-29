@@ -1,6 +1,6 @@
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
-  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
+  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
   Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
   QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
   WalletCards, WifiOff, X,
@@ -16,6 +16,9 @@ import {
 } from './account-migration';
 import { decryptExport, encryptExport } from './config-crypto';
 import { CustomSelect } from './custom-select';
+import {
+  applyAppearance, normalizeAccentColor, normalizeAppTheme,
+} from './appearance';
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
 import { requestNetworkTrustApproval } from './network-trust';
 import { formatBytes, isVersionNewer, renderReleaseNotes, selectUpdateAsset } from './update-utils';
@@ -36,7 +39,7 @@ import type {
 
 const icons = {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
-  ChevronLeft, ChevronRight, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
+  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
   Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
   QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
   WalletCards, WifiOff, X,
@@ -45,6 +48,11 @@ const icons = {
 function renderIcons(root: Element | Document | DocumentFragment = document) {
   createIcons({ icons, root });
 }
+
+applyAppearance(
+  normalizeAppTheme(localStorage.getItem('bjut_theme')),
+  normalizeAccentColor(localStorage.getItem('bjut_accent_color')),
+);
 
 if (IS_ANDROID) {
   document.body.classList.add('is-android');
@@ -75,14 +83,31 @@ function showResumeMask() {
   }, 260);
 }
 
+function resetSensitivePasswordInput(input: HTMLInputElement) {
+  input.value = '';
+  input.type = 'password';
+  if (!input.id) return;
+  const button = document.querySelector<HTMLButtonElement>(
+    `.toggle-password[data-target="${CSS.escape(input.id)}"]`,
+  );
+  if (!button) return;
+  button.classList.add('hide-password');
+  button.setAttribute('aria-pressed', 'false');
+  const label = input.placeholder?.includes('当前') ? '当前密码'
+    : input.placeholder?.includes('确认') ? '确认密码'
+      : input.placeholder?.includes('新') ? '新密码'
+        : '密码';
+  button.setAttribute('aria-label', `显示${label}`);
+  button.title = `显示${label}`;
+}
+
 function clearTransientWebviewPasswords() {
   document.querySelectorAll<HTMLElement>('.password-text').forEach(element => {
     if (element.textContent !== '*************') element.textContent = '*************';
   });
   document.querySelectorAll('.action-toggle-password').forEach(button => button.classList.add('hide-password'));
-  document.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input => {
-    input.value = '';
-  });
+  document.querySelectorAll<HTMLInputElement>('[data-sensitive-password]')
+    .forEach(resetSensitivePasswordInput);
 }
 
 async function finishAppLaunch() {
@@ -278,22 +303,34 @@ async function showUpdateDialog(
   release: GitHubRelease,
   target: UpdateTarget,
   asset: GitHubReleaseAsset,
-): Promise<boolean> {
+  options: {
+    reinstall?: boolean;
+    installAvailable?: boolean;
+  } = {},
+): Promise<'install' | 'browser' | null> {
   const modal = document.getElementById('update-modal');
   const notes = document.getElementById('update-release-notes');
   const cancelButton = document.getElementById('btn-update-cancel');
+  const browserButton = document.getElementById('btn-update-browser') as HTMLButtonElement | null;
   const confirmButton = document.getElementById('btn-update-confirm') as HTMLButtonElement | null;
   const actions = document.getElementById('update-modal-actions');
   const progressWrap = document.getElementById('update-progress-wrap');
   const progressBar = document.getElementById('update-progress-bar') as HTMLElement | null;
   const progressText = document.getElementById('update-progress-text');
-  if (!modal || !notes || !cancelButton || !confirmButton || !actions || !progressWrap || !progressBar || !progressText) {
+  if (!modal || !notes || !cancelButton || !browserButton || !confirmButton || !actions || !progressWrap || !progressBar || !progressText) {
     throw new Error('更新窗口初始化失败');
   }
 
-  document.getElementById('update-modal-title')!.textContent = `发现新版本 ${release.tag_name}`;
+  const reinstall = options.reinstall === true;
+  const installAvailable = options.installAvailable !== false;
+  document.getElementById('update-modal-title')!.textContent = reinstall
+    ? `重新安装 ${release.tag_name}`
+    : `发现新版本 ${release.tag_name}`;
+  const signedInstallerHint = installAvailable && target.platform !== 'android'
+    ? ' · 应用内安装将使用签名更新包'
+    : '';
   document.getElementById('update-modal-meta')!.textContent =
-    `当前 v${target.currentVersion} · ${target.platform}/${target.arch} · ${asset.name} · ${formatBytes(asset.size)}`;
+    `当前 v${target.currentVersion} · ${target.platform}/${target.arch} · 浏览器完整包 ${asset.name} · ${formatBytes(asset.size)}${signedInstallerHint}`;
   notes.innerHTML = await renderReleaseNotes(release.body || '');
   notes.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => {
     anchor.addEventListener('click', event => {
@@ -302,8 +339,13 @@ async function showUpdateDialog(
       if (href.startsWith('https://')) openUrl(href).catch(() => {});
     });
   });
-  actions.style.display = 'flex';
+  actions.hidden = false;
+  browserButton.hidden = false;
+  browserButton.disabled = false;
+  browserButton.textContent = '使用浏览器下载';
+  confirmButton.hidden = !installAvailable;
   confirmButton.disabled = false;
+  confirmButton.textContent = reinstall ? '由应用重新安装' : '由应用下载并安装';
   progressWrap.classList.add('hidden');
   progressBar.style.width = '0';
   progressText.textContent = '准备下载…';
@@ -312,20 +354,27 @@ async function showUpdateDialog(
   return new Promise(resolve => {
     const cleanup = () => {
       cancelButton.removeEventListener('click', onCancel);
+      browserButton.removeEventListener('click', onBrowser);
       confirmButton.removeEventListener('click', onConfirm);
     };
     const onCancel = () => {
       cleanup();
       modal.classList.add('hidden');
-      resolve(false);
+      resolve(null);
+    };
+    const onBrowser = () => {
+      cleanup();
+      modal.classList.add('hidden');
+      resolve('browser');
     };
     const onConfirm = () => {
       cleanup();
-      actions.style.display = 'none';
+      actions.hidden = true;
       progressWrap.classList.remove('hidden');
-      resolve(true);
+      resolve('install');
     };
     cancelButton.addEventListener('click', onCancel);
+    browserButton.addEventListener('click', onBrowser);
     confirmButton.addEventListener('click', onConfirm);
   });
 }
@@ -399,6 +448,8 @@ function syncConfigToRust(): Promise<void> {
     check_interval_bg: parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10),
     wifi_change_detect: localStorage.getItem('bjut_wifi_change_detect') !== 'false',
     log_level: localStorage.getItem('bjut_log_level') || 'info',
+    theme: normalizeAppTheme(localStorage.getItem('bjut_theme')),
+    accent_color: normalizeAccentColor(localStorage.getItem('bjut_accent_color')),
     vpn_compatibility: localStorage.getItem('bjut_vpn_compatibility') || 'high',
     vpn_maximum_until: vpnMaximumUntil || null,
     whitelist: [...whitelistCache],
@@ -489,6 +540,11 @@ async function loadConfigFromRust() {
     localStorage.setItem('bjut_check_interval_bg', config.check_interval_bg.toString());
     localStorage.setItem('bjut_wifi_change_detect', config.wifi_change_detect.toString());
     localStorage.setItem('bjut_log_level', config.log_level);
+    const loadedTheme = normalizeAppTheme(config.theme);
+    const loadedAccentColor = normalizeAccentColor(config.accent_color);
+    localStorage.setItem('bjut_theme', loadedTheme);
+    localStorage.setItem('bjut_accent_color', loadedAccentColor);
+    applyAppearance(loadedTheme, loadedAccentColor);
     const loadedVpnMode = config.vpn_compatibility || 'high';
     vpnMaximumUntil = Number(config.vpn_maximum_until || 0);
     localStorage.setItem('bjut_vpn_compatibility', loadedVpnMode);
@@ -530,6 +586,8 @@ async function loadConfigFromRust() {
     settingAutoLogin.checked = autoLoginEnabled;
     settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
     settingCheckInterval.value = checkInterval.toString();
+    settingTheme.value = loadedTheme;
+    settingAccentColor.value = loadedAccentColor;
     settingLogLevel.value = config.log_level;
     settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
     scheduleVpnMaximumRollback();
@@ -636,6 +694,9 @@ async function listenToRustEvents() {
       if (state === NetworkState.Online) {
         updateUserInfo().catch(() => {});
         scheduleCurrentCampusAccountDiscovery();
+      } else {
+        portalUserInfoCache = null;
+        updateTopUpPackageAction();
       }
 
       const moreSsid = document.getElementById('more-ssid');
@@ -939,11 +1000,11 @@ function customPasswordPrompt(text: string, title = '配置密码'): Promise<str
 
     document.getElementById('password-prompt-title')!.textContent = title;
     document.getElementById('password-prompt-text')!.textContent = text;
-    input.value = '';
+    resetSensitivePasswordInput(input);
 
     const cleanup = () => {
       modal.classList.add('hidden');
-      input.value = '';
+      resetSensitivePasswordInput(input);
       form.removeEventListener('submit', onSubmit);
       cancelButton.removeEventListener('click', onCancel);
     };
@@ -1095,6 +1156,7 @@ const billingRechargeForm = document.getElementById('billing-recharge-form') as 
 const billingRechargeAccount = document.getElementById('billing-recharge-account') as HTMLInputElement;
 const billingRechargeCustomTarget = document.getElementById('billing-recharge-custom-target')!;
 const billingRechargeAmount = document.getElementById('billing-recharge-amount') as HTMLInputElement;
+const btnBillingTopUpPackage = document.getElementById('btn-billing-top-up-package') as HTMLButtonElement;
 const btnBillingRecharge = document.getElementById('btn-billing-recharge') as HTMLButtonElement;
 const billingRechargeProgress = document.getElementById('billing-recharge-progress')!;
 const billingRechargeProgressText = document.getElementById('billing-recharge-progress-text')!;
@@ -1204,6 +1266,8 @@ const settingWifiChangeDetect = document.getElementById('setting-wifi-change-det
 const settingAutostart = document.getElementById('setting-autostart') as HTMLInputElement;
 const settingCheckInterval = document.getElementById('setting-check-interval') as HTMLInputElement;
 let settingLogLevel: CustomSelect;
+let settingTheme: CustomSelect;
+let settingAccentColor: CustomSelect;
 let overrideAccountSelect: CustomSelect;
 let overrideMethodSelect: CustomSelect;
 let settingUpdateChannel: CustomSelect;
@@ -1230,6 +1294,7 @@ let alipayCompletionBusy = false;
 let alipayExternalHandoffAt = 0;
 let alipayAutomaticCheckTimer: number | null = null;
 let alipayAutomaticCheckCount = 0;
+let alipayTransferPreparationRetryCount = 0;
 let alipayArrivalReady = false;
 let alipayReturnPromptShown = false;
 let wechatCompletionBusy = false;
@@ -1245,6 +1310,10 @@ let selectedBillingPackageId = '';
 let effectiveNextBillingPackageId = '';
 let effectiveNextBillingPackageName = '';
 let hasDistinctBillingPackageReservation = false;
+let billingAccountFollowsDefault = true;
+let rechargePayerFollowsBilling = true;
+let rechargeTargetFollowsPayer = true;
+let portalUserInfoCache: UserInfo | null = null;
 let activeBillingWorkbenchSection: BillingWorkbenchSection = 'overview';
 let campusAccountDiscoveryPromise: Promise<void> | null = null;
 let lastCampusAccountDiscoveryAt = 0;
@@ -1263,6 +1332,7 @@ const UNIFIED_AUTH_PASSWORD_POLICY: BillingPasswordPolicy = {
 const addModal = document.getElementById('add-modal')!;
 const btnShowAdd = document.getElementById('btn-show-add')!;
 const btnCancelAdd = document.getElementById('btn-cancel-add')!;
+const addAccPassword = document.getElementById('acc-password') as HTMLInputElement;
 
 // Edit Modal
 const editModal = document.getElementById('edit-modal')!;
@@ -1348,12 +1418,15 @@ function restoreRechargeForm(transaction: RecoverableRecharge, method: RechargeM
   if (payerExists) {
     billingRechargeCardAccountSelect.setValue(transaction.payerAccount);
   }
+  rechargePayerFollowsBilling = transaction.payerAccount === selectedBillingAccountUser();
   const targetExists = enabledBillingAccounts().some(account => account.user === transaction.targetAccount);
   billingRechargeTargetAccountSelect.setValue(targetExists ? transaction.targetAccount : '__custom__');
+  rechargeTargetFollowsPayer = transaction.targetAccount === transaction.payerAccount;
   syncRechargeTargetAccountInput();
   billingRechargeAccount.value = transaction.targetAccount;
   billingRechargeAmount.value = transaction.amount;
   activateRechargeMethod(method);
+  updateTopUpPackageAction();
 }
 
 // Initialize
@@ -1361,6 +1434,8 @@ async function init() {
   // Instantiate Custom Selects
   overrideAccountSelect = new CustomSelect('override-account');
   overrideMethodSelect = new CustomSelect('override-method');
+  settingTheme = new CustomSelect('setting-theme');
+  settingAccentColor = new CustomSelect('setting-accent-color');
   settingUpdateChannel = new CustomSelect('setting-update-channel');
   settingLogLevel = new CustomSelect('setting-log-level');
   settingVpnCompatibility = new CustomSelect('setting-vpn-compatibility');
@@ -1394,25 +1469,41 @@ async function init() {
     else renderBillingRecords();
   });
   billingAccountSelect.addEventListener('change', () => {
+    billingAccountFollowsDefault = selectedBillingAccountUser() === defaultBillingAccountUser();
     billingCenterData = null;
     billingRecordQueryStates = {};
+    if (rechargePayerFollowsBilling) {
+      const account = selectedBillingAccountUser();
+      billingRechargeCardAccountSelect.setValue(account);
+      if (rechargeTargetFollowsPayer) {
+        billingRechargeTargetAccountSelect.setValue(account || '__custom__');
+        syncRechargeTargetAccountInput();
+      }
+    }
     resetBillingCenterForSelectedAccount();
     syncStandaloneBillingSecurity();
+    updateTopUpPackageAction();
     void refreshBillingCenterData();
   });
   billingRechargeCardAccountSelect.addEventListener('change', () => {
     const payerAccount = selectedRechargePayerAccount();
+    rechargePayerFollowsBilling = payerAccount === selectedBillingAccountUser();
+    rechargeTargetFollowsPayer = true;
     billingRechargeTargetAccountSelect.setValue(payerAccount || '__custom__');
     syncRechargeTargetAccountInput();
     billingRechargePreview.hidden = true;
     billingRechargeState.textContent = payerAccount
       ? `校园卡与默认网费目标均已切换为 ${payerAccount}；如需为他人充值，可再修改目标账户。`
       : '当前没有可用的校园卡账户。';
+    updateTopUpPackageAction();
   });
   billingRechargeTargetAccountSelect.addEventListener('change', () => {
+    rechargeTargetFollowsPayer = billingRechargeTargetAccountSelect.value === selectedRechargePayerAccount();
     syncRechargeTargetAccountInput();
     billingRechargePreview.hidden = true;
+    updateTopUpPackageAction();
   });
+  billingRechargeAccount.addEventListener('input', updateTopUpPackageAction);
   syncStandaloneBillingSecurity();
 
   renderIcons();
@@ -1439,6 +1530,8 @@ async function init() {
   }
 
   // Initialize selectors values
+  settingTheme.value = normalizeAppTheme(localStorage.getItem('bjut_theme'));
+  settingAccentColor.value = normalizeAccentColor(localStorage.getItem('bjut_accent_color'));
   settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
   settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
   settingUpdateChannel.value = localStorage.getItem('bjut_update_channel') || 'release';
@@ -1976,6 +2069,15 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
   const changed = activeBillingWorkbenchSection !== section;
   activeBillingWorkbenchSection = section as BillingWorkbenchSection;
   billingCenterSubtitle.textContent = billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
+  if (activeBillingWorkbenchSection === 'recharge' && rechargePayerFollowsBilling) {
+    const account = selectedBillingAccountUser();
+    billingRechargeCardAccountSelect.setValue(account);
+    if (rechargeTargetFollowsPayer) {
+      billingRechargeTargetAccountSelect.setValue(account || '__custom__');
+      syncRechargeTargetAccountInput();
+    }
+    updateTopUpPackageAction();
+  }
   billingSectionPanels.forEach(panel => {
     const active = panel.dataset.billingSection === activeBillingWorkbenchSection;
     panel.hidden = !active;
@@ -2246,6 +2348,14 @@ function setupEventListeners() {
     else if (activeRechargeMethod === 'wechat') void prepareAndOpenWechatRecharge();
     else void prepareAndConfirmNetworkRecharge();
   });
+  btnBillingTopUpPackage.addEventListener('click', () => {
+    const suggestion = topUpPackageSuggestion();
+    if (!suggestion || suggestion.alreadyCovered) return;
+    billingRechargeAmount.value = suggestion.amount;
+    billingRechargePreview.hidden = true;
+    billingRechargeState.textContent =
+      `已按${suggestion.packageName}和校园网返回的当前余额，向上取整补足 ${suggestion.amount} 元；提交前仍会再次核对账户。`;
+  });
   billingRechargeMethodButtons.forEach(button => {
     button.addEventListener('click', () => {
       activateRechargeMethod((button.dataset.rechargeMethodTarget || '') as RechargeMethod);
@@ -2497,9 +2607,11 @@ function setupEventListeners() {
   
   // Add modal toggle
   btnShowAdd.addEventListener('click', () => {
+    resetSensitivePasswordInput(addAccPassword);
     addModal.classList.remove('hidden');
   });
   btnCancelAdd.addEventListener('click', () => {
+    resetSensitivePasswordInput(addAccPassword);
     addModal.classList.add('hidden');
     addAccountForm.reset();
   });
@@ -2525,6 +2637,7 @@ function setupEventListeners() {
         await saveAccounts(nextAccounts);
         renderAccounts();
         addAccountForm.reset();
+        resetSensitivePasswordInput(addAccPassword);
         addModal.classList.add('hidden');
         log('账号管理', `已添加账号: ${user}`);
       } catch (error) {
@@ -2754,6 +2867,58 @@ function setupEventListeners() {
     });
   }
 
+  const persistAppearanceSelection = async (
+    theme: ReturnType<typeof normalizeAppTheme>,
+    accent: ReturnType<typeof normalizeAccentColor>,
+    previousTheme: ReturnType<typeof normalizeAppTheme>,
+    previousAccent: ReturnType<typeof normalizeAccentColor>,
+    label: string,
+  ) => {
+    settingTheme.setDisabled(true);
+    settingAccentColor.setDisabled(true);
+    localStorage.setItem('bjut_theme', theme);
+    localStorage.setItem('bjut_accent_color', accent);
+    applyAppearance(theme, accent);
+    try {
+      await syncConfigToRust();
+    } catch (error) {
+      localStorage.setItem('bjut_theme', previousTheme);
+      localStorage.setItem('bjut_accent_color', previousAccent);
+      settingTheme.value = previousTheme;
+      settingAccentColor.value = previousAccent;
+      applyAppearance(previousTheme, previousAccent);
+      console.error(`Failed to persist ${label}:`, error);
+      await customAlert(`${label}保存失败，已恢复原设置：${String(error)}`);
+    } finally {
+      settingTheme.setDisabled(false);
+      settingAccentColor.setDisabled(false);
+    }
+  };
+
+  settingTheme.addEventListener('change', event => {
+    const previousTheme = normalizeAppTheme(localStorage.getItem('bjut_theme'));
+    const previousAccent = normalizeAccentColor(localStorage.getItem('bjut_accent_color'));
+    void persistAppearanceSelection(
+      normalizeAppTheme(event.target.value),
+      previousAccent,
+      previousTheme,
+      previousAccent,
+      '主题',
+    );
+  });
+
+  settingAccentColor.addEventListener('change', event => {
+    const previousTheme = normalizeAppTheme(localStorage.getItem('bjut_theme'));
+    const previousAccent = normalizeAccentColor(localStorage.getItem('bjut_accent_color'));
+    void persistAppearanceSelection(
+      previousTheme,
+      normalizeAccentColor(event.target.value),
+      previousTheme,
+      previousAccent,
+      '强调色',
+    );
+  });
+
   if (settingLogLevel) {
     settingLogLevel.addEventListener('change', (e) => {
       const level = e.target.value;
@@ -2901,13 +3066,18 @@ function setupEventListeners() {
         const signedManifest = latestRelease.assets.find(item => item.name === 'latest.json');
         if (target.platform !== 'android' && !signedManifest) {
           log('系统', `版本 ${latestRelease.tag_name} 缺少 Tauri 签名更新清单`, 'error');
-          await customAlert('该版本没有签名更新清单，应用已拒绝自动安装。请从 Releases 页面手动下载。', '无法验证更新签名');
-          return;
         }
 
         log('系统', `发现新版本: ${latestRelease.tag_name}，匹配安装包 ${asset.name}`, 'success');
-        const confirmed = await showUpdateDialog(latestRelease, target, asset);
-        if (!confirmed) return;
+        const installAvailable = target.platform === 'android'
+          || (target.platform !== 'ios' && Boolean(signedManifest));
+        const choice = await showUpdateDialog(latestRelease, target, asset, { installAvailable });
+        if (!choice) return;
+        if (choice === 'browser') {
+          await openUrl(asset.browser_download_url);
+          log('系统', `已在浏览器打开更新包：${asset.name}`, 'success');
+          return;
+        }
 
         try {
           await invoke('download_and_install_update', {
@@ -2957,16 +3127,31 @@ function setupEventListeners() {
         if (!asset) {
           throw new Error(`当前版本未提供 ${target.platform}/${target.arch}/${target.format} 完整包`);
         }
-        const confirmed = await customConfirm(
-          `将使用系统浏览器重新下载当前版本完整安装包：\n${asset.name}\n${formatBytes(asset.size)}\n\n现有设置和账号不会因此被删除。`,
-          '重新下载完整包',
-          '打开浏览器下载完整包',
-          '取消',
-        );
-        if (!confirmed) return;
-        await openUrl(asset.browser_download_url);
-        log('系统', `已打开当前版本完整包下载：${asset.name}`, 'success');
+        const signedManifest = release.assets.find(item => item.name === 'latest.json');
+        const installAvailable = target.platform === 'android'
+          || (target.platform !== 'ios' && Boolean(signedManifest));
+        const choice = await showUpdateDialog(release, target, asset, {
+          reinstall: true,
+          installAvailable,
+        });
+        if (!choice) return;
+        if (choice === 'browser') {
+          await openUrl(asset.browser_download_url);
+          log('系统', `已在浏览器打开当前版本完整包：${asset.name}`, 'success');
+          return;
+        }
+        await invoke('reinstall_current_version', {
+          url: target.platform === 'android'
+            ? asset.browser_download_url
+            : signedManifest!.browser_download_url,
+          fileName: asset.name,
+        });
+        const progressText = document.getElementById('update-progress-text');
+        if (progressText) progressText.textContent = '系统安装程序已启动，请按系统提示完成重新安装。';
+        log('系统', `当前版本 ${asset.name} 已验证并交由系统重新安装`, 'success');
+        window.setTimeout(() => document.getElementById('update-modal')?.classList.add('hidden'), 2500);
       } catch (error) {
+        document.getElementById('update-modal')?.classList.add('hidden');
         await customAlert(`无法重新下载完整包：${String(error)}`, '重新下载完整包');
         log('系统', `重新下载完整包失败：${String(error)}`, 'error');
       } finally {
@@ -3010,6 +3195,8 @@ function setupEventListeners() {
           autoLogin: localStorage.getItem('bjut_auto_login'),
           checkInterval: localStorage.getItem('bjut_check_interval'),
           checkIntervalBg: localStorage.getItem('bjut_check_interval_bg'),
+          theme: localStorage.getItem('bjut_theme'),
+          accentColor: localStorage.getItem('bjut_accent_color'),
           whitelist: JSON.stringify(whitelistCache),
           blacklist: JSON.stringify(blacklistCache),
           moreOptions: localStorage.getItem('bjut_more_options'),
@@ -3074,6 +3261,8 @@ function setupEventListeners() {
         restoreString('autoLogin', 'bjut_auto_login');
         restoreString('checkInterval', 'bjut_check_interval');
         restoreString('checkIntervalBg', 'bjut_check_interval_bg');
+        restoreString('theme', 'bjut_theme');
+        restoreString('accentColor', 'bjut_accent_color');
         restoreString('moreOptions', 'bjut_more_options');
         restoreString('usageAlerts', 'bjut_usage_alerts');
         restoreString('balanceAlertThreshold', 'bjut_balance_alert_threshold');
@@ -3116,21 +3305,24 @@ function setupEventListeners() {
   // Password visibility toggle
   document.querySelectorAll('.toggle-password').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      const targetId = (e.currentTarget as HTMLElement).getAttribute('data-target');
-      const input = document.getElementById(targetId!) as HTMLInputElement;
-      if (input.type === 'password') {
-        input.type = 'text';
-        btn.classList.remove('hide-password');
-      } else {
-        input.type = 'password';
-        btn.classList.add('hide-password');
-      }
+      const button = e.currentTarget as HTMLButtonElement;
+      const targetId = button.getAttribute('data-target');
+      const input = targetId ? document.getElementById(targetId) as HTMLInputElement | null : null;
+      if (!input) return;
+      const visible = input.type === 'password';
+      input.type = visible ? 'text' : 'password';
+      button.classList.toggle('hide-password', !visible);
+      button.setAttribute('aria-pressed', String(visible));
+      const currentLabel = button.getAttribute('aria-label') || '显示密码';
+      const passwordLabel = currentLabel.replace(/^(显示|隐藏)/, '');
+      button.setAttribute('aria-label', `${visible ? '隐藏' : '显示'}${passwordLabel}`);
+      button.title = `${visible ? '隐藏' : '显示'}${passwordLabel}`;
     });
   });
 
   // Edit Modal events
   btnCancelEdit.addEventListener('click', () => {
-    editAccPassword.value = '';
+    resetSensitivePasswordInput(editAccPassword);
     editModal.classList.add('hidden');
   });
 
@@ -3157,7 +3349,7 @@ function setupEventListeners() {
       if (submitButton) submitButton.disabled = true;
       try {
         await saveAccounts(nextAccounts);
-        editAccPassword.value = '';
+        resetSensitivePasswordInput(editAccPassword);
         renderAccounts();
         editModal.classList.add('hidden');
         log('账号管理', `已修改并保存账号: ${user}`);
@@ -3320,7 +3512,7 @@ function setupEventListeners() {
       const accounts = getAccounts();
       editAccIndex.value = index.toString();
       editAccUsername.value = accounts[index].user;
-      editAccPassword.value = '';
+      resetSensitivePasswordInput(editAccPassword);
       try {
         editAccPassword.value = await invoke<string>('get_account_password', { user: accounts[index].user });
         editModal.classList.remove('hidden');
@@ -3668,6 +3860,16 @@ function syncRechargeTargetAccountInput() {
   billingRechargeAccount.disabled = !custom;
 }
 
+function resetRechargeAccountSelectionToBilling() {
+  rechargePayerFollowsBilling = true;
+  rechargeTargetFollowsPayer = true;
+  const account = selectedBillingAccountUser();
+  billingRechargeCardAccountSelect.setValue(account);
+  billingRechargeTargetAccountSelect.setValue(account || '__custom__');
+  syncRechargeTargetAccountInput();
+  updateTopUpPackageAction();
+}
+
 function updateBillingAccountOptions() {
   if (!billingAccountSelect || !billingRechargeCardAccountSelect || !billingRechargeTargetAccountSelect) return;
   const accounts = enabledBillingAccounts();
@@ -3678,15 +3880,27 @@ function updateBillingAccountOptions() {
   }));
   const fallback = accounts.find(account => account.isDefault)?.user || accounts[0]?.user || '';
 
-  const currentBilling = accounts.some(account => account.user === billingAccountSelect.value)
-    ? billingAccountSelect.value
-    : fallback;
+  const currentBilling = billingAccountFollowsDefault
+    ? fallback
+    : accounts.some(account => account.user === billingAccountSelect.value)
+      ? billingAccountSelect.value
+      : fallback;
+  if (!accounts.some(account => account.user === billingAccountSelect.value)
+    && billingAccountSelect.value) {
+    billingAccountFollowsDefault = true;
+  }
   billingAccountSelect.setOptions(options.length > 0 ? options : [{ value: '', text: '暂无可用账号' }]);
   billingAccountSelect.setValue(currentBilling);
 
-  const currentPayer = accounts.some(account => account.user === billingRechargeCardAccountSelect.value)
-    ? billingRechargeCardAccountSelect.value
-    : currentBilling;
+  const previousPayer = billingRechargeCardAccountSelect.value;
+  const currentPayer = rechargePayerFollowsBilling
+    ? currentBilling
+    : accounts.some(account => account.user === previousPayer)
+      ? previousPayer
+      : currentBilling;
+  if (!accounts.some(account => account.user === previousPayer) && previousPayer) {
+    rechargePayerFollowsBilling = true;
+  }
   billingRechargeCardAccountSelect.setOptions(options.length > 0 ? options : [{ value: '', text: '暂无可用账号' }]);
   billingRechargeCardAccountSelect.setValue(currentPayer);
 
@@ -3696,12 +3910,16 @@ function updateBillingAccountOptions() {
     { value: '__custom__', text: '自定义其他学工号' },
   ];
   billingRechargeTargetAccountSelect.setOptions(targetOptions);
-  billingRechargeTargetAccountSelect.setValue(
-    targetOptions.some(option => option.value === previousTarget)
+  const targetStillValid = targetOptions.some(option => option.value === previousTarget);
+  if (!targetStillValid && previousTarget) rechargeTargetFollowsPayer = true;
+  const nextTarget = rechargeTargetFollowsPayer
+    ? (currentPayer || '__custom__')
+    : targetStillValid
       ? previousTarget
-      : (currentPayer || '__custom__'),
-  );
+      : (currentPayer || '__custom__');
+  billingRechargeTargetAccountSelect.setValue(nextTarget);
   syncRechargeTargetAccountInput();
+  updateTopUpPackageAction();
   syncStandaloneBillingSecurity();
   if (billingCenterData && (billingCenterData.account !== currentBilling || previousBilling !== currentBilling)) {
     billingCenterData = null;
@@ -4463,6 +4681,7 @@ function renderBillingService(data: BillingCenterData) {
     billingPackageOptions.replaceChildren(fragment);
   }
   updateBillingPackageActionButton();
+  updateTopUpPackageAction();
 }
 
 function renderBillingDevices(data: BillingCenterData) {
@@ -4572,6 +4791,7 @@ function resetBillingCenterForSelectedAccount() {
   btnBillingPackage.textContent = '确认预约套餐';
   btnBillingCancelPackage.hidden = true;
   btnBillingCancelPackage.disabled = true;
+  updateTopUpPackageAction();
   billingPackageOptions.replaceChildren(createBillingEmpty('正在读取可预约套餐…'));
   billingDeviceCount.textContent = '0';
   btnBillingBindMac.disabled = true;
@@ -4745,10 +4965,8 @@ function billingOverviewToUserInfo(overview: BillingOverview): UserInfo {
 }
 
 function clearBillingSecretInputs() {
-  billingOldPassword.value = '';
-  billingNewPassword.value = '';
-  billingConfirmPassword.value = '';
-  billingQuestionPassword.value = '';
+  [billingOldPassword, billingNewPassword, billingConfirmPassword, billingQuestionPassword]
+    .forEach(resetSensitivePasswordInput);
   [1, 2, 3].forEach(index => {
     const answer = document.getElementById(`billing-answer-${index}`) as HTMLInputElement;
     answer.value = '';
@@ -4809,6 +5027,8 @@ function setRechargeBusy(busy: boolean, label?: string) {
   billingRechargeTargetAccountSelect.setDisabled(busy);
   billingRechargeAccount.disabled = busy || billingRechargeTargetAccountSelect.value !== '__custom__';
   billingRechargeAmount.disabled = busy;
+  if (busy) btnBillingTopUpPackage.disabled = true;
+  else updateTopUpPackageAction();
   billingRechargeMethodButtons.forEach(button => { button.disabled = busy; });
   btnBillingRecharge.textContent = label || (activeRechargeMethod === 'alipay'
     ? activeAlipayPayment
@@ -4854,6 +5074,91 @@ function parseBillingCents(value: string) {
   return Number.isFinite(amount) ? Math.round(amount * 100) : Number.NaN;
 }
 
+function parseBillingTenThousandths(value: string): number | null {
+  const matched = value.replaceAll(',', '').match(/-?\d+(?:\.\d+)?/);
+  if (!matched) return null;
+  const negative = matched[0].startsWith('-');
+  const unsigned = negative ? matched[0].slice(1) : matched[0];
+  const [wholePart, fractionPart = ''] = unsigned.split('.');
+  const whole = Number.parseInt(wholePart, 10);
+  const fraction = Number.parseInt(fractionPart.padEnd(4, '0').slice(0, 4), 10) || 0;
+  if (!Number.isSafeInteger(whole)) return null;
+  const scaled = whole * 10_000 + fraction;
+  return negative ? -scaled : scaled;
+}
+
+function packageMonthlyFeeTenThousandths(
+  packageName: string | null | undefined,
+  packageDescription: string | null | undefined,
+): number | null {
+  const name = (packageName || '').trim();
+  const description = (packageDescription || '').trim();
+  const nameMatch = name.match(/(\d+(?:\.\d{1,2})?)\s*元(?:套餐|资费)/);
+  const descriptionMatch = description.match(/每月\s*(\d+(?:\.\d{1,2})?)\s*元/);
+  const explicit = nameMatch?.[1] || descriptionMatch?.[1];
+  if (explicit) return parseBillingTenThousandths(explicit);
+  if (/免费/.test(`${name} ${description}`) && /套餐|每月/.test(`${name} ${description}`)) return 0;
+  return null;
+}
+
+function selectedRechargeTargetAccount(): string {
+  return billingRechargeTargetAccountSelect.value === '__custom__'
+    ? billingRechargeAccount.value.trim()
+    : billingRechargeTargetAccountSelect.value;
+}
+
+function topUpPackageSuggestion(): {
+  amount: string;
+  packageName: string;
+  alreadyCovered: boolean;
+} | null {
+  const portalInfo = portalUserInfoCache;
+  if (portalInfo?.source !== 'portal' || !portalInfo.account) return null;
+  const payer = selectedRechargePayerAccount();
+  const target = selectedRechargeTargetAccount();
+  if (payer !== portalInfo.account || target !== portalInfo.account) return null;
+  if (billingCenterData && billingCenterData.account !== portalInfo.account) return null;
+
+  const packageName = effectiveNextBillingPackageName
+    || billingCenterData?.service.currentPackage
+    || portalInfo.package
+    || '';
+  const packageOption = billingCenterData?.service.packageOptions.find(option =>
+    option.id === effectiveNextBillingPackageId
+    || normalizedPackageName(option.name) === normalizedPackageName(packageName));
+  const fee = packageMonthlyFeeTenThousandths(
+    packageName,
+    packageOption?.description || billingCenterData?.service.packageDetail || portalInfo.packageDetail,
+  );
+  const balance = parseBillingTenThousandths(portalInfo.balance);
+  if (fee === null || balance === null) return null;
+  const shortfall = fee - balance;
+  if (shortfall <= 0) return { amount: '0.00', packageName, alreadyCovered: true };
+  const cents = Math.floor((shortfall + 99) / 100);
+  if (cents <= 0 || cents > 50_000) return null;
+  return {
+    amount: (cents / 100).toFixed(2),
+    packageName,
+    alreadyCovered: false,
+  };
+}
+
+function updateTopUpPackageAction() {
+  const suggestion = topUpPackageSuggestion();
+  btnBillingTopUpPackage.hidden = suggestion === null;
+  if (!suggestion) return;
+  const label = btnBillingTopUpPackage.querySelector('span');
+  if (suggestion.alreadyCovered) {
+    btnBillingTopUpPackage.disabled = true;
+    if (label) label.textContent = '下月套餐余额已充足';
+    btnBillingTopUpPackage.title = `${suggestion.packageName}所需余额已充足`;
+  } else {
+    btnBillingTopUpPackage.disabled = false;
+    if (label) label.textContent = `补足下月套餐 · ${suggestion.amount} 元`;
+    btnBillingTopUpPackage.title = `按${suggestion.packageName}与当前余额计算，向上取整到分`;
+  }
+}
+
 function formatBillingCents(cents: number) {
   return `${(cents / 100).toFixed(2)} 元`;
 }
@@ -4887,6 +5192,17 @@ function renderRechargeBalances(snapshot: RechargeBalanceSnapshot) {
   billingRechargeTargetStatus.textContent = snapshot.targetStatus;
   billingRechargeTargetBalance.textContent = formatBillingCurrency(snapshot.targetBalance);
   billingRechargePreview.hidden = false;
+  if (
+    portalUserInfoCache?.source === 'portal'
+    && portalUserInfoCache.account === snapshot.payerAccount
+  ) {
+    portalUserInfoCache = {
+      ...portalUserInfoCache,
+      balance: formatBillingCurrency(snapshot.cardBalance),
+      updatedAt: new Date().toISOString(),
+    };
+    updateTopUpPackageAction();
+  }
 }
 
 async function refreshRechargeBalancesOnce(
@@ -4959,6 +5275,7 @@ async function prepareAndConfirmNetworkRecharge() {
     updateRechargeProgress(84, '充值已提交，正在读取最新余额…');
     const balanceError = await refreshRechargeBalancesOnce(targetAccount, accountUser);
     billingRechargeAmount.value = '';
+    resetRechargeAccountSelectionToBilling();
     billingRechargeState.textContent = balanceError
       ? `${result.message}；余额刷新失败：${balanceError}`
       : `${result.message}；校园卡与目标网费余额已刷新。`;
@@ -5034,6 +5351,7 @@ function clearActiveAlipayPayment() {
   setAlipayArrivalReady(false);
   alipayExternalHandoffAt = 0;
   alipayAutomaticCheckCount = 0;
+  alipayTransferPreparationRetryCount = 0;
   alipayReturnPromptShown = false;
   alipayCompletionBusy = false;
   btnBillingAlipayShowPayment.hidden = true;
@@ -5050,6 +5368,7 @@ function rememberActiveAlipayPayment(payment: ActiveAlipayPayment) {
   setAlipayArrivalReady(false);
   alipayExternalHandoffAt = Date.now();
   alipayAutomaticCheckCount = 0;
+  alipayTransferPreparationRetryCount = 0;
   alipayReturnPromptShown = false;
   btnBillingAlipayShowPayment.hidden = IS_ANDROID;
   scheduleAlipayAutomaticCompletionCheck(3500);
@@ -5066,14 +5385,16 @@ function scheduleAlipayAutomaticCompletionCheck(delay = 650) {
   if (!activeAlipayPayment
     || !alipayExternalHandoffAt
     || alipayCompletionBusy
-    || alipayAutomaticCheckCount >= 180
+    || (!alipayArrivalReady && alipayAutomaticCheckCount >= 180)
+    || (alipayArrivalReady && alipayTransferPreparationRetryCount >= 5)
     || !rechargeServiceIsOpen()) return;
   if (alipayAutomaticCheckTimer !== null) window.clearTimeout(alipayAutomaticCheckTimer);
   alipayAutomaticCheckTimer = window.setTimeout(async () => {
     alipayAutomaticCheckTimer = null;
     if (!activeAlipayPayment || alipayCompletionBusy) return;
     if (await isAppInBackground()) return;
-    alipayAutomaticCheckCount += 1;
+    if (alipayArrivalReady) alipayTransferPreparationRetryCount += 1;
+    else alipayAutomaticCheckCount += 1;
     void completeAlipayNetworkRecharge(true, alipayArrivalReady);
   }, delay);
 }
@@ -5176,6 +5497,7 @@ async function completeAlipayNetworkRecharge(
     return;
   }
   if (await isAppInBackground()) return;
+  if (alipayCompletionBusy) return;
   const payment = activeAlipayPayment;
   if (!payment) {
     if (!automatic) await customAlert('当前没有等待处理的支付宝订单，请重新发起充值。', '支付宝充值');
@@ -5232,6 +5554,7 @@ async function completeAlipayNetworkRecharge(
 
     if (!previouslyApprovedArrival) {
       alipayAutomaticCheckCount = 180;
+      alipayTransferPreparationRetryCount = 0;
       setAlipayArrivalReady(true);
       const message = `检测到校园卡余额增加 ${formatBillingCents(balanceIncrease)}，与当前支付宝订单金额一致，正在自动转入 ${payment.targetAccount} 网费账户…`;
       billingRechargeState.textContent = message;
@@ -5276,6 +5599,7 @@ async function completeAlipayNetworkRecharge(
     }).catch(() => undefined);
     clearActiveAlipayPayment();
     billingRechargeAmount.value = '';
+    resetRechargeAccountSelectionToBilling();
     billingRechargeState.textContent = balanceError
       ? `${result.message}。支付宝 → 校园卡 → 网费账户流程已完成；余额刷新失败：${balanceError}`
       : `${result.message}。支付宝 → 校园卡 → 网费账户流程已完成，最新余额已读取。`;
@@ -5294,19 +5618,37 @@ async function completeAlipayNetworkRecharge(
       }).catch(() => undefined);
       clearActiveAlipayPayment();
     }
-    const message = transferSubmitted
-      ? `网费转入已提交，但结果未能确认：${detail}。为避免重复扣费，App 不会自动重试；请先查询校园卡和网费记录。`
-      : automatic
-        ? `自动到账核对暂未完成：${detail}。App 会在前台继续重试。`
-        : `到账核对或网费转入未完成：${detail}`;
+    const retryingTransferPreparation = !transferSubmitted
+      && alipayArrivalReady
+      && alipayTransferPreparationRetryCount < 5;
+    let message: string;
+    if (transferSubmitted) {
+      message = `网费转入已提交，但结果未能确认：${detail}。为避免重复扣费，App 不会自动重试；请先查询校园卡和网费记录。`;
+    } else if (retryingTransferPreparation) {
+      message = `支付宝已到账，但网费转入准备暂未完成：${detail}。App 会在前台自动重试（${alipayTransferPreparationRetryCount + 1}/5），不会重复创建支付宝订单。`;
+    } else if (alipayArrivalReady) {
+      message = `支付宝已到账，但网费转入准备连续失败：${detail}。已停止自动重试；请点击“从校园卡转入目标网费账户”再次尝试，不要重新创建支付宝订单。`;
+    } else if (automatic) {
+      message = `自动到账核对暂未完成：${detail}。App 会在前台继续重试。`;
+    } else {
+      message = `到账核对或网费转入未完成：${detail}`;
+    }
     billingRechargeState.textContent = message;
     alipayPaymentModalStatus.textContent = message;
     billingRechargeProgress.hidden = true;
     if (!automatic) await customAlert(message, '支付宝充值');
   } finally {
     setAlipayCompletionBusy(false);
-    if (activeAlipayPayment && alipayAutomaticCheckCount < 180) {
-      scheduleAlipayAutomaticCompletionCheck(6000);
+    if (activeAlipayPayment) {
+      if (alipayArrivalReady && alipayTransferPreparationRetryCount < 5) {
+        const retryDelay = Math.min(
+          30_000,
+          6_000 * (2 ** alipayTransferPreparationRetryCount),
+        );
+        scheduleAlipayAutomaticCompletionCheck(retryDelay);
+      } else if (!alipayArrivalReady && alipayAutomaticCheckCount < 180) {
+        scheduleAlipayAutomaticCompletionCheck(6000);
+      }
     }
   }
 }
@@ -5700,6 +6042,7 @@ async function completeWechatNetworkRecharge(automatic = false) {
     }).catch(() => undefined);
     clearActiveWechatPayment();
     billingRechargeAmount.value = '';
+    resetRechargeAccountSelectionToBilling();
     billingRechargeState.textContent = balanceError
       ? `${result.message}。微信 → 校园卡 → 网费账户流程已完成；余额刷新失败：${balanceError}`
       : `${result.message}。微信 → 校园卡 → 网费账户流程已完成，最新余额已读取。`;
@@ -6002,6 +6345,7 @@ async function updateUserInfo(force = false) {
       force,
     });
     if (requestId !== userInfoRequestId) return;
+    portalUserInfoCache = info?.source === 'portal' ? info : null;
     if (info) {
       infoAccount.textContent = info.account || '--';
       infoBalance.textContent = info.balance || '--';
@@ -6013,13 +6357,16 @@ async function updateUserInfo(force = false) {
       infoFlow.textContent = '--';
       infoAccountLabel.textContent = '当前登录账号';
     }
+    updateTopUpPackageAction();
   } catch (error) {
     if (requestId !== userInfoRequestId) return;
+    portalUserInfoCache = null;
     console.error('Failed to refresh portal user information:', error);
     infoAccount.textContent = '--';
     infoBalance.textContent = '--';
     infoFlow.textContent = '--';
     infoAccountLabel.textContent = '当前登录账号';
+    updateTopUpPackageAction();
   } finally {
     userInfoLoading = false;
   }

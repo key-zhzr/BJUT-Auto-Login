@@ -1,0 +1,515 @@
+/*
+ * Appearance themes deliberately keep layout and accent color independent:
+ * themes own materials, typography, radii and elevation; appearance.ts owns
+ * --accent-* / --primary-*.
+ */
+:root {
+  --accent-color: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-rgb: 59, 130, 246;
+  --accent-contrast: #ffffff;
+  --primary-rgb: var(--accent-rgb);
+
+  --theme-font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --theme-bg: #0f172a;
+  --theme-body-bg:
+    radial-gradient(circle at 0% 0%, #1e1b4b 0%, #0f172a 62%);
+  --theme-nav-bg: rgba(15, 23, 42, 0.84);
+  --theme-titlebar-bg: rgba(15, 23, 42, 0.84);
+  --theme-card-bg: rgba(30, 41, 59, 0.72);
+  --theme-card-solid: #1b273b;
+  --theme-raised-bg: rgba(26, 31, 54, 0.98);
+  --theme-subtle-bg: rgba(0, 0, 0, 0.13);
+  --theme-input-bg: rgba(7, 12, 24, 0.34);
+  --theme-border: rgba(255, 255, 255, 0.1);
+  --theme-border-strong: rgba(255, 255, 255, 0.2);
+  --theme-text: #f8fafc;
+  --theme-text-muted: #94a3b8;
+  --theme-heading-gradient: linear-gradient(90deg, #ffffff, #94a3b8);
+  --theme-card-radius: 16px;
+  --theme-panel-radius: 12px;
+  --theme-control-radius: 8px;
+  --theme-modal-radius: 16px;
+  --theme-blur: 12px;
+  --theme-menu-blur: 16px;
+  --theme-saturation: 1;
+  --theme-card-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --theme-raised-shadow: 0 18px 48px rgba(0, 0, 0, 0.44);
+  --theme-control-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+:root[data-theme="basic"] {
+  --theme-font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --theme-bg: #0f172a;
+  --theme-body-bg:
+    radial-gradient(circle at 0% 0%, #1e1b4b 0%, #0f172a 62%);
+  --theme-nav-bg: rgba(15, 23, 42, 0.84);
+  --theme-titlebar-bg: rgba(15, 23, 42, 0.84);
+  --theme-card-bg: rgba(30, 41, 59, 0.72);
+  --theme-card-solid: #1b273b;
+  --theme-raised-bg: rgba(26, 31, 54, 0.98);
+  --theme-subtle-bg: rgba(0, 0, 0, 0.13);
+  --theme-input-bg: rgba(7, 12, 24, 0.34);
+  --theme-border: rgba(255, 255, 255, 0.1);
+  --theme-border-strong: rgba(255, 255, 255, 0.2);
+  --theme-text: #f8fafc;
+  --theme-text-muted: #94a3b8;
+  --theme-heading-gradient: linear-gradient(90deg, #ffffff, #94a3b8);
+  --theme-card-radius: 16px;
+  --theme-panel-radius: 12px;
+  --theme-control-radius: 8px;
+  --theme-modal-radius: 16px;
+  --theme-blur: 12px;
+  --theme-menu-blur: 16px;
+  --theme-saturation: 1;
+  --theme-card-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --theme-raised-shadow: 0 18px 48px rgba(0, 0, 0, 0.44);
+}
+
+:root[data-theme="apple26"] {
+  --theme-font:
+    "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --theme-bg: #0a1020;
+  --theme-body-bg:
+    radial-gradient(circle at 10% -10%, rgba(var(--accent-rgb), 0.3), transparent 38%),
+    radial-gradient(circle at 98% 2%, rgba(122, 92, 255, 0.2), transparent 34%),
+    linear-gradient(148deg, #111a31 0%, #0b1120 56%, #10162a 100%);
+  --theme-nav-bg:
+    linear-gradient(155deg, rgba(31, 42, 68, 0.72), rgba(13, 21, 39, 0.68));
+  --theme-titlebar-bg: rgba(18, 27, 48, 0.68);
+  --theme-card-bg:
+    linear-gradient(145deg, rgba(49, 62, 91, 0.66), rgba(25, 35, 58, 0.54));
+  --theme-card-solid: #202d46;
+  --theme-raised-bg: rgba(31, 42, 67, 0.96);
+  --theme-subtle-bg: rgba(9, 16, 31, 0.25);
+  --theme-input-bg: rgba(9, 16, 31, 0.42);
+  --theme-border: rgba(255, 255, 255, 0.15);
+  --theme-border-strong: rgba(255, 255, 255, 0.27);
+  --theme-text: #f7f9ff;
+  --theme-text-muted: #a8b4cc;
+  --theme-heading-gradient: linear-gradient(105deg, #ffffff 8%, #cdd8ee 78%);
+  --theme-card-radius: 21px;
+  --theme-panel-radius: 16px;
+  --theme-control-radius: 13px;
+  --theme-modal-radius: 22px;
+  --theme-blur: 22px;
+  --theme-menu-blur: 28px;
+  --theme-saturation: 1.18;
+  --theme-card-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 16px 42px rgba(0, 0, 0, 0.24);
+  --theme-raised-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 28px 70px rgba(0, 0, 0, 0.48);
+  --theme-control-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 4px 14px rgba(0, 0, 0, 0.16);
+}
+
+:root[data-theme="apple27"] {
+  --theme-font:
+    "SF Pro Rounded", "SF Pro Display", "SF Pro Text", -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --theme-bg: #070b17;
+  --theme-body-bg:
+    radial-gradient(ellipse at 14% -8%, rgba(var(--accent-rgb), 0.38), transparent 35%),
+    radial-gradient(ellipse at 90% 18%, rgba(146, 112, 255, 0.24), transparent 31%),
+    radial-gradient(ellipse at 55% 110%, rgba(37, 99, 235, 0.16), transparent 44%),
+    linear-gradient(155deg, #11182d 0%, #080d1b 54%, #11162a 100%);
+  --theme-nav-bg:
+    linear-gradient(160deg, rgba(34, 44, 70, 0.61), rgba(11, 17, 32, 0.56));
+  --theme-titlebar-bg: rgba(15, 21, 39, 0.58);
+  --theme-card-bg:
+    linear-gradient(142deg, rgba(60, 73, 104, 0.58), rgba(21, 29, 50, 0.46));
+  --theme-card-solid: #202a43;
+  --theme-raised-bg: rgba(30, 38, 62, 0.965);
+  --theme-subtle-bg: rgba(5, 10, 23, 0.28);
+  --theme-input-bg: rgba(4, 9, 21, 0.46);
+  --theme-border: rgba(255, 255, 255, 0.17);
+  --theme-border-strong: rgba(255, 255, 255, 0.31);
+  --theme-text: #fbfcff;
+  --theme-text-muted: #acb7ce;
+  --theme-heading-gradient: linear-gradient(112deg, #ffffff 5%, #d7ddf0 72%);
+  --theme-card-radius: 25px;
+  --theme-panel-radius: 19px;
+  --theme-control-radius: 15px;
+  --theme-modal-radius: 26px;
+  --theme-blur: 30px;
+  --theme-menu-blur: 34px;
+  --theme-saturation: 1.28;
+  --theme-card-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.095),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.16),
+    0 22px 52px rgba(0, 0, 0, 0.29);
+  --theme-raised-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.11),
+    0 34px 84px rgba(0, 0, 0, 0.54);
+  --theme-control-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.065),
+    0 7px 20px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-theme="winui"] {
+  --theme-font:
+    "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", sans-serif;
+  --theme-bg: #101319;
+  --theme-body-bg:
+    radial-gradient(circle at 3% 0%, rgba(var(--accent-rgb), 0.13), transparent 31%),
+    linear-gradient(145deg, #171b24, #101319 58%, #131720);
+  --theme-nav-bg: rgba(21, 25, 34, 0.94);
+  --theme-titlebar-bg: rgba(20, 24, 32, 0.96);
+  --theme-card-bg: rgba(31, 36, 47, 0.91);
+  --theme-card-solid: #20252f;
+  --theme-raised-bg: rgba(39, 44, 56, 0.985);
+  --theme-subtle-bg: rgba(12, 15, 21, 0.36);
+  --theme-input-bg: rgba(14, 17, 23, 0.74);
+  --theme-border: rgba(255, 255, 255, 0.09);
+  --theme-border-strong: rgba(255, 255, 255, 0.18);
+  --theme-text: #f3f3f3;
+  --theme-text-muted: #aab0ba;
+  --theme-heading-gradient: linear-gradient(90deg, #ffffff, #b9bec8);
+  --theme-card-radius: 10px;
+  --theme-panel-radius: 8px;
+  --theme-control-radius: 5px;
+  --theme-modal-radius: 10px;
+  --theme-blur: 14px;
+  --theme-menu-blur: 22px;
+  --theme-saturation: 1.1;
+  --theme-card-shadow: 0 8px 26px rgba(0, 0, 0, 0.2);
+  --theme-raised-shadow:
+    0 22px 64px rgba(0, 0, 0, 0.52),
+    0 0 0 1px rgba(0, 0, 0, 0.3);
+  --theme-control-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+:root[data-theme] {
+  --primary-color: var(--accent-color);
+  --primary-hover: var(--accent-hover);
+  --bg-color: var(--theme-bg);
+  --card-bg: var(--theme-card-bg);
+  --card-border: var(--theme-border);
+  --text-main: var(--theme-text);
+  --text-muted: var(--theme-text-muted);
+  color-scheme: dark;
+}
+
+html:root[data-theme] {
+  background: var(--theme-bg);
+}
+
+:root[data-theme] body {
+  color: var(--theme-text);
+  background: var(--theme-body-bg);
+  font-family: var(--theme-font);
+}
+
+:root[data-theme] body nav {
+  border-color: var(--theme-border);
+  background: var(--theme-nav-bg);
+  -webkit-backdrop-filter:
+    blur(var(--theme-blur)) saturate(var(--theme-saturation));
+  backdrop-filter:
+    blur(var(--theme-blur)) saturate(var(--theme-saturation));
+}
+
+:root[data-theme] .titlebar {
+  border-color: var(--theme-border);
+  background: var(--theme-titlebar-bg);
+  -webkit-backdrop-filter:
+    blur(var(--theme-blur)) saturate(var(--theme-saturation));
+  backdrop-filter:
+    blur(var(--theme-blur)) saturate(var(--theme-saturation));
+}
+
+:root[data-theme] .page-header h1 {
+  background-image: var(--theme-heading-gradient);
+}
+
+:root[data-theme] .glass-card,
+:root[data-theme] .account-item,
+:root[data-theme] .diagnostic-panel,
+:root[data-theme] .diagnostic-summary,
+:root[data-theme] .log-filters {
+  border-color: var(--theme-border);
+  border-radius: var(--theme-card-radius);
+  background: var(--theme-card-bg);
+  box-shadow: var(--theme-card-shadow);
+  -webkit-backdrop-filter:
+    blur(var(--theme-blur)) saturate(var(--theme-saturation));
+  backdrop-filter:
+    blur(var(--theme-blur)) saturate(var(--theme-saturation));
+}
+
+:root[data-theme] .settings-about-card {
+  background:
+    radial-gradient(circle at 92% 10%, rgba(var(--accent-rgb), 0.15), transparent 34%),
+    var(--theme-card-bg);
+}
+
+:root[data-theme] .status-card {
+  background: var(--theme-card-bg);
+}
+
+:root[data-theme] .billing-payment-panel,
+:root[data-theme] .billing-flow-step,
+:root[data-theme] .billing-detail-item,
+:root[data-theme] .billing-record-card,
+:root[data-theme] .billing-empty,
+:root[data-theme] .billing-action-group:not(.billing-package-action),
+:root[data-theme] .billing-package-option,
+:root[data-theme] .billing-recharge-preview > div,
+:root[data-theme] .diagnostic-metrics > div,
+:root[data-theme] .account-health-row,
+:root[data-theme] .diagnostic-step,
+:root[data-theme] .network-profile-row,
+:root[data-theme] .permission-health-row,
+:root[data-theme] .settings-about-meta > div {
+  border-color: var(--theme-border);
+  border-radius: var(--theme-panel-radius);
+  background: var(--theme-subtle-bg);
+}
+
+:root[data-theme] .btn,
+:root[data-theme] input,
+:root[data-theme] textarea,
+:root[data-theme] .custom-select-trigger {
+  border-radius: var(--theme-control-radius);
+}
+
+:root[data-theme] input[type="text"],
+:root[data-theme] input[type="password"],
+:root[data-theme] input[type="number"],
+:root[data-theme] input[type="date"],
+:root[data-theme] textarea,
+:root[data-theme] .billing-action-controls input,
+:root[data-theme] .billing-security-form input,
+:root[data-theme] .billing-recharge-form input,
+:root[data-theme] .log-filters input,
+:root[data-theme] .profile-form-grid input,
+:root[data-theme] .network-profile-modal-content > form > .form-group input,
+:root[data-theme] .custom-select-trigger {
+  border-color: var(--theme-border);
+  color: var(--theme-text);
+  background: var(--theme-input-bg);
+  box-shadow: var(--theme-control-shadow);
+}
+
+:root[data-theme] input:focus,
+:root[data-theme] textarea:focus,
+:root[data-theme] .billing-action-controls input:focus,
+:root[data-theme] .billing-security-form input:focus,
+:root[data-theme] .billing-recharge-form input:focus,
+:root[data-theme] .custom-select.open .custom-select-trigger {
+  border-color: rgba(var(--accent-rgb), 0.7);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.16);
+}
+
+:root[data-theme] .custom-select-options,
+:root[data-theme] .modal-content {
+  border: 1px solid var(--theme-border-strong);
+  border-radius: var(--theme-modal-radius);
+  background: var(--theme-raised-bg);
+  box-shadow: var(--theme-raised-shadow);
+  -webkit-backdrop-filter:
+    blur(var(--theme-menu-blur)) saturate(var(--theme-saturation));
+  backdrop-filter:
+    blur(var(--theme-menu-blur)) saturate(var(--theme-saturation));
+}
+
+:root[data-theme] .modal-overlay {
+  background: rgba(2, 5, 12, 0.58);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+}
+
+:root[data-theme] .nav-item.active,
+:root[data-theme] .nav-tree-link.active,
+:root[data-theme] .billing-section-nav-button.active,
+:root[data-theme] .billing-payment-method.active,
+:root[data-theme] .billing-package-option.selected,
+:root[data-theme] .custom-option.selected {
+  color: var(--accent-color);
+  border-color: rgba(var(--accent-rgb), 0.46);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+:root[data-theme] .nav-tree-link:hover,
+:root[data-theme] .nav-item:hover,
+:root[data-theme] .custom-option:hover {
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+:root[data-theme] .btn-primary {
+  color: var(--accent-contrast);
+  background: var(--accent-color);
+  box-shadow: 0 8px 24px rgba(var(--accent-rgb), 0.28);
+}
+
+:root[data-theme] .btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+:root[data-theme] .account-avatar,
+:root[data-theme] input:checked + .slider {
+  background-color: var(--accent-color);
+}
+
+:root[data-theme] .logo {
+  box-shadow: 0 0 18px rgba(var(--accent-rgb), 0.4);
+}
+
+:root[data-theme] .billing-flow-step-number {
+  color: var(--accent-contrast);
+  background:
+    linear-gradient(135deg, var(--accent-hover), var(--accent-color));
+  box-shadow: 0 7px 18px rgba(var(--accent-rgb), 0.25);
+}
+
+:root[data-theme] .billing-flow-connector,
+:root[data-theme] .billing-panel-title svg,
+:root[data-theme] .billing-payment-method > svg,
+:root[data-theme] .text-primary,
+:root[data-theme] .settings-about-eyebrow {
+  color: var(--accent-color);
+}
+
+:root[data-theme] .billing-recharge-progress {
+  border-color: rgba(var(--accent-rgb), 0.28);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+:root[data-theme] .billing-recharge-progress-track span,
+:root[data-theme] .billing-refresh-button::before {
+  background:
+    linear-gradient(90deg, var(--accent-hover), var(--accent-color));
+}
+
+:root[data-theme="apple26"] .glass-card {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.055), transparent 42%),
+    var(--theme-card-bg);
+}
+
+:root[data-theme="apple26"] .custom-select-options,
+:root[data-theme="apple26"] .modal-content {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.055), transparent 42%),
+    var(--theme-raised-bg);
+}
+
+:root[data-theme="apple27"] .glass-card {
+  background:
+    linear-gradient(138deg, rgba(255, 255, 255, 0.085), transparent 34%),
+    radial-gradient(circle at 100% 0%, rgba(var(--accent-rgb), 0.1), transparent 36%),
+    var(--theme-card-bg);
+}
+
+:root[data-theme="apple27"] .custom-select-options,
+:root[data-theme="apple27"] .modal-content {
+  background:
+    linear-gradient(138deg, rgba(255, 255, 255, 0.085), transparent 34%),
+    radial-gradient(circle at 100% 0%, rgba(var(--accent-rgb), 0.1), transparent 36%),
+    var(--theme-raised-bg);
+}
+
+:root[data-theme="apple26"] .btn-secondary,
+:root[data-theme="apple27"] .btn-secondary {
+  border: 1px solid var(--theme-border);
+  background: rgba(255, 255, 255, 0.085);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+:root[data-theme="apple27"] .billing-mobile-nav {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 18px 48px rgba(0, 0, 0, 0.32);
+}
+
+:root[data-theme="winui"] .btn {
+  border: 1px solid var(--theme-border);
+  box-shadow: var(--theme-control-shadow);
+}
+
+:root[data-theme="winui"] .btn-primary {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme="winui"] .nav-item.active,
+:root[data-theme="winui"] .nav-tree-link.active {
+  box-shadow: inset 3px 0 0 var(--accent-color);
+}
+
+:root[data-theme="winui"] .glass-card,
+:root[data-theme="winui"] .modal-content {
+  outline: 1px solid rgba(0, 0, 0, 0.22);
+  outline-offset: -1px;
+}
+
+/*
+ * Android's WebView remains visually aligned with the selected theme, but it
+ * uses opaque surfaces and no full-surface live blur. Small static gradients
+ * and borders are retained because they do not require continuous backdrop
+ * recomposition while scrolling.
+ */
+:root[data-theme] body.is-android {
+  --card-bg: var(--theme-card-solid);
+}
+
+:root[data-theme] body.is-android nav,
+:root[data-theme] body.is-android .titlebar,
+:root[data-theme] body.is-android .glass-card,
+:root[data-theme] body.is-android .account-item,
+:root[data-theme] body.is-android .diagnostic-panel,
+:root[data-theme] body.is-android .diagnostic-summary,
+:root[data-theme] body.is-android .log-filters,
+:root[data-theme] body.is-android .modal-content {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+:root[data-theme] body.is-android nav,
+:root[data-theme] body.is-android .glass-card,
+:root[data-theme] body.is-android .account-item,
+:root[data-theme] body.is-android .diagnostic-panel,
+:root[data-theme] body.is-android .diagnostic-summary,
+:root[data-theme] body.is-android .log-filters {
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.045),
+      rgba(var(--accent-rgb), 0.018) 55%,
+      rgba(15, 23, 42, 0.04)
+    ),
+    var(--theme-card-solid);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme] body.is-android .custom-select-options,
+:root[data-theme] body.is-android .modal-content {
+  background: var(--theme-raised-bg);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-theme] body nav,
+  :root[data-theme] .titlebar,
+  :root[data-theme] .glass-card,
+  :root[data-theme] .account-item,
+  :root[data-theme] .custom-select-options,
+  :root[data-theme] .modal-overlay,
+  :root[data-theme] .modal-content {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  :root[data-theme] .glass-card,
+  :root[data-theme] .account-item {
+    background: var(--theme-card-solid);
+  }
+}

@@ -5,6 +5,10 @@ const {
   buildWechatPaymentRelayUrl,
   isTrustedWechatLaunchUrl,
 } = await import('../src/wechat-payment.ts');
+const {
+  normalizeAppTheme,
+  normalizeAccentColor,
+} = await import('../src/appearance.ts');
 
 const cases = [
   ['1.0.0-alpha.1', '1.0.0-alpha.beta', true],
@@ -36,3 +40,10 @@ assert.equal(relay.origin, 'https://red.bjutdown.work');
 assert.equal(relay.search, '');
 assert.equal(decodeURIComponent(relay.hash.slice(1)), paymentUrl);
 console.log('WeChat relay regression cases passed');
+
+assert.equal(normalizeAppTheme('Apple OS 26'), 'apple26');
+assert.equal(normalizeAppTheme('windows'), 'winui');
+assert.equal(normalizeAppTheme('unsupported-theme'), 'basic');
+assert.equal(normalizeAccentColor('orange'), 'orange');
+assert.equal(normalizeAccentColor('unsupported-accent'), 'blue');
+console.log('Appearance normalization regression cases passed');

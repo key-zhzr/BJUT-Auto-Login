@@ -52,6 +52,10 @@ pub(crate) struct AppConfig {
     pub(crate) wifi_change_detect: bool,
     #[serde(default = "default_log_level", alias = "logLevel")]
     pub(crate) log_level: String,
+    #[serde(default = "default_theme")]
+    pub(crate) theme: String,
+    #[serde(default = "default_accent_color", alias = "accentColor")]
+    pub(crate) accent_color: String,
     #[serde(default = "default_vpn_compatibility", alias = "vpnCompatibility")]
     pub(crate) vpn_compatibility: String,
     #[serde(default, alias = "vpnMaximumUntil")]
@@ -111,6 +115,14 @@ pub(crate) fn default_wifi_change_detect() -> bool {
 
 pub(crate) fn default_log_level() -> String {
     "info".to_string()
+}
+
+pub(crate) fn default_theme() -> String {
+    "basic".to_string()
+}
+
+pub(crate) fn default_accent_color() -> String {
+    "blue".to_string()
 }
 
 pub(crate) fn default_vpn_compatibility() -> String {

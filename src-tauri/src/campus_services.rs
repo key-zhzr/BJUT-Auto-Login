@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1919,12 +1919,9 @@ fn solve_its_challenge(current: &Url, html: &str) -> Result<Url, CampusServiceEr
         .map(|offset| subject_start + offset)
         .ok_or_else(|| CampusServiceError::protocol("itsapp 挑战值不完整"))?;
     let subject = &tail[subject_start..subject_end];
-    let address = subject
+    subject
         .parse::<IpAddr>()
         .map_err(|_| CampusServiceError::protocol("itsapp 挑战值不是 IP"))?;
-    if !matches!(address, IpAddr::V4(Ipv4Addr { .. })) {
-        return Err(CampusServiceError::protocol("itsapp 挑战值不是 IPv4"));
-    }
     let mut target = current
         .join(&literal)
         .map_err(|_| CampusServiceError::protocol("itsapp 导航地址无效"))?;
@@ -1977,6 +1974,10 @@ fn solve_its_challenge(current: &Url, html: &str) -> Result<Url, CampusServiceEr
             return Err(CampusServiceError::protocol("itsapp 挑战出现在未知路径"));
         }
     }
+    // itsapp hashes the literal client address embedded in the validated
+    // challenge. Depending on the selected campus/VPN route that address may
+    // legitimately be IPv4 or IPv6; the surrounding host, path and query
+    // allowlists above remain the security boundary.
     let digest = format!("{:x}", md5::compute(subject.as_bytes()));
     target.set_query(None);
     {
@@ -2566,6 +2567,32 @@ mod tests {
     }
 
     #[test]
+    fn solves_a_structurally_valid_ipv6_challenge() {
+        let current = Url::parse(
+            "https://itsapp.bjut.edu.cn/uc/api/oauth/index?redirect=https%3A%2F%2Fydapp.bjut.edu.cn%2FopenV8HomePage&appid=200220816093810809&state=V8YKT&qrcode=1",
+        )
+        .unwrap();
+        let valid_ipv6 = r#"<script>
+          window.location.href = "?redirect=https%3A%2F%2Fydapp.bjut.edu.cn%2FopenV8HomePage&appid=200220816093810809&state=V8YKT&qrcode=1&abcdefghijklmnopdictkey=" + md5("2001:db8::8");
+        </script>"#;
+        let solved = solve_its_challenge(&current, valid_ipv6).unwrap();
+        let pairs = solved.query_pairs().collect::<BTreeMap<_, _>>();
+        let expected_digest = format!("{:x}", md5::compute(b"2001:db8::8"));
+        assert_eq!(
+            pairs
+                .get("abcdefghijklmnopdictkey")
+                .map(|value| value.as_ref()),
+            Some(expected_digest.as_str())
+        );
+
+        let invalid_address = valid_ipv6.replace("2001:db8::8", "not-an-ip");
+        assert!(solve_its_challenge(&current, &invalid_address).is_err());
+
+        let changed_target = valid_ipv6.replace("?redirect=", "/unexpected?redirect=");
+        assert!(solve_its_challenge(&current, &changed_target).is_err());
+    }
+
+    #[test]
     fn solves_itsapp_sso_md5_challenge_from_browser_flow() {
         let oauth = Url::parse(
             "https://itsapp.bjut.edu.cn/uc/api/oauth/index?redirect=https%3A%2F%2Fydapp.bjut.edu.cn%2FopenV8HomePage&appid=200220816093810809&state=V8YKT&qrcode=1",
@@ -2581,21 +2608,23 @@ mod tests {
             "?{}&a17f5f4fdictkey=",
             current.query().expect("test URL has a query")
         );
-        let html = format!(
-            r#"<script src="/a155a53cde0f5585235d18ab56219d67.js"></script>
-              <script>window.location.href="{literal}"+md5("192.0.2.9");</script>"#
-        );
+        for subject in ["192.0.2.9", "2001:db8::9"] {
+            let html = format!(
+                r#"<script src="/a155a53cde0f5585235d18ab56219d67.js"></script>
+                  <script>window.location.href="{literal}"+md5("{subject}");</script>"#
+            );
 
-        let solved = solve_its_challenge(&current, &html).unwrap();
-        let pairs = solved.query_pairs().collect::<BTreeMap<_, _>>();
-        assert_eq!(
-            pairs.get("ticket").map(|value| value.as_ref()),
-            Some("ST-redacted-test-ticket")
-        );
-        assert_eq!(pairs.get("from").map(|value| value.as_ref()), Some("wap"));
-        assert_eq!(
-            pairs.get("a17f5f4fdictkey").map(|value| value.as_ref()),
-            Some(format!("{:x}", md5::compute(b"192.0.2.9")).as_str())
-        );
+            let solved = solve_its_challenge(&current, &html).unwrap();
+            let pairs = solved.query_pairs().collect::<BTreeMap<_, _>>();
+            assert_eq!(
+                pairs.get("ticket").map(|value| value.as_ref()),
+                Some("ST-redacted-test-ticket")
+            );
+            assert_eq!(pairs.get("from").map(|value| value.as_ref()), Some("wap"));
+            assert_eq!(
+                pairs.get("a17f5f4fdictkey").map(|value| value.as_ref()),
+                Some(format!("{:x}", md5::compute(subject.as_bytes())).as_str())
+            );
+        }
     }
 }

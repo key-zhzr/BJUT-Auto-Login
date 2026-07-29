@@ -529,8 +529,9 @@ fn write_clipboard(text: String) -> Result<(), String> {
 }
 
 use config_model::{
-    default_android_notification_mode, default_balance_alert_threshold,
-    default_flow_alert_threshold, default_vpn_compatibility, Account, AppConfig, NetworkProfile,
+    default_accent_color, default_android_notification_mode, default_balance_alert_threshold,
+    default_flow_alert_threshold, default_theme, default_vpn_compatibility, Account, AppConfig,
+    NetworkProfile,
 };
 use network_trust::{
     evaluate_network_trust, is_campus_local_ip, is_known_campus_ssid, normalize_trust_lists,
@@ -1589,6 +1590,19 @@ fn get_update_target(app: tauri::AppHandle) -> UpdateTarget {
     }
 }
 
+fn is_official_github_release_download(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("github.com")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url
+            .path()
+            .starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
+}
+
 #[cfg(target_os = "android")]
 fn launch_update_installer(_app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
     use jni::objects::{JObject, JValue};
@@ -1640,12 +1654,7 @@ async fn download_and_install_update(
     use std::io::Write;
 
     let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
-    if parsed.scheme() != "https"
-        || parsed.host_str() != Some("github.com")
-        || !parsed
-            .path()
-            .starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
-    {
+    if !is_official_github_release_download(&parsed) {
         return Err("拒绝下载非官方 GitHub Release 资产".to_string());
     }
     let safe_name = std::path::Path::new(&file_name)
@@ -1708,12 +1717,7 @@ async fn download_and_install_update(
     use tauri_plugin_updater::UpdaterExt;
 
     let endpoint = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
-    if endpoint.scheme() != "https"
-        || endpoint.host_str() != Some("github.com")
-        || !endpoint
-            .path()
-            .starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
-        || !endpoint.path().ends_with("/latest.json")
+    if !is_official_github_release_download(&endpoint) || !endpoint.path().ends_with("/latest.json")
     {
         return Err("拒绝使用非官方签名更新清单".to_string());
     }
@@ -1757,6 +1761,74 @@ async fn download_and_install_update(
         )
         .await
         .map_err(|error| format!("更新签名验证或安装失败：{error}"))?;
+    app.restart();
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+async fn reinstall_current_version(
+    app: tauri::AppHandle,
+    url: String,
+    file_name: String,
+) -> Result<(), String> {
+    download_and_install_update(app, url, file_name).await
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn reinstall_current_version(
+    app: tauri::AppHandle,
+    url: String,
+    _file_name: String,
+) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let endpoint = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
+    if !is_official_github_release_download(&endpoint) || !endpoint.path().ends_with("/latest.json")
+    {
+        return Err("拒绝使用非官方签名更新清单".to_string());
+    }
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|error| error.to_string())?
+        .version_comparator(|current, remote| remote.version == current)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "签名更新清单不是当前应用版本，已拒绝重新安装".to_string())?;
+    let mut received = 0u64;
+    update
+        .download_and_install(
+            |chunk_length, content_length| {
+                received += chunk_length as u64;
+                let percent = content_length
+                    .map(|total| ((received as f64 / total as f64) * 100.0).min(100.0));
+                let _ = app.emit(
+                    "update-progress",
+                    serde_json::json!({
+                        "status": "downloading",
+                        "received": received,
+                        "total": content_length,
+                        "percent": percent,
+                    }),
+                );
+            },
+            || {
+                let _ = app.emit(
+                    "update-progress",
+                    serde_json::json!({
+                        "status": "installing",
+                        "percent": 100.0,
+                    }),
+                );
+            },
+        )
+        .await
+        .map_err(|error| format!("完整包签名验证或重新安装失败：{error}"))?;
     app.restart();
 }
 
@@ -2488,6 +2560,18 @@ fn save_config(
 ) -> Result<(), String> {
     if new_cfg.android_notification_mode != "separate" {
         new_cfg.android_notification_mode = default_android_notification_mode();
+    }
+    if !matches!(
+        new_cfg.theme.as_str(),
+        "basic" | "apple26" | "apple27" | "winui"
+    ) {
+        new_cfg.theme = default_theme();
+    }
+    if !matches!(
+        new_cfg.accent_color.as_str(),
+        "blue" | "violet" | "cyan" | "green" | "orange" | "rose"
+    ) {
+        new_cfg.accent_color = default_accent_color();
     }
     normalize_trust_lists(&mut new_cfg.whitelist, &mut new_cfg.blacklist);
     let previous_cfg = {
@@ -5966,6 +6050,8 @@ pub fn run() {
                 check_interval_bg: 60,
                 wifi_change_detect: true,
                 log_level: "info".to_string(),
+                theme: default_theme(),
+                accent_color: default_accent_color(),
                 vpn_compatibility: default_vpn_compatibility(),
                 vpn_maximum_until: None,
                 whitelist: Vec::new(),
@@ -6379,6 +6465,7 @@ pub fn run() {
             set_auto_login_pause,
             get_update_target,
             download_and_install_update,
+            reinstall_current_version,
             log_from_js,
             set_background_state,
             get_current_network_state
@@ -6535,6 +6622,8 @@ mod tests {
             check_interval_bg: 60,
             wifi_change_detect: true,
             log_level: "info".to_string(),
+            theme: default_theme(),
+            accent_color: default_accent_color(),
             vpn_compatibility: default_vpn_compatibility(),
             vpn_maximum_until: None,
             whitelist: vec!["campus|trusted".to_string()],
@@ -6989,5 +7078,30 @@ mod tests {
         assert!(campus_recharge_open_at_hour(6));
         assert!(campus_recharge_open_at_hour(22));
         assert!(!campus_recharge_open_at_hour(23));
+    }
+
+    #[test]
+    fn update_download_allowlist_rejects_url_ambiguity() {
+        let valid = reqwest::Url::parse(
+            "https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.5/latest.json",
+        )
+        .unwrap();
+        assert!(is_official_github_release_download(&valid));
+
+        for invalid in [
+            "http://github.com/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.5/latest.json",
+            "https://example.com/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.5/latest.json",
+            "https://user@github.com/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.5/latest.json",
+            "https://github.com:444/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.5/latest.json",
+            "https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.5/latest.json?asset=other",
+            "https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.5/latest.json#other",
+        ] {
+            assert!(
+                !is_official_github_release_download(
+                    &reqwest::Url::parse(invalid).expect("test URL is valid")
+                ),
+                "{invalid} should be rejected"
+            );
+        }
     }
 }

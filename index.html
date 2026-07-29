@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>BJUT-Auto-Login</title>
     <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/themes.css" />
   </head>
   <body>
     <div id="app-loading-mask" class="app-loading-mask is-visible" role="status" aria-live="polite">
@@ -545,6 +546,10 @@
                       <span>金额（元）</span>
                       <input id="billing-recharge-amount" inputmode="decimal" autocomplete="off" maxlength="6" placeholder="0.01–500" required>
                     </label>
+                    <button id="btn-billing-top-up-package" class="btn btn-secondary btn-sm billing-top-up-package" type="button" hidden>
+                      <i data-lucide="circle-dollar-sign"></i>
+                      <span>补足下月套餐</span>
+                    </button>
                     <button id="btn-billing-recharge" class="btn btn-primary btn-sm" type="submit">核对充值信息</button>
                   </section>
                 </div>
@@ -594,16 +599,28 @@
               <h3>修改统一认证密码</h3>
               <p id="billing-password-policy" class="billing-inline-note">密码要求：12–16 位、大写字母、小写字母、数字、特殊字符 !@#$%^&amp;*()</p>
               <div class="billing-security-fields">
-                <input id="billing-old-password" type="password" autocomplete="current-password" maxlength="16" placeholder="当前密码" required>
-                <input id="billing-new-password" type="password" autocomplete="new-password" maxlength="16" placeholder="新密码" required>
-                <input id="billing-confirm-password" type="password" autocomplete="new-password" maxlength="16" placeholder="确认新密码" required>
+                <div class="password-input-wrap">
+                  <input id="billing-old-password" data-sensitive-password type="password" autocomplete="current-password" maxlength="16" placeholder="当前密码" required>
+                  <button type="button" class="btn-icon toggle-password hide-password" data-target="billing-old-password" aria-label="显示当前密码" aria-pressed="false" title="显示当前密码"><i data-lucide="eye"></i></button>
+                </div>
+                <div class="password-input-wrap">
+                  <input id="billing-new-password" data-sensitive-password type="password" autocomplete="new-password" maxlength="16" placeholder="新密码" required>
+                  <button type="button" class="btn-icon toggle-password hide-password" data-target="billing-new-password" aria-label="显示新密码" aria-pressed="false" title="显示新密码"><i data-lucide="eye"></i></button>
+                </div>
+                <div class="password-input-wrap">
+                  <input id="billing-confirm-password" data-sensitive-password type="password" autocomplete="new-password" maxlength="16" placeholder="确认新密码" required>
+                  <button type="button" class="btn-icon toggle-password hide-password" data-target="billing-confirm-password" aria-label="显示确认密码" aria-pressed="false" title="显示确认密码"><i data-lucide="eye"></i></button>
+                </div>
               </div>
               <button id="btn-billing-password" class="btn btn-danger btn-sm" type="submit">修改统一认证密码</button>
             </form>
             <form id="billing-questions-form" class="billing-security-form" autocomplete="off">
               <h3>密码保护</h3>
               <p class="billing-inline-note">三个问题不能重复；密码和答案仅用于本次 HTTPS 请求，不会写入日志。</p>
-              <input id="billing-question-password" type="password" autocomplete="current-password" maxlength="16" placeholder="当前密码" required>
+              <div class="password-input-wrap">
+                <input id="billing-question-password" data-sensitive-password type="password" autocomplete="current-password" maxlength="16" placeholder="当前密码" required>
+                <button type="button" class="btn-icon toggle-password hide-password" data-target="billing-question-password" aria-label="显示当前密码" aria-pressed="false" title="显示当前密码"><i data-lucide="eye"></i></button>
+              </div>
               <div class="billing-question-grid">
                 <div class="billing-question-row" data-question-index="1">
                   <div class="custom-select form-select billing-question-select" id="billing-question-1" aria-label="问题一">
@@ -663,8 +680,8 @@
               <div class="form-group">
                 <label for="acc-password">密码</label>
                 <div class="password-input-wrap">
-                  <input type="password" id="acc-password" required placeholder="请输入密码">
-                  <button type="button" class="btn-icon toggle-password hide-password" data-target="acc-password"><i data-lucide="eye"></i></button>
+                  <input type="password" id="acc-password" data-sensitive-password required placeholder="请输入密码">
+                  <button type="button" class="btn-icon toggle-password hide-password" data-target="acc-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><i data-lucide="eye"></i></button>
                 </div>
               </div>
               <div class="modal-actions">
@@ -688,8 +705,8 @@
               <div class="form-group">
                 <label for="edit-acc-password">密码</label>
                 <div class="password-input-wrap">
-                  <input type="password" id="edit-acc-password" required>
-                  <button type="button" class="btn-icon toggle-password hide-password" data-target="edit-acc-password"><i data-lucide="eye"></i></button>
+                  <input type="password" id="edit-acc-password" data-sensitive-password required>
+                  <button type="button" class="btn-icon toggle-password hide-password" data-target="edit-acc-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><i data-lucide="eye"></i></button>
                 </div>
               </div>
               <div class="modal-actions">
@@ -845,6 +862,48 @@
           
           <div class="settings-container">
             <div class="settings-group glass-card">
+              <h3>外观</h3>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>界面主题</h4>
+                  <p>Basic 保留当前视觉；Apple OS 与 WinUI 主题会调整材质、圆角和层次。</p>
+                </div>
+                <div class="custom-select" id="setting-theme" aria-label="界面主题">
+                  <div class="custom-select-trigger" tabindex="0">
+                    <span>Basic</span>
+                    <i data-lucide="chevron-down"></i>
+                  </div>
+                  <div class="custom-select-options">
+                    <div class="custom-option selected" data-value="basic">Basic</div>
+                    <div class="custom-option" data-value="apple26">Apple OS 26</div>
+                    <div class="custom-option" data-value="apple27">Apple OS 27</div>
+                    <div class="custom-option" data-value="winui">WinUI</div>
+                  </div>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <h4>强调色</h4>
+                  <p>应用于活动栏目、主按钮、进度与焦点状态。</p>
+                </div>
+                <div class="custom-select appearance-accent-select" id="setting-accent-color" aria-label="强调色">
+                  <div class="custom-select-trigger" tabindex="0">
+                    <span>蓝色</span>
+                    <i data-lucide="chevron-down"></i>
+                  </div>
+                  <div class="custom-select-options">
+                    <div class="custom-option selected" data-value="blue">蓝色</div>
+                    <div class="custom-option" data-value="violet">紫罗兰</div>
+                    <div class="custom-option" data-value="cyan">青色</div>
+                    <div class="custom-option" data-value="green">绿色</div>
+                    <div class="custom-option" data-value="orange">橙色</div>
+                    <div class="custom-option" data-value="rose">玫红</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-group glass-card" style="margin-top: 1rem;">
               <h3>自动化设置</h3>
               <div class="setting-item">
                 <div class="setting-info">
@@ -1354,7 +1413,10 @@
         <p id="password-prompt-text" style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.95rem;"></p>
         <form id="password-prompt-form">
           <div class="form-group">
-            <input type="password" id="password-prompt-input" required autocomplete="new-password" placeholder="请输入密码">
+            <div class="password-input-wrap">
+              <input type="password" id="password-prompt-input" data-sensitive-password required autocomplete="new-password" placeholder="请输入密码">
+              <button type="button" class="btn-icon toggle-password hide-password" data-target="password-prompt-input" aria-label="显示密码" aria-pressed="false" title="显示密码"><i data-lucide="eye"></i></button>
+            </div>
           </div>
           <div class="modal-actions">
             <button type="button" class="btn btn-secondary" id="btn-password-prompt-cancel">取消</button>
@@ -1376,6 +1438,7 @@
         </div>
         <div class="modal-actions" id="update-modal-actions">
           <button type="button" class="btn btn-secondary" id="btn-update-cancel">稍后</button>
+          <button type="button" class="btn btn-secondary" id="btn-update-browser">使用浏览器下载</button>
           <button type="button" class="btn btn-primary" id="btn-update-confirm">下载并安装</button>
         </div>
       </div>

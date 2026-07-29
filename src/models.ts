@@ -29,6 +29,8 @@ export interface BackendConfig {
   check_interval_bg: number;
   wifi_change_detect: boolean;
   log_level: string;
+  theme?: string;
+  accent_color?: string;
   vpn_compatibility?: string;
   vpn_maximum_until?: number | null;
   whitelist?: string[];
