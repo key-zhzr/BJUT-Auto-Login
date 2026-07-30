@@ -2823,6 +2823,16 @@ input:checked + .slider:before { transform: translateX(24px); }
   .diagnostics-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .diagnostics-actions .btn { width: 100%; padding-left: 0.55rem; padding-right: 0.55rem; }
   .setting-item { align-items: flex-start; }
+  .setting-item:has(> .custom-select) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .setting-item > .custom-select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    flex-basis: auto;
+  }
   .setting-item > div:last-child:not(.setting-info) { flex-wrap: nowrap !important; }
   .setting-group-heading { flex-direction: column; }
   .setting-group-actions {
@@ -2908,6 +2918,20 @@ input:checked + .slider:before { transform: translateX(24px); }
   .billing-record-pager .btn svg {
     width: 16px;
     height: 16px;
+  }
+}
+
+@media (max-width: 680px) {
+  body.is-desktop .setting-item:has(> .custom-select) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  body.is-desktop .setting-item > .custom-select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    flex-basis: auto;
   }
 }
 

@@ -126,65 +126,65 @@
 :root[data-theme="apple27"][data-color-scheme="dark"] {
   --theme-bg: #000000;
   --theme-body-bg: #000000;
-  --theme-nav-bg: rgba(18, 18, 20, 0.82);
+  --theme-nav-bg: rgba(28, 28, 30, 0.82);
   --theme-titlebar-bg: rgba(0, 0, 0, 0.88);
-  --theme-card-bg: rgba(28, 28, 30, 0.94);
+  --theme-card-bg: #1c1c1e;
   --theme-card-solid: #1c1c1e;
-  --theme-raised-bg: rgba(44, 44, 46, 0.88);
-  --theme-subtle-bg: rgba(255, 255, 255, 0.045);
-  --theme-input-bg: rgba(118, 118, 128, 0.16);
-  --theme-button-bg: rgba(118, 118, 128, 0.18);
-  --theme-hover-bg: rgba(255, 255, 255, 0.075);
+  --theme-raised-bg: rgba(44, 44, 46, 0.96);
+  --theme-subtle-bg: rgba(118, 118, 128, 0.12);
+  --theme-input-bg: #2c2c2e;
+  --theme-button-bg: #2c2c2e;
+  --theme-hover-bg: rgba(118, 118, 128, 0.2);
   --theme-overlay-bg: rgba(0, 0, 0, 0.48);
   --theme-code-bg: rgba(0, 0, 0, 0.22);
   --theme-scrollbar: rgba(255, 255, 255, 0.2);
   --theme-scrollbar-hover: rgba(255, 255, 255, 0.32);
-  --theme-border: rgba(255, 255, 255, 0.1);
-  --theme-border-strong: rgba(255, 255, 255, 0.18);
+  --theme-border: rgba(84, 84, 88, 0.48);
+  --theme-border-strong: rgba(84, 84, 88, 0.72);
   --theme-text: #f5f5f7;
-  --theme-text-muted: #a1a1aa;
-  --theme-heading-gradient: linear-gradient(108deg, #ffffff 4%, #c7c7cc 78%);
+  --theme-text-muted: #98989d;
+  --theme-heading-gradient: linear-gradient(#f5f5f7, #f5f5f7);
   --theme-card-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 8px 24px rgba(0, 0, 0, 0.28);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.045),
+    0 4px 14px rgba(0, 0, 0, 0.24);
   --theme-raised-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    0 22px 60px rgba(0, 0, 0, 0.54);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.11),
+    0 22px 60px rgba(0, 0, 0, 0.58);
   --theme-control-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 5px 18px rgba(0, 0, 0, 0.2);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.08),
+    0 2px 7px rgba(0, 0, 0, 0.2);
 }
 
 :root[data-theme="apple27"][data-color-scheme="light"] {
-  --theme-bg: #f5f5f7;
-  --theme-body-bg: #f5f5f7;
-  --theme-nav-bg: rgba(255, 255, 255, 0.76);
-  --theme-titlebar-bg: rgba(245, 245, 247, 0.86);
-  --theme-card-bg: rgba(255, 255, 255, 0.96);
+  --theme-bg: #f2f2f7;
+  --theme-body-bg: #f2f2f7;
+  --theme-nav-bg: rgba(255, 255, 255, 0.8);
+  --theme-titlebar-bg: rgba(242, 242, 247, 0.88);
+  --theme-card-bg: #ffffff;
   --theme-card-solid: #ffffff;
-  --theme-raised-bg: rgba(255, 255, 255, 0.9);
-  --theme-subtle-bg: rgba(118, 118, 128, 0.075);
-  --theme-input-bg: rgba(118, 118, 128, 0.08);
-  --theme-button-bg: rgba(255, 255, 255, 0.68);
-  --theme-hover-bg: rgba(60, 60, 67, 0.075);
+  --theme-raised-bg: rgba(255, 255, 255, 0.96);
+  --theme-subtle-bg: rgba(118, 118, 128, 0.08);
+  --theme-input-bg: #f2f2f7;
+  --theme-button-bg: rgba(118, 118, 128, 0.12);
+  --theme-hover-bg: rgba(118, 118, 128, 0.12);
   --theme-overlay-bg: rgba(28, 28, 30, 0.28);
   --theme-code-bg: rgba(60, 60, 67, 0.075);
   --theme-scrollbar: rgba(60, 60, 67, 0.2);
   --theme-scrollbar-hover: rgba(60, 60, 67, 0.32);
-  --theme-border: rgba(60, 60, 67, 0.11);
-  --theme-border-strong: rgba(60, 60, 67, 0.2);
+  --theme-border: rgba(60, 60, 67, 0.14);
+  --theme-border-strong: rgba(60, 60, 67, 0.24);
   --theme-text: #1d1d1f;
   --theme-text-muted: #6e6e73;
-  --theme-heading-gradient: linear-gradient(108deg, #161617 4%, #6e6e73 78%);
+  --theme-heading-gradient: linear-gradient(#1d1d1f, #1d1d1f);
   --theme-card-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.88),
-    0 8px 24px rgba(58, 58, 66, 0.09);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.92),
+    0 4px 14px rgba(58, 58, 66, 0.07);
   --theme-raised-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.96),
-    0 22px 60px rgba(58, 58, 66, 0.18);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.98),
+    0 22px 60px rgba(58, 58, 66, 0.2);
   --theme-control-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.78),
-    0 4px 14px rgba(58, 58, 66, 0.1);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.78),
+    0 1px 4px rgba(58, 58, 66, 0.11);
 }
 
 /*
@@ -207,29 +207,31 @@
 :root[data-theme="winui"][data-color-scheme="dark"] {
   --theme-bg: #000000;
   --theme-body-bg: #000000;
-  --theme-nav-bg: rgba(12, 12, 12, 0.96);
+  --theme-nav-bg: #0c0c0c;
   --theme-titlebar-bg: #000000;
   --theme-card-bg: #1c1c1c;
   --theme-card-solid: #1c1c1c;
-  --theme-raised-bg: rgba(37, 37, 37, 0.96);
-  --theme-subtle-bg: rgba(255, 255, 255, 0.035);
+  --theme-raised-bg: rgba(44, 44, 44, 0.97);
+  --theme-subtle-bg: rgba(255, 255, 255, 0.045);
   --theme-input-bg: #1f1f1f;
-  --theme-button-bg: rgba(255, 255, 255, 0.075);
-  --theme-hover-bg: rgba(255, 255, 255, 0.065);
+  --theme-button-bg: #2d2d2d;
+  --theme-hover-bg: rgba(255, 255, 255, 0.08);
   --theme-overlay-bg: rgba(0, 0, 0, 0.52);
   --theme-code-bg: rgba(0, 0, 0, 0.2);
   --theme-scrollbar: rgba(255, 255, 255, 0.18);
   --theme-scrollbar-hover: rgba(255, 255, 255, 0.3);
-  --theme-border: rgba(255, 255, 255, 0.09);
-  --theme-border-strong: rgba(255, 255, 255, 0.17);
+  --theme-border: rgba(255, 255, 255, 0.1);
+  --theme-border-strong: rgba(255, 255, 255, 0.2);
   --theme-text: #ffffff;
-  --theme-text-muted: #c5c5c5;
-  --theme-heading-gradient: linear-gradient(90deg, #ffffff, #c8c8c8);
-  --theme-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --theme-text-muted: #c8c8c8;
+  --theme-heading-gradient: linear-gradient(#ffffff, #ffffff);
+  --theme-card-shadow: none;
   --theme-raised-shadow:
     0 24px 64px rgba(0, 0, 0, 0.48),
     0 0 0 1px rgba(0, 0, 0, 0.28);
-  --theme-control-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --theme-control-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 1px 2px rgba(0, 0, 0, 0.22);
 }
 
 :root[data-theme="winui"][data-color-scheme="light"] {
@@ -239,11 +241,11 @@
   --theme-titlebar-bg: rgba(243, 243, 243, 0.96);
   --theme-card-bg: #fbfbfb;
   --theme-card-solid: #fbfbfb;
-  --theme-raised-bg: rgba(252, 252, 252, 0.94);
+  --theme-raised-bg: rgba(252, 252, 252, 0.97);
   --theme-subtle-bg: rgba(0, 0, 0, 0.028);
-  --theme-input-bg: rgba(255, 255, 255, 0.76);
-  --theme-button-bg: rgba(255, 255, 255, 0.78);
-  --theme-hover-bg: rgba(0, 0, 0, 0.045);
+  --theme-input-bg: #ffffff;
+  --theme-button-bg: #fbfbfb;
+  --theme-hover-bg: rgba(0, 0, 0, 0.055);
   --theme-overlay-bg: rgba(0, 0, 0, 0.28);
   --theme-code-bg: rgba(0, 0, 0, 0.055);
   --theme-scrollbar: rgba(0, 0, 0, 0.18);
@@ -252,8 +254,8 @@
   --theme-border-strong: rgba(0, 0, 0, 0.15);
   --theme-text: #1b1b1b;
   --theme-text-muted: #616161;
-  --theme-heading-gradient: linear-gradient(90deg, #1b1b1b, #616161);
-  --theme-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.075);
+  --theme-heading-gradient: linear-gradient(#1b1b1b, #1b1b1b);
+  --theme-card-shadow: none;
   --theme-raised-shadow:
     0 24px 64px rgba(0, 0, 0, 0.18),
     0 0 0 1px rgba(0, 0, 0, 0.07);
@@ -577,13 +579,29 @@ html:root[data-theme] {
   border: 1px solid var(--theme-border-strong);
   background: var(--theme-nav-bg);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.08),
-    0 10px 32px rgba(0, 0, 0, 0.18);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -0.5px 0 rgba(0, 0, 0, 0.1),
+    0 8px 24px rgba(0, 0, 0, 0.16);
   -webkit-backdrop-filter:
     blur(var(--theme-blur)) saturate(var(--theme-saturation));
   backdrop-filter:
     blur(var(--theme-blur)) saturate(var(--theme-saturation));
+}
+
+:root[data-theme="apple27"] .page-header h1 {
+  color: var(--theme-text);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  letter-spacing: -0.035em;
+}
+
+:root[data-theme="apple27"] .page.active {
+  animation: applePageEnter 260ms cubic-bezier(0.22, 0.8, 0.24, 1);
+}
+
+@keyframes applePageEnter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 :root[data-theme="apple27"] .glass-card,
@@ -598,9 +616,7 @@ html:root[data-theme] {
 
 :root[data-theme="apple27"] .custom-select-options,
 :root[data-theme="apple27"] .modal-content {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 42%),
-    var(--theme-raised-bg);
+  background: var(--theme-raised-bg);
 }
 
 :root[data-theme="apple27"] .btn {
@@ -617,12 +633,21 @@ html:root[data-theme] {
 
 :root[data-theme="apple27"] .btn-secondary {
   border-color: var(--theme-border-strong);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.13), transparent 54%),
-    var(--theme-button-bg);
+  background: var(--theme-button-bg);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.17),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.16),
     var(--theme-control-shadow);
+}
+
+:root[data-theme="apple27"] .btn-primary {
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.2),
+    0 3px 10px rgba(var(--accent-rgb), 0.24);
+}
+
+:root[data-theme="apple27"] .billing-flow-step-number {
+  background: var(--accent-color);
+  box-shadow: 0 3px 10px rgba(var(--accent-rgb), 0.2);
 }
 
 :root[data-theme="apple27"] .nav-item,
@@ -637,12 +662,10 @@ html:root[data-theme] {
 :root[data-theme="apple27"] .billing-section-nav-button.active {
   color: var(--theme-text);
   border-color: rgba(var(--accent-rgb), 0.32);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.13), transparent 52%),
-    rgba(var(--accent-rgb), 0.2);
+  background: rgba(var(--accent-rgb), 0.2);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.13),
-    0 7px 20px rgba(var(--accent-rgb), 0.16);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.12),
+    0 3px 10px rgba(var(--accent-rgb), 0.12);
 }
 
 :root[data-theme="apple27"] .custom-select-trigger,
@@ -651,17 +674,67 @@ html:root[data-theme] {
   border-color: var(--theme-border-strong);
 }
 
+:root[data-theme="apple27"] input:focus,
+:root[data-theme="apple27"] textarea:focus,
+:root[data-theme="apple27"] .custom-select.open .custom-select-trigger {
+  border-color: rgba(var(--accent-rgb), 0.7);
+  box-shadow:
+    0 0 0 3px rgba(var(--accent-rgb), 0.16),
+    var(--theme-control-shadow);
+}
+
+:root[data-theme="apple27"] .switch {
+  width: 42px;
+  height: 24px;
+}
+
+:root[data-theme="apple27"] .slider {
+  border: 1px solid var(--theme-border);
+  background: var(--theme-button-bg);
+  transition:
+    border-color 220ms ease,
+    background-color 220ms ease;
+}
+
+:root[data-theme="apple27"] .slider::before {
+  bottom: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.28),
+    0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  transition: transform 240ms cubic-bezier(0.22, 0.8, 0.24, 1);
+}
+
+:root[data-theme="apple27"] input:checked + .slider {
+  border-color: transparent;
+}
+
+:root[data-theme="apple27"] input:checked + .slider::before {
+  transform: translateX(18px);
+}
+
 :root[data-theme="apple27"] body.is-android #nav,
 :root[data-theme="apple27"] body.is-android .billing-mobile-nav {
   border-radius: 14px;
 }
 
 @media (hover: hover) {
-  :root[data-theme="apple27"] .btn:hover:not(:disabled),
-  :root[data-theme="apple27"] .nav-item:hover,
-  :root[data-theme="apple27"] .nav-tree-link:hover {
-    transform: translateY(-1px) scale(1.012);
+  :root[data-theme="apple27"] .btn:hover:not(:disabled) {
+    filter: brightness(1.04);
   }
+}
+
+:root[data-theme="apple27"] .btn:active:not(:disabled),
+:root[data-theme="apple27"] .nav-item:active,
+:root[data-theme="apple27"] .nav-tree-link:active {
+  transform: scale(0.985);
+}
+
+:root[data-theme="apple27"] .modal-overlay {
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
 }
 
 /* WinUI: one Mica base, opaque content, Acrylic only for transient surfaces. */
@@ -674,28 +747,41 @@ html:root[data-theme] {
   backdrop-filter: none;
 }
 
+:root[data-theme="winui"] .page-header h1 {
+  color: var(--theme-text);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  letter-spacing: -0.02em;
+}
+
+:root[data-theme="winui"] .page.active {
+  animation: winuiPageEnter 167ms cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+@keyframes winuiPageEnter {
+  from { opacity: 0; transform: translateX(6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 :root[data-theme="winui"] .glass-card,
 :root[data-theme="winui"] .account-item,
 :root[data-theme="winui"] .diagnostic-panel,
 :root[data-theme="winui"] .diagnostic-summary,
 :root[data-theme="winui"] .log-filters {
-  outline: 1px solid rgba(0, 0, 0, 0.08);
-  outline-offset: -1px;
+  outline: none;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 
 :root[data-theme="winui"][data-color-scheme="dark"] .glass-card,
 :root[data-theme="winui"][data-color-scheme="dark"] .account-item {
-  outline-color: rgba(0, 0, 0, 0.28);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 :root[data-theme="winui"] .custom-select-options,
 :root[data-theme="winui"] .modal-content,
 :root[data-theme="winui"] .billing-mobile-nav {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.04), transparent 50%),
-    var(--theme-raised-bg);
+  background: var(--theme-raised-bg);
   -webkit-backdrop-filter:
     blur(var(--theme-menu-blur)) saturate(var(--theme-saturation));
   backdrop-filter:
@@ -711,15 +797,45 @@ html:root[data-theme] {
 :root[data-theme="winui"] .btn-primary {
   border-color: rgba(255, 255, 255, 0.12);
   border-bottom-color: rgba(0, 0, 0, 0.32);
+  box-shadow: none;
+}
+
+:root[data-theme="winui"] .btn-secondary {
+  background: var(--theme-button-bg);
+}
+
+:root[data-theme="winui"] .btn-secondary:hover:not(:disabled) {
+  background-color: var(--theme-hover-bg);
+}
+
+:root[data-theme="winui"] .btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+:root[data-theme="winui"] .btn:active:not(:disabled) {
+  box-shadow: none;
+  transform: none;
+}
+
+:root[data-theme="winui"] .btn-secondary:active:not(:disabled) {
+  border-color: var(--theme-border);
+  background-color: var(--theme-subtle-bg);
+}
+
+:root[data-theme="winui"] .btn-primary:active:not(:disabled) {
+  background-color: var(--accent-hover);
+  filter: brightness(0.88);
 }
 
 :root[data-theme="winui"] .nav-item,
-:root[data-theme="winui"] .nav-tree-link {
+:root[data-theme="winui"] .nav-tree-link,
+:root[data-theme="winui"] .billing-section-nav-button {
   position: relative;
 }
 
 :root[data-theme="winui"] .nav-item.active,
-:root[data-theme="winui"] .nav-tree-link.active {
+:root[data-theme="winui"] .nav-tree-link.active,
+:root[data-theme="winui"] .billing-section-nav-button.active {
   color: var(--theme-text);
   border-color: transparent;
   background: var(--theme-hover-bg);
@@ -727,7 +843,8 @@ html:root[data-theme] {
 }
 
 :root[data-theme="winui"] .nav-item.active::before,
-:root[data-theme="winui"] .nav-tree-link.active::before {
+:root[data-theme="winui"] .nav-tree-link.active::before,
+:root[data-theme="winui"] .billing-section-nav-button.active::before {
   position: absolute;
   top: 50%;
   left: 3px;
@@ -745,7 +862,48 @@ html:root[data-theme] {
   border-bottom-color: var(--theme-border-strong);
 }
 
+:root[data-theme="winui"] input:focus,
+:root[data-theme="winui"] textarea:focus,
+:root[data-theme="winui"] .custom-select.open .custom-select-trigger {
+  border-color: rgba(var(--accent-rgb), 0.72);
+  box-shadow:
+    inset 0 -2px 0 var(--accent-color),
+    var(--theme-control-shadow);
+}
+
+:root[data-theme="winui"] .switch {
+  width: 40px;
+  height: 20px;
+}
+
+:root[data-theme="winui"] .slider {
+  border: 1px solid var(--theme-border-strong);
+  background: transparent;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+:root[data-theme="winui"] .slider::before {
+  bottom: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  background: var(--theme-text-muted);
+  transition: transform 120ms ease;
+}
+
+:root[data-theme="winui"] input:checked + .slider {
+  border-color: var(--accent-color);
+}
+
+:root[data-theme="winui"] input:checked + .slider::before {
+  background: var(--accent-contrast);
+  transform: translateX(20px);
+}
+
 :root[data-theme="winui"] .billing-flow-step-number {
+  background: var(--accent-color);
   border-radius: 50%;
   box-shadow: none;
 }
@@ -753,6 +911,15 @@ html:root[data-theme] {
 :root[data-theme="winui"] body.is-android #nav,
 :root[data-theme="winui"] body.is-android .billing-mobile-nav {
   border-radius: 8px;
+}
+
+:root[data-theme="winui"] body.is-android #nav .nav-item.active::before,
+:root[data-theme="winui"] body.is-android .billing-mobile-nav .billing-section-nav-button.active::before {
+  top: 2px;
+  left: 50%;
+  width: 16px;
+  height: 3px;
+  transform: translateX(-50%);
 }
 
 /*
@@ -796,6 +963,38 @@ html:root[data-theme] {
   backdrop-filter: blur(4px) !important;
 }
 
+:root[data-theme="apple27"] body.is-android .glass-card,
+:root[data-theme="apple27"] body.is-android .account-item,
+:root[data-theme="apple27"] body.is-android .diagnostic-panel,
+:root[data-theme="apple27"] body.is-android .diagnostic-summary,
+:root[data-theme="apple27"] body.is-android .log-filters {
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.1),
+    0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-theme="apple27"] body.is-android #nav,
+:root[data-theme="apple27"] body.is-android .billing-mobile-nav {
+  border-radius: 14px;
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.14),
+    0 8px 22px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme="winui"] body.is-android .glass-card,
+:root[data-theme="winui"] body.is-android .account-item,
+:root[data-theme="winui"] body.is-android .diagnostic-panel,
+:root[data-theme="winui"] body.is-android .diagnostic-summary,
+:root[data-theme="winui"] body.is-android .log-filters {
+  box-shadow: none;
+}
+
+:root[data-theme="winui"] body.is-android #nav,
+:root[data-theme="winui"] body.is-android .billing-mobile-nav {
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+}
+
 @media (prefers-reduced-transparency: reduce) {
   :root[data-theme] body nav,
   :root[data-theme] .titlebar,
@@ -817,5 +1016,25 @@ html:root[data-theme] {
   :root[data-theme] .custom-select-options,
   :root[data-theme] .modal-content {
     background: var(--theme-raised-bg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="apple27"] .page.active,
+  :root[data-theme="winui"] .page.active {
+    animation: none;
+  }
+
+  :root[data-theme="apple27"] .btn,
+  :root[data-theme="apple27"] .nav-item,
+  :root[data-theme="apple27"] .nav-tree-link,
+  :root[data-theme="apple27"] .slider,
+  :root[data-theme="apple27"] .slider::before,
+  :root[data-theme="winui"] .btn,
+  :root[data-theme="winui"] .nav-item,
+  :root[data-theme="winui"] .nav-tree-link,
+  :root[data-theme="winui"] .slider,
+  :root[data-theme="winui"] .slider::before {
+    transition: none;
   }
 }
