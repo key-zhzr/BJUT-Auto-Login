@@ -23,7 +23,12 @@ import {
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
 import { requestNetworkTrustApproval } from './network-trust';
 import { formatBytes, isVersionNewer, renderReleaseNotes, selectUpdateAsset } from './update-utils';
-import { buildWechatPaymentRelayUrl, isTrustedWechatLaunchUrl } from './wechat-payment';
+import {
+  buildWechatPaymentRelayUrl,
+  createWechatPaymentRelaySession,
+  isTrustedWechatLaunchUrl,
+  type WechatRelaySession,
+} from './wechat-payment';
 import type {
   AccountView, ActiveAlipayPayment, ActiveWechatPayment, AlipayRechargePreview,
   AlipayRechargeResult, AppLogEntry, BackendConfig, BillingActionRequest,
@@ -1304,6 +1309,8 @@ let billingCenterData: BillingCenterData | null = null;
 let activeRechargeMethod: RechargeMethod = 'campus-card';
 let activeAlipayPayment: ActiveAlipayPayment | null = null;
 let activeWechatPayment: ActiveWechatPayment | null = null;
+let activeWechatRelaySession: WechatRelaySession | null = null;
+let activeWechatRelaySessionPromise: Promise<WechatRelaySession> | null = null;
 let alipayPaymentModalReturnFocus: HTMLElement | null = null;
 let wechatPaymentModalReturnFocus: HTMLElement | null = null;
 let alipayCompletionBusy = false;
@@ -5832,9 +5839,26 @@ async function prepareAndOpenAlipayRecharge() {
   }
 }
 
-function activeWechatPaymentRelayUrl() {
+async function activeWechatPaymentRelayUrl(): Promise<{ session: WechatRelaySession, legacy: boolean } | null> {
   const payment = activeWechatPayment;
-  return payment ? buildWechatPaymentRelayUrl(payment.launchUrl) : '';
+  if (!payment) return null;
+  if (activeWechatRelaySession) return { session: activeWechatRelaySession, legacy: false };
+  if (!activeWechatRelaySessionPromise) {
+    activeWechatRelaySessionPromise = createWechatPaymentRelaySession(payment.launchUrl);
+  }
+  try {
+    const session = await activeWechatRelaySessionPromise;
+    if (activeWechatPayment !== payment) return null;
+    activeWechatRelaySession = session;
+    return { session, legacy: false };
+  } catch (error) {
+    const legacyUrl = buildWechatPaymentRelayUrl(payment.launchUrl);
+    if (!legacyUrl) return null;
+    log('计费', `短期微信接力会话不可用，已降级为仅限外部浏览器的 Fragment 接力：${String(error)}`, 'error');
+    return { session: { url: legacyUrl, expiresIn: 300 }, legacy: true };
+  } finally {
+    activeWechatRelaySessionPromise = null;
+  }
 }
 
 function closeWechatPaymentModal() {
@@ -5849,8 +5873,7 @@ function closeWechatPaymentModal() {
 
 async function showWechatPaymentModal(returnFocus?: HTMLElement) {
   const payment = activeWechatPayment;
-  const relayUrl = activeWechatPaymentRelayUrl();
-  if (!payment || !relayUrl) {
+  if (!payment) {
     await customAlert('当前没有可用的微信支付入口，请重新核对充值信息。', '微信充值');
     return;
   }
@@ -5871,8 +5894,10 @@ async function showWechatPaymentModal(returnFocus?: HTMLElement) {
   }
   scheduleWechatAutomaticCompletionCheck();
   try {
+    const relay = await activeWechatPaymentRelayUrl();
+    if (!relay || activeWechatPayment !== payment) throw new Error('支付入口已经变化');
     const QRCode = await import('qrcode');
-    await QRCode.toCanvas(wechatPaymentQr, relayUrl, {
+    await QRCode.toCanvas(wechatPaymentQr, relay.session.url, {
       errorCorrectionLevel: 'L',
       margin: 2,
       width: 360,
@@ -5882,7 +5907,9 @@ async function showWechatPaymentModal(returnFocus?: HTMLElement) {
       },
     });
     if (activeWechatPayment !== payment) return;
-    wechatPaymentModalStatus.textContent = '二维码已在本机生成；手机浏览器将通过 red.bjutdown.work 安全接力页唤起微信，支付参数不会随网页请求上传。';
+    wechatPaymentModalStatus.textContent = relay.legacy
+      ? '短期接力服务暂不可用。当前二维码需直接在微信外部浏览器扫描；若先在微信内打开再选择浏览器，支付参数可能丢失。'
+      : `已生成 ${relay.session.expiresIn} 秒有效的短期接力二维码；从微信切换到外部浏览器时仍可继续支付。`;
   } catch {
     if (activeWechatPayment !== payment) return;
     wechatPaymentQrShell.classList.add('has-error');
@@ -5892,14 +5919,16 @@ async function showWechatPaymentModal(returnFocus?: HTMLElement) {
 }
 
 async function copyActiveWechatPaymentRelay() {
-  const relayUrl = activeWechatPaymentRelayUrl();
-  if (!relayUrl) {
+  const relay = await activeWechatPaymentRelayUrl();
+  if (!relay) {
     wechatPaymentModalStatus.textContent = '当前支付入口已经失效，请重新核对充值信息。';
     return;
   }
   try {
-    await writeTextToClipboard(relayUrl);
-    wechatPaymentModalStatus.textContent = '支付接力链接已复制。请仅发送到自己的手机，并尽快完成支付。';
+    await writeTextToClipboard(relay.session.url);
+    wechatPaymentModalStatus.textContent = relay.legacy
+      ? '兼容接力链接已复制；请直接在微信外部浏览器打开，不要先经过微信内置浏览器。'
+      : `短期支付接力链接已复制，将在约 ${relay.session.expiresIn} 秒后失效。`;
   } catch (error) {
     wechatPaymentModalStatus.textContent = `复制失败：${String(error)}`;
   }
@@ -5911,6 +5940,8 @@ function clearActiveWechatPayment() {
     wechatAutomaticCheckTimer = null;
   }
   activeWechatPayment = null;
+  activeWechatRelaySession = null;
+  activeWechatRelaySessionPromise = null;
   wechatExternalHandoffAt = 0;
   wechatLastAutomaticCheckAt = 0;
   wechatAutomaticCheckCount = 0;
@@ -5931,6 +5962,8 @@ function clearActiveWechatPayment() {
 
 function rememberActiveWechatPayment(payment: ActiveWechatPayment) {
   activeWechatPayment = payment;
+  activeWechatRelaySession = null;
+  activeWechatRelaySessionPromise = null;
   wechatExternalHandoffAt = 0;
   wechatLastAutomaticCheckAt = 0;
   wechatAutomaticCheckCount = 0;
@@ -5988,9 +6021,9 @@ async function openActiveWechatPayment() {
         throw new Error('未检测到可处理该订单的微信客户端');
       }
     } else {
-      const relayUrl = activeWechatPaymentRelayUrl();
-      if (!relayUrl) throw new Error('微信支付接力地址无效');
-      await openUrl(relayUrl);
+      const relay = await activeWechatPaymentRelayUrl();
+      if (!relay) throw new Error('微信支付接力地址无效');
+      await openUrl(relay.session.url);
     }
     billingRechargeState.textContent = IS_ANDROID
       ? '已直接唤起微信支付；支付完成后返回 App，将自动确认订单并转入网费。'

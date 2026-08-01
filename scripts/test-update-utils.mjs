@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 const { isVersionNewer } = await import('../src/update-utils.ts');
 const {
   buildWechatPaymentRelayUrl,
+  createWechatPaymentRelaySession,
   isTrustedWechatLaunchUrl,
 } = await import('../src/wechat-payment.ts');
 const {
@@ -43,6 +44,20 @@ assert.equal(relay.origin, 'https://red.bjutdown.work');
 assert.equal(relay.search, '');
 assert.equal(decodeURIComponent(relay.hash.slice(1)), paymentUrl);
 console.log('WeChat relay regression cases passed');
+
+const relaySession = await createWechatPaymentRelaySession(paymentUrl, async (_url, init) => {
+  const submitted = JSON.parse(String(init.body));
+  assert.equal(submitted.launchUrl, paymentUrl);
+  return new Response(JSON.stringify({
+    token: 'abcdefghijklmnopqrstuvwxyzABCDEFG_1234567890',
+    expiresIn: 300,
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+});
+const relaySessionUrl = new URL(relaySession.url);
+assert.equal(relaySessionUrl.origin, 'https://red.bjutdown.work');
+assert.match(relaySessionUrl.pathname, /^\/p\/[0-9A-Za-z_-]+$/);
+assert.equal(relaySessionUrl.search, '');
+assert.equal(relaySessionUrl.hash, '');
 
 assert.equal(normalizeAppTheme('Apple OS 26'), 'apple27');
 assert.equal(normalizeAppTheme('windows'), 'winui');

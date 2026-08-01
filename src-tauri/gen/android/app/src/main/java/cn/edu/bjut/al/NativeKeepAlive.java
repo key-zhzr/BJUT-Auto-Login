@@ -11,6 +11,7 @@ public final class NativeKeepAlive {
     public static native String runHeadlessCheck(
         String configJson,
         String networkInfoJson,
+        String accountHealthJson,
         String reason
     );
 }

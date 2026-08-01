@@ -6,6 +6,40 @@ mod cookie_jar;
 mod network_trust;
 mod portal_auth;
 mod recharge_state;
+
+pub(crate) fn route_source_ipv4(destination: &str) -> String {
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| {
+            socket.connect(destination)?;
+            socket.local_addr()
+        })
+        .ok()
+        .and_then(|address| address.is_ipv4().then(|| address.ip().to_string()))
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "linux")]
+fn split_nmcli_fields(line: &str) -> Vec<String> {
+    let mut fields = vec![String::new()];
+    let mut escaped = false;
+    for character in line.chars() {
+        if escaped {
+            fields.last_mut().unwrap().push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == ':' {
+            fields.push(String::new());
+        } else {
+            fields.last_mut().unwrap().push(character);
+        }
+    }
+    if escaped {
+        fields.last_mut().unwrap().push('\\');
+    }
+    fields
+}
+
 #[tauri::command]
 fn get_network_info(
     _app: tauri::AppHandle,
@@ -91,6 +125,9 @@ fn get_network_info(
         let mut ssid = String::new();
         let mut bssid = String::new();
         let mut ip = String::new();
+        let mut interface_name = String::new();
+        let mut identity_source = "unverifiedFallback".to_string();
+        let route_ip = route_source_ipv4("10.21.251.3:80");
 
         #[cfg(target_os = "macos")]
         {
@@ -106,6 +143,7 @@ fn get_network_info(
                 }
                 if let Ok(client) = corewlan::WiFiClient::shared() {
                     if let Some(interface) = client.interface() {
+                        interface_name = interface.interface_name().unwrap_or_default();
                         if let Some(ssid_str) = interface.ssid() {
                             ssid = ssid_str;
                         }
@@ -116,21 +154,15 @@ fn get_network_info(
                 }
             }
 
-            if let Ok(output) = std::process::Command::new("sh")
-                .arg("-c")
-                .arg("ipconfig getifaddr en0")
-                .output()
-            {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let trimmed = stdout.trim();
-                if !trimmed.is_empty() {
-                    ip = trimmed.to_string();
-                } else if let Ok(output2) = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg("ipconfig getifaddr en1")
+            if !interface_name.is_empty() {
+                if let Ok(output) = std::process::Command::new("ipconfig")
+                    .args(["getifaddr", interface_name.as_str()])
                     .output()
                 {
-                    ip = String::from_utf8_lossy(&output2.stdout).trim().to_string();
+                    ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !ip.is_empty() {
+                        identity_source = "sameInterface".to_string();
+                    }
                 }
             }
         }
@@ -147,6 +179,16 @@ fn get_network_info(
                 for line in stdout.lines() {
                     let trimmed = line.trim();
                     let upper = trimmed.to_uppercase();
+                    if interface_name.is_empty() {
+                        if let Some(idx) = trimmed.find(':') {
+                            let candidate = trimmed[idx + 1..].trim();
+                            if !candidate.is_empty()
+                                && !candidate.contains(" interface on the system")
+                            {
+                                interface_name = candidate.to_string();
+                            }
+                        }
+                    }
                     if upper.contains("BSSID") {
                         if let Some(idx) = trimmed.find(':') {
                             bssid = trimmed[idx + 1..].trim().to_string();
@@ -155,6 +197,24 @@ fn get_network_info(
                         if let Some(idx) = trimmed.find(':') {
                             ssid = trimmed[idx + 1..].trim().to_string();
                         }
+                    }
+                }
+            }
+
+            if !interface_name.is_empty() {
+                let escaped_alias = interface_name.replace('\'', "''");
+                let script = format!(
+                    "$a=Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias '{}' -ErrorAction SilentlyContinue | Where-Object {{$_.IPAddress -notlike '169.254.*'}} | Select-Object -First 1 -ExpandProperty IPAddress; if($a){{$a}}",
+                    escaped_alias
+                );
+                let mut address_command = std::process::Command::new("powershell.exe");
+                address_command.creation_flags(0x08000000);
+                address_command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+                if let Ok(output) = address_command.output() {
+                    let candidate = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !candidate.is_empty() {
+                        ip = candidate;
+                        identity_source = "sameInterface".to_string();
                     }
                 }
             }
@@ -191,7 +251,7 @@ fn get_network_info(
                     }
                 }
             }
-            if !best_ip.is_empty() {
+            if ip.is_empty() && !best_ip.is_empty() {
                 ip = best_ip;
             }
         }
@@ -199,26 +259,51 @@ fn get_network_info(
         #[cfg(target_os = "linux")]
         {
             if let Ok(output) = std::process::Command::new("nmcli")
-                .args(["-t", "-f", "active,ssid,bssid", "dev", "wifi"])
+                .args(["-t", "-f", "device,active,ssid,bssid", "dev", "wifi"])
                 .output()
             {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 for line in stdout.lines() {
-                    if line.starts_with("yes:") {
-                        let parts: Vec<&str> = line.split(':').collect();
-                        if parts.len() >= 3 {
-                            ssid = parts[1].to_string();
-                            let raw_bssid = parts[2..].join(":");
-                            bssid = raw_bssid.replace("\\:", ":");
+                    let parts = split_nmcli_fields(line);
+                    if parts.len() >= 4 && parts[1] == "yes" {
+                        interface_name = parts[0].clone();
+                        ssid = parts[2].clone();
+                        bssid = parts[3].clone();
+                        if let Ok(output) = std::process::Command::new("ip")
+                            .args([
+                                "-4",
+                                "-o",
+                                "addr",
+                                "show",
+                                "dev",
+                                &interface_name,
+                                "scope",
+                                "global",
+                            ])
+                            .output()
+                        {
+                            let output = String::from_utf8_lossy(&output.stdout);
+                            if let Some(address) = output
+                                .split_whitespace()
+                                .find(|part| part.contains('.') && part.contains('/'))
+                            {
+                                ip = address.split('/').next().unwrap_or("").to_string();
+                                if !ip.is_empty() {
+                                    identity_source = "sameInterface".to_string();
+                                }
+                            }
                         }
+                        break;
                     }
                 }
             }
 
-            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-                if socket.connect("8.8.8.8:80").is_ok() {
-                    if let Ok(local_addr) = socket.local_addr() {
-                        ip = local_addr.ip().to_string();
+            if ip.is_empty() {
+                if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                    if socket.connect("8.8.8.8:80").is_ok() {
+                        if let Ok(local_addr) = socket.local_addr() {
+                            ip = local_addr.ip().to_string();
+                        }
                     }
                 }
             }
@@ -227,9 +312,85 @@ fn get_network_info(
         serde_json::json!({
             "ssid": ssid,
             "bssid": bssid,
-            "ip": ip
+            "ip": ip,
+            "interfaceName": interface_name,
+            "identitySource": identity_source,
+            "routeIp": route_ip
         })
     }
+}
+
+#[cfg(target_os = "android")]
+fn call_android_network_helper_bool(method: &str) -> bool {
+    let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() else {
+        return false;
+    };
+    let Ok(vm) = (unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) }) else {
+        return false;
+    };
+    let Ok(mut env) = vm.attach_current_thread_as_daemon() else {
+        return false;
+    };
+    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+    let Ok(class) =
+        tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.NetworkHelper".into())
+    else {
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        return false;
+    };
+    let result = env
+        .call_static_method(
+            class,
+            method,
+            "(Landroid/content/Context;)Z",
+            &[jni::objects::JValue::Object(&activity)],
+        )
+        .and_then(|value| value.z())
+        .unwrap_or(false);
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+        return false;
+    }
+    result
+}
+
+#[cfg(target_os = "android")]
+struct AndroidWifiRouteGuard {
+    bound: bool,
+}
+
+#[cfg(target_os = "android")]
+impl AndroidWifiRouteGuard {
+    fn bind_if_required(network: &serde_json::Value) -> Self {
+        let required = network
+            .get("routeBindingRequired")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        Self {
+            bound: required && call_android_network_helper_bool("bindProcessToCampusWifi"),
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+impl Drop for AndroidWifiRouteGuard {
+    fn drop(&mut self) {
+        if self.bound {
+            let _ = call_android_network_helper_bool("clearProcessNetworkBinding");
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+fn report_android_campus_wifi_connected() {
+    let _ = call_android_network_helper_bool("reportCampusWifiConnectivity");
+}
+
+#[cfg(target_os = "android")]
+fn clear_android_network_binding() {
+    let _ = call_android_network_helper_bool("clearProcessNetworkBinding");
 }
 
 #[tauri::command]
@@ -467,21 +628,17 @@ fn get_local_ip() -> String {
 
         #[cfg(target_os = "macos")]
         {
-            if let Ok(output) = std::process::Command::new("sh")
-                .arg("-c")
-                .arg("ipconfig getifaddr en0")
-                .output()
-            {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let trimmed = stdout.trim();
-                if !trimmed.is_empty() {
-                    ip = trimmed.to_string();
-                } else if let Ok(output2) = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg("ipconfig getifaddr en1")
+            let interface_name = corewlan::WiFiClient::shared()
+                .ok()
+                .and_then(|client| client.interface())
+                .and_then(|interface| interface.interface_name())
+                .unwrap_or_default();
+            if !interface_name.is_empty() {
+                if let Ok(output) = std::process::Command::new("ipconfig")
+                    .args(["getifaddr", interface_name.as_str()])
                     .output()
                 {
-                    ip = String::from_utf8_lossy(&output2.stdout).trim().to_string();
+                    ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 }
             }
         }
@@ -778,21 +935,6 @@ fn is_mobile_data_network(network: &serde_json::Value) -> bool {
     }
 }
 
-fn network_is_system_validated(network: &serde_json::Value) -> bool {
-    #[cfg(target_os = "android")]
-    {
-        return network
-            .get("validated")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false);
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = network;
-        false
-    }
-}
-
 fn network_identity_is_fresh(network: &serde_json::Value) -> bool {
     #[cfg(target_os = "android")]
     {
@@ -943,13 +1085,18 @@ where
     billing_runtime::run_mutation_to_completion(&state.is_in_background, future).await
 }
 
-async fn check_internet_rust() -> bool {
-    let client = match reqwest::Client::builder()
+pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool {
+    let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(1800))
         .redirect(reqwest::redirect::Policy::none())
-        .use_rustls_tls()
-        .build()
+        .use_rustls_tls();
+    if let Some(source) = source_ip
+        .and_then(|value| value.parse::<std::net::IpAddr>().ok())
+        .filter(|address| !address.is_unspecified() && !address.is_loopback())
     {
+        builder = builder.local_address(source);
+    }
+    let client = match builder.build() {
         Ok(client) => client,
         Err(_) => return false,
     };
@@ -985,6 +1132,10 @@ async fn check_internet_rust() -> bool {
         .into_iter()
         .flatten()
         .any(|online| online)
+}
+
+async fn check_internet_rust() -> bool {
+    check_internet_from_source(None).await
 }
 
 const CAMPUS_DNS_SERVER: &str = "10.21.200.28:53";
@@ -1133,6 +1284,7 @@ fn headless_log(
 async fn run_headless_network_check(
     config: AppConfig,
     network: serde_json::Value,
+    mut account_health: HashMap<String, AccountHealth>,
     reason: &str,
 ) -> serde_json::Value {
     let mut logs = Vec::new();
@@ -1178,21 +1330,26 @@ async fn run_headless_network_check(
     }
 
     if transport.eq_ignore_ascii_case("cellular") {
+        let online = check_internet_rust().await;
         headless_log(
             &mut logs,
             "网络",
-            "当前使用移动数据；已放缓后台检测并停止校园网网关探测",
+            if online {
+                "App 自身探测确认移动数据已连通；已放缓后台检测并停止校园网网关探测"
+            } else {
+                "App 自身探测未确认移动数据连通；已放缓后台检测并停止校园网网关探测"
+            },
             "info",
         );
         return serde_json::json!({
-            "status": if validated { "online" } else { "cellular" },
+            "status": if online { "online" } else { "cellular" },
             "notification_category": "network",
-            "notification": if validated { "移动数据已连接，校园网探测已暂停" } else { "移动数据尚未通过系统验证" },
+            "notification": if online { "移动数据已连接，校园网探测已暂停" } else { "移动数据连通性暂未确认" },
             "logs": logs,
         });
     }
 
-    if validated || check_internet_rust().await {
+    if check_internet_rust().await {
         headless_log(&mut logs, "网络", "无界面检测完成：互联网已连通", "info");
         return serde_json::json!({
             "status": "online",
@@ -1321,23 +1478,45 @@ async fn run_headless_network_check(
     }
 
     let accounts = accounts_for_profile(config.accounts.clone(), profile.as_ref());
-    if accounts.is_empty() {
+    let mut active_accounts = Vec::new();
+    for account in accounts {
+        let remaining = account_health
+            .get(&account.user)
+            .and_then(|item| item.cooldown_until)
+            .map(|until| until - chrono::Utc::now().timestamp())
+            .unwrap_or(0);
+        if remaining > 0 {
+            headless_log(
+                &mut logs,
+                "账号健康",
+                format!(
+                    "账号 {} 仍在冷却中（剩余 {} 秒），无界面核心已跳过",
+                    account.user, remaining
+                ),
+                "info",
+            );
+        } else {
+            active_accounts.push(account);
+        }
+    }
+    if active_accounts.is_empty() {
         headless_log(
             &mut logs,
             "网络",
-            "没有可供无界面自动登录使用的已保存账号",
+            "没有可供无界面自动登录使用的账号（可能均处于冷却或未保存密码）",
             "error",
         );
         return serde_json::json!({
             "status": "campus",
             "notification_category": "login",
-            "notification": "校园网需要认证，但没有可用账号",
+            "notification": "校园网需要认证，但当前没有可尝试账号",
+            "accountHealth": account_health,
             "logs": logs,
         });
     }
 
     let mut last_message = "所有账号均登录失败".to_string();
-    for account in accounts {
+    for account in active_accounts {
         headless_log(
             &mut logs,
             "网络",
@@ -1353,6 +1532,13 @@ async fn run_headless_network_check(
         .await
         {
             Ok((true, message)) => {
+                let item = account_health.entry(account.user.clone()).or_default();
+                item.consecutive_failures = 0;
+                item.cooldown_until = None;
+                item.last_success =
+                    Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                item.last_failure_reason = None;
+                item.failure_kind = None;
                 headless_log(
                     &mut logs,
                     "网络",
@@ -1363,11 +1549,21 @@ async fn run_headless_network_check(
                     "status": "login_success",
                     "notification_category": "login",
                     "notification": format!("校园网自动登录成功：{}", account.user),
+                    "accountHealth": account_health,
                     "logs": logs,
                 });
             }
             Ok((false, message)) => {
                 last_message = message.clone();
+                let item = account_health.entry(account.user.clone()).or_default();
+                item.consecutive_failures = item.consecutive_failures.saturating_add(1);
+                let (kind, cooldown_seconds) =
+                    classify_account_failure(&message, item.consecutive_failures);
+                item.cooldown_until = Some(chrono::Utc::now().timestamp() + cooldown_seconds);
+                item.last_failure =
+                    Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                item.last_failure_reason = Some(message.clone());
+                item.failure_kind = Some(kind.to_string());
                 headless_log(
                     &mut logs,
                     "网络",
@@ -1391,9 +1587,20 @@ async fn run_headless_network_check(
                         "status": "login_unknown",
                         "notification_category": "login",
                         "notification": "校园网登录请求已发送，但结果无法确认；请勿立即重试",
+                        "accountHealth": account_health,
                         "logs": logs,
                     });
                 }
+                let item = account_health.entry(account.user.clone()).or_default();
+                item.consecutive_failures = item.consecutive_failures.saturating_add(1);
+                let reason = format!("请求出错: {error}");
+                let (kind, cooldown_seconds) =
+                    classify_account_failure(&reason, item.consecutive_failures);
+                item.cooldown_until = Some(chrono::Utc::now().timestamp() + cooldown_seconds);
+                item.last_failure =
+                    Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                item.last_failure_reason = Some(reason);
+                item.failure_kind = Some(kind.to_string());
                 headless_log(
                     &mut logs,
                     "网络",
@@ -1407,6 +1614,7 @@ async fn run_headless_network_check(
         "status": "login_failed",
         "notification_category": "login",
         "notification": format!("校园网自动登录失败：{last_message}"),
+        "accountHealth": account_health,
         "logs": logs,
     })
 }
@@ -1418,6 +1626,7 @@ pub extern "system" fn Java_cn_edu_bjut_al_NativeKeepAlive_runHeadlessCheck(
     _class: jni::objects::JClass,
     config_json: jni::objects::JString,
     network_info_json: jni::objects::JString,
+    account_health_json: jni::objects::JString,
     reason: jni::objects::JString,
 ) -> jni::sys::jstring {
     let result = (|| -> Result<String, String> {
@@ -1429,6 +1638,10 @@ pub extern "system" fn Java_cn_edu_bjut_al_NativeKeepAlive_runHeadlessCheck(
             .get_string(&network_info_json)
             .map_err(|error| error.to_string())?
             .into();
+        let account_health_json: String = env
+            .get_string(&account_health_json)
+            .map_err(|error| error.to_string())?
+            .into();
         let reason: String = env
             .get_string(&reason)
             .map_err(|error| error.to_string())?
@@ -1437,11 +1650,18 @@ pub extern "system" fn Java_cn_edu_bjut_al_NativeKeepAlive_runHeadlessCheck(
             .map_err(|error| format!("解析安全配置失败：{error}"))?;
         let network: serde_json::Value = serde_json::from_str(&network_info_json)
             .map_err(|error| format!("解析网络信息失败：{error}"))?;
+        let account_health: HashMap<String, AccountHealth> =
+            serde_json::from_str(&account_health_json).unwrap_or_default();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|error| format!("创建无界面运行时失败：{error}"))?;
-        let payload = runtime.block_on(run_headless_network_check(config, network, &reason));
+        let payload = runtime.block_on(run_headless_network_check(
+            config,
+            network,
+            account_health,
+            &reason,
+        ));
         serde_json::to_string(&payload).map_err(|error| error.to_string())
     })()
     .unwrap_or_else(|error| {
@@ -1496,32 +1716,10 @@ async fn fetch_portal_user_info(
         .get("package_group_name")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let total_flow = if package_name.contains("Test") {
-        None
-    } else if package_name.contains("10元") {
-        Some(60.0)
-    } else if package_name.contains("20元") {
-        Some(120.0)
-    } else if package_name.contains("30元") {
-        Some(180.0)
-    } else if package_name.contains("60元") {
-        Some(400.0)
-    } else {
-        Some(30.0)
-    };
     let used_raw = info
         .get("use_flow")
         .and_then(|v| v.as_str())
         .unwrap_or("0GB");
-    let mut used = used_raw
-        .chars()
-        .filter(|c| c.is_ascii_digit() || *c == '.')
-        .collect::<String>()
-        .parse::<f64>()
-        .unwrap_or(0.0);
-    if used_raw.contains("MB") {
-        used /= 1024.0;
-    }
     Some(UserInfo {
         account: info
             .get("account")
@@ -1533,9 +1731,15 @@ async fn fetch_portal_user_info(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        flow: total_flow
-            .map(|total| format!("{:.2} GB", total - used))
-            .unwrap_or_else(|| "无限".to_string()),
+        // Portal responses do not consistently include an authoritative quota.
+        // Never infer it from a package display name: renamed/new packages would
+        // otherwise show a precise but incorrect remaining amount.
+        flow: info
+            .get("left_flow")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "未知".to_string()),
         source: "portal".to_string(),
         status: None,
         status_reason: None,
@@ -2701,10 +2905,16 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             state.last_network_state.lock().unwrap().clone()
         };
         let previous_network = state.last_network_state.lock().unwrap().clone();
+        #[cfg(target_os = "android")]
+        let _wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&net_info);
         let transport = network_transport(&net_info).to_string();
         let is_mobile_data = is_mobile_data_network(&net_info);
         let was_mobile_data = is_mobile_data_network(&previous_network);
-        let system_validated = network_is_system_validated(&net_info);
+        #[cfg(target_os = "android")]
+        let system_validated = net_info
+            .get("validated")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         #[cfg(target_os = "android")]
         let metered = net_info
             .get("metered")
@@ -2867,18 +3077,11 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 payload
             };
 
-        let is_online = if system_validated {
-            rust_log(
-                &app,
-                &state,
-                "网络",
-                "[DEBUG] 系统已验证默认网络具备互联网能力，跳过额外连通性探测",
-                "debug",
-            );
-            true
-        } else {
-            check_internet_rust().await
-        };
+        // Android's VALIDATED bit is useful context, but it can describe a
+        // different default network (for example cellular while an unvalidated
+        // campus Wi-Fi remains associated). Connectivity decisions therefore
+        // always come from our independent multi-target probes.
+        let is_online = check_internet_rust().await;
         rust_log(
             &app,
             &state,
@@ -3151,6 +3354,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                         }
                                         success = true;
                                         login_succeeded = true;
+                                        #[cfg(target_os = "android")]
+                                        report_android_campus_wifi_connected();
                                         break;
                                     }
                                     Ok((false, msg)) => {
@@ -3486,14 +3691,27 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let mut steps = Vec::new();
     let identity_started = std::time::Instant::now();
     let network = get_network_info(app, Some(true));
+    #[cfg(target_os = "android")]
+    let _wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
     let transport = network_transport(&network).to_string();
     let mobile_data = is_mobile_data_network(&network);
-    let system_validated = network_is_system_validated(&network);
     let ssid = network
         .get("ssid")
         .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string();
+    let interface_name = network
+        .get("interfaceName")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let identity_source = network
+        .get("identitySource")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let route_ip = network
+        .get("routeIp")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     let mut ip = network
         .get("ip")
         .and_then(|value| value.as_str())
@@ -3516,7 +3734,14 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     } else if ssid.is_empty() || ssid.eq_ignore_ascii_case("<unknown ssid>") {
         format!("已取得本地 IP {ip}，但未取得无线网络名称（可能为有线网络或权限不足）")
     } else {
-        format!("已连接 {ssid}，本地 IP {ip}")
+        format!(
+            "已连接 {ssid}，接口 {}，本地 IP {ip}（身份来源：{identity_source}）",
+            if interface_name.is_empty() {
+                "未知"
+            } else {
+                interface_name
+            }
+        )
     };
     steps.push(make_diagnostic_step(
         "network_identity",
@@ -3524,6 +3749,23 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         identity_started,
         identity_status,
         identity_message,
+    ));
+
+    let route_started = std::time::Instant::now();
+    steps.push(make_diagnostic_step(
+        "campus_route",
+        "校园目标路由",
+        route_started,
+        if route_ip.is_empty() { "warning" } else { "success" },
+        if route_ip.is_empty() {
+            "无法取得访问校园认证目标时系统选择的源 IPv4".to_string()
+        } else if route_ip == ip {
+            format!("校园认证目标与当前网络身份使用同一源 IP：{route_ip}")
+        } else {
+            format!(
+                "访问校园认证目标将使用 {route_ip}，与物理网络 IP {ip} 不同；可能存在 VPN 或独立路由"
+            )
+        },
     ));
 
     let campus_started = std::time::Instant::now();
@@ -3580,20 +3822,18 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     ));
 
     let internet_started = std::time::Instant::now();
-    let online = system_validated || check_internet_rust().await;
+    let online = check_internet_rust().await;
     steps.push(make_diagnostic_step(
         "internet",
         "互联网连通性",
         internet_started,
         if online { "success" } else { "warning" },
-        if system_validated {
-            "Android 已验证默认网络具备互联网能力".to_string()
-        } else if online {
+        if online {
             "多个独立探测目标中至少一个验证成功，互联网访问正常".to_string()
         } else if mobile_data {
-            "移动数据未通过互联网验证；不会继续探测校园网认证网关".to_string()
+            "App 自身的多个独立探测目标均未确认移动数据连通；不会继续探测校园网认证网关".to_string()
         } else {
-            "多个独立目标均未验证成功，继续检测认证网关".to_string()
+            "App 自身的多个独立探测目标均未验证成功，继续检测认证网关".to_string()
         },
     ));
 
@@ -3646,7 +3886,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     } else if mobile_data {
         (
             "offline",
-            "移动数据存在，但系统与独立目标均未验证互联网连通性",
+            "移动数据存在，但 App 自身的独立目标未验证互联网连通性",
         )
     } else {
         (
@@ -3917,6 +4157,8 @@ async fn evaluate_manual_network_trust(
     login_type_override: Option<String>,
 ) -> Result<NetworkTrustEvaluation, String> {
     let network = get_network_info(app, Some(true));
+    #[cfg(target_os = "android")]
+    let _wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
     let transport = network_transport(&network);
     let ssid = network
         .get("ssid")
@@ -4032,6 +4274,8 @@ async fn manual_login(
     expected_network_key: Option<String>,
 ) -> Result<ManualLoginResult, String> {
     let network = get_network_info(app.clone(), Some(true));
+    #[cfg(target_os = "android")]
+    let _wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
     if is_mobile_data_network(&network) {
         rust_log(
             &app,
@@ -4180,6 +4424,8 @@ async fn manual_login(
         {
             Ok((true, message)) => {
                 record_account_success(&app, &state, &account.user);
+                #[cfg(target_os = "android")]
+                report_android_campus_wifi_connected();
                 rust_log(
                     &app,
                     &state,
@@ -4731,6 +4977,8 @@ async fn perform_billing_action(
 }
 
 fn campus_service_target(state: &AppState, account_user: Option<&str>) -> Result<Account, String> {
+    #[cfg(target_os = "android")]
+    clear_android_network_binding();
     let config = state.config.read().unwrap();
     let account = selected_billing_account(&config, account_user).ok_or_else(|| {
         if account_user.is_some() {
@@ -4868,8 +5116,11 @@ fn get_recoverable_recharges(
         let changed = config
             .recharge_transactions
             .reconcile_legacy_completed_transfers();
+        let expired = config
+            .recharge_transactions
+            .prune_expired(chrono::Utc::now().timestamp());
         let views = config.recharge_transactions.recovery_views();
-        (views, changed.then(|| config.clone()))
+        (views, (changed || expired).then(|| config.clone()))
     };
     if let Some(snapshot) = reconciled_snapshot {
         if let Err(error) = save_recharge_snapshot_verified(&app, &snapshot) {
@@ -5669,9 +5920,11 @@ fn billing_action_target(
     account_user: Option<&str>,
 ) -> Result<(Account, VpnCompatibility), String> {
     ensure_billing_foreground(state)?;
-    if is_mobile_data_network(&state.last_network_state.lock().unwrap()) {
-        return Err("Android 移动数据网络下不能访问校园网计费系统".to_string());
-    }
+    // Billing may be reachable through a user-configured VPN even when Android's
+    // physical/default transport is cellular. Never gate an explicit request on
+    // transport type, and make sure a short-lived campus Wi-Fi binding is gone.
+    #[cfg(target_os = "android")]
+    clear_android_network_binding();
     let config = state.config.read().unwrap();
     let account = selected_billing_account(&config, account_user).ok_or_else(|| {
         if account_user.is_some() {
@@ -5824,8 +6077,18 @@ fn log_from_js(
 }
 
 #[tauri::command]
-fn set_background_state(state: tauri::State<Arc<AppState>>, is_bg: bool) {
+fn set_background_state(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>, is_bg: bool) {
     state.is_in_background.store(is_bg, Ordering::SeqCst);
+    #[cfg(not(target_os = "android"))]
+    let _ = &app;
+    #[cfg(target_os = "android")]
+    if !is_bg {
+        // The headless JNI engine writes the same cooldown file while the
+        // WebView is backgrounded. Refresh the live state before another
+        // foreground/manual attempt can bypass those updates.
+        *state.account_health.lock().unwrap() = load_account_health(&app);
+        emit_account_health(&app, &state);
+    }
     let val = state.countdown.load(Ordering::SeqCst);
     let cfg = state.config.read().unwrap();
     let configured_interval = if is_bg {
@@ -6514,10 +6777,6 @@ mod tests {
         assert!(!is_mobile_data_network(
             &serde_json::json!({"transport": "wifi"})
         ));
-        assert_eq!(
-            network_is_system_validated(&serde_json::json!({"validated": true})),
-            cfg!(target_os = "android")
-        );
     }
 
     #[test]

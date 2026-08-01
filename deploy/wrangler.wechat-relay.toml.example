@@ -1,0 +1,17 @@
+name = "bjut-wechat-payment-relay"
+main = "wechat-relay-worker.js"
+compatibility_date = "2026-08-01"
+no_bundle = true
+workers_dev = false
+
+[[routes]]
+pattern = "red.bjutdown.work"
+custom_domain = true
+
+[[kv_namespaces]]
+binding = "PAYMENT_SESSIONS"
+id = "replace-with-production-kv-namespace-id"
+
+[observability.logs]
+enabled = false
+invocation_logs = false

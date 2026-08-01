@@ -53,3 +53,53 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  desktop-platform-check:
+    name: Desktop check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Type-check and build frontend
+        run: npm run build
+
+      - name: Check platform Rust integration
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+
+  android-kotlin-check:
+    name: Android Kotlin check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Compile Android Kotlin sources
+        working-directory: src-tauri/gen/android
+        run: ./gradlew :app:compileDebugKotlin --stacktrace

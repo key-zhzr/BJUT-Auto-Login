@@ -3094,7 +3094,8 @@ body.is-android .dragging-fallback,
 body.is-android .dragging-fallback-clone {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  background: rgba(30, 41, 59, 0.98) !important;
+  background: var(--card-bg) !important;
+  color: var(--text-main) !important;
 }
 body.is-android .account-item,
 body.is-android .logs-container,

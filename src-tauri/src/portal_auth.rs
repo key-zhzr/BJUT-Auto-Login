@@ -1,6 +1,6 @@
 use super::{
-    check_internet_rust, query_campus_dns_ipv4, redact_request_error, VpnCompatibility, LGN6_HOST,
-    LGN_HOST, WLGN_HOST,
+    check_internet_from_source, query_campus_dns_ipv4, redact_request_error, route_source_ipv4,
+    VpnCompatibility, LGN6_HOST, LGN_HOST, WLGN_HOST,
 };
 use reqwest::{Client, Url};
 use serde_json::Value;
@@ -138,7 +138,7 @@ async fn probe_login_type(
         .ok()?;
     for url in portal_probe_urls(compatibility, &login_type) {
         let Ok(response) = client
-            .get(url)
+            .get(&url)
             .header("Cache-Control", "no-cache, no-store")
             .send()
             .await
@@ -149,16 +149,50 @@ async fn probe_login_type(
         // characteristic currently documented for probes. Reject redirects,
         // server errors and empty responses rather than treating any completed
         // TCP/TLS request as a confirmed protocol.
-        if response.status().is_success()
-            && response
-                .bytes()
-                .await
-                .is_ok_and(|body| !body.iter().all(u8::is_ascii_whitespace))
-        {
+        let status_ok = response.status().is_success();
+        let body = response.text().await.unwrap_or_default();
+        if status_ok && probe_body_matches(&login_type, &url, &body) {
             return Some(login_type);
         }
     }
     None
+}
+
+fn jsonp_object(text: &str) -> Option<Value> {
+    let start = text.find('(')?;
+    let end = text.rfind(')').filter(|end| *end > start)?;
+    serde_json::from_str(&text[start + 1..end]).ok()
+}
+
+fn probe_body_matches(login_type: &LoginType, url: &str, body: &str) -> bool {
+    if body.trim().is_empty() {
+        return false;
+    }
+    let normalized = body.to_ascii_lowercase();
+    match login_type {
+        LoginType::Type1 => {
+            normalized.contains("eportal")
+                || normalized.contains("user_account")
+                || jsonp_object(body).is_some_and(|value| value.get("result").is_some())
+        }
+        LoginType::Type2 => {
+            normalized.contains("drcom")
+                || normalized.contains("ddddd")
+                || normalized.contains("0mkkey")
+                || jsonp_object(body).is_some_and(|value| value.get("result").is_some())
+        }
+        LoginType::Type3 if url.contains("loadUserInfo") => {
+            jsonp_object(body).is_some_and(|value| {
+                value.get("code").is_some() && value.get("user_info").is_some_and(Value::is_object)
+            })
+        }
+        LoginType::Type3 => {
+            normalized.contains("name=\"v6ip\"")
+                || normalized.contains("name='v6ip'")
+                || normalized.contains("lgn.bjut.edu.cn")
+        }
+        LoginType::Unknown => false,
+    }
 }
 
 pub(crate) async fn detect_login_type_rust(
@@ -354,7 +388,9 @@ async fn login_lgn_once(
     if confirm_lgn_account(client, compatibility, user).await {
         return Ok((true, "Portal协议认证成功！".to_string()));
     }
-    if check_internet_rust().await {
+    let route_source = route_source_ipv4("172.30.201.2:443");
+    if check_internet_from_source((!route_source.is_empty()).then_some(route_source.as_str())).await
+    {
         return Ok((true, "Portal协议认证成功！".to_string()));
     }
     Err(format!(
@@ -521,5 +557,34 @@ mod tests {
                 .iter()
                 .all(|url| url.contains(":801/"))
         );
+    }
+
+    #[test]
+    fn probes_require_protocol_specific_response_fingerprints() {
+        assert!(probe_body_matches(
+            &LoginType::Type1,
+            "http://10.21.221.98:801/eportal/portal/login",
+            r#"dr1003({"result":0,"msg":"missing parameters"});"#,
+        ));
+        assert!(probe_body_matches(
+            &LoginType::Type2,
+            "https://wlgn.bjut.edu.cn/drcom/login",
+            "<form><input name=\"DDDDD\"><input name=\"0MKKey\"></form>",
+        ));
+        assert!(probe_body_matches(
+            &LoginType::Type3,
+            "http://172.30.201.2:801/eportal/portal/page/loadUserInfo",
+            r#"dr1002({"code":1,"user_info":{"account":"25000000"},"user_info_lang":{"account":"账号"}});"#,
+        ));
+        assert!(!probe_body_matches(
+            &LoginType::Type3,
+            "http://172.30.201.2:801/eportal/portal/page/loadUserInfo",
+            r#"dr1002({"code":1,"user_info_lang":{"account":"账号"}});"#,
+        ));
+        assert!(!probe_body_matches(
+            &LoginType::Type1,
+            "http://10.21.221.98:801/eportal/portal/login",
+            "generic reverse proxy error page",
+        ));
     }
 }

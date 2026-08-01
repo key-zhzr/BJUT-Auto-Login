@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 const MAX_ARCHIVED_TRANSACTION_HISTORY: usize = 32;
+const PAYMENT_LAUNCH_TTL_SECONDS: i64 = 15 * 60;
+const UNRESOLVED_TRANSACTION_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +15,7 @@ pub(crate) enum RechargeStage {
     Completed,
     Unknown,
     Cancelled,
+    Expired,
 }
 
 impl RechargeStage {
@@ -43,10 +46,13 @@ impl RechargeStage {
                     HandedOff,
                     PaymentConfirmed | Completed | Unknown | Cancelled
                 )
-                | (PaymentConfirmed, TransferSubmitted | Completed | Unknown)
+                | (
+                    PaymentConfirmed,
+                    TransferSubmitted | Completed | Unknown | Expired
+                )
                 | (
                     Unknown,
-                    PaymentConfirmed | TransferSubmitted | Completed | Cancelled
+                    PaymentConfirmed | TransferSubmitted | Completed | Cancelled | Expired
                 )
         ) || self == next
     }
@@ -68,7 +74,7 @@ pub(crate) fn stage_after_payment_context_closed(
         RechargeStage::TransferSubmitted | RechargeStage::Unknown => {
             Some((RechargeStage::Unknown, "充值流程结果仍需核对"))
         }
-        RechargeStage::Completed | RechargeStage::Cancelled => None,
+        RechargeStage::Completed | RechargeStage::Cancelled | RechargeStage::Expired => None,
     }
 }
 
@@ -159,6 +165,24 @@ impl RechargeTransaction {
             parent_id: String::new(),
         }
     }
+
+    fn clear_provider_material_if_terminal(&mut self) -> bool {
+        if !matches!(
+            self.stage,
+            RechargeStage::Completed | RechargeStage::Cancelled | RechargeStage::Expired
+        ) {
+            return false;
+        }
+        let changed = !self.payment_url.is_empty()
+            || !self.payment_id.is_empty()
+            || !self.partner_jour_no.is_empty()
+            || !self.openid.is_empty();
+        self.payment_url.clear();
+        self.payment_id.clear();
+        self.partner_jour_no.clear();
+        self.openid.clear();
+        changed
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,7 +190,8 @@ impl RechargeTransaction {
 pub(crate) struct RechargeJournal(pub Vec<RechargeTransaction>);
 
 impl RechargeJournal {
-    pub(crate) fn upsert(&mut self, transaction: RechargeTransaction) {
+    pub(crate) fn upsert(&mut self, mut transaction: RechargeTransaction) {
+        transaction.clear_provider_material_if_terminal();
         if let Some(current) = self.0.iter_mut().find(|item| item.id == transaction.id) {
             *current = transaction;
         } else {
@@ -196,6 +221,7 @@ impl RechargeJournal {
         transaction.stage = stage;
         transaction.updated_at = now;
         transaction.note = note.into();
+        transaction.clear_provider_material_if_terminal();
         self.trim();
         Ok(())
     }
@@ -279,8 +305,46 @@ impl RechargeJournal {
                 payment.stage = RechargeStage::Completed;
                 payment.updated_at = created_at;
                 payment.note = "已根据紧随支付订单的网费转入成功记录完成旧版恢复状态".to_string();
+                payment.clear_provider_material_if_terminal();
                 changed = true;
             }
+        }
+        if changed {
+            self.trim();
+        }
+        changed
+    }
+
+    /// Remove short-lived launch/session material and eventually archive
+    /// transactions that can no longer be reconciled automatically.
+    pub(crate) fn prune_expired(&mut self, now: i64) -> bool {
+        let mut changed = false;
+        for transaction in &mut self.0 {
+            let age = now.saturating_sub(transaction.updated_at);
+            if matches!(
+                transaction.stage,
+                RechargeStage::OrderCreated | RechargeStage::HandedOff
+            ) && age > PAYMENT_LAUNCH_TTL_SECONDS
+            {
+                transaction.stage = RechargeStage::Unknown;
+                transaction.note =
+                    "支付入口已过期；请核对学校平台记录，不要直接创建重复订单".to_string();
+                transaction.payment_url.clear();
+                transaction.openid.clear();
+                changed = true;
+            }
+            if transaction.stage == RechargeStage::Unknown
+                && age > UNRESOLVED_TRANSACTION_TTL_SECONDS
+            {
+                transaction.stage = RechargeStage::Expired;
+                transaction.note = "未决充值记录已超过 30 天并归档".to_string();
+                transaction.payment_url.clear();
+                transaction.payment_id.clear();
+                transaction.partner_jour_no.clear();
+                transaction.openid.clear();
+                changed = true;
+            }
+            changed |= transaction.clear_provider_material_if_terminal();
         }
         if changed {
             self.trim();
@@ -295,7 +359,7 @@ impl RechargeJournal {
         self.0.retain(|item| {
             if matches!(
                 item.stage,
-                RechargeStage::Completed | RechargeStage::Cancelled
+                RechargeStage::Completed | RechargeStage::Cancelled | RechargeStage::Expired
             ) {
                 archived_kept += 1;
                 archived_kept <= MAX_ARCHIVED_TRANSACTION_HISTORY
@@ -511,5 +575,55 @@ mod tests {
         let recoverable = journal.recovery_views();
         assert_eq!(recoverable.len(), 1);
         assert_eq!(recoverable[0].id, "payment-older");
+    }
+
+    #[test]
+    fn expired_launch_material_is_removed_without_losing_reconciliation_record() {
+        let mut item = transaction();
+        item.stage = RechargeStage::HandedOff;
+        item.updated_at = 10;
+        item.payment_url = "weixin://wap/pay?secret".to_string();
+        item.openid = "openid".to_string();
+        let mut journal = RechargeJournal(vec![item]);
+
+        assert!(journal.prune_expired(10 + PAYMENT_LAUNCH_TTL_SECONDS + 1));
+        assert_eq!(journal.0[0].stage, RechargeStage::Unknown);
+        assert!(journal.0[0].payment_url.is_empty());
+        assert!(journal.0[0].openid.is_empty());
+        assert_eq!(journal.recovery_views().len(), 1);
+    }
+
+    #[test]
+    fn unresolved_transactions_are_archived_after_thirty_days() {
+        let mut item = transaction();
+        item.stage = RechargeStage::Unknown;
+        item.updated_at = 20;
+        item.payment_id = "provider-secret".to_string();
+        let mut journal = RechargeJournal(vec![item]);
+
+        assert!(journal.prune_expired(20 + UNRESOLVED_TRANSACTION_TTL_SECONDS + 1));
+        assert_eq!(journal.0[0].stage, RechargeStage::Expired);
+        assert!(journal.0[0].payment_id.is_empty());
+        assert!(journal.recovery_views().is_empty());
+    }
+
+    #[test]
+    fn terminal_transition_immediately_removes_provider_material() {
+        let mut item = transaction();
+        item.stage = RechargeStage::TransferSubmitted;
+        item.payment_url = "weixin://wap/pay?secret".to_string();
+        item.payment_id = "provider-id".to_string();
+        item.partner_jour_no = "journey".to_string();
+        item.openid = "openid".to_string();
+        let mut journal = RechargeJournal(vec![item]);
+
+        journal
+            .transition("tx-1", RechargeStage::Completed, 30, "done")
+            .unwrap();
+        let completed = &journal.0[0];
+        assert!(completed.payment_url.is_empty());
+        assert!(completed.payment_id.is_empty());
+        assert!(completed.partner_jour_no.is_empty());
+        assert!(completed.openid.is_empty());
     }
 }

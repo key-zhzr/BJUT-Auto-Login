@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost https://api.github.com; img-src 'self' data: asset: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost https://api.github.com https://red.bjutdown.work; img-src 'self' data: asset: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
       "devCsp": null
     }
   },

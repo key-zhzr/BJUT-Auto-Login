@@ -2,6 +2,7 @@ package cn.edu.bjut.al
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.SystemClock
@@ -141,32 +142,34 @@ class NetworkHelper {
                 val activeNetwork = connectivityManager.activeNetwork
                 val capabilities = activeNetwork?.let(connectivityManager::getNetworkCapabilities)
                 val vpnActive = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-                // A VPN becomes Android's active routed network. Inspect its physical
-                // underlay so mobile-data throttling works without asking for
-                // location-protected SSID/BSSID details on every check.
-                val physicalNetwork = if (vpnActive) {
-                    connectivityManager.allNetworks
-                        .asSequence()
-                        .filter { it != activeNetwork }
-                        .mapNotNull { network ->
-                            connectivityManager.getNetworkCapabilities(network)
-                                ?.let { network to it }
-                        }
-                        .filter { (_, item) -> !item.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
-                        .filter { (_, item) -> item.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
-                        .sortedByDescending { (_, item) ->
-                            when {
-                                item.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 3
-                                item.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 2
-                                item.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> 1
-                                else -> 0
-                            }
-                        }
-                        .firstOrNull()
-                        ?.first
-                } else activeNetwork
+                val availableNetworks = connectivityManager.allNetworks
+                    .asSequence()
+                    .mapNotNull { network ->
+                        connectivityManager.getNetworkCapabilities(network)
+                            ?.let { network to it }
+                    }
+                    .filter { (_, item) -> !item.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+                    .toList()
+                // Android may keep an unvalidated Wi-Fi associated while cellular is
+                // the default Internet route. Campus authentication must describe and
+                // target that Wi-Fi instead of mixing cellular capabilities with wlan0.
+                val wifiNetwork = availableNetworks
+                    .firstOrNull { (_, item) -> item.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) }
+                    ?.first
+                val ethernetNetwork = availableNetworks
+                    .firstOrNull { (_, item) -> item.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) }
+                    ?.first
+                val cellularNetwork = availableNetworks
+                    .firstOrNull { (_, item) -> item.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) }
+                    ?.first
+                val physicalNetwork = wifiNetwork
+                    ?: ethernetNetwork
+                    ?: cellularNetwork
+                    ?: if (vpnActive) null else activeNetwork
                 val physicalCapabilities = physicalNetwork
                     ?.let(connectivityManager::getNetworkCapabilities)
+                val physicalLinkProperties = physicalNetwork
+                    ?.let(connectivityManager::getLinkProperties)
                 val transport = when {
                     physicalCapabilities == null -> if (vpnActive) "vpn" else "none"
                     physicalCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
@@ -175,11 +178,14 @@ class NetworkHelper {
                     physicalCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH) -> "bluetooth"
                     else -> "other"
                 }
-                val validated = capabilities
+                val validated = physicalCapabilities
                     ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-                val captivePortal = capabilities
+                val defaultValidated = capabilities
+                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                val captivePortal = physicalCapabilities
                     ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true
-                val metered = connectivityManager.isActiveNetworkMetered
+                val metered = physicalCapabilities
+                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true
                 var ssid = ""
                 var bssid = ""
                 var identityFresh = false
@@ -188,7 +194,14 @@ class NetworkHelper {
                 // enabled it may expose the TUN/Fake-IP address instead of the Wi-Fi
                 // or cellular interface address. Reuse the physical-interface lookup
                 // used by the change detector so identity checks see the real LAN IP.
-                var ipString = getLocalIpAddress()
+                var ipString = physicalLinkProperties
+                    ?.linkAddresses
+                    ?.asSequence()
+                    ?.map { it.address }
+                    ?.filterIsInstance<Inet4Address>()
+                    ?.firstOrNull { !it.isLoopbackAddress }
+                    ?.hostAddress
+                    .orEmpty()
 
                 if (includeWifiDetails && transport == "wifi") {
                     val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -217,13 +230,21 @@ class NetworkHelper {
                     .put("ssid", ssid)
                     .put("bssid", bssid)
                     .put("ip", ipString)
+                    .put("interfaceName", physicalLinkProperties?.interfaceName ?: "")
+                    .put("identitySource", if (ipString.isEmpty()) "unknown" else "sameInterface")
+                    .put("routeIp", ipString)
                     .put("transport", transport)
                     .put("networkId", physicalNetwork?.hashCode()?.toString() ?: "")
+                    .put("defaultNetworkId", activeNetwork?.hashCode()?.toString() ?: "")
+                    .put("wifiNetworkId", wifiNetwork?.hashCode()?.toString() ?: "")
+                    .put("wifiIsDefault", wifiNetwork != null && wifiNetwork == activeNetwork)
+                    .put("routeBindingRequired", wifiNetwork != null && wifiNetwork != activeNetwork && !vpnActive)
                     .put("identityRequested", includeWifiDetails)
                     .put("identityFresh", identityFresh)
                     .put("identityObservedAt", identityObservedAt)
                     .put("vpnActive", vpnActive)
                     .put("validated", validated)
+                    .put("defaultValidated", defaultValidated)
                     .put("captivePortal", captivePortal)
                     .put("metered", metered)
                     .toString()
@@ -232,16 +253,100 @@ class NetworkHelper {
                     .put("ssid", "")
                     .put("bssid", "")
                     .put("ip", "")
+                    .put("interfaceName", "")
+                    .put("identitySource", "unknown")
+                    .put("routeIp", "")
                     .put("transport", "unknown")
                     .put("networkId", "")
+                    .put("defaultNetworkId", "")
+                    .put("wifiNetworkId", "")
+                    .put("wifiIsDefault", false)
+                    .put("routeBindingRequired", false)
                     .put("identityRequested", includeWifiDetails)
                     .put("identityFresh", false)
                     .put("identityObservedAt", 0)
                     .put("vpnActive", false)
                     .put("validated", false)
+                    .put("defaultValidated", false)
                     .put("captivePortal", false)
                     .put("metered", false)
                     .toString()
+            }
+        }
+
+        private fun campusWifiNetwork(context: Context): Network? {
+            val manager = context.applicationContext
+                .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            return manager.allNetworks.firstOrNull { network ->
+                manager.getNetworkCapabilities(network)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            }
+        }
+
+        /** Temporarily route this process through the associated Wi-Fi network. */
+        @JvmStatic
+        fun bindProcessToCampusWifi(context: Context): Boolean {
+            return try {
+                val manager = context.applicationContext
+                    .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val wifi = campusWifiNetwork(context) ?: return false
+                manager.bindProcessToNetwork(wifi)
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        @JvmStatic
+        fun clearProcessNetworkBinding(context: Context): Boolean {
+            return try {
+                val manager = context.applicationContext
+                    .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                manager.bindProcessToNetwork(null)
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        /** Ask Android to revalidate the same Wi-Fi after our own probes succeed. */
+        @JvmStatic
+        fun reportCampusWifiConnectivity(context: Context): Boolean {
+            return try {
+                val manager = context.applicationContext
+                    .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val wifi = campusWifiNetwork(context) ?: return false
+                manager.reportNetworkConnectivity(wifi, true)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        @JvmStatic
+        fun getAccountHealth(context: Context): String {
+            return try {
+                val file = File(context.applicationContext.filesDir, "account-health.json")
+                if (file.isFile) file.readText(Charsets.UTF_8) else "{}"
+            } catch (_: Exception) {
+                "{}"
+            }
+        }
+
+        @JvmStatic
+        fun setAccountHealth(context: Context, value: String): Boolean {
+            return try {
+                // Validate before replacing the shared file so a partial JNI value
+                // cannot erase the foreground engine's cooldown history.
+                JSONObject(value)
+                val target = File(context.applicationContext.filesDir, "account-health.json")
+                val temporary = File(target.parentFile, "${target.name}.tmp")
+                temporary.writeText(value, Charsets.UTF_8)
+                if (!temporary.renameTo(target)) {
+                    target.writeText(value, Charsets.UTF_8)
+                    temporary.delete()
+                }
+                true
+            } catch (_: Exception) {
+                false
             }
         }
 

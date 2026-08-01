@@ -36,3 +36,7 @@ src-tauri/.keys/
 
 # Private reverse-engineering captures (may contain account/billing data)
 /billing-capture.local/
+
+# Local Cloudflare deployment state
+/deploy/wrangler.toml
+/deploy/.wrangler/

@@ -10,6 +10,7 @@ import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -66,7 +67,8 @@ class KeepAliveService : Service() {
     private val worker = Executors.newSingleThreadExecutor()
     private val checkInProgress = AtomicBoolean(false)
     private var connectivityManager: ConnectivityManager? = null
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var wifiNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var pausedUntil = 0L
     private var lastNetworkSignature = ""
     private var lastNetworkEventAt = 0L
@@ -211,10 +213,14 @@ class KeepAliveService : Service() {
 
     override fun onDestroy() {
         destroyed = true
-        networkCallback?.let { callback ->
+        defaultNetworkCallback?.let { callback ->
             try { connectivityManager?.unregisterNetworkCallback(callback) } catch (_: Exception) {}
         }
-        networkCallback = null
+        wifiNetworkCallback?.let { callback ->
+            try { connectivityManager?.unregisterNetworkCallback(callback) } catch (_: Exception) {}
+        }
+        defaultNetworkCallback = null
+        wifiNetworkCallback = null
         handler.removeCallbacks(periodicCheckRunnable)
         handler.removeCallbacks(ipPollRunnable)
         handler.removeCallbacks(serviceHeartbeatRunnable)
@@ -495,9 +501,14 @@ class KeepAliveService : Service() {
                     if (config.isBlank()) throw IllegalStateException("安全存储中没有应用配置")
                     var networkInfo = networkInfoForCheck(fullDetails)
                     val initialNetwork = JSONObject(networkInfo)
-                    var result = JSONObject(
-                        NativeKeepAlive.runHeadlessCheck(config, networkInfo, reason)
-                    )
+                    val routeBindingRequired = initialNetwork.optBoolean("routeBindingRequired", false)
+                    val routeBound = routeBindingRequired && NetworkHelper.bindProcessToCampusWifi(this)
+                    val accountHealth = NetworkHelper.getAccountHealth(this)
+                    var result = try {
+                        JSONObject(NativeKeepAlive.runHeadlessCheck(config, networkInfo, accountHealth, reason))
+                    } finally {
+                        if (routeBound) NetworkHelper.clearProcessNetworkBinding(this)
+                    }
                     if (!fullDetails && result.optString("status") == "needs_fresh_identity") {
                         KeepAliveJournal.append(
                             this,
@@ -519,14 +530,27 @@ class KeepAliveService : Service() {
                                 .put("notification", "网络正在切换，已取消本次自动登录")
                         } else {
                             networkInfo = freshNetworkInfo
-                            JSONObject(
-                                NativeKeepAlive.runHeadlessCheck(
-                                    config,
-                                    networkInfo,
-                                    "$reason（发送凭据前身份复核）"
+                            val freshBindingRequired = freshNetwork.optBoolean("routeBindingRequired", false)
+                            val freshRouteBound = freshBindingRequired && NetworkHelper.bindProcessToCampusWifi(this)
+                            try {
+                                JSONObject(
+                                    NativeKeepAlive.runHeadlessCheck(
+                                        config,
+                                        networkInfo,
+                                        NetworkHelper.getAccountHealth(this),
+                                        "$reason（发送凭据前身份复核）"
+                                    )
                                 )
-                            )
+                            } finally {
+                                if (freshRouteBound) NetworkHelper.clearProcessNetworkBinding(this)
+                            }
                         }
+                    }
+                    result.optJSONObject("accountHealth")?.let {
+                        NetworkHelper.setAccountHealth(this, it.toString())
+                    }
+                    if (result.optString("status") in setOf("online", "login_success")) {
+                        NetworkHelper.reportCampusWifiConnectivity(this)
                     }
                     val logs = result.optJSONArray("logs")
                     if (logs != null) {
@@ -589,8 +613,27 @@ class KeepAliveService : Service() {
                     notifyNetworkChanged(signature)
                 }
             }
-            networkCallback = callback
+            defaultNetworkCallback = callback
             manager.registerDefaultNetworkCallback(callback)
+            val wifiCallback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) = notifyNetworkChanged("wifi-available:${network.hashCode()}")
+
+                override fun onLost(network: Network) = notifyNetworkChanged("wifi-lost:${network.hashCode()}")
+
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    val signature = "wifi-cap:${network.hashCode()}:" +
+                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) + ":" +
+                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)
+                    notifyNetworkChanged(signature)
+                }
+            }
+            wifiNetworkCallback = wifiCallback
+            manager.registerNetworkCallback(
+                NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .build(),
+                wifiCallback
+            )
         } catch (error: Exception) {
             KeepAliveJournal.append(this, "注册系统网络回调失败：${error.javaClass.simpleName}", "error")
         }
