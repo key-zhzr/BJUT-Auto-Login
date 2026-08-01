@@ -3637,6 +3637,25 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
   border-top-left-radius: 12px;
   border-top-right-radius: 12px;
 }
+.titlebar-caption {
+  display: none;
+  align-items: center;
+  min-width: 0;
+  margin-right: auto;
+  padding-left: 12px;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  pointer-events: none;
+}
+.titlebar-caption-logo {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: url('/logo.png') center / cover no-repeat;
+}
 .titlebar-button {
   display: inline-flex;
   justify-content: center;
