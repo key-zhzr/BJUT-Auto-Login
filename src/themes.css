@@ -38,6 +38,7 @@
   --theme-panel-radius: 12px;
   --theme-control-radius: 8px;
   --theme-modal-radius: 16px;
+  --theme-control-height: 36px;
   --theme-blur: 12px;
   --theme-menu-blur: 18px;
   --theme-saturation: 1;
@@ -114,10 +115,11 @@
   --theme-font:
     "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont,
     "Helvetica Neue", sans-serif;
-  --theme-card-radius: 16px;
-  --theme-panel-radius: 12px;
-  --theme-control-radius: 10px;
-  --theme-modal-radius: 18px;
+  --theme-card-radius: 14px;
+  --theme-panel-radius: 10px;
+  --theme-control-radius: 9px;
+  --theme-modal-radius: 14px;
+  --theme-control-height: 34px;
   --theme-blur: 28px;
   --theme-menu-blur: 36px;
   --theme-saturation: 1.3;
@@ -199,6 +201,7 @@
   --theme-panel-radius: 6px;
   --theme-control-radius: 4px;
   --theme-modal-radius: 8px;
+  --theme-control-height: 32px;
   --theme-blur: 0px;
   --theme-menu-blur: 30px;
   --theme-saturation: 1.22;
@@ -310,6 +313,14 @@ html:root[data-theme] {
   font-family: var(--theme-font);
 }
 
+:root[data-color-scheme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-color-scheme="light"] {
+  color-scheme: light;
+}
+
 :root[data-theme] .app-loading-mask {
   color: var(--theme-text);
   background: var(--theme-body-bg);
@@ -383,6 +394,13 @@ html:root[data-theme] {
 :root[data-theme] textarea,
 :root[data-theme] .custom-select-trigger {
   border-radius: var(--theme-control-radius);
+}
+
+:root[data-theme] .dragging-fallback,
+:root[data-theme] .dragging-fallback-clone {
+  border-radius: var(--theme-card-radius) !important;
+  background: var(--theme-card-solid) !important;
+  box-shadow: var(--theme-raised-shadow) !important;
 }
 
 :root[data-theme] .custom-select-trigger {
@@ -576,12 +594,12 @@ html:root[data-theme] {
 :root[data-theme="apple27"] body nav,
 :root[data-theme="apple27"] .titlebar,
 :root[data-theme="apple27"] .billing-mobile-nav {
-  border: 1px solid var(--theme-border-strong);
+  border: 1px solid var(--theme-border);
   background: var(--theme-nav-bg);
   box-shadow:
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.14),
-    inset 0 -0.5px 0 rgba(0, 0, 0, 0.1),
-    0 8px 24px rgba(0, 0, 0, 0.16);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -0.5px 0 rgba(0, 0, 0, 0.08),
+    0 6px 20px rgba(0, 0, 0, 0.14);
   -webkit-backdrop-filter:
     blur(var(--theme-blur)) saturate(var(--theme-saturation));
   backdrop-filter:
@@ -593,6 +611,22 @@ html:root[data-theme] {
   background: none;
   -webkit-text-fill-color: currentColor;
   letter-spacing: -0.035em;
+  font-weight: 700;
+}
+
+:root[data-theme="apple27"] #settings > .page-header,
+:root[data-theme="winui"] #settings > .page-header {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+:root[data-theme="apple27"] .logo,
+:root[data-theme="apple27"] .app-loading-logo,
+:root[data-theme="apple27"] .settings-about-logo {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.18),
+    0 5px 16px rgba(0, 0, 0, 0.12);
 }
 
 :root[data-theme="apple27"] .page.active {
@@ -614,21 +648,37 @@ html:root[data-theme] {
   backdrop-filter: none;
 }
 
+:root[data-theme="apple27"] .settings-group,
+:root[data-theme="apple27"] .settings-about-card {
+  background-image: none;
+}
+
+:root[data-theme="apple27"] .setting-item {
+  min-height: 58px;
+  border-bottom-color: var(--theme-border);
+}
+
 :root[data-theme="apple27"] .custom-select-options,
 :root[data-theme="apple27"] .modal-content {
   background: var(--theme-raised-bg);
 }
 
 :root[data-theme="apple27"] .btn {
-  min-height: 2.45rem;
+  min-height: var(--theme-control-height);
+  padding: 0.45rem 0.9rem;
   border-radius: var(--theme-control-radius);
   letter-spacing: -0.01em;
+  font-size: 0.9rem;
+  font-weight: 600;
 }
 
-:root[data-theme="apple27"] .btn-icon,
+:root[data-theme="apple27"] .btn-icon {
+  border-radius: 50%;
+}
+
 :root[data-theme="apple27"] .billing-back-button,
 :root[data-theme="apple27"] .titlebar-button {
-  border-radius: 50%;
+  border-radius: 6px;
 }
 
 :root[data-theme="apple27"] .btn-secondary {
@@ -657,20 +707,45 @@ html:root[data-theme] {
   border-radius: var(--theme-control-radius);
 }
 
+:root[data-theme="apple27"] .nav-item {
+  min-height: 40px;
+  padding: 0.62rem 0.8rem;
+}
+
+:root[data-theme="apple27"] .nav-tree-link,
+:root[data-theme="apple27"] .billing-section-nav-button {
+  min-height: 32px;
+}
+
 :root[data-theme="apple27"] .nav-item.active,
 :root[data-theme="apple27"] .nav-tree-link.active,
 :root[data-theme="apple27"] .billing-section-nav-button.active {
+  color: var(--accent-contrast);
+  border-color: transparent;
+  background: var(--accent-color);
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.2);
+}
+
+:root[data-theme="apple27"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
+:root[data-theme="apple27"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
   color: var(--theme-text);
-  border-color: rgba(var(--accent-rgb), 0.32);
-  background: rgba(var(--accent-rgb), 0.2);
-  box-shadow:
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.12),
-    0 3px 10px rgba(var(--accent-rgb), 0.12);
+  border-color: transparent;
+  background: var(--theme-hover-bg);
+  box-shadow: none;
+}
+
+:root[data-theme="apple27"] .custom-option.selected,
+:root[data-theme="apple27"] .billing-payment-method.active,
+:root[data-theme="apple27"] .billing-package-option.selected {
+  color: var(--theme-text);
+  border-color: rgba(var(--accent-rgb), 0.38);
+  background: rgba(var(--accent-rgb), 0.14);
 }
 
 :root[data-theme="apple27"] .custom-select-trigger,
 :root[data-theme="apple27"] input,
 :root[data-theme="apple27"] textarea {
+  min-height: var(--theme-control-height);
   border-color: var(--theme-border-strong);
 }
 
@@ -717,7 +792,15 @@ html:root[data-theme] {
 
 :root[data-theme="apple27"] body.is-android #nav,
 :root[data-theme="apple27"] body.is-android .billing-mobile-nav {
-  border-radius: 14px;
+  border-radius: 13px;
+}
+
+:root[data-theme="apple27"] body.is-android #nav .nav-item.active,
+:root[data-theme="apple27"] body.is-android .billing-mobile-nav .billing-section-nav-button.active {
+  color: var(--accent-color);
+  border-color: transparent;
+  background: rgba(var(--accent-rgb), 0.16);
+  box-shadow: none;
 }
 
 @media (hover: hover) {
@@ -751,7 +834,16 @@ html:root[data-theme] {
   color: var(--theme-text);
   background: none;
   -webkit-text-fill-color: currentColor;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.012em;
+  font-size: 1.8rem;
+  font-weight: 600;
+}
+
+:root[data-theme="winui"] .logo,
+:root[data-theme="winui"] .app-loading-logo,
+:root[data-theme="winui"] .settings-about-logo {
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
 }
 
 :root[data-theme="winui"] .page.active {
@@ -773,6 +865,16 @@ html:root[data-theme] {
   backdrop-filter: none;
 }
 
+:root[data-theme="winui"] .settings-group,
+:root[data-theme="winui"] .settings-about-card {
+  background-image: none;
+}
+
+:root[data-theme="winui"] .setting-item {
+  min-height: 56px;
+  border-bottom-color: var(--theme-border);
+}
+
 :root[data-theme="winui"][data-color-scheme="dark"] .glass-card,
 :root[data-theme="winui"][data-color-scheme="dark"] .account-item {
   border-color: rgba(255, 255, 255, 0.1);
@@ -789,9 +891,13 @@ html:root[data-theme] {
 }
 
 :root[data-theme="winui"] .btn {
+  min-height: var(--theme-control-height);
+  padding: 0.4rem 0.85rem;
   border: 1px solid var(--theme-border);
   border-bottom-color: var(--theme-border-strong);
   box-shadow: var(--theme-control-shadow);
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 
 :root[data-theme="winui"] .btn-primary {
@@ -831,6 +937,18 @@ html:root[data-theme] {
 :root[data-theme="winui"] .nav-tree-link,
 :root[data-theme="winui"] .billing-section-nav-button {
   position: relative;
+  border-radius: var(--theme-control-radius);
+}
+
+:root[data-theme="winui"] .nav-item {
+  min-height: 36px;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+}
+
+:root[data-theme="winui"] .nav-tree-link,
+:root[data-theme="winui"] .billing-section-nav-button {
+  min-height: 30px;
 }
 
 :root[data-theme="winui"] .nav-item.active,
@@ -856,10 +974,46 @@ html:root[data-theme] {
   content: "";
 }
 
+:root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
+:root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
+  color: var(--theme-text);
+  background: transparent;
+}
+
+:root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active::before,
+:root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active::before,
+:root[data-theme="winui"] #nav:not(.billing-active) .nav-billing-link.active::before {
+  display: none;
+}
+
 :root[data-theme="winui"] .custom-select-trigger,
 :root[data-theme="winui"] input,
 :root[data-theme="winui"] textarea {
+  min-height: var(--theme-control-height);
   border-bottom-color: var(--theme-border-strong);
+}
+
+:root[data-theme="winui"] .custom-select-options,
+:root[data-theme="winui"] .modal-content {
+  border-color: var(--theme-border);
+}
+
+:root[data-theme="winui"] .custom-option {
+  position: relative;
+  min-height: 32px;
+  border-radius: 4px;
+}
+
+:root[data-theme="winui"] .custom-option.selected::before {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 3px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--accent-color);
+  transform: translateY(-50%);
+  content: "";
 }
 
 :root[data-theme="winui"] input:focus,
@@ -913,6 +1067,10 @@ html:root[data-theme] {
   border-radius: 8px;
 }
 
+:root[data-theme="winui"] body:not(.is-macos) {
+  border-radius: 8px;
+}
+
 :root[data-theme="winui"] body.is-android #nav .nav-item.active::before,
 :root[data-theme="winui"] body.is-android .billing-mobile-nav .billing-section-nav-button.active::before {
   top: 2px;
@@ -928,6 +1086,7 @@ html:root[data-theme] {
  */
 :root[data-theme] body.is-android {
   --card-bg: var(--theme-card-solid);
+  border-radius: 0;
 }
 
 :root[data-theme] body.is-android nav,
@@ -975,10 +1134,18 @@ html:root[data-theme] {
 
 :root[data-theme="apple27"] body.is-android #nav,
 :root[data-theme="apple27"] body.is-android .billing-mobile-nav {
-  border-radius: 14px;
+  border-radius: 13px;
   box-shadow:
     inset 0 0.5px 0 rgba(255, 255, 255, 0.14),
     0 8px 22px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme="apple27"] body.is-android #nav .nav-item,
+:root[data-theme="winui"] body.is-android #nav .nav-item {
+  min-height: 0;
+  height: 100%;
+  gap: 0.16rem;
+  padding: 0.34rem 0.06rem;
 }
 
 :root[data-theme="winui"] body.is-android .glass-card,
