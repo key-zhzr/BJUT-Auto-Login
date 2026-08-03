@@ -6196,6 +6196,7 @@ async function prepareAndOpenWechatRecharge() {
   billingRechargeState.textContent = '正在核对当前校园卡与目标网费账户…';
   setRechargeBusy(true, '正在核对…');
   updateRechargeProgress(10, '正在复用移动门户登录状态并核对账户…');
+  let wechatOrderCreated = false;
   try {
     const preview = await invoke<WechatRechargePreview>('prepare_wechat_card_recharge', {
       targetAccount,
@@ -6229,6 +6230,7 @@ async function prepareAndOpenWechatRecharge() {
     const result = await invoke<WechatRechargeResult>('confirm_wechat_card_recharge', {
       confirmationId: preview.confirmationId,
     });
+    wechatOrderCreated = true;
     if (!isTrustedWechatLaunchUrl(result.launchUrl)
       || result.payerAccount !== preview.payerAccount
       || result.targetAccount !== preview.targetAccount) {
@@ -6252,7 +6254,11 @@ async function prepareAndOpenWechatRecharge() {
       await showWechatPaymentModal(btnBillingRecharge);
     }
   } catch (error) {
-    billingRechargeState.textContent = `微信充值未开始或支付入口未打开：${String(error)}`;
+    const message = String(error);
+    const orderMayExist = wechatOrderCreated || message.includes('订单');
+    billingRechargeState.textContent = orderMayExist
+      ? `微信订单可能已经创建，但支付入口未能安全打开：${message}。请先刷新充值恢复状态，不要立即重复创建订单。`
+      : `微信充值未开始：${message}`;
     billingRechargeProgress.hidden = true;
     await customAlert(billingRechargeState.textContent, '微信充值');
   } finally {

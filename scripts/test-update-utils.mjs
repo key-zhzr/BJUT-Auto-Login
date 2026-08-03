@@ -38,7 +38,17 @@ console.log(`SemVer regression cases passed: ${cases.length}`);
 
 const paymentUrl = 'weixin://wap/pay?prepayid%3Dwx1234567890&package=123&noncestr=abc123&timestamp=1784697242&sign=BgAAyf6IiX7aEIMn';
 assert.equal(isTrustedWechatLaunchUrl(paymentUrl), true);
+assert.equal(
+  isTrustedWechatLaunchUrl('weixin://wap/pay?prepayid%3Dwx1234567890%26package%3DWAP%26noncestr%3Dabc123%26sign%3DBgAAyf6IiX7aEIMn'),
+  true,
+);
+assert.equal(
+  isTrustedWechatLaunchUrl('weixin://wap/pay?prepayid=wx1234567890&package=Sign%3DWXPay&noncestr=abc123&sign=BgAAyf6IiX7aEIMn%2B%2F%3D'),
+  true,
+);
 assert.equal(isTrustedWechatLaunchUrl('weixin://evil/pay?prepayid=wx1'), false);
+assert.equal(isTrustedWechatLaunchUrl('weixin://wap/pay?prepayid=wx123&package=WAP'), false);
+assert.equal(isTrustedWechatLaunchUrl('weixin://wap/pay?prepayid=wx123&package=WAP&sign=abc%22def'), false);
 const relay = new URL(buildWechatPaymentRelayUrl(paymentUrl));
 assert.equal(relay.origin, 'https://red.bjutdown.work');
 assert.equal(relay.search, '');

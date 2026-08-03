@@ -6,29 +6,45 @@ export interface WechatRelaySession {
   expiresIn: number;
 }
 
+function hasWechatPaymentMarkers(query: string): boolean {
+  const candidates = [query];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const decoded = decodeURIComponent(candidates[candidates.length - 1]);
+      if (decoded === candidates[candidates.length - 1]) break;
+      candidates.push(decoded);
+    } catch {
+      break;
+    }
+  }
+
+  const candidatesAreSafe = candidates.every((candidate) => /^[\x21-\x7e]+$/.test(candidate)
+    && !/[\x22\x27<>\\]/.test(candidate));
+  return candidatesAreSafe && candidates.some((candidate) => {
+    const lower = candidate.toLowerCase();
+    return lower.includes('prepay')
+      && lower.includes('package')
+      && lower.includes('sign');
+  });
+}
+
 export function isTrustedWechatLaunchUrl(value: string): boolean {
+  if (typeof value !== 'string' || value.length > 4096) return false;
   try {
     const url = new URL(value);
-    const decodedQuery = decodeURIComponent(url.search.slice(1));
-    const parameters = new URLSearchParams(decodedQuery);
-    const prepayId = parameters.get('prepayid') ?? '';
-    const packageValue = parameters.get('package') ?? '';
-    const nonce = parameters.get('noncestr') ?? '';
-    const timestamp = parameters.get('timestamp') ?? '';
-    const signature = parameters.get('sign') ?? '';
-    return value.length <= 4096
-      && url.protocol === 'weixin:'
+    const query = url.search.slice(1);
+    return url.protocol === 'weixin:'
       && url.hostname === 'wap'
       && url.pathname === '/pay'
       && !url.username
       && !url.password
       && !url.port
       && !url.hash
-      && /^wx[0-9A-Za-z]+$/.test(prepayId)
-      && /^[0-9A-Za-z_-]+$/.test(packageValue)
-      && /^[0-9A-Za-z_-]+$/.test(nonce)
-      && /^\d{9,13}$/.test(timestamp)
-      && /^[0-9A-Za-z_-]{16,}$/.test(signature);
+      && query.length >= 16
+      && query.length <= 3072
+      && /^[\x21-\x7e]+$/.test(query)
+      && !/[\x22\x27<>\\]/.test(query)
+      && hasWechatPaymentMarkers(query);
   } catch {
     return false;
   }

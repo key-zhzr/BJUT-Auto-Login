@@ -1267,6 +1267,7 @@ fn validate_wechat_launch_url(candidate: &str) -> Result<String, CampusServiceEr
         .filter(|query| (16..=3072).contains(&query.len()))
         .ok_or_else(|| CampusServiceError::protocol("微信唤起地址缺少支付参数"))?;
     let query_lower = query.to_ascii_lowercase();
+    let decoded_query = percent_decode_ascii_once(query);
     if url.scheme() != "weixin"
         || url.host_str() != Some("wap")
         || url.path() != "/pay"
@@ -1275,6 +1276,9 @@ fn validate_wechat_launch_url(candidate: &str) -> Result<String, CampusServiceEr
         || url.password().is_some()
         || url.fragment().is_some()
         || !query.bytes().all(|byte| {
+            byte.is_ascii_graphic() && !matches!(byte, b'\'' | b'"' | b'<' | b'>' | b'\\')
+        })
+        || !decoded_query.bytes().all(|byte| {
             byte.is_ascii_graphic() && !matches!(byte, b'\'' | b'"' | b'<' | b'>' | b'\\')
         })
         || !["prepay", "package", "sign"]
@@ -2525,7 +2529,15 @@ mod tests {
         assert!(launch.starts_with("weixin://wap/pay?"));
         assert!(validate_wechat_launch_url(&launch).is_ok());
         assert!(validate_wechat_launch_url(
+            "weixin://wap/pay?prepayid=wx-test&package=Sign%3DWXPay&noncestr=n&sign=safe%2B%2F%3D"
+        )
+        .is_ok());
+        assert!(validate_wechat_launch_url(
             "weixin://evil/pay?prepayid%3Dx%26package%3DWAP%26sign%3Ds"
+        )
+        .is_err());
+        assert!(validate_wechat_launch_url(
+            "weixin://wap/pay?prepayid=wx-test&package=WAP&sign=unsafe%22value"
         )
         .is_err());
     }

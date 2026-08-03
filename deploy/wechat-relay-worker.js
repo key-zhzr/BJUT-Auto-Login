@@ -42,11 +42,32 @@ function corsHeaders(request) {
   } : {};
 }
 
+function hasWechatPaymentMarkers(query) {
+  const candidates = [query];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const decoded = decodeURIComponent(candidates[candidates.length - 1]);
+      if (decoded === candidates[candidates.length - 1]) break;
+      candidates.push(decoded);
+    } catch {
+      break;
+    }
+  }
+  const candidatesAreSafe = candidates.every((candidate) => /^[\x21-\x7e]+$/.test(candidate)
+    && !/[\x22\x27<>\\]/.test(candidate));
+  return candidatesAreSafe && candidates.some((candidate) => {
+    const lower = candidate.toLowerCase();
+    return lower.includes('prepay')
+      && lower.includes('package')
+      && lower.includes('sign');
+  });
+}
+
 function isTrustedWechatLaunchUrl(value) {
   if (typeof value !== 'string' || value.length > 4096) return false;
   try {
     const url = new URL(value);
-    const parameters = new URLSearchParams(decodeURIComponent(url.search.slice(1)));
+    const query = url.search.slice(1);
     return url.protocol === 'weixin:'
       && url.hostname === 'wap'
       && url.pathname === '/pay'
@@ -54,11 +75,11 @@ function isTrustedWechatLaunchUrl(value) {
       && !url.password
       && !url.port
       && !url.hash
-      && /^wx[0-9A-Za-z]+$/.test(parameters.get('prepayid') || '')
-      && /^[0-9A-Za-z_-]+$/.test(parameters.get('package') || '')
-      && /^[0-9A-Za-z_-]+$/.test(parameters.get('noncestr') || '')
-      && /^\d{9,13}$/.test(parameters.get('timestamp') || '')
-      && /^[0-9A-Za-z_-]{16,}$/.test(parameters.get('sign') || '');
+      && query.length >= 16
+      && query.length <= 3072
+      && /^[\x21-\x7e]+$/.test(query)
+      && !/[\x22\x27<>\\]/.test(query)
+      && hasWechatPaymentMarkers(query);
   } catch {
     return false;
   }
