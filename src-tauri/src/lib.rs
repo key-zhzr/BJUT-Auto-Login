@@ -498,34 +498,56 @@ fn exit_app(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+fn get_macos_dock_visible(state: tauri::State<Arc<AppState>>) -> Option<bool> {
     #[cfg(target_os = "macos")]
     {
-        use tauri::ActivationPolicy;
-        let policy = if visible {
-            ActivationPolicy::Regular
-        } else {
-            ActivationPolicy::Accessory
+        return state.config.read().ok()?.macos_dock_visible;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_activation_policy(app: &tauri::AppHandle, visible: bool) -> Result<(), String> {
+    use tauri::ActivationPolicy;
+    app.set_activation_policy(if visible {
+        ActivationPolicy::Regular
+    } else {
+        ActivationPolicy::Accessory
+    })
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_dock_visible(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    visible: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let snapshot = {
+            let mut config = state.config.write().map_err(|error| error.to_string())?;
+            config.macos_dock_visible = Some(visible);
+            config.clone()
         };
-        app.set_activation_policy(policy)
-            .map_err(|e| e.to_string())?;
+        save_config(&app, &state, snapshot)?;
+        apply_macos_activation_policy(&app, visible)?;
         if visible {
-            // Changing Accessory -> Regular is asynchronous in AppKit. Restore
-            // focus after the policy transition instead of during cold start.
-            let delayed_app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(180)).await;
-                let main_thread_app = delayed_app.clone();
-                let _ = delayed_app.run_on_main_thread(move || {
-                    if let Some(window) = main_thread_app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                });
-            });
+            // Keep the already-rendered window visible when switching from
+            // Accessory to Regular. Avoid a delayed AppKit callback: it can
+            // race with a close/hide event and used to refocus cold starts.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
         }
     }
     let _ = app;
+    let _ = state;
     let _ = visible;
     Ok(())
 }
@@ -2076,6 +2098,45 @@ fn get_log_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     let _ = std::fs::create_dir_all(&p);
     p.push("app.log");
     p
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_panic_log_hook(app: &tauri::AppHandle) {
+    let log_path = get_log_path(app);
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let message = panic_info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| {
+                panic_info
+                    .payload()
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+            })
+            .unwrap_or("unknown Rust panic")
+            .replace(['\r', '\n'], " ");
+        let location = panic_info
+            .location()
+            .map(|location| format!("{}:{}", location.file(), location.line()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write;
+            let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            let _ = writeln!(
+                file,
+                "[{now}] [error] [系统] Rust panic at {location}: {}",
+                message.chars().take(1000).collect::<String>()
+            );
+            let _ = file.flush();
+        }
+        previous_hook(panic_info);
+    }));
 }
 
 fn get_account_health_path(app: &tauri::AppHandle) -> std::path::PathBuf {
@@ -5274,7 +5335,10 @@ async fn prepare_network_recharge(
                     {
                         return Err("支付恢复记录与本次网费转入信息不一致，已停止操作".to_string());
                     }
-                    transaction.parent_id = source_id.to_string();
+                    // Store the journal's stable transaction id instead of a
+                    // provider payment id, which is deliberately cleared once
+                    // the payment reaches a terminal stage.
+                    transaction.parent_id = source.id.clone();
                     config.recharge_transactions.transition(
                         source_id,
                         recharge_state::RechargeStage::PaymentConfirmed,
@@ -6318,6 +6382,7 @@ pub fn run() {
                 theme: default_theme(),
                 accent_color: default_accent_color(),
                 color_mode: default_color_mode(),
+                macos_dock_visible: None,
                 vpn_compatibility: default_vpn_compatibility(),
                 vpn_maximum_until: None,
                 whitelist: Vec::new(),
@@ -6365,8 +6430,26 @@ pub fn run() {
         let app_handle = _app.handle().clone();
         let state_clone = app_state.clone();
 
+        #[cfg(target_os = "macos")]
+        install_macos_panic_log_hook(&app_handle);
+
         // Load config on startup
         load_config(&app_handle, &state_clone);
+
+        // AppKit activation policy belongs to application setup. Applying the
+        // saved policy before the WebView asks to reveal the window avoids a
+        // cold-start race between accessory-mode changes and Tao window events.
+        #[cfg(target_os = "macos")]
+        if let Some(visible) = state_clone
+            .config
+            .read()
+            .ok()
+            .and_then(|config| config.macos_dock_visible)
+        {
+            if let Err(error) = apply_macos_activation_policy(&app_handle, visible) {
+                eprintln!("Unable to restore macOS activation policy: {error}");
+            }
+        }
 
         initialize_log_history(&app_handle, &state_clone);
 
@@ -6681,6 +6764,7 @@ pub fn run() {
             stop_keep_alive_service,
             get_local_ip,
             exit_app,
+            get_macos_dock_visible,
             set_dock_visible,
             frontend_ready,
             read_clipboard,
@@ -6887,6 +6971,7 @@ mod tests {
             theme: default_theme(),
             accent_color: default_accent_color(),
             color_mode: default_color_mode(),
+            macos_dock_visible: Some(false),
             vpn_compatibility: default_vpn_compatibility(),
             vpn_maximum_until: None,
             whitelist: vec!["campus|trusted".to_string()],

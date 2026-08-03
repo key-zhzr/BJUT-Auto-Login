@@ -514,7 +514,8 @@ mod tests {
     fn linked_transfer_completes_its_payment_parent_atomically() {
         let mut payment = transaction();
         payment.id = "payment-1".to_string();
-        payment.method = "alipay".to_string();
+        payment.method = "wechat".to_string();
+        payment.payment_id = "wx-order-1".to_string();
         payment.stage = RechargeStage::PaymentConfirmed;
         let mut transfer = transaction();
         transfer.id = "transfer-1".to_string();
@@ -532,6 +533,11 @@ mod tests {
             .0
             .iter()
             .all(|item| item.stage == RechargeStage::Completed));
+        assert!(journal.find("wx-order-1").is_none());
+        assert_eq!(
+            journal.find("payment-1").map(|item| item.stage.clone()),
+            Some(RechargeStage::Completed)
+        );
     }
 
     #[test]

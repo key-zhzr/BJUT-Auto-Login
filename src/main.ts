@@ -78,7 +78,24 @@ if (IS_ANDROID) {
 
 let loadingMaskTimer: number | null = null;
 let appLaunchRevealed = false;
-let macosDockPolicyReady: Promise<void> = Promise.resolve();
+let appWindowRevealed = false;
+
+async function initializeMacosDockPolicy(): Promise<void> {
+  if (!window.__TAURI__ || !navigator.userAgent.includes('Mac OS X')) return;
+  try {
+    const backendPreference = await invoke<boolean | null>('get_macos_dock_visible');
+    const localPreference = localStorage.getItem('bjut_macos_dock') !== 'false';
+    if (backendPreference === null) {
+      await invoke<void>('set_dock_visible', { visible: localPreference });
+      return;
+    }
+    localStorage.setItem('bjut_macos_dock', String(backendPreference));
+  } catch (error) {
+    console.error('Failed to initialize macOS dock policy:', error);
+  }
+}
+
+const macosDockPolicyReady = initializeMacosDockPolicy();
 
 function setLoadingMaskVisible(visible: boolean, text = '正在启动 BJUT-AL…') {
   const mask = document.getElementById('app-loading-mask');
@@ -126,15 +143,21 @@ function clearTransientWebviewPasswords() {
     .forEach(resetSensitivePasswordInput);
 }
 
-async function finishAppLaunch() {
-  if (appLaunchRevealed) return;
+async function revealAppWindow() {
+  if (appWindowRevealed) return;
   await macosDockPolicyReady;
   await new Promise(resolve => window.setTimeout(resolve, 40));
-  appLaunchRevealed = true;
-  setLoadingMaskVisible(false);
+  appWindowRevealed = true;
   if (window.__TAURI__) {
     await invoke('frontend_ready').catch(error => console.error('Failed to reveal main window:', error));
   }
+}
+
+async function finishAppLaunch() {
+  if (appLaunchRevealed) return;
+  await revealAppWindow();
+  appLaunchRevealed = true;
+  setLoadingMaskVisible(false);
 }
 
 window.__showResumeMask = showResumeMask;
@@ -467,6 +490,7 @@ function syncConfigToRust(): Promise<void> {
     theme: normalizeAppTheme(localStorage.getItem('bjut_theme')),
     accent_color: normalizeAccentColor(localStorage.getItem('bjut_accent_color')),
     color_mode: normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode')),
+    macos_dock_visible: localStorage.getItem('bjut_macos_dock') !== 'false',
     vpn_compatibility: localStorage.getItem('bjut_vpn_compatibility') || 'high',
     vpn_maximum_until: vpnMaximumUntil || null,
     whitelist: [...whitelistCache],
@@ -560,9 +584,12 @@ async function loadConfigFromRust() {
     const loadedTheme = normalizeAppTheme(config.theme);
     const loadedAccentColor = normalizeAccentColor(config.accent_color);
     const loadedColorMode = normalizeAppearanceColorMode(config.color_mode);
+    const loadedMacosDockVisible = config.macos_dock_visible
+      ?? (localStorage.getItem('bjut_macos_dock') !== 'false');
     localStorage.setItem('bjut_theme', loadedTheme);
     localStorage.setItem('bjut_accent_color', loadedAccentColor);
     localStorage.setItem('bjut_color_mode', loadedColorMode);
+    localStorage.setItem('bjut_macos_dock', String(loadedMacosDockVisible));
     applyAppearance(loadedTheme, loadedAccentColor, loadedColorMode);
     const loadedVpnMode = config.vpn_compatibility || 'high';
     vpnMaximumUntil = Number(config.vpn_maximum_until || 0);
@@ -608,6 +635,8 @@ async function loadConfigFromRust() {
     settingTheme.value = loadedTheme;
     settingAccentColor.value = loadedAccentColor;
     settingColorMode.value = loadedColorMode;
+    const settingMacosDock = document.getElementById('setting-macos-dock') as HTMLInputElement | null;
+    if (settingMacosDock) settingMacosDock.checked = loadedMacosDockVisible;
     settingLogLevel.value = config.log_level;
     settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
     scheduleVpnMaximumRollback();
@@ -1572,7 +1601,7 @@ async function init() {
   setupNavigation();
   setupEventListeners();
   if (window.__TAURI__ && navigator.userAgent.includes('Mac OS X')) {
-    void invoke('frontend_ready').catch(error => {
+    await revealAppWindow().catch(error => {
       console.error('Failed to reveal macOS launch window:', error);
     });
   }
@@ -2847,12 +2876,6 @@ function setupEventListeners() {
     const dockEnabled = localStorage.getItem('bjut_macos_dock') !== 'false';
     const isMacos = navigator.userAgent.includes('Mac OS X');
     settingMacosDock.checked = dockEnabled;
-    // Regular is already the default policy. Re-applying it while the hidden
-    // cold-start window is being created can make macOS deactivate the window.
-    if (window.__TAURI__ && isMacos && !dockEnabled) {
-      macosDockPolicyReady = invoke<void>('set_dock_visible', { visible: false })
-        .catch(error => console.error('Failed to initialize macOS dock policy:', error));
-    }
     settingMacosDock.addEventListener('change', async (e) => {
       const enabled = (e.target as HTMLInputElement).checked;
       localStorage.setItem('bjut_macos_dock', enabled.toString());
@@ -6112,11 +6135,6 @@ async function completeWechatNetworkRecharge(automatic = false) {
     });
     updateRechargeProgress(88, '网费转入完成，正在刷新双方余额…');
     const balanceError = await refreshRechargeBalancesOnce(payment.targetAccount, payment.payerAccount);
-    await invoke('finish_recharge_recovery', {
-      id: payment.paymentId,
-      completed: true,
-      note: '微信到账并已转入目标网费账户',
-    });
     await invoke('cancel_wechat_card_recharge', {
       confirmationId: null,
       paymentId: payment.paymentId,

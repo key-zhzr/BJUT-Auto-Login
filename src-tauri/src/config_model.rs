@@ -58,6 +58,8 @@ pub(crate) struct AppConfig {
     pub(crate) accent_color: String,
     #[serde(default = "default_color_mode", alias = "colorMode")]
     pub(crate) color_mode: String,
+    #[serde(default, alias = "macosDockVisible")]
+    pub(crate) macos_dock_visible: Option<bool>,
     #[serde(default = "default_vpn_compatibility", alias = "vpnCompatibility")]
     pub(crate) vpn_compatibility: String,
     #[serde(default, alias = "vpnMaximumUntil")]

@@ -32,6 +32,7 @@ export interface BackendConfig {
   theme?: string;
   accent_color?: string;
   color_mode?: string;
+  macos_dock_visible?: boolean | null;
   vpn_compatibility?: string;
   vpn_maximum_until?: number | null;
   whitelist?: string[];
