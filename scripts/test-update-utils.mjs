@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 
 const { isVersionNewer } = await import('../src/update-utils.ts');
 const {
+  loadGitHubReleases,
+  releaseFromOfficialManifest,
+} = await import('../src/update-source.ts');
+const {
   buildWechatPaymentRelayUrl,
   createWechatPaymentRelaySession,
   isTrustedWechatLaunchUrl,
@@ -35,6 +39,74 @@ for (const [current, latest, expected] of cases) {
 }
 
 console.log(`SemVer regression cases passed: ${cases.length}`);
+
+const releaseFixture = {
+  tag_name: 'v0.1.6',
+  name: 'BJUT-Auto-Login v0.1.6',
+  body: 'notes',
+  html_url: 'https://github.com/key-zhzr/BJUT-Auto-Login/releases/tag/v0.1.6',
+  prerelease: false,
+  draft: false,
+  assets: [],
+};
+const storageValues = new Map();
+const storage = {
+  getItem(key) { return storageValues.get(key) ?? null; },
+  setItem(key, value) { storageValues.set(key, value); },
+};
+let apiCalls = 0;
+const apiResult = await loadGitHubReleases(10, {
+  storage,
+  now: 1_000,
+  async fetchImpl() {
+    apiCalls += 1;
+    return new Response(JSON.stringify([releaseFixture]), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  },
+});
+assert.equal(apiResult.source, 'api');
+assert.equal(apiResult.releases[0].tag_name, 'v0.1.6');
+const cachedResult = await loadGitHubReleases(10, {
+  storage,
+  now: 2_000,
+  async fetchImpl() {
+    throw new Error('fresh cache should avoid a network request');
+  },
+});
+assert.equal(cachedResult.source, 'cache');
+assert.equal(apiCalls, 1);
+const staleResult = await loadGitHubReleases(10, {
+  storage,
+  now: 31 * 60 * 1_000,
+  async fetchImpl() {
+    return new Response('rate limited', {
+      status: 403,
+      headers: {
+        'x-ratelimit-remaining': '0',
+        'x-ratelimit-reset': '9999999999',
+      },
+    });
+  },
+});
+assert.equal(staleResult.source, 'stale-cache');
+assert.match(staleResult.warning, /已使用上次成功读取的发布信息/);
+
+const syntheticRelease = releaseFromOfficialManifest({
+  version: '0.1.6',
+  notes: 'manifest notes',
+  platforms: {},
+}, {
+  platform: 'android',
+  arch: 'arm64',
+  format: 'apk',
+  currentVersion: '0.1.5',
+}, 'https://github.com/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json');
+assert.equal(syntheticRelease.tag_name, 'v0.1.6');
+assert.equal(syntheticRelease.assets[0].name, 'BJUT-Auto-Login_0.1.6_Android_arm64.apk');
+assert.equal(syntheticRelease.assets[1].name, 'latest.json');
+console.log('GitHub release fallback regression cases passed');
 
 const paymentUrl = 'weixin://wap/pay?prepayid%3Dwx1234567890&package=123&noncestr=abc123&timestamp=1784697242&sign=BgAAyf6IiX7aEIMn';
 assert.equal(isTrustedWechatLaunchUrl(paymentUrl), true);

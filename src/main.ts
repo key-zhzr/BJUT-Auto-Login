@@ -23,6 +23,7 @@ import {
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
 import { requestNetworkTrustApproval } from './network-trust';
 import { formatBytes, isVersionNewer, renderReleaseNotes, selectUpdateAsset } from './update-utils';
+import { loadGitHubReleases, releaseFromOfficialManifest } from './update-source';
 import {
   buildWechatPaymentRelayUrl,
   createWechatPaymentRelaySession,
@@ -38,6 +39,7 @@ import type {
   BillingServiceState, BillingTable, CountdownPayload, CredentialStorageHealth,
   DiagnosticReport, DiscoveredCampusAccount, GitHubRelease, GitHubReleaseAsset,
   NetworkStatePayload,
+  OfficialUpdateManifest,
   NetworkProfile, RechargeBalanceSnapshot, RechargePreview, RechargeResult,
   RecoverableRecharge, UpdateProgress, UpdateTarget, UserInfo, WechatPaymentStatus,
   WechatRechargePreview, WechatRechargeResult, AccountHealth,
@@ -3102,14 +3104,27 @@ function setupEventListeners() {
           throw new Error('仅应用内支持自动更新');
         }
         const target = await invoke<UpdateTarget>('get_update_target');
-        const response = await fetch('https://api.github.com/repos/key-zhzr/BJUT-Auto-Login/releases?per_page=10', {
-          headers: { Accept: 'application/vnd.github+json' },
-        });
-        if (!response.ok) {
-          throw new Error(`GitHub API 返回 HTTP ${response.status}`);
+        let releases: GitHubRelease[];
+        try {
+          const loaded = await loadGitHubReleases(10);
+          releases = loaded.releases;
+          if (loaded.warning) log('系统', loaded.warning, 'info');
+        } catch (apiError) {
+          const manifestUrl = channel === 'release'
+            ? 'https://github.com/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json'
+            : `https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/${encodeURIComponent(
+              await invoke<string>('fetch_latest_official_release_tag'),
+            )}/latest.json`;
+          const manifest = await invoke<OfficialUpdateManifest>('fetch_official_update_manifest', {
+            url: manifestUrl,
+          });
+          releases = [releaseFromOfficialManifest(manifest, target, manifestUrl)];
+          log(
+            '系统',
+            `${String(apiError)}；已改用 GitHub 官方发布订阅和签名更新清单`,
+            'info',
+          );
         }
-
-        const releases = await response.json() as GitHubRelease[];
         if (!Array.isArray(releases) || releases.length === 0) {
           await customAlert('暂无更新版本发布');
           log('系统', '检查更新完毕 (暂无发布版本)');
@@ -3190,15 +3205,15 @@ function setupEventListeners() {
       try {
         if (!window.__TAURI__) throw new Error('仅应用内支持识别当前设备安装包');
         const target = await invoke<UpdateTarget>('get_update_target');
-        const response = await fetch('https://api.github.com/repos/key-zhzr/BJUT-Auto-Login/releases?per_page=20', {
-          headers: { Accept: 'application/vnd.github+json' },
-        });
-        if (!response.ok) throw new Error(`GitHub API 返回 HTTP ${response.status}`);
-        const releases = await response.json() as GitHubRelease[];
         const currentTag = target.currentVersion.replace(/^v/i, '');
-        const release = releases.find(item =>
-          !item.draft && item.tag_name.replace(/^v/i, '') === currentTag);
-        if (!release) throw new Error(`未找到当前版本 v${target.currentVersion} 的 GitHub Release`);
+        const manifestUrl = `https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/v${encodeURIComponent(currentTag)}/latest.json`;
+        const manifest = await invoke<OfficialUpdateManifest>('fetch_official_update_manifest', {
+          url: manifestUrl,
+        });
+        const release = releaseFromOfficialManifest(manifest, target, manifestUrl);
+        if (release.tag_name.replace(/^v/i, '') !== currentTag) {
+          throw new Error(`官方更新清单版本 ${release.tag_name} 与当前版本 v${currentTag} 不一致`);
+        }
         const asset = selectUpdateAsset(release.assets, target);
         if (!asset) {
           throw new Error(`当前版本未提供 ${target.platform}/${target.arch}/${target.format} 完整包`);

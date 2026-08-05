@@ -1829,6 +1829,171 @@ fn is_official_github_release_download(url: &reqwest::Url) -> bool {
             .starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
 }
 
+fn is_official_update_manifest_endpoint(url: &reqwest::Url) -> bool {
+    let trusted_origin = url.scheme() == "https"
+        && url.host_str() == Some("github.com")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none();
+    if !trusted_origin || !url.path().ends_with("/latest.json") {
+        return false;
+    }
+    url.path() == "/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json"
+        || url
+            .path()
+            .starts_with("/key-zhzr/BJUT-Auto-Login/releases/download/")
+}
+
+fn valid_update_manifest_version(version: &str) -> bool {
+    let version = version.trim().strip_prefix('v').unwrap_or(version.trim());
+    if version.is_empty() || version.len() > 64 {
+        return false;
+    }
+    let (without_build, build) = version
+        .split_once('+')
+        .map_or((version, None), |(left, right)| (left, Some(right)));
+    if build.is_some_and(|value| !valid_semver_identifiers(value, false)) {
+        return false;
+    }
+    let (core, prerelease) = without_build
+        .split_once('-')
+        .map_or((without_build, None), |(left, right)| (left, Some(right)));
+    if prerelease.is_some_and(|value| !valid_semver_identifiers(value, true)) {
+        return false;
+    }
+    let mut core_parts = core.split('.');
+    let valid_core = core_parts.by_ref().take(3).all(valid_semver_number);
+    valid_core && core_parts.next().is_none() && core.split('.').count() == 3
+}
+
+fn valid_semver_number(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| character.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0'))
+}
+
+fn valid_semver_identifiers(value: &str, reject_numeric_leading_zero: bool) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|identifier| {
+            !identifier.is_empty()
+                && identifier
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+                && (!reject_numeric_leading_zero
+                    || !identifier
+                        .chars()
+                        .all(|character| character.is_ascii_digit())
+                    || valid_semver_number(identifier))
+        })
+}
+
+fn latest_official_release_tag_from_atom(atom: &str) -> Option<String> {
+    const RELEASE_TAG_LINK: &str =
+        "href=\"https://github.com/key-zhzr/BJUT-Auto-Login/releases/tag/";
+    atom.match_indices(RELEASE_TAG_LINK).find_map(|(index, _)| {
+        let value = &atom[index + RELEASE_TAG_LINK.len()..];
+        let tag = value.split_once('"')?.0;
+        (tag.starts_with('v') && valid_update_manifest_version(tag)).then(|| tag.to_string())
+    })
+}
+
+#[tauri::command]
+async fn fetch_latest_official_release_tag() -> Result<String, String> {
+    const RELEASES_ATOM_URL: &str = "https://github.com/key-zhzr/BJUT-Auto-Login/releases.atom";
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent(format!(
+            "BJUT-Auto-Login/{} update-check",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .use_rustls_tls()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(RELEASES_ATOM_URL)
+        .header(
+            reqwest::header::ACCEPT,
+            "application/atom+xml, application/xml;q=0.9",
+        )
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
+        .send()
+        .await
+        .map_err(|error| format!("读取 GitHub 官方发布订阅失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub 官方发布订阅返回 HTTP {}",
+            response.status()
+        ));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("读取 GitHub 官方发布订阅失败：{error}"))?;
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err("GitHub 官方发布订阅大小异常".to_string());
+    }
+    let atom =
+        std::str::from_utf8(&bytes).map_err(|_| "GitHub 官方发布订阅不是有效 UTF-8".to_string())?;
+    latest_official_release_tag_from_atom(atom)
+        .ok_or_else(|| "GitHub 官方发布订阅未包含有效版本".to_string())
+}
+
+#[tauri::command]
+async fn fetch_official_update_manifest(url: String) -> Result<serde_json::Value, String> {
+    let endpoint = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
+    if !is_official_update_manifest_endpoint(&endpoint) {
+        return Err("拒绝读取非官方 GitHub 更新清单".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent(format!(
+            "BJUT-Auto-Login/{} update-check",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .use_rustls_tls()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(endpoint)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
+        .send()
+        .await
+        .map_err(|error| format!("读取 GitHub 官方更新清单失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub 官方更新清单返回 HTTP {}",
+            response.status()
+        ));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("读取 GitHub 官方更新清单失败：{error}"))?;
+    if bytes.len() > 512 * 1024 {
+        return Err("GitHub 官方更新清单大小异常".to_string());
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("GitHub 官方更新清单格式异常：{error}"))?;
+    let version = manifest
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .filter(|version| valid_update_manifest_version(version))
+        .ok_or_else(|| "GitHub 官方更新清单版本号无效".to_string())?;
+    if manifest
+        .get("platforms")
+        .is_none_or(|value| !value.is_object())
+    {
+        return Err("GitHub 官方更新清单缺少平台签名信息".to_string());
+    }
+    let _ = version;
+    Ok(manifest)
+}
+
 #[cfg(target_os = "android")]
 fn launch_update_installer(_app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
     use jni::objects::{JObject, JValue};
@@ -2340,9 +2505,15 @@ fn ensure_persistent_credential_backend() -> Result<(), String> {
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
+const SECURE_CONFIG_SERVICE: &str = "cn.edu.bjut.al";
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+const SECURE_CONFIG_USER: &str = "app-config";
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn load_secure_config(_app: &tauri::AppHandle) -> Result<Option<AppConfig>, String> {
     ensure_persistent_credential_backend()?;
-    let entry = keyring::Entry::new("cn.edu.bjut.al", "app-config").map_err(|e| e.to_string())?;
+    let entry = keyring::Entry::new(SECURE_CONFIG_SERVICE, SECURE_CONFIG_USER)
+        .map_err(|e| e.to_string())?;
     match entry.get_password() {
         Ok(serialized) => serde_json::from_str(&serialized)
             .map(Some)
@@ -2355,7 +2526,8 @@ fn load_secure_config(_app: &tauri::AppHandle) -> Result<Option<AppConfig>, Stri
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn save_secure_config(_app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
     ensure_persistent_credential_backend()?;
-    let entry = keyring::Entry::new("cn.edu.bjut.al", "app-config").map_err(|e| e.to_string())?;
+    let entry = keyring::Entry::new(SECURE_CONFIG_SERVICE, SECURE_CONFIG_USER)
+        .map_err(|e| e.to_string())?;
     let serialized = serde_json::to_string(config).map_err(|e| e.to_string())?;
     entry.set_password(&serialized).map_err(|e| e.to_string())
 }
@@ -6814,6 +6986,8 @@ pub fn run() {
             notify_network_change,
             set_auto_login_pause,
             get_update_target,
+            fetch_latest_official_release_tag,
+            fetch_official_update_manifest,
             download_and_install_update,
             reinstall_current_version,
             log_from_js,
@@ -6861,6 +7035,55 @@ mod tests {
         assert!(!is_mobile_data_network(
             &serde_json::json!({"transport": "wifi"})
         ));
+    }
+
+    #[test]
+    fn official_update_manifest_urls_are_tightly_scoped() {
+        for allowed in [
+            "https://github.com/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json",
+            "https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.5/latest.json",
+        ] {
+            assert!(is_official_update_manifest_endpoint(
+                &reqwest::Url::parse(allowed).unwrap()
+            ));
+        }
+        for rejected in [
+            "http://github.com/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json",
+            "https://example.com/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json",
+            "https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.5/app.json",
+            "https://github.com/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json?x=1",
+        ] {
+            assert!(!is_official_update_manifest_endpoint(
+                &reqwest::Url::parse(rejected).unwrap()
+            ));
+        }
+        assert!(valid_update_manifest_version("0.1.5"));
+        assert!(valid_update_manifest_version("0.1.6-beta.1"));
+        assert!(valid_update_manifest_version("v1.2.3-rc.1+build.7"));
+        assert!(!valid_update_manifest_version("../../latest"));
+        assert!(!valid_update_manifest_version("1.2"));
+        assert!(!valid_update_manifest_version("01.2.3"));
+        assert!(!valid_update_manifest_version("1.2.3-beta.01"));
+        assert!(!valid_update_manifest_version("1.2.3+"));
+    }
+
+    #[test]
+    fn official_release_atom_parser_accepts_only_trusted_semver_links() {
+        let atom = r#"
+            <feed>
+              <entry><link href="https://example.com/key-zhzr/BJUT-Auto-Login/releases/tag/v9.9.9"/></entry>
+              <entry><link href="https://github.com/key-zhzr/BJUT-Auto-Login/releases/tag/v0.1.6-beta.2"/></entry>
+              <entry><link href="https://github.com/key-zhzr/BJUT-Auto-Login/releases/tag/v0.1.5"/></entry>
+            </feed>
+        "#;
+        assert_eq!(
+            latest_official_release_tag_from_atom(atom).as_deref(),
+            Some("v0.1.6-beta.2")
+        );
+        assert!(latest_official_release_tag_from_atom(
+            r#"<link href="https://github.com/key-zhzr/BJUT-Auto-Login/releases/tag/../../latest"/>"#
+        )
+        .is_none());
     }
 
     #[test]
@@ -7179,7 +7402,7 @@ mod tests {
         assert!(!is_known_campus_ssid("evil-bjut-wifi"));
         assert!(automatic_login_network_allowed(NetworkTrustInput {
             login_type: &LoginType::Type1,
-            ssid: "bjut_wifi",
+            ssid: "bjut-sushe-5G-24vF",
             bssid: "11:22",
             ip: "10.21.2.3",
             transport: "wifi",

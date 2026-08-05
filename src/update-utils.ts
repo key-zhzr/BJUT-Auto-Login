@@ -72,6 +72,17 @@ export function selectUpdateAsset(
   return assets.find(asset => asset.name.toLowerCase().endsWith(expectedSuffix));
 }
 
+export function buildExpectedUpdateAssetName(version: string, target: UpdateTarget): string {
+  const normalizedVersion = version.replace(/^v/i, '');
+  switch (target.platform) {
+    case 'android': return `BJUT-Auto-Login_${normalizedVersion}_Android_${target.arch}.apk`;
+    case 'windows': return `BJUT-Auto-Login_${normalizedVersion}_Windows_${target.arch}.exe`;
+    case 'macos': return `BJUT-Auto-Login_${normalizedVersion}_macOS_${target.arch}.dmg`;
+    case 'linux': return `BJUT-Auto-Login_${normalizedVersion}_Linux_${target.arch}.${target.format}`;
+    default: return '';
+  }
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '未知大小';
   const units = ['B', 'KB', 'MB', 'GB'];

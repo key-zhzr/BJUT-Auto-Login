@@ -26,7 +26,80 @@ pub(crate) struct NetworkTrustInput<'a> {
 }
 
 pub(crate) fn normalize_ssid(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace('_', "-")
+    let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+    let mut collapsed = String::with_capacity(normalized.len());
+    let mut previous_was_separator = false;
+    for character in normalized.chars() {
+        if character == '-' {
+            if !previous_was_separator {
+                collapsed.push(character);
+            }
+            previous_was_separator = true;
+        } else {
+            collapsed.push(character);
+            previous_was_separator = false;
+        }
+    }
+    collapsed
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CampusWifiKind {
+    Dormitory,
+    Public,
+}
+
+fn valid_dorm_ap_id(value: &str) -> bool {
+    value.len() == 4
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+}
+
+fn has_observed_dorm_suffix(value: &str, prefix: &str, allow_bare: bool) -> bool {
+    let Some(suffix) = value.strip_prefix(prefix) else {
+        return false;
+    };
+    if suffix.is_empty() {
+        return allow_bare;
+    }
+    // The measured AP identifier is consistently four ASCII letters/digits.
+    // Requiring the complete suffix avoids turning a familiar-looking personal
+    // hotspot such as `bjut-sushe-private` into a trusted campus identity.
+    ["-2.4g-", "-5g-", "2.4g-", "5g-", "-2.4-"]
+        .iter()
+        .any(|marker| suffix.strip_prefix(marker).is_some_and(valid_dorm_ap_id))
+}
+
+pub(crate) fn campus_wifi_kind(ssid: &str) -> Option<CampusWifiKind> {
+    let normalized = normalize_ssid(ssid);
+    if normalized == "bjut-wifi" {
+        return Some(CampusWifiKind::Public);
+    }
+
+    if has_observed_dorm_suffix(&normalized, "bjut-sushe", true)
+        || has_observed_dorm_suffix(&normalized, "bjutsushe", false)
+    {
+        return Some(CampusWifiKind::Dormitory);
+    }
+
+    // These exact spelling variants were present in the supplied multi-floor
+    // scans. Keep the list explicit instead of using edit distance, which could
+    // classify unrelated personal hotspots as a campus network.
+    [
+        "bj-sushe",
+        "bjit-sushe",
+        "bjur-sushe",
+        "bjut-suahe",
+        "bjut-sudhe",
+        "bjut-suhe",
+        "bjut-sushr",
+        "bjuy-sushe",
+        "bnut-sushe",
+    ]
+    .iter()
+    .any(|prefix| has_observed_dorm_suffix(&normalized, prefix, false))
+    .then_some(CampusWifiKind::Dormitory)
 }
 
 fn normalize_bssid(value: &str) -> String {
@@ -100,8 +173,7 @@ pub(crate) fn is_campus_local_ip(ip: &str) -> bool {
 }
 
 pub(crate) fn is_known_campus_ssid(ssid: &str) -> bool {
-    let normalized = normalize_ssid(ssid);
-    normalized == "bjut-wifi" || normalized.contains("bjut-sushe")
+    campus_wifi_kind(ssid).is_some()
 }
 
 pub(crate) fn evaluate_network_trust(input: NetworkTrustInput<'_>) -> NetworkTrustResult {
@@ -147,7 +219,8 @@ pub(crate) fn evaluate_network_trust(input: NetworkTrustInput<'_>) -> NetworkTru
     }
 
     let allowed = match login_type {
-        LoginType::Type1 | LoginType::Type2 => is_known_campus_ssid(&normalized_ssid),
+        LoginType::Type1 => campus_wifi_kind(&normalized_ssid) == Some(CampusWifiKind::Dormitory),
+        LoginType::Type2 => campus_wifi_kind(&normalized_ssid) == Some(CampusWifiKind::Public),
         LoginType::Type3 => {
             (transport.is_empty()
                 || transport.eq_ignore_ascii_case("unknown")
@@ -189,10 +262,70 @@ mod tests {
     }
 
     #[test]
-    fn campus_ssid_matching_keeps_dorm_variants_specific() {
-        assert!(is_known_campus_ssid("room-bjut-sushe-5g"));
+    fn campus_ssid_matching_uses_scan_derived_variants_without_broad_fuzzy_matching() {
+        assert_eq!(
+            campus_wifi_kind("bjut-sushe-5G-24vF"),
+            Some(CampusWifiKind::Dormitory)
+        );
+        assert_eq!(
+            campus_wifi_kind("bjut-sushe--2.4G-eXd2"),
+            Some(CampusWifiKind::Dormitory)
+        );
+        assert_eq!(
+            campus_wifi_kind("bjut_sushe-5G-69Xe"),
+            Some(CampusWifiKind::Dormitory)
+        );
+        assert_eq!(
+            campus_wifi_kind("bjutsushe-5G-aU97"),
+            Some(CampusWifiKind::Dormitory)
+        );
+        assert_eq!(
+            campus_wifi_kind("bjut-sushe2.4G-a8Gb"),
+            Some(CampusWifiKind::Dormitory)
+        );
+        assert_eq!(
+            campus_wifi_kind("bjut-sushe-2.4-5JqM"),
+            Some(CampusWifiKind::Dormitory)
+        );
+        assert_eq!(
+            campus_wifi_kind("bjut_sushe"),
+            Some(CampusWifiKind::Dormitory)
+        );
+        for observed_typo in [
+            "bj-sushe-5G-a8Gb",
+            "bjit-sushe-2.4G-e8F6",
+            "bjur-sushe-5G-eMs6",
+            "bjut-suahe-5G-6Y6m",
+            "bjut-sudhe-2.4G-p5X9",
+            "bjut-suhe-2.4G-7XEm",
+            "bjut-sushr-2.4G-yB55",
+            "bjuy-sushe-5G-V9ye",
+            "bnut-sushe-5G-A3Mw",
+        ] {
+            assert_eq!(
+                campus_wifi_kind(observed_typo),
+                Some(CampusWifiKind::Dormitory),
+                "{observed_typo}"
+            );
+        }
         assert!(is_known_campus_ssid("BJUT_WIFI"));
-        assert!(!is_known_campus_ssid("evil-bjut-wifi"));
+        for unrelated in [
+            "room-bjut-sushe-5g",
+            "CU_bjut-sushe-28Au",
+            "not_bjut_wifi",
+            "evil-bjut-wifi",
+            "BJUT-OLY",
+            "bjut.wife",
+            "bjut-suahe-private",
+            "bjut-sushe-private",
+            "bjut-susheff",
+            "bjut-susheushe-2.4G-Bx34",
+            "bjut-sushe-438",
+            "bjut-sushe-R8",
+            "bjut_wifi_ceshi",
+        ] {
+            assert!(!is_known_campus_ssid(unrelated), "{unrelated}");
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@ use super::{
     check_internet_from_source, query_campus_dns_ipv4, redact_request_error, route_source_ipv4,
     VpnCompatibility, LGN6_HOST, LGN_HOST, WLGN_HOST,
 };
+use crate::network_trust::{campus_wifi_kind, CampusWifiKind};
 use reqwest::{Client, Url};
 use serde_json::Value;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -36,18 +37,11 @@ fn random_request_id() -> String {
     format!("{:04}", nanos % 10_000)
 }
 
-fn normalized_ssid(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace('_', "-")
-}
-
 fn login_type_hint(ssid: &str) -> Option<LoginType> {
-    let normalized = normalized_ssid(ssid);
-    if normalized.contains("bjut-sushe") {
-        Some(LoginType::Type1)
-    } else if normalized == "bjut-wifi" {
-        Some(LoginType::Type2)
-    } else {
-        None
+    match campus_wifi_kind(ssid) {
+        Some(CampusWifiKind::Dormitory) => Some(LoginType::Type1),
+        Some(CampusWifiKind::Public) => Some(LoginType::Type2),
+        None => None,
     }
 }
 
@@ -534,10 +528,16 @@ mod tests {
     #[test]
     fn ssid_and_transport_hints_are_specific() {
         assert_eq!(
-            login_type_hint("room-bjut-sushe-5g"),
+            login_type_hint("bjut-sushe--5G-bEY5"),
+            Some(LoginType::Type1)
+        );
+        assert_eq!(
+            login_type_hint("bjut-suahe-5G-6Y6m"),
             Some(LoginType::Type1)
         );
         assert_eq!(login_type_hint("bjut_wifi"), Some(LoginType::Type2));
+        assert_eq!(login_type_hint("CU_bjut-sushe-28Au"), None);
+        assert_eq!(login_type_hint("room-bjut-sushe-5g"), None);
         assert_eq!(login_type_hint("bjut_wifi_guest"), None);
         assert_eq!(login_type_hint(""), None);
     }
