@@ -3488,6 +3488,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                     "info",
                 );
                 let mut login_succeeded = false;
+                let mut login_failure_message: Option<String> = None;
                 let auto_login_paused = state.auto_login_paused_until.load(Ordering::SeqCst)
                     > chrono::Utc::now().timestamp();
                 let auto_login_enabled = {
@@ -3511,6 +3512,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                     }) {
                         Ok(()) => true,
                         Err(reason) => {
+                            login_failure_message = Some(format!("自动登录已阻止：{reason}"));
                             rust_log(
                                 &app,
                                 &state,
@@ -3543,6 +3545,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             }
                         }
                         if active_accounts.is_empty() {
+                            login_failure_message =
+                                Some("没有带已保存密码且当前可尝试的账号".to_string());
                             rust_log(
                                 &app,
                                 &state,
@@ -3592,6 +3596,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                         break;
                                     }
                                     Ok((false, msg)) => {
+                                        login_failure_message =
+                                            Some(format!("自动登录失败：{msg}"));
                                         record_account_failure(&app, &state, &acc.user, &msg);
                                         rust_log(
                                             &app,
@@ -3603,6 +3609,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                     }
                                     Err(err) => {
                                         if login_result_is_ambiguous(&err) {
+                                            login_failure_message = Some(err.clone());
                                             result_uncertain = true;
                                             state.auto_login_paused_until.store(
                                                 chrono::Utc::now().timestamp() + 60,
@@ -3620,6 +3627,8 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                             );
                                             break;
                                         }
+                                        login_failure_message =
+                                            Some(format!("自动登录请求失败：{err}"));
                                         record_account_failure(
                                             &app,
                                             &state,
@@ -3637,6 +3646,10 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                 }
                             }
                             if !success && !result_uncertain {
+                                if login_failure_message.is_none() {
+                                    login_failure_message =
+                                        Some("所有账号均未能完成登录".to_string());
+                                }
                                 rust_log(
                                     &app,
                                     &state,
@@ -3648,6 +3661,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                         }
                     }
                 } else if auto_login_paused {
+                    login_failure_message = Some("自动登录已临时暂停，请稍后重试".to_string());
                     rust_log(&app, &state, "网络", "自动登录已临时暂停，忽略重连", "info");
                 } else {
                     rust_log(&app, &state, "网络", "自动登录未开启，忽略重连", "info");
@@ -3670,7 +3684,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 } else {
                     state.non_campus_count.store(0, Ordering::SeqCst);
                 }
-                let payload = if login_succeeded {
+                let mut payload = if login_succeeded {
                     make_payload("Online", None, &current_ssid, &current_bssid, &current_ip)
                 } else {
                     make_payload(
@@ -3681,6 +3695,13 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                         &current_ip,
                     )
                 };
+                if !login_succeeded {
+                    if let (Some(message), Some(object)) =
+                        (login_failure_message, payload.as_object_mut())
+                    {
+                        object.insert("loginMessage".to_string(), serde_json::json!(message));
+                    }
+                }
                 {
                     let mut last_state = state.last_network_state.lock().unwrap();
                     *last_state = payload.clone();
@@ -4616,8 +4637,10 @@ async fn manual_login(
         });
     }
 
+    let mut last_failure_message: Option<String> = None;
     for account in accounts {
         if account.pass.is_empty() {
+            last_failure_message = Some(format!("账号 {} 缺少已保存的密码", account.user));
             rust_log(
                 &app,
                 &state,
@@ -4628,6 +4651,10 @@ async fn manual_login(
             continue;
         }
         if let Err(remaining) = account_attempt_allowed(&state, &account.user) {
+            last_failure_message = Some(format!(
+                "账号 {} 正在冷却，剩余 {} 秒；可在网络诊断页解除",
+                account.user, remaining
+            ));
             rust_log(
                 &app,
                 &state,
@@ -4684,6 +4711,7 @@ async fn manual_login(
                 });
             }
             Ok((false, message)) => {
+                last_failure_message = Some(message.clone());
                 record_account_failure(&app, &state, &account.user, &message);
                 rust_log(
                     &app,
@@ -4710,6 +4738,7 @@ async fn manual_login(
                         message: error,
                     });
                 }
+                last_failure_message = Some(error.clone());
                 record_account_failure(&app, &state, &account.user, &format!("请求出错: {error}"));
                 rust_log(&app, &state, "登录", &format!("请求出错: {error}"), "error");
             }
@@ -4717,7 +4746,7 @@ async fn manual_login(
     }
     Ok(ManualLoginResult {
         success: false,
-        message: "所有可用账号均未能登录".to_string(),
+        message: last_failure_message.unwrap_or_else(|| "所有可用账号均未能登录".to_string()),
     })
 }
 

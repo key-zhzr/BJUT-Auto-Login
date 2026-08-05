@@ -247,6 +247,7 @@ export interface NetworkStatePayload {
   bssid?: string;
   ip?: string;
   timestamp?: string;
+  loginMessage?: string;
 }
 
 export interface BillingLoginRecord {

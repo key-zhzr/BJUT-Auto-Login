@@ -1,14 +1,30 @@
 use super::{
-    check_internet_from_source, query_campus_dns_ipv4, redact_request_error, route_source_ipv4,
-    VpnCompatibility, LGN6_HOST, LGN_HOST, WLGN_HOST,
+    query_campus_dns_ipv4, redact_request_error, route_source_ipv4, VpnCompatibility, LGN6_HOST,
+    LGN_HOST, WLGN_HOST,
 };
 use crate::network_trust::{campus_wifi_kind, CampusWifiKind};
+use reqwest::header::{ACCEPT, CACHE_CONTROL, REFERER};
 use reqwest::{Client, Url};
 use serde_json::Value;
+use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) const AMBIGUOUS_LOGIN_RESULT: &str = "认证结果暂无法确认";
+
+const DORM_HTTP_LOGIN: &str = "http://10.21.221.98:801/eportal/portal/login";
+const DORM_HTTPS_LOGIN: &str = "https://10.21.221.98:802/eportal/portal/login";
+const DORM_HTTP_REFERER: &str = "http://10.21.221.98/";
+const DORM_HTTPS_REFERER: &str = "https://10.21.221.98/";
+const WIFI_HTTP_LOGIN: &str = "http://10.21.251.3/drcom/login";
+const WIFI_HTTPS_LOGIN: &str = "https://wlgn.bjut.edu.cn/drcom/login";
+const WIFI_HTTP_REFERER: &str = "http://10.21.251.3/";
+const WIFI_HTTPS_REFERER: &str = "https://wlgn.bjut.edu.cn/";
+const LGN_REFERER: &str = "https://lgn.bjut.edu.cn/";
+const LGN_PROGRAM_INDEX: &str = "o4OBee1755497815";
+const LGN_PAGE_INDEX: &str = "cHAmjX1755497856";
+const LGN_JS_VERSION: &str = "4.2.2";
+const EPORTAL_XOR_KEY: u16 = 0x16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LoginType {
@@ -103,13 +119,13 @@ pub(crate) fn portal_probe_urls(
 ) -> Vec<String> {
     match login_type {
         LoginType::Type1 if compatibility == VpnCompatibility::Maximum => {
-            vec!["http://10.21.221.98:801/eportal/portal/login".to_string()]
+            vec![DORM_HTTP_LOGIN.to_string()]
         }
-        LoginType::Type1 => vec!["https://10.21.221.98:802/eportal/portal/login".to_string()],
+        LoginType::Type1 => vec![DORM_HTTPS_LOGIN.to_string()],
         LoginType::Type2 if compatibility == VpnCompatibility::Maximum => {
-            vec!["http://10.21.251.3/drcom/login".to_string()]
+            vec![WIFI_HTTP_LOGIN.to_string()]
         }
-        LoginType::Type2 => vec!["https://wlgn.bjut.edu.cn/drcom/login".to_string()],
+        LoginType::Type2 => vec![WIFI_HTTPS_LOGIN.to_string()],
         LoginType::Type3 if compatibility == VpnCompatibility::Maximum => {
             let primary = lgn_user_info_url(compatibility);
             let secondary = primary.replacen("172.30.201.2", "172.30.201.10", 1);
@@ -117,7 +133,9 @@ pub(crate) fn portal_probe_urls(
         }
         LoginType::Type3 => vec![
             lgn_user_info_url(compatibility),
-            "https://lgn6.bjut.edu.cn/V6?https://lgn.bjut.edu.cn".to_string(),
+            lgn_observed_ipv6_url()
+                .map(|url| url.to_string())
+                .unwrap_or_default(),
         ],
         LoginType::Unknown => Vec::new(),
     }
@@ -180,6 +198,7 @@ fn probe_body_matches(login_type: &LoginType, url: &str, body: &str) -> bool {
                 value.get("code").is_some() && value.get("user_info").is_some_and(Value::is_object)
             })
         }
+        LoginType::Type3 if url.contains("/drcom/getipv6") => parse_observed_ip(body, true).is_ok(),
         LoginType::Type3 => {
             normalized.contains("name=\"v6ip\"")
                 || normalized.contains("name='v6ip'")
@@ -261,20 +280,102 @@ fn parse_dr_response(text: &str) -> Result<(bool, String), String> {
     Ok((result == 1, message))
 }
 
-fn find_v6ip(html: &str) -> String {
-    for (name, value) in [("name=\"v6ip\"", "value=\""), ("name='v6ip'", "value='")] {
-        if let Some(name_pos) = html.find(name) {
-            let source = &html[name_pos..];
-            if let Some(value_pos) = source.find(value) {
-                let start = value_pos + value.len();
-                let quote = value.chars().last().unwrap_or('"');
-                if let Some(end) = source[start..].find(quote) {
-                    return source[start..start + end].to_string();
-                }
-            }
-        }
+fn eportal_encrypt(value: &str) -> String {
+    let mut encrypted = String::with_capacity(value.len() * 2);
+    for unit in value.encode_utf16() {
+        let _ = write!(encrypted, "{:02x}", unit ^ EPORTAL_XOR_KEY);
     }
-    String::new()
+    encrypted
+}
+
+fn parse_observed_ip(text: &str, expect_ipv6: bool) -> Result<String, String> {
+    let data =
+        jsonp_object(text).ok_or_else(|| "有线登录地址发现接口未返回预期 JSONP".to_string())?;
+    let result = data
+        .get("result")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str()?.parse::<i64>().ok())
+        })
+        .unwrap_or_default();
+    if result != 1 {
+        return Err("有线登录地址发现接口未返回成功结果".to_string());
+    }
+    let value = data
+        .get("ip")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "有线登录地址发现接口未返回 IP 地址".to_string())?;
+    let address = value
+        .parse::<IpAddr>()
+        .map_err(|_| "有线登录地址发现接口返回了无效 IP 地址".to_string())?;
+    if address.is_ipv6() != expect_ipv6 {
+        return Err(if expect_ipv6 {
+            "有线登录地址发现接口未返回 IPv6 地址".to_string()
+        } else {
+            "有线登录地址发现接口未返回 IPv4 地址".to_string()
+        });
+    }
+    Ok(address.to_string())
+}
+
+fn lgn_observed_ipv6_url() -> Result<Url, String> {
+    let mut url =
+        Url::parse("https://lgn6.bjut.edu.cn/drcom/getipv6").map_err(|error| error.to_string())?;
+    url.query_pairs_mut()
+        .append_pair("callback", "dr1004")
+        .append_pair("program_index", LGN_PROGRAM_INDEX)
+        .append_pair("page_index", LGN_PAGE_INDEX)
+        .append_pair("jsVersion", LGN_JS_VERSION)
+        .append_pair("v", &random_request_id())
+        .append_pair("lang", "zh");
+    Ok(url)
+}
+
+fn lgn_login_url(
+    user: &str,
+    pass: &str,
+    local_ipv4: &str,
+    observed_ipv6: &str,
+) -> Result<Url, String> {
+    let mut url = Url::parse("https://lgn.bjut.edu.cn:802/eportal/portal/login")
+        .map_err(|error| error.to_string())?;
+    let account = if user.starts_with(",0,") {
+        user.to_string()
+    } else {
+        format!(",0,{user}")
+    };
+    let fields = [
+        ("callback", "dr1005".to_string()),
+        ("login_method", "1".to_string()),
+        ("user_account", account),
+        ("user_password", pass.to_string()),
+        ("wlan_user_ip", local_ipv4.to_string()),
+        ("wlan_user_ipv6", observed_ipv6.to_string()),
+        ("wlan_user_mac", "000000000000".to_string()),
+        ("wlan_vlan_id", "0".to_string()),
+        ("wlan_ac_ip", String::new()),
+        ("wlan_ac_name", String::new()),
+        ("authex_enable", String::new()),
+        ("jsVersion", LGN_JS_VERSION.to_string()),
+        ("login_ip_type", "0".to_string()),
+        ("terminal_type", "3".to_string()),
+        ("lang", "zh-cn".to_string()),
+        ("program_index", LGN_PROGRAM_INDEX.to_string()),
+        ("page_index", LGN_PAGE_INDEX.to_string()),
+    ];
+    {
+        let mut query = url.query_pairs_mut();
+        for (name, value) in fields {
+            query.append_pair(name, &eportal_encrypt(&value));
+        }
+        query
+            .append_pair("encrypt", "1")
+            .append_pair("v", &random_request_id())
+            .append_pair("lang", "zh");
+    }
+    Ok(url)
 }
 
 pub(crate) fn lgn_user_info_url(compatibility: VpnCompatibility) -> String {
@@ -289,143 +390,84 @@ pub(crate) fn lgn_user_info_url(compatibility: VpnCompatibility) -> String {
     }
 }
 
-async fn confirm_lgn_account(
-    client: &Client,
-    compatibility: VpnCompatibility,
-    expected_account: &str,
-) -> bool {
-    let Ok(response) = client.get(lgn_user_info_url(compatibility)).send().await else {
-        return false;
-    };
-    if !response.status().is_success() {
-        return false;
+async fn login_lgn_once(client: &Client, user: &str, pass: &str) -> Result<(bool, String), String> {
+    let local_ipv4 = route_source_ipv4("172.30.201.2:802");
+    let local_address = local_ipv4
+        .parse::<Ipv4Addr>()
+        .map_err(|_| "有线登录前无法确定访问 lgn 网关所使用的 IPv4 地址".to_string())?;
+    if local_address.is_unspecified() || local_address.is_loopback() {
+        return Err("有线登录前无法确定访问 lgn 网关所使用的有效 IPv4 地址".to_string());
     }
-    let Ok(text) = response.text().await else {
-        return false;
-    };
-    let Some(start) = text.find('(') else {
-        return false;
-    };
-    let Some(end) = text.rfind(')').filter(|end| *end > start) else {
-        return false;
-    };
-    let Ok(data) = serde_json::from_str::<Value>(&text[start + 1..end]) else {
-        return false;
-    };
-    data.get("code").and_then(Value::as_i64) == Some(1)
-        && data
-            .get("user_info")
-            .and_then(|info| info.get("account"))
-            .and_then(Value::as_str)
-            .is_some_and(|account| account == expected_account)
+
+    let ipv6_response = client
+        .get(lgn_observed_ipv6_url()?)
+        .header(ACCEPT, "*/*")
+        .header(REFERER, LGN_REFERER)
+        .header(CACHE_CONTROL, "no-cache, no-store")
+        .send()
+        .await
+        .map_err(|error| portal_request_error("lgn IPv6 地址发现", error, None))?;
+    if !ipv6_response.status().is_success() {
+        return Err(format!(
+            "lgn IPv6 地址发现接口返回 HTTP {}",
+            ipv6_response.status()
+        ));
+    }
+    let ipv6_body = ipv6_response.text().await.map_err(|error| {
+        format!(
+            "lgn IPv6 地址发现响应读取失败：{}",
+            redact_request_error(error)
+        )
+    })?;
+    let observed_ipv6 = parse_observed_ip(&ipv6_body, true)?;
+    let login_url = lgn_login_url(user, pass, &local_ipv4, &observed_ipv6)?;
+    get_jsonp_login(client, login_url, LGN_REFERER, "lgn 有线登录", None).await
 }
 
-async fn login_lgn_once(
-    client: &Client,
-    first_url: &str,
-    second_url: &str,
+fn type1_login_url(
+    compatibility: VpnCompatibility,
     user: &str,
     pass: &str,
-    compatibility: VpnCompatibility,
-) -> Result<(bool, String), String> {
-    let first_response = client
-        .post(first_url)
-        .form(&[
-            ("DDDDD", user),
-            ("upass", pass),
-            ("v46s", "0"),
-            ("0MKKey", ""),
-        ])
-        .send()
-        .await
-        .map_err(redact_request_error)?;
-    if !first_response.status().is_success() {
-        return Err(format!(
-            "有线登录第一步返回 HTTP {}",
-            first_response.status()
-        ));
-    }
-    let html = first_response.text().await.map_err(redact_request_error)?;
-    let v6ip = find_v6ip(&html);
-    if v6ip.is_empty() {
-        return Err("有线登录页未返回动态 IPv6 地址".to_string());
-    }
-
-    let final_response = client
-        .post(second_url)
-        .form(&[
-            ("DDDDD", user),
-            ("upass", pass),
-            ("0MKKey", "Login"),
-            ("v6ip", v6ip.as_str()),
-        ])
-        .send()
-        .await
-        .map_err(redact_request_error)?;
-    if !final_response.status().is_success() {
-        return Err(format!(
-            "有线登录第二步返回 HTTP {}",
-            final_response.status()
-        ));
-    }
-    let final_html = final_response.text().await.map_err(redact_request_error)?;
-    let normalized = final_html.to_ascii_lowercase();
-    if normalized.contains("dispqianfei")
-        || normalized.contains("ldap auth error")
-        || normalized.contains("userid error")
-        || final_html.contains("账号不存在")
-        || final_html.contains("密码错误")
-        || final_html.contains("余额不足")
-    {
-        return Ok((false, "登录失败，请检查账号密码或余额".to_string()));
-    }
-    if confirm_lgn_account(client, compatibility, user).await {
-        return Ok((true, "Portal协议认证成功！".to_string()));
-    }
-    let route_source = route_source_ipv4("172.30.201.2:443");
-    if check_internet_from_source((!route_source.is_empty()).then_some(route_source.as_str())).await
-    {
-        return Ok((true, "Portal协议认证成功！".to_string()));
-    }
-    Err(format!(
-        "{AMBIGUOUS_LOGIN_RESULT}：请求已提交，但账号信息和互联网连通性均未能确认成功；已停止继续尝试其他账号"
-    ))
-}
-
-fn type1_login_url(compatibility: VpnCompatibility, user: &str, pass: &str) -> Result<Url, String> {
+    local_ip: &str,
+) -> Result<Url, String> {
     let base = if compatibility == VpnCompatibility::Maximum {
-        "http://10.21.221.98:801/eportal/portal/login"
+        DORM_HTTP_LOGIN
     } else {
-        "https://10.21.221.98:802/eportal/portal/login"
+        DORM_HTTPS_LOGIN
     };
     let mut url = Url::parse(base).map_err(|error| error.to_string())?;
-    let account = format!("{user}@campus");
+    let account = if user.to_ascii_lowercase().ends_with("@campus") {
+        user.to_string()
+    } else {
+        format!("{user}@campus")
+    };
     url.query_pairs_mut()
         .append_pair("callback", "dr1003")
         .append_pair("login_method", "1")
         .append_pair("user_account", &account)
         .append_pair("user_password", pass)
-        .append_pair("wlan_user_ip", "")
+        .append_pair("wlan_user_ip", local_ip)
         .append_pair("wlan_user_ipv6", "")
         .append_pair("wlan_user_mac", "000000000000")
         .append_pair("wlan_ac_ip", "")
         .append_pair("wlan_ac_name", "")
         .append_pair("jsVersion", "4.2.1")
-        .append_pair("terminal_type", "1")
+        .append_pair("terminal_type", "3")
         .append_pair("lang", "zh-cn")
-        .append_pair("v", &random_request_id());
+        .append_pair("v", &random_request_id())
+        .append_pair("lang", "zh");
     Ok(url)
 }
 
 fn type2_login_url(compatibility: VpnCompatibility, user: &str, pass: &str) -> Result<Url, String> {
     let base = if compatibility == VpnCompatibility::Maximum {
-        "http://10.21.251.3/drcom/login"
+        WIFI_HTTP_LOGIN
     } else {
-        "https://wlgn.bjut.edu.cn/drcom/login"
+        WIFI_HTTPS_LOGIN
     };
     let mut url = Url::parse(base).map_err(|error| error.to_string())?;
     url.query_pairs_mut()
-        .append_pair("callback", "dr1002")
+        .append_pair("callback", "dr1003")
         .append_pair("DDDDD", user)
         .append_pair("upass", pass)
         .append_pair("0MKKey", "123456")
@@ -438,16 +480,53 @@ fn type2_login_url(compatibility: VpnCompatibility, user: &str, pass: &str) -> R
         .append_pair("terminal_type", "1")
         .append_pair("lang", "zh-cn")
         .append_pair("jsVersion", "4.1")
-        .append_pair("v", &random_request_id());
+        .append_pair("v", &random_request_id())
+        .append_pair("lang", "zh");
     Ok(url)
 }
 
-async fn get_jsonp_login(client: &Client, url: Url) -> Result<(bool, String), String> {
-    let response = client.get(url).send().await.map_err(redact_request_error)?;
-    if !response.status().is_success() {
-        return Err(format!("登录网关返回 HTTP {}", response.status()));
+fn portal_request_error(label: &str, error: reqwest::Error, hint: Option<&str>) -> String {
+    let category = if error.is_timeout() {
+        "请求超时"
+    } else if error.is_connect() {
+        "连接或 TLS 握手失败"
+    } else if error.is_request() {
+        "请求构造或发送失败"
+    } else if error.is_body() || error.is_decode() {
+        "响应读取失败"
+    } else {
+        "请求失败"
+    };
+    let mut message = format!("{label}：{category}");
+    if let Some(hint) = hint {
+        message.push('；');
+        message.push_str(hint);
     }
-    let text = response.text().await.map_err(redact_request_error)?;
+    message
+}
+
+async fn get_jsonp_login(
+    client: &Client,
+    url: Url,
+    referer: &str,
+    label: &str,
+    connection_hint: Option<&str>,
+) -> Result<(bool, String), String> {
+    let response = client
+        .get(url)
+        .header(ACCEPT, "*/*")
+        .header(REFERER, referer)
+        .header(CACHE_CONTROL, "no-cache, no-store")
+        .send()
+        .await
+        .map_err(|error| portal_request_error(label, error, connection_hint))?;
+    if !response.status().is_success() {
+        return Err(format!("{label}网关返回 HTTP {}", response.status()));
+    }
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("{label}响应读取失败：{}", redact_request_error(error)))?;
     parse_dr_response(&text)
 }
 
@@ -457,9 +536,10 @@ pub(crate) async fn login_to_campus_network_rust(
     pass: &str,
     compatibility: VpnCompatibility,
 ) -> Result<(bool, String), String> {
-    // The documented lgn flow requires the HTTPS hostnames. For the maximum
-    // compatibility setting, keep TLS/SNI and pin the known addresses instead
-    // of constructing the invalid http://IP/V6?http://IP flow.
+    // The captured lgn eportal flow requires both HTTPS hostnames: lgn6 obtains
+    // the observed IPv6 address and lgn:802 receives the encrypted login GET.
+    // Even in maximum compatibility mode, preserve TLS/SNI and pin the known
+    // campus addresses rather than replacing those hostnames with raw IP URLs.
     let client_compatibility =
         if login_type == LoginType::Type3 && compatibility == VpnCompatibility::Maximum {
             VpnCompatibility::High
@@ -469,22 +549,54 @@ pub(crate) async fn login_to_campus_network_rust(
     let client = portal_client(client_compatibility, &login_type, Duration::from_secs(5)).await?;
     match login_type {
         LoginType::Type1 => {
-            get_jsonp_login(&client, type1_login_url(compatibility, user, pass)?).await
-        }
-        LoginType::Type2 => {
-            get_jsonp_login(&client, type2_login_url(compatibility, user, pass)?).await
-        }
-        LoginType::Type3 => {
-            login_lgn_once(
+            let destination = if compatibility == VpnCompatibility::Maximum {
+                "10.21.221.98:801"
+            } else {
+                "10.21.221.98:802"
+            };
+            let local_ip = route_source_ipv4(destination);
+            if local_ip
+                .parse::<Ipv4Addr>()
+                .ok()
+                .is_none_or(|address| address.is_unspecified() || address.is_loopback())
+            {
+                return Err("bjut-sushe 登录前无法确定访问宿舍网关所使用的 IPv4 地址".to_string());
+            }
+            let (referer, hint) = if compatibility == VpnCompatibility::Maximum {
+                (DORM_HTTP_REFERER, None)
+            } else {
+                (
+                    DORM_HTTPS_REFERER,
+                    Some(
+                        "实测宿舍网入口使用 HTTP:801；确认当前网络可信后，可临时启用“最高兼容”重试",
+                    ),
+                )
+            };
+            get_jsonp_login(
                 &client,
-                "https://lgn6.bjut.edu.cn/V6?https://lgn.bjut.edu.cn",
-                "https://lgn.bjut.edu.cn",
-                user,
-                pass,
-                compatibility,
+                type1_login_url(compatibility, user, pass, &local_ip)?,
+                referer,
+                "bjut-sushe 登录",
+                hint,
             )
             .await
         }
+        LoginType::Type2 => {
+            let referer = if compatibility == VpnCompatibility::Maximum {
+                WIFI_HTTP_REFERER
+            } else {
+                WIFI_HTTPS_REFERER
+            };
+            get_jsonp_login(
+                &client,
+                type2_login_url(compatibility, user, pass)?,
+                referer,
+                "bjut_wifi 登录",
+                None,
+            )
+            .await
+        }
+        LoginType::Type3 => login_lgn_once(&client, user, pass).await,
         LoginType::Unknown => Err("未设定的登录类型".to_string()),
     }
 }
@@ -513,16 +625,77 @@ mod tests {
 
     #[test]
     fn login_urls_use_the_documented_ports_and_fields() {
-        let dorm = type1_login_url(VpnCompatibility::Maximum, "25000000", "p!").unwrap();
+        let dorm =
+            type1_login_url(VpnCompatibility::Maximum, "25000000", "p!", "10.126.21.113").unwrap();
         assert_eq!(dorm.port(), Some(801));
         assert_eq!(dorm.scheme(), "http");
-        assert!(dorm.as_str().contains("terminal_type=1"));
+        assert!(dorm.as_str().contains("terminal_type=3"));
+        assert!(dorm.as_str().contains("wlan_user_ip=10.126.21.113"));
         assert!(dorm.as_str().contains("user_account=25000000%40campus"));
+        assert_eq!(
+            dorm.query_pairs()
+                .filter(|(name, _)| name == "lang")
+                .count(),
+            2
+        );
 
         let wifi = type2_login_url(VpnCompatibility::High, "25000000", "p!").unwrap();
         assert_eq!(wifi.scheme(), "https");
         assert_eq!(wifi.host_str(), Some(WLGN_HOST));
-        assert!(wifi.as_str().contains("callback=dr1002"));
+        assert!(wifi.as_str().contains("callback=dr1003"));
+        assert_eq!(
+            wifi.query_pairs()
+                .filter(|(name, _)| name == "lang")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn lgn_urls_match_the_encrypted_eportal_flow() {
+        assert_eq!(eportal_encrypt("dr1005"), "726427262623");
+        assert_eq!(eportal_encrypt(LGN_JS_VERSION), "2238243824");
+
+        let discovery = lgn_observed_ipv6_url().unwrap();
+        assert_eq!(
+            discovery.as_str().split('?').next().unwrap(),
+            "https://lgn6.bjut.edu.cn/drcom/getipv6"
+        );
+        assert!(discovery.as_str().contains("callback=dr1004"));
+        assert!(discovery.as_str().contains("jsVersion=4.2.2"));
+
+        let login = lgn_login_url(
+            "25000000",
+            "safe-fixture-password",
+            "172.30.200.10",
+            "2001:db8::10",
+        )
+        .unwrap();
+        assert_eq!(login.scheme(), "https");
+        assert_eq!(login.host_str(), Some(LGN_HOST));
+        assert_eq!(login.port(), Some(802));
+        let pairs: std::collections::HashMap<_, _> = login.query_pairs().into_owned().collect();
+        assert_eq!(
+            pairs.get("callback").map(String::as_str),
+            Some("726427262623")
+        );
+        assert_eq!(pairs.get("login_method").map(String::as_str), Some("27"));
+        assert_eq!(pairs.get("terminal_type").map(String::as_str), Some("25"));
+        assert_eq!(pairs.get("login_ip_type").map(String::as_str), Some("26"));
+        assert_eq!(pairs.get("encrypt").map(String::as_str), Some("1"));
+        assert!(!login.as_str().contains("25000000"));
+        assert!(!login.as_str().contains("safe-fixture-password"));
+        assert!(!login.as_str().contains("172.30.200.10"));
+    }
+
+    #[test]
+    fn observed_ip_jsonp_requires_the_expected_address_family() {
+        assert_eq!(
+            parse_observed_ip(r#"dr1004({"result":1,"ip":"2001:db8::10"});"#, true).unwrap(),
+            "2001:db8::10"
+        );
+        assert!(parse_observed_ip(r#"dr1004({"result":1,"ip":"172.30.0.1"});"#, true).is_err());
+        assert!(parse_observed_ip(r#"dr1004({"result":0,"ip":""});"#, true).is_err());
     }
 
     #[test]

@@ -740,7 +740,7 @@ async function listenToRustEvents() {
         : LoginType.Unknown;
       
       currentNetworkState = state;
-      updateNetworkStatus(state, loginType);
+      updateNetworkStatus(state, loginType, data.loginMessage);
       isChecking = false;
       if (state === NetworkState.Online) {
         updateUserInfo().catch(() => {});
@@ -4167,9 +4167,10 @@ async function checkNetwork() {
   }
 }
 
-function updateNetworkStatus(state: NetworkState, type?: LoginType) {
+function updateNetworkStatus(state: NetworkState, type?: LoginType, loginMessage?: string) {
   currentNetworkState = state;
   networkIcon.className = 'status-icon';
+  networkDetail.classList.remove('login-error');
   
   if (state === NetworkState.Online) {
     networkStatus.textContent = '互联网已连接';
@@ -4178,8 +4179,9 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType) {
     networkIcon.innerHTML = '<i data-lucide="check-circle"></i>';
     btnLogin.disabled = true;
   } else if (state === NetworkState.BjutCampus) {
-    networkStatus.textContent = '检测到校园网';
-    networkDetail.textContent = `需要认证 (登录类型: ${type})`;
+    networkStatus.textContent = loginMessage ? '校园网登录未完成' : '检测到校园网';
+    networkDetail.textContent = loginMessage || `需要认证 (登录类型: ${type})`;
+    networkDetail.classList.toggle('login-error', Boolean(loginMessage));
     networkIcon.classList.add('warning');
     networkIcon.innerHTML = '<i data-lucide="alert-circle"></i>';
     btnLogin.disabled = false;
@@ -6541,6 +6543,7 @@ async function manualLogin() {
     });
     if (!result.success) {
       log('登录', `登录失败: ${result.message}`, 'error');
+      updateNetworkStatus(NetworkState.BjutCampus, undefined, result.message);
       btnLogin.disabled = false;
       btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
       return;
@@ -6550,6 +6553,7 @@ async function manualLogin() {
     setTimeout(() => void updateUserInfo(true), 2000);
   } catch (error) {
     log('登录', `登录请求失败: ${String(error)}`, 'error');
+    updateNetworkStatus(NetworkState.BjutCampus, undefined, `登录请求失败：${String(error)}`);
     btnLogin.disabled = false;
     btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
   } finally {
