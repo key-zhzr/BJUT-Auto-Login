@@ -1,6 +1,6 @@
 use super::{
-    query_campus_dns_ipv4, redact_request_error, route_source_ipv4, VpnCompatibility, LGN6_HOST,
-    LGN_HOST, WLGN_HOST,
+    query_campus_dns_ipv4, redact_request_error, route_source_ipv4, usable_physical_ipv4,
+    VpnCompatibility, LGN6_HOST, LGN_HOST, WLGN_HOST,
 };
 use crate::network_trust::{campus_wifi_kind, CampusWifiKind};
 use reqwest::header::{ACCEPT, CACHE_CONTROL, REFERER};
@@ -390,14 +390,37 @@ pub(crate) fn lgn_user_info_url(compatibility: VpnCompatibility) -> String {
     }
 }
 
-async fn login_lgn_once(client: &Client, user: &str, pass: &str) -> Result<(bool, String), String> {
-    let local_ipv4 = route_source_ipv4("172.30.201.2:802");
-    let local_address = local_ipv4
-        .parse::<Ipv4Addr>()
-        .map_err(|_| "有线登录前无法确定访问 lgn 网关所使用的 IPv4 地址".to_string())?;
-    if local_address.is_unspecified() || local_address.is_loopback() {
-        return Err("有线登录前无法确定访问 lgn 网关所使用的有效 IPv4 地址".to_string());
+fn login_source_ipv4(
+    physical_ipv4: Option<&str>,
+    destination: &str,
+    network_label: &str,
+) -> Result<String, String> {
+    if let Some(candidate) = physical_ipv4
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return usable_physical_ipv4(candidate)
+            .map(|address| address.to_string())
+            .ok_or_else(|| {
+                format!("{network_label}登录所需的物理接口 IPv4 无效；已拒绝使用 VPN/TUN Fake-IP")
+            });
     }
+
+    let routed = route_source_ipv4(destination);
+    usable_physical_ipv4(&routed)
+        .map(|address| address.to_string())
+        .ok_or_else(|| {
+            format!("{network_label}登录前无法确定物理接口 IPv4；请检查 Wi-Fi/有线接口或 VPN 分流")
+        })
+}
+
+async fn login_lgn_once(
+    client: &Client,
+    user: &str,
+    pass: &str,
+    physical_ipv4: Option<&str>,
+) -> Result<(bool, String), String> {
+    let local_ipv4 = login_source_ipv4(physical_ipv4, "172.30.201.2:802", "lgn 有线")?;
 
     let ipv6_response = client
         .get(lgn_observed_ipv6_url()?)
@@ -535,6 +558,7 @@ pub(crate) async fn login_to_campus_network_rust(
     user: &str,
     pass: &str,
     compatibility: VpnCompatibility,
+    physical_ipv4: Option<&str>,
 ) -> Result<(bool, String), String> {
     // The captured lgn eportal flow requires both HTTPS hostnames: lgn6 obtains
     // the observed IPv6 address and lgn:802 receives the encrypted login GET.
@@ -554,14 +578,7 @@ pub(crate) async fn login_to_campus_network_rust(
             } else {
                 "10.21.221.98:802"
             };
-            let local_ip = route_source_ipv4(destination);
-            if local_ip
-                .parse::<Ipv4Addr>()
-                .ok()
-                .is_none_or(|address| address.is_unspecified() || address.is_loopback())
-            {
-                return Err("bjut-sushe 登录前无法确定访问宿舍网关所使用的 IPv4 地址".to_string());
-            }
+            let local_ip = login_source_ipv4(physical_ipv4, destination, "bjut-sushe")?;
             let (referer, hint) = if compatibility == VpnCompatibility::Maximum {
                 (DORM_HTTP_REFERER, None)
             } else {
@@ -596,7 +613,7 @@ pub(crate) async fn login_to_campus_network_rust(
             )
             .await
         }
-        LoginType::Type3 => login_lgn_once(&client, user, pass).await,
+        LoginType::Type3 => login_lgn_once(&client, user, pass, physical_ipv4).await,
         LoginType::Unknown => Err("未设定的登录类型".to_string()),
     }
 }
@@ -648,6 +665,19 @@ mod tests {
                 .filter(|(name, _)| name == "lang")
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn login_source_uses_the_physical_interface_and_rejects_tun_fake_ip() {
+        assert_eq!(
+            login_source_ipv4(Some("10.3.219.173"), "10.21.221.98:801", "fixture").unwrap(),
+            "10.3.219.173"
+        );
+        assert!(
+            login_source_ipv4(Some("198.18.12.34"), "10.21.221.98:801", "fixture")
+                .unwrap_err()
+                .contains("Fake-IP")
         );
     }
 

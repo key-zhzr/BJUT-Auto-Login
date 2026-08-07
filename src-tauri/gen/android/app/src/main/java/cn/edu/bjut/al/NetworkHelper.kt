@@ -186,14 +186,19 @@ class NetworkHelper {
                     ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true
                 val metered = physicalCapabilities
                     ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true
+                // A VPN can remain the app's default network while an associated
+                // campus Wi-Fi is still captive/unvalidated. In that case every
+                // probe and login request must bypass the VPN/mobile default and
+                // target the concrete Wi-Fi Network object.
+                val routeBindingRequired = wifiNetwork != null
+                    && wifiNetwork != activeNetwork
+                    && (!validated || captivePortal)
                 var ssid = ""
                 var bssid = ""
                 var identityFresh = false
                 var identityObservedAt = 0L
-                // LinkProperties belongs to the active routed network. When a VPN is
-                // enabled it may expose the TUN/Fake-IP address instead of the Wi-Fi
-                // or cellular interface address. Reuse the physical-interface lookup
-                // used by the change detector so identity checks see the real LAN IP.
+                // These LinkProperties belong to physicalNetwork, never the VPN.
+                // This keeps TUN/Fake-IP addresses out of the campus login context.
                 var ipString = physicalLinkProperties
                     ?.linkAddresses
                     ?.asSequence()
@@ -238,7 +243,7 @@ class NetworkHelper {
                     .put("defaultNetworkId", activeNetwork?.hashCode()?.toString() ?: "")
                     .put("wifiNetworkId", wifiNetwork?.hashCode()?.toString() ?: "")
                     .put("wifiIsDefault", wifiNetwork != null && wifiNetwork == activeNetwork)
-                    .put("routeBindingRequired", wifiNetwork != null && wifiNetwork != activeNetwork && !vpnActive)
+                    .put("routeBindingRequired", routeBindingRequired)
                     .put("identityRequested", includeWifiDetails)
                     .put("identityFresh", identityFresh)
                     .put("identityObservedAt", identityObservedAt)
@@ -278,8 +283,10 @@ class NetworkHelper {
             val manager = context.applicationContext
                 .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             return manager.allNetworks.firstOrNull { network ->
-                manager.getNetworkCapabilities(network)
-                    ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                val capabilities = manager.getNetworkCapabilities(network)
+                capabilities != null
+                    && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
             }
         }
 

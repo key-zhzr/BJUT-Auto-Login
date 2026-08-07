@@ -504,10 +504,39 @@ class KeepAliveService : Service() {
                     val routeBindingRequired = initialNetwork.optBoolean("routeBindingRequired", false)
                     val routeBound = routeBindingRequired && NetworkHelper.bindProcessToCampusWifi(this)
                     val accountHealth = NetworkHelper.getAccountHealth(this)
-                    var result = try {
-                        JSONObject(NativeKeepAlive.runHeadlessCheck(config, networkInfo, accountHealth, reason))
-                    } finally {
-                        if (routeBound) NetworkHelper.clearProcessNetworkBinding(this)
+                    var result = if (routeBindingRequired && !routeBound) {
+                        JSONObject()
+                            .put("status", "route_binding_failed")
+                            .put("notification_category", "login")
+                            .put(
+                                "notification",
+                                "无法绑定待认证校园 Wi-Fi，已停止使用 VPN/移动数据结果"
+                            )
+                            .put(
+                                "logs",
+                                org.json.JSONArray().put(
+                                    JSONObject()
+                                        .put("module", "网络")
+                                        .put("type", "error")
+                                        .put(
+                                            "message",
+                                            "检测到非默认的待认证 Wi-Fi，但进程路由绑定失败；本轮未执行联网判断或登录"
+                                        )
+                                )
+                            )
+                    } else {
+                        try {
+                            JSONObject(
+                                NativeKeepAlive.runHeadlessCheck(
+                                    config,
+                                    networkInfo,
+                                    accountHealth,
+                                    reason
+                                )
+                            )
+                        } finally {
+                            if (routeBound) NetworkHelper.clearProcessNetworkBinding(this)
+                        }
                     }
                     if (!fullDetails && result.optString("status") == "needs_fresh_identity") {
                         KeepAliveJournal.append(
@@ -532,17 +561,39 @@ class KeepAliveService : Service() {
                             networkInfo = freshNetworkInfo
                             val freshBindingRequired = freshNetwork.optBoolean("routeBindingRequired", false)
                             val freshRouteBound = freshBindingRequired && NetworkHelper.bindProcessToCampusWifi(this)
-                            try {
-                                JSONObject(
-                                    NativeKeepAlive.runHeadlessCheck(
-                                        config,
-                                        networkInfo,
-                                        NetworkHelper.getAccountHealth(this),
-                                        "$reason（发送凭据前身份复核）"
+                            if (freshBindingRequired && !freshRouteBound) {
+                                JSONObject()
+                                    .put("status", "route_binding_failed")
+                                    .put("notification_category", "login")
+                                    .put(
+                                        "notification",
+                                        "无法绑定待认证校园 Wi-Fi，已停止使用 VPN/移动数据结果"
                                     )
-                                )
-                            } finally {
-                                if (freshRouteBound) NetworkHelper.clearProcessNetworkBinding(this)
+                                    .put(
+                                        "logs",
+                                        org.json.JSONArray().put(
+                                            JSONObject()
+                                                .put("module", "网络")
+                                                .put("type", "error")
+                                                .put(
+                                                    "message",
+                                                    "发送凭据前无法重新绑定校园 Wi-Fi，本轮登录已取消"
+                                                )
+                                        )
+                                    )
+                            } else {
+                                try {
+                                    JSONObject(
+                                        NativeKeepAlive.runHeadlessCheck(
+                                            config,
+                                            networkInfo,
+                                            NetworkHelper.getAccountHealth(this),
+                                            "$reason（发送凭据前身份复核）"
+                                        )
+                                    )
+                                } finally {
+                                    if (freshRouteBound) NetworkHelper.clearProcessNetworkBinding(this)
+                                }
                             }
                         }
                     }

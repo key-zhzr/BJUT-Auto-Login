@@ -18,6 +18,23 @@ pub(crate) fn route_source_ipv4(destination: &str) -> String {
         .unwrap_or_default()
 }
 
+pub(crate) fn usable_physical_ipv4(value: &str) -> Option<std::net::Ipv4Addr> {
+    let address = value.trim().parse::<std::net::Ipv4Addr>().ok()?;
+    let octets = address.octets();
+    let is_fake_ip = octets[0] == 198 && matches!(octets[1], 18 | 19);
+    if address.is_unspecified()
+        || address.is_loopback()
+        || address.is_link_local()
+        || address.is_multicast()
+        || address.is_broadcast()
+        || is_fake_ip
+    {
+        None
+    } else {
+        Some(address)
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn split_nmcli_fields(line: &str) -> Vec<String> {
     let mut fields = vec![String::new()];
@@ -358,6 +375,7 @@ fn call_android_network_helper_bool(method: &str) -> bool {
 
 #[cfg(target_os = "android")]
 struct AndroidWifiRouteGuard {
+    required: bool,
     bound: bool,
 }
 
@@ -369,8 +387,13 @@ impl AndroidWifiRouteGuard {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         Self {
+            required,
             bound: required && call_android_network_helper_bool("bindProcessToCampusWifi"),
         }
+    }
+
+    fn failed(&self) -> bool {
+        self.required && !self.bound
     }
 }
 
@@ -1112,11 +1135,11 @@ pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool 
         .timeout(std::time::Duration::from_millis(1800))
         .redirect(reqwest::redirect::Policy::none())
         .use_rustls_tls();
-    if let Some(source) = source_ip
-        .and_then(|value| value.parse::<std::net::IpAddr>().ok())
-        .filter(|address| !address.is_unspecified() && !address.is_loopback())
-    {
-        builder = builder.local_address(source);
+    if let Some(candidate) = source_ip {
+        let Some(source) = usable_physical_ipv4(candidate) else {
+            return false;
+        };
+        builder = builder.local_address(std::net::IpAddr::V4(source));
     }
     let client = match builder.build() {
         Ok(client) => client,
@@ -1154,10 +1177,6 @@ pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool 
         .into_iter()
         .flatten()
         .any(|online| online)
-}
-
-async fn check_internet_rust() -> bool {
-    check_internet_from_source(None).await
 }
 
 const CAMPUS_DNS_SERVER: &str = "10.21.200.28:53";
@@ -1352,7 +1371,7 @@ async fn run_headless_network_check(
     }
 
     if transport.eq_ignore_ascii_case("cellular") {
-        let online = check_internet_rust().await;
+        let online = check_internet_from_source(Some(&ip)).await;
         headless_log(
             &mut logs,
             "网络",
@@ -1371,7 +1390,7 @@ async fn run_headless_network_check(
         });
     }
 
-    if check_internet_rust().await {
+    if check_internet_from_source(Some(&ip)).await {
         headless_log(&mut logs, "网络", "无界面检测完成：互联网已连通", "info");
         return serde_json::json!({
             "status": "online",
@@ -1550,6 +1569,7 @@ async fn run_headless_network_check(
             &account.user,
             &account.pass,
             compatibility,
+            Some(&ip),
         )
         .await
         {
@@ -3139,7 +3159,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         };
         let previous_network = state.last_network_state.lock().unwrap().clone();
         #[cfg(target_os = "android")]
-        let _wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&net_info);
+        let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&net_info);
         let transport = network_transport(&net_info).to_string();
         let is_mobile_data = is_mobile_data_network(&net_info);
         let was_mobile_data = is_mobile_data_network(&previous_network);
@@ -3310,11 +3330,33 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 payload
             };
 
+        #[cfg(target_os = "android")]
+        if wifi_route_guard.failed() {
+            let message =
+                "检测到非默认的待认证 Wi-Fi，但无法将请求绑定到该 Wi-Fi；已停止使用 VPN/移动数据结果";
+            rust_log(&app, &state, "网络", message, "error");
+            state.is_checking.store(false, Ordering::SeqCst);
+            state.non_campus_count.store(0, Ordering::SeqCst);
+            let mut payload = make_payload(
+                "BjutCampus",
+                None,
+                &current_ssid,
+                &current_bssid,
+                &current_ip,
+            );
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("loginMessage".to_string(), serde_json::json!(message));
+            }
+            *state.last_network_state.lock().unwrap() = payload.clone();
+            let _ = app.emit("network-state-change", payload);
+            return;
+        }
+
         // Android's VALIDATED bit is useful context, but it can describe a
         // different default network (for example cellular while an unvalidated
         // campus Wi-Fi remains associated). Connectivity decisions therefore
         // always come from our independent multi-target probes.
-        let is_online = check_internet_rust().await;
+        let is_online = check_internet_from_source(Some(&current_ip)).await;
         rust_log(
             &app,
             &state,
@@ -3570,6 +3612,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                     &acc.user,
                                     &acc.pass,
                                     compatibility,
+                                    Some(&current_ip),
                                 )
                                 .await
                                 {
@@ -3946,7 +3989,11 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let identity_started = std::time::Instant::now();
     let network = get_network_info(app, Some(true));
     #[cfg(target_os = "android")]
-    let _wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    #[cfg(target_os = "android")]
+    let wifi_route_failed = wifi_route_guard.failed();
+    #[cfg(not(target_os = "android"))]
+    let wifi_route_failed = false;
     let transport = network_transport(&network).to_string();
     let mobile_data = is_mobile_data_network(&network);
     let ssid = network
@@ -4010,8 +4057,16 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         "campus_route",
         "校园目标路由",
         route_started,
-        if route_ip.is_empty() { "warning" } else { "success" },
-        if route_ip.is_empty() {
+        if wifi_route_failed {
+            "error"
+        } else if route_ip.is_empty() {
+            "warning"
+        } else {
+            "success"
+        },
+        if wifi_route_failed {
+            "检测到非默认的待认证 Wi-Fi，但 Android 无法将请求绑定到该网络".to_string()
+        } else if route_ip.is_empty() {
             "无法取得访问校园认证目标时系统选择的源 IPv4".to_string()
         } else if route_ip == ip {
             format!("校园认证目标与当前网络身份使用同一源 IP：{route_ip}")
@@ -4076,7 +4131,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     ));
 
     let internet_started = std::time::Instant::now();
-    let online = check_internet_rust().await;
+    let online = !wifi_route_failed && check_internet_from_source(Some(&ip)).await;
     steps.push(make_diagnostic_step(
         "internet",
         "互联网连通性",
@@ -4092,12 +4147,17 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     ));
 
     let portal_started = std::time::Instant::now();
-    let login_type = if online || mobile_data {
+    let login_type = if online || mobile_data || wifi_route_failed {
         LoginType::Unknown
     } else {
         detect_login_type_rust(compatibility, &ssid, network_transport(&network)).await
     };
-    let (portal_status, portal_message) = if mobile_data {
+    let (portal_status, portal_message) = if wifi_route_failed {
+        (
+            "error",
+            "无法绑定非默认校园 Wi-Fi，已停止认证网关探测以避免误用 VPN/移动数据".to_string(),
+        )
+    } else if mobile_data {
         (
             "skipped",
             "当前使用移动数据，已跳过校园网认证网关探测".to_string(),
@@ -4412,7 +4472,11 @@ async fn evaluate_manual_network_trust(
 ) -> Result<NetworkTrustEvaluation, String> {
     let network = get_network_info(app, Some(true));
     #[cfg(target_os = "android")]
-    let _wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    #[cfg(target_os = "android")]
+    if wifi_route_guard.failed() {
+        return Err("无法将认证请求绑定到当前校园 Wi-Fi；已停止使用 VPN/移动数据路径".to_string());
+    }
     let transport = network_transport(&network);
     let ssid = network
         .get("ssid")
@@ -4529,7 +4593,14 @@ async fn manual_login(
 ) -> Result<ManualLoginResult, String> {
     let network = get_network_info(app.clone(), Some(true));
     #[cfg(target_os = "android")]
-    let _wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    #[cfg(target_os = "android")]
+    if wifi_route_guard.failed() {
+        return Ok(ManualLoginResult {
+            success: false,
+            message: "无法将认证请求绑定到当前校园 Wi-Fi；已停止使用 VPN/移动数据路径".to_string(),
+        });
+    }
     if is_mobile_data_network(&network) {
         rust_log(
             &app,
@@ -4679,6 +4750,7 @@ async fn manual_login(
             &account.user,
             &account.pass,
             compatibility,
+            Some(ip),
         )
         .await
         {
@@ -6511,8 +6583,14 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         &format!("使用首选账号 {} 执行快捷登录", account.user),
         "info",
     );
-    match login_to_campus_network_rust(login_type, &account.user, &account.pass, compatibility)
-        .await
+    match login_to_campus_network_rust(
+        login_type,
+        &account.user,
+        &account.pass,
+        compatibility,
+        Some(&ip),
+    )
+    .await
     {
         Ok((true, message)) => {
             record_account_success(&app, &state, &account.user);
