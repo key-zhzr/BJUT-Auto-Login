@@ -57,6 +57,252 @@ fn split_nmcli_fields(line: &str) -> Vec<String> {
     fields
 }
 
+#[cfg(target_os = "macos")]
+fn macos_route_interface(destination: &str) -> String {
+    std::process::Command::new("route")
+        .args(["-n", "get", destination])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("interface:").map(str::trim))
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_ipv4_for_interface(interface: &str) -> String {
+    if interface.is_empty() {
+        return String::new();
+    }
+    std::process::Command::new("ipconfig")
+        .args(["getifaddr", interface])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|candidate| usable_physical_ipv4(candidate).is_some())
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_is_physical_interface(interface: &str) -> bool {
+    interface.starts_with("en")
+}
+
+#[cfg(target_os = "macos")]
+fn macos_campus_wired_identity(excluded_interface: &str) -> Option<(String, String)> {
+    let output = std::process::Command::new("ifconfig")
+        .arg("-l")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .filter(|interface| {
+            macos_is_physical_interface(interface) && *interface != excluded_interface
+        })
+        .find_map(|interface| {
+            let address = macos_ipv4_for_interface(interface);
+            is_campus_local_ip(&address).then(|| (interface.to_string(), address))
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_is_physical_interface(interface: &str) -> bool {
+    let sysfs = std::path::Path::new("/sys/class/net").join(interface);
+    sysfs.join("device").exists()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_is_physical_ethernet_interface(interface: &str) -> bool {
+    linux_is_physical_interface(interface)
+        && !std::path::Path::new("/sys/class/net")
+            .join(interface)
+            .join("wireless")
+            .exists()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_route_identity(destination: &str) -> Option<(String, String)> {
+    let output = std::process::Command::new("ip")
+        .args(["-4", "route", "get", destination])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let output = String::from_utf8_lossy(&output.stdout);
+    let fields = output.split_whitespace().collect::<Vec<_>>();
+    let interface = fields
+        .windows(2)
+        .find(|pair| pair[0] == "dev")
+        .map(|pair| pair[1])?;
+    let address = fields
+        .windows(2)
+        .find(|pair| pair[0] == "src")
+        .map(|pair| pair[1])?;
+    (linux_is_physical_interface(interface) && usable_physical_ipv4(address).is_some())
+        .then(|| (interface.to_string(), address.to_string()))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_campus_wired_identity(excluded_interface: &str) -> Option<(String, String)> {
+    let output = std::process::Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "scope", "global"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            let interface = fields.get(1)?.trim_end_matches(':');
+            if !linux_is_physical_ethernet_interface(interface) || interface == excluded_interface {
+                return None;
+            }
+            let address = fields
+                .windows(2)
+                .find(|pair| pair[0] == "inet")?
+                .get(1)?
+                .split('/')
+                .next()?;
+            (is_campus_local_ip(address) && usable_physical_ipv4(address).is_some())
+                .then(|| (interface.to_string(), address.to_string()))
+        })
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct WindowsNetworkIdentity {
+    ssid: String,
+    bssid: String,
+    ip: String,
+    interface_name: String,
+    transport: String,
+}
+
+#[cfg(target_os = "windows")]
+fn looks_like_windows_interface_guid(value: &str) -> bool {
+    let candidate = value
+        .trim()
+        .trim_matches(|character| character == '{' || character == '}');
+    candidate.len() == 36
+        && candidate
+            .chars()
+            .enumerate()
+            .all(|(index, character)| match index {
+                8 | 13 | 18 | 23 => character == '-',
+                _ => character.is_ascii_hexdigit(),
+            })
+}
+
+#[cfg(target_os = "windows")]
+fn run_hidden_powershell(script: &str) -> String {
+    use std::os::windows::process::CommandExt;
+    let mut command = std::process::Command::new("powershell.exe");
+    command.creation_flags(0x08000000);
+    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    command
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentity {
+    use std::os::windows::process::CommandExt;
+
+    let mut identity = WindowsNetworkIdentity::default();
+    let mut wifi_candidates = Vec::<(String, String, String)>::new();
+    let mut current_guid = String::new();
+    let mut current_ssid = String::new();
+    let mut current_bssid = String::new();
+    let mut command = std::process::Command::new("netsh");
+    command.args(["wlan", "show", "interfaces"]);
+    command.creation_flags(0x08000000);
+    if let Ok(output) = command.output() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let Some((label, value)) = line.trim().split_once(':') else {
+                continue;
+            };
+            let label = label.trim();
+            let value = value.trim();
+            if looks_like_windows_interface_guid(value) {
+                if !current_guid.is_empty() {
+                    wifi_candidates.push((current_guid, current_ssid, current_bssid));
+                    current_ssid = String::new();
+                    current_bssid = String::new();
+                }
+                current_guid = value
+                    .trim_matches(|character| character == '{' || character == '}')
+                    .to_string();
+            } else if include_wifi_details && label.eq_ignore_ascii_case("BSSID") {
+                current_bssid = value.to_string();
+            } else if include_wifi_details
+                && label.eq_ignore_ascii_case("SSID")
+                && !label.eq_ignore_ascii_case("BSSID")
+            {
+                current_ssid = value.to_string();
+            }
+        }
+    }
+    if !current_guid.is_empty() {
+        wifi_candidates.push((current_guid, current_ssid, current_bssid));
+    }
+
+    // Query each WLAN GUID separately and retain SSID/BSSID from that same
+    // netsh interface block. This prevents a disconnected secondary adapter
+    // from donating its GUID to another adapter's wireless identity.
+    for (wifi_guid, candidate_ssid, candidate_bssid) in wifi_candidates {
+        let script = format!(
+            "$g=[guid]'{}'; $a=Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {{$_.InterfaceGuid -eq $g -and $_.Status -eq 'Up'}} | Select-Object -First 1; if($a){{$ip=Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $a.InterfaceIndex -ErrorAction SilentlyContinue | Where-Object {{$_.IPAddress -notlike '169.254.*'}} | Select-Object -First 1 -ExpandProperty IPAddress; if($ip){{Write-Output ($a.Name + \"`t\" + $ip)}}}}",
+            wifi_guid
+        );
+        let output = run_hidden_powershell(&script);
+        if let Some((interface, address)) = output.split_once('\t') {
+            if usable_physical_ipv4(address).is_some() {
+                identity.ssid = candidate_ssid;
+                identity.bssid = candidate_bssid;
+                identity.interface_name = interface.trim().to_string();
+                identity.ip = address.trim().to_string();
+                identity.transport = "wifi".to_string();
+                break;
+            }
+        }
+    }
+
+    // Wired identity is selected by the route to the Type 3 campus portal. A
+    // VPN/virtual adapter is rejected, and the fallback still enumerates each
+    // physical adapter together with its own IPv4 instead of guessing from a
+    // global ipconfig dump.
+    let script = "$found=$false; $r=@(Find-NetRoute -RemoteIPAddress '172.30.201.2' -ErrorAction SilentlyContinue); if($r.Count -gt 0){$local=$r[0]; $i=$local.InterfaceIndex; if(-not $i -and $local.NetRoute){$i=$local.NetRoute.InterfaceIndex}; $a=Get-NetAdapter -InterfaceIndex $i -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.HardwareInterface -and $_.MediaType -eq '802.3'} | Select-Object -First 1; if($a -and $local.IPAddress){Write-Output ($a.Name + \"`t\" + $local.IPAddress); $found=$true}}; if(-not $found){Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.MediaType -eq '802.3'} | ForEach-Object {$adapter=$_; Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $adapter.InterfaceIndex -ErrorAction SilentlyContinue | Where-Object {$_.IPAddress -like '10.*' -or $_.IPAddress -like '172.*'} | ForEach-Object {Write-Output ($adapter.Name + \"`t\" + $_.IPAddress)}}}";
+    let output = run_hidden_powershell(script);
+    if let Some((interface, address)) = output.lines().find_map(|line| {
+        let (interface, address) = line.split_once('\t')?;
+        (usable_physical_ipv4(address).is_some()
+            && (is_campus_local_ip(address) || identity.ip.is_empty()))
+        .then_some((interface, address))
+    }) {
+        identity.ssid.clear();
+        identity.bssid.clear();
+        identity.interface_name = interface.trim().to_string();
+        identity.ip = address.trim().to_string();
+        identity.transport = "ethernet".to_string();
+    }
+    identity
+}
+
 #[tauri::command]
 fn get_network_info(
     _app: tauri::AppHandle,
@@ -144,23 +390,25 @@ fn get_network_info(
         let mut ip = String::new();
         let mut interface_name = String::new();
         let mut identity_source = "unverifiedFallback".to_string();
+        let mut transport = "unknown".to_string();
         let route_ip = route_source_ipv4("10.21.251.3:80");
 
         #[cfg(target_os = "macos")]
         {
-            if _include_wifi_details.unwrap_or(true) {
-                if let Some(state) = _app.try_state::<Arc<AppState>>() {
-                    rust_log(
-                        &_app,
-                        &state,
-                        "隐私",
-                        "[DEBUG] macOS 正在读取 SSID/BSSID；此操作可能显示系统位置使用指示",
-                        "debug",
-                    );
-                }
-                if let Ok(client) = corewlan::WiFiClient::shared() {
-                    if let Some(interface) = client.interface() {
-                        interface_name = interface.interface_name().unwrap_or_default();
+            let mut wifi_interface_name = String::new();
+            if let Ok(client) = corewlan::WiFiClient::shared() {
+                if let Some(interface) = client.interface() {
+                    wifi_interface_name = interface.interface_name().unwrap_or_default();
+                    if _include_wifi_details.unwrap_or(true) {
+                        if let Some(state) = _app.try_state::<Arc<AppState>>() {
+                            rust_log(
+                                &_app,
+                                &state,
+                                "隐私",
+                                "[DEBUG] macOS 正在读取 SSID/BSSID；此操作可能显示系统位置使用指示",
+                                "debug",
+                            );
+                        }
                         if let Some(ssid_str) = interface.ssid() {
                             ssid = ssid_str;
                         }
@@ -171,105 +419,53 @@ fn get_network_info(
                 }
             }
 
-            if !interface_name.is_empty() {
-                if let Ok(output) = std::process::Command::new("ipconfig")
-                    .args(["getifaddr", interface_name.as_str()])
-                    .output()
-                {
-                    ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !ip.is_empty() {
-                        identity_source = "sameInterface".to_string();
-                    }
-                }
+            let wifi_ip = macos_ipv4_for_interface(&wifi_interface_name);
+            let route_interface = macos_route_interface("172.30.201.2");
+            let route_interface_ip = macos_ipv4_for_interface(&route_interface);
+            let routed_physical_wired = macos_is_physical_interface(&route_interface)
+                && route_interface != wifi_interface_name
+                && !route_interface_ip.is_empty();
+            let campus_wired = macos_campus_wired_identity(&wifi_interface_name);
+            if routed_physical_wired && is_campus_local_ip(&route_interface_ip) {
+                ssid.clear();
+                bssid.clear();
+                interface_name = route_interface;
+                ip = route_interface_ip;
+                transport = "ethernet".to_string();
+                identity_source = "sameInterface".to_string();
+            } else if let Some((wired_interface, wired_ip)) = campus_wired {
+                // A TUN route can hide the physical route to the Type 3
+                // portal. Prefer a separate, same-interface campus Ethernet
+                // address over an unrelated Wi-Fi that merely has an IPv4.
+                ssid.clear();
+                bssid.clear();
+                interface_name = wired_interface;
+                ip = wired_ip;
+                transport = "ethernet".to_string();
+                identity_source = "sameInterface".to_string();
+            } else if !wifi_ip.is_empty() {
+                interface_name = wifi_interface_name;
+                ip = wifi_ip;
+                transport = "wifi".to_string();
+                identity_source = "sameInterface".to_string();
+            } else if routed_physical_wired {
+                interface_name = route_interface;
+                ip = route_interface_ip;
+                transport = "ethernet".to_string();
+                identity_source = "sameInterface".to_string();
             }
         }
 
         #[cfg(target_os = "windows")]
         {
-            use std::os::windows::process::CommandExt;
-            // Get SSID/BSSID via netsh wlan (doesn't trigger location prompts)
-            let mut cmd = std::process::Command::new("netsh");
-            cmd.args(["wlan", "show", "interfaces"]);
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            if let Ok(output) = cmd.output() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    let trimmed = line.trim();
-                    let upper = trimmed.to_uppercase();
-                    if interface_name.is_empty() {
-                        if let Some(idx) = trimmed.find(':') {
-                            let candidate = trimmed[idx + 1..].trim();
-                            if !candidate.is_empty()
-                                && !candidate.contains(" interface on the system")
-                            {
-                                interface_name = candidate.to_string();
-                            }
-                        }
-                    }
-                    if upper.contains("BSSID") {
-                        if let Some(idx) = trimmed.find(':') {
-                            bssid = trimmed[idx + 1..].trim().to_string();
-                        }
-                    } else if upper.contains("SSID") {
-                        if let Some(idx) = trimmed.find(':') {
-                            ssid = trimmed[idx + 1..].trim().to_string();
-                        }
-                    }
-                }
-            }
-
-            if !interface_name.is_empty() {
-                let escaped_alias = interface_name.replace('\'', "''");
-                let script = format!(
-                    "$a=Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias '{}' -ErrorAction SilentlyContinue | Where-Object {{$_.IPAddress -notlike '169.254.*'}} | Select-Object -First 1 -ExpandProperty IPAddress; if($a){{$a}}",
-                    escaped_alias
-                );
-                let mut address_command = std::process::Command::new("powershell.exe");
-                address_command.creation_flags(0x08000000);
-                address_command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
-                if let Ok(output) = address_command.output() {
-                    let candidate = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !candidate.is_empty() {
-                        ip = candidate;
-                        identity_source = "sameInterface".to_string();
-                    }
-                }
-            }
-
-            // Get IP via rust ipconfig (avoids location prompts and VM startup overhead)
-            let mut ipconfig_ips = Vec::new();
-            let mut ip_cmd = std::process::Command::new("ipconfig");
-            ip_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            if let Ok(output) = ip_cmd.output() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    if line.contains("IPv4") {
-                        if let Some(idx) = line.find(':') {
-                            let extracted_ip = line[idx + 1..].trim().to_string();
-                            if !extracted_ip.is_empty() {
-                                ipconfig_ips.push(extracted_ip);
-                            }
-                        }
-                    }
-                }
-            }
-            let mut best_ip = String::new();
-            for extracted_ip in &ipconfig_ips {
-                if extracted_ip.starts_with("10.") || extracted_ip.starts_with("172.") {
-                    best_ip = extracted_ip.clone();
-                    break;
-                }
-            }
-            if best_ip.is_empty() && !ipconfig_ips.is_empty() {
-                for extracted_ip in &ipconfig_ips {
-                    if !extracted_ip.starts_with("198.18.") && !extracted_ip.starts_with("127.") {
-                        best_ip = extracted_ip.clone();
-                        break;
-                    }
-                }
-            }
-            if ip.is_empty() && !best_ip.is_empty() {
-                ip = best_ip;
+            let identity = windows_network_identity(_include_wifi_details.unwrap_or(true));
+            ssid = identity.ssid;
+            bssid = identity.bssid;
+            ip = identity.ip;
+            interface_name = identity.interface_name;
+            transport = identity.transport;
+            if !ip.is_empty() && !interface_name.is_empty() {
+                identity_source = "sameInterface".to_string();
             }
         }
 
@@ -306,6 +502,7 @@ fn get_network_info(
                             {
                                 ip = address.split('/').next().unwrap_or("").to_string();
                                 if !ip.is_empty() {
+                                    transport = "wifi".to_string();
                                     identity_source = "sameInterface".to_string();
                                 }
                             }
@@ -315,13 +512,44 @@ fn get_network_info(
                 }
             }
 
-            if ip.is_empty() {
-                if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-                    if socket.connect("8.8.8.8:80").is_ok() {
-                        if let Ok(local_addr) = socket.local_addr() {
-                            ip = local_addr.ip().to_string();
-                        }
-                    }
+            let route_identity = linux_route_identity("172.30.201.2");
+            if let Some((route_interface, route_ip)) =
+                route_identity.filter(|(route_interface, route_ip)| {
+                    route_interface != &interface_name
+                        && linux_is_physical_ethernet_interface(route_interface)
+                        && is_campus_local_ip(route_ip)
+                })
+            {
+                ssid.clear();
+                bssid.clear();
+                interface_name = route_interface;
+                ip = route_ip;
+                transport = "ethernet".to_string();
+                identity_source = "sameInterface".to_string();
+            } else if let Some((wired_interface, wired_ip)) =
+                linux_campus_wired_identity(&interface_name)
+            {
+                // When a TUN device owns the route, the route query cannot
+                // identify the physical campus Ethernet. Keep the scan
+                // per-interface and prefer that campus address over Wi-Fi.
+                ssid.clear();
+                bssid.clear();
+                interface_name = wired_interface;
+                ip = wired_ip;
+                transport = "ethernet".to_string();
+                identity_source = "sameInterface".to_string();
+            } else if ip.is_empty() {
+                if let Some((route_interface, route_ip)) = linux_route_identity("172.30.201.2") {
+                    let route_transport = if linux_is_physical_ethernet_interface(&route_interface)
+                    {
+                        "ethernet"
+                    } else {
+                        "wifi"
+                    };
+                    interface_name = route_interface;
+                    ip = route_ip;
+                    transport = route_transport.to_string();
+                    identity_source = "sameInterface".to_string();
                 }
             }
         }
@@ -332,6 +560,7 @@ fn get_network_info(
             "ip": ip,
             "interfaceName": interface_name,
             "identitySource": identity_source,
+            "transport": transport,
             "routeIp": route_ip
         })
     }
@@ -374,9 +603,140 @@ fn call_android_network_helper_bool(method: &str) -> bool {
 }
 
 #[cfg(target_os = "android")]
+fn call_android_network_helper_string(method: &str) -> String {
+    let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() else {
+        return String::new();
+    };
+    let Ok(vm) = (unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) }) else {
+        return String::new();
+    };
+    let Ok(mut env) = vm.attach_current_thread_as_daemon() else {
+        return String::new();
+    };
+    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+    let Ok(class) =
+        tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.NetworkHelper".into())
+    else {
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        return String::new();
+    };
+    let result = env.call_static_method(
+        class,
+        method,
+        "(Landroid/content/Context;)Ljava/lang/String;",
+        &[jni::objects::JValue::Object(&activity)],
+    );
+    let output = result
+        .ok()
+        .and_then(|value| value.l().ok())
+        .and_then(|object| {
+            let value = jni::objects::JString::from(object);
+            env.get_string(&value).ok().map(Into::into)
+        })
+        .unwrap_or_default();
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+        return String::new();
+    }
+    output
+}
+
+#[cfg(target_os = "android")]
+fn call_android_network_helper_string_argument(method: &str, argument: &str) -> String {
+    let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() else {
+        return String::new();
+    };
+    let Ok(vm) = (unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) }) else {
+        return String::new();
+    };
+    let Ok(mut env) = vm.attach_current_thread_as_daemon() else {
+        return String::new();
+    };
+    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+    let Ok(class) =
+        tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.NetworkHelper".into())
+    else {
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        return String::new();
+    };
+    let Ok(java_argument) = env.new_string(argument) else {
+        return String::new();
+    };
+    let java_argument = jni::objects::JObject::from(java_argument);
+    let result = env.call_static_method(
+        class,
+        method,
+        "(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;",
+        &[
+            jni::objects::JValue::Object(&activity),
+            jni::objects::JValue::Object(&java_argument),
+        ],
+    );
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+        return String::new();
+    }
+    result
+        .ok()
+        .and_then(|value| value.l().ok())
+        .and_then(|object| {
+            let value = jni::objects::JString::from(object);
+            env.get_string(&value).ok().map(Into::into)
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "android")]
+fn call_android_network_helper_bool_argument(method: &str, argument: &str) -> bool {
+    let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() else {
+        return false;
+    };
+    let Ok(vm) = (unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) }) else {
+        return false;
+    };
+    let Ok(mut env) = vm.attach_current_thread_as_daemon() else {
+        return false;
+    };
+    let activity = unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
+    let Ok(class) =
+        tauri::wry::prelude::find_class(&mut env, &activity, "cn.edu.bjut.al.NetworkHelper".into())
+    else {
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        return false;
+    };
+    let Ok(java_argument) = env.new_string(argument) else {
+        return false;
+    };
+    let java_argument = jni::objects::JObject::from(java_argument);
+    let result = env
+        .call_static_method(
+            class,
+            method,
+            "(Landroid/content/Context;Ljava/lang/String;)Z",
+            &[
+                jni::objects::JValue::Object(&activity),
+                jni::objects::JValue::Object(&java_argument),
+            ],
+        )
+        .and_then(|value| value.z())
+        .unwrap_or(false);
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+        return false;
+    }
+    result
+}
+
+#[cfg(target_os = "android")]
 struct AndroidWifiRouteGuard {
     required: bool,
-    bound: bool,
+    token: Option<String>,
 }
 
 #[cfg(target_os = "android")]
@@ -386,34 +746,54 @@ impl AndroidWifiRouteGuard {
             .get("routeBindingRequired")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
-        Self {
-            required,
-            bound: required && call_android_network_helper_bool("bindProcessToCampusWifi"),
-        }
+        let network_id = network
+            .get("networkId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let token = required
+            .then(|| {
+                call_android_network_helper_string_argument(
+                    "acquireCampusWifiBindingForNetwork",
+                    network_id,
+                )
+            })
+            .filter(|value| !value.is_empty());
+        Self { required, token }
     }
 
     fn failed(&self) -> bool {
-        self.required && !self.bound
+        self.required && self.token.is_none()
     }
 }
 
 #[cfg(target_os = "android")]
 impl Drop for AndroidWifiRouteGuard {
     fn drop(&mut self) {
-        if self.bound {
-            let _ = call_android_network_helper_bool("clearProcessNetworkBinding");
+        if let Some(token) = self.token.take() {
+            let _ =
+                call_android_network_helper_bool_argument("releaseProcessNetworkBinding", &token);
         }
     }
 }
 
 #[cfg(target_os = "android")]
-fn report_android_campus_wifi_connected() {
-    let _ = call_android_network_helper_bool("reportCampusWifiConnectivity");
+fn report_android_campus_wifi_connected(network: &serde_json::Value) {
+    let network_id = network
+        .get("wifiNetworkId")
+        .or_else(|| network.get("networkId"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let _ = call_android_network_helper_bool_argument(
+        "reportCampusWifiConnectivityForNetwork",
+        network_id,
+    );
 }
 
 #[cfg(target_os = "android")]
-fn clear_android_network_binding() {
-    let _ = call_android_network_helper_bool("clearProcessNetworkBinding");
+fn clear_android_network_binding() -> Result<(), String> {
+    call_android_network_helper_bool("waitAndClearProcessNetworkBinding")
+        .then_some(())
+        .ok_or_else(|| "自动登录仍在使用校园 Wi-Fi 路由，请稍后重试".to_string())
 }
 
 #[tauri::command]
@@ -590,117 +970,55 @@ fn frontend_ready(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn get_local_ip() -> String {
-    let mut ip = String::new();
-
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        let mut ipconfig_ips = Vec::new();
-        let mut ip_cmd = std::process::Command::new("ipconfig");
-        ip_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        if let Ok(output) = ip_cmd.output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if line.contains("IPv4") {
-                    if let Some(idx) = line.find(':') {
-                        let extracted_ip = line[idx + 1..].trim().to_string();
-                        if !extracted_ip.is_empty() {
-                            ipconfig_ips.push(extracted_ip);
-                        }
-                    }
-                }
-            }
-        }
-        let mut best_ip = String::new();
-        for extracted_ip in &ipconfig_ips {
-            if extracted_ip.starts_with("10.") || extracted_ip.starts_with("172.") {
-                best_ip = extracted_ip.clone();
-                break;
-            }
-        }
-        if best_ip.is_empty() && !ipconfig_ips.is_empty() {
-            for extracted_ip in &ipconfig_ips {
-                if !extracted_ip.starts_with("198.18.") && !extracted_ip.starts_with("127.") {
-                    best_ip = extracted_ip.clone();
-                    break;
-                }
-            }
-        }
-        if !best_ip.is_empty() {
-            ip = best_ip;
-        }
+        return windows_network_identity(false).ip;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
     {
-        #[cfg(target_os = "android")]
-        {
-            if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
-                if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
-                    if let Ok(mut env) = vm.attach_current_thread_as_daemon() {
-                        let activity =
-                            unsafe { jni::objects::JObject::from_raw(ctx.context_jobject.cast()) };
-                        if let Ok(class) = tauri::wry::prelude::find_class(
-                            &mut env,
-                            &activity,
-                            "cn.edu.bjut.al.NetworkHelper".into(),
-                        ) {
-                            let method_call = env.call_static_method(
-                                class,
-                                "getLocalIpAddress",
-                                "()Ljava/lang/String;",
-                                &[],
-                            );
-                            if let Ok(jvalue) = method_call {
-                                if let Ok(jobject) = jvalue.l() {
-                                    let jstring: jni::objects::JString = jobject.into();
-                                    if let Ok(rust_str) = env.get_string(&jstring).map(|s| {
-                                        let s: String = s.into();
-                                        s
-                                    }) {
-                                        ip = rust_str;
-                                    }
-                                }
-                            }
-                        }
-                        if env.exception_check().unwrap_or(false) {
-                            let _ = env.exception_clear();
-                        }
-                    }
-                }
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let interface_name = corewlan::WiFiClient::shared()
-                .ok()
-                .and_then(|client| client.interface())
-                .and_then(|interface| interface.interface_name())
-                .unwrap_or_default();
-            if !interface_name.is_empty() {
-                if let Ok(output) = std::process::Command::new("ipconfig")
-                    .args(["getifaddr", interface_name.as_str()])
-                    .output()
-                {
-                    ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                }
-            }
-        }
-
-        #[cfg(not(any(target_os = "windows", target_os = "android", target_os = "macos")))]
-        {
-            if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-                if socket.connect("8.8.8.8:80").is_ok() {
-                    if let Ok(local_addr) = socket.local_addr() {
-                        ip = local_addr.ip().to_string();
-                    }
-                }
-            }
-        }
+        return call_android_network_helper_string("getPhysicalNetworkIp");
     }
 
-    ip
+    #[cfg(target_os = "macos")]
+    {
+        let interface_name = corewlan::WiFiClient::shared()
+            .ok()
+            .and_then(|client| client.interface())
+            .and_then(|interface| interface.interface_name())
+            .unwrap_or_default();
+        let wifi_ip = macos_ipv4_for_interface(&interface_name);
+        if !wifi_ip.is_empty() {
+            return wifi_ip;
+        }
+        let route_interface = macos_route_interface("172.30.201.2");
+        if macos_is_physical_interface(&route_interface) {
+            return macos_ipv4_for_interface(&route_interface);
+        }
+        macos_campus_wired_identity(&interface_name)
+            .map(|(_interface, address)| address)
+            .unwrap_or_default()
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some((_interface, address)) = linux_route_identity("172.30.201.2") {
+            return address;
+        }
+        linux_campus_wired_identity("")
+            .map(|(_interface, address)| address)
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "linux"
+    )))]
+    {
+        String::new()
+    }
 }
 
 #[tauri::command]
@@ -742,8 +1060,8 @@ use network_trust::{
 #[cfg(test)]
 use portal_auth::portal_probe_urls;
 use portal_auth::{
-    detect_login_type_rust, lgn_user_info_url, login_result_is_ambiguous,
-    login_to_campus_network_rust, portal_client, LoginType,
+    detect_login_type_details_rust, detect_login_type_rust, lgn_user_info_url,
+    login_result_is_ambiguous, login_to_campus_network_rust, portal_client, LoginType,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
@@ -990,8 +1308,10 @@ fn network_identity_is_fresh(network: &serde_json::Value) -> bool {
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = network;
-        true
+        network
+            .get("identitySource")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|source| source.eq_ignore_ascii_case("sameInterface"))
     }
 }
 
@@ -1004,6 +1324,9 @@ fn mobile_data_check_interval(configured: i32, is_background: bool) -> i32 {
 }
 
 fn automatic_login_network_allowed(input: NetworkTrustInput<'_>) -> Result<(), String> {
+    if !input.identity_fresh {
+        return Err("网络身份不是来自同一物理接口，已阻止自动发送账号密码".to_string());
+    }
     let result = evaluate_network_trust(input);
     match result.decision {
         NetworkTrustDecision::Allowed => Ok(()),
@@ -1131,15 +1454,27 @@ where
 }
 
 pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool {
-    let mut builder = reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(1800))
         .redirect(reqwest::redirect::Policy::none())
         .use_rustls_tls();
-    if let Some(candidate) = source_ip {
+    #[cfg(target_os = "android")]
+    let builder = if let Some(candidate) = source_ip {
         let Some(source) = usable_physical_ipv4(candidate) else {
             return false;
         };
-        builder = builder.local_address(std::net::IpAddr::V4(source));
+        builder.local_address(std::net::IpAddr::V4(source))
+    } else {
+        builder
+    };
+    #[cfg(not(target_os = "android"))]
+    {
+        // Desktop proxy/TUN clients often publish synthetic DNS addresses and
+        // require public traffic to follow the system's default route. Binding
+        // these probes to the physical Wi-Fi/Ethernet source address bypasses
+        // that route and falsely reports offline. The physical address remains
+        // available separately for campus identity and authentication URLs.
+        let _ = source_ip;
     }
     let client = match builder.build() {
         Ok(client) => client,
@@ -3227,7 +3562,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
         #[cfg(not(target_os = "android"))]
-        let identity_fresh = true;
+        let identity_fresh = network_identity_is_fresh(&net_info);
         let preliminary_profile = {
             let cfg = state.config.read().unwrap();
             matching_network_profile(&cfg, &current_ssid, &current_bssid, &LoginType::Unknown)
@@ -3309,22 +3644,30 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
 
         let make_payload =
             |state_str: &str, login_type: Option<&LoginType>, ssid: &str, bssid: &str, ip: &str| {
-                #[allow(unused_mut)]
-                let mut payload = serde_json::json!({
-                    "state": state_str,
-                    "loginType": login_type.map(LoginType::as_str),
-                    "ssid": ssid,
-                    "bssid": bssid,
-                    "ip": ip,
-                    "timestamp": timestamp.clone()
-                });
-                #[cfg(target_os = "android")]
+                let mut payload = net_info.clone();
+                if !payload.is_object() {
+                    payload = serde_json::json!({});
+                }
                 if let Some(object) = payload.as_object_mut() {
+                    object.insert("state".to_string(), serde_json::json!(state_str));
+                    object.insert(
+                        "loginType".to_string(),
+                        serde_json::json!(login_type.map(LoginType::as_str)),
+                    );
+                    object.insert("ssid".to_string(), serde_json::json!(ssid));
+                    object.insert("bssid".to_string(), serde_json::json!(bssid));
+                    object.insert("ip".to_string(), serde_json::json!(ip));
+                    object.insert(
+                        "timestamp".to_string(),
+                        serde_json::json!(timestamp.clone()),
+                    );
                     object.insert(
                         "transport".to_string(),
                         serde_json::json!(transport.clone()),
                     );
+                    #[cfg(target_os = "android")]
                     object.insert("validated".to_string(), serde_json::json!(system_validated));
+                    #[cfg(target_os = "android")]
                     object.insert("metered".to_string(), serde_json::json!(metered));
                 }
                 payload
@@ -3432,6 +3775,16 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             && detected_login_type != LoginType::Unknown
         {
             let fresh_network = get_network_info(app.clone(), Some(true));
+            let captured_network_id = net_info
+                .get("networkId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let fresh_network_id = fresh_network
+                .get("networkId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let same_network =
+                !captured_network_id.is_empty() && captured_network_id == fresh_network_id;
             current_ssid = fresh_network
                 .get("ssid")
                 .and_then(|value| value.as_str())
@@ -3450,12 +3803,15 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             identity_fresh = fresh_network
                 .get("identityFresh")
                 .and_then(|value| value.as_bool())
-                .unwrap_or(false);
+                .unwrap_or(false)
+                && same_network;
             rust_log(
                 &app,
                 &state,
                 "安全",
-                if identity_fresh {
+                if !same_network {
+                    "读取 Wi-Fi 身份期间网络已经切换，已阻止本轮自动登录"
+                } else if identity_fresh {
                     "检测到认证网关，已在发送凭据前重新读取当前 Wi-Fi 身份"
                 } else {
                     "检测到认证网关，但系统未能返回有效的当前 SSID/BSSID"
@@ -3538,6 +3894,39 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                     profile_auto_login_enabled(profile.as_ref(), &login_type, cfg.auto_login)
                 };
                 if auto_login_enabled && !auto_login_paused {
+                    #[cfg(target_os = "android")]
+                    {
+                        // Re-read only the non-location-protected network/IP
+                        // identity immediately before credentials are used. A
+                        // Network object can be replaced during a long portal
+                        // probe even when SSID/BSSID were coherent at capture.
+                        let latest_network = get_network_info(app.clone(), Some(false));
+                        let captured_network_id = net_info
+                            .get("networkId")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("");
+                        let latest_network_id = latest_network
+                            .get("networkId")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("");
+                        let latest_ip = latest_network
+                            .get("ip")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("");
+                        if captured_network_id.is_empty()
+                            || captured_network_id != latest_network_id
+                            || latest_ip != current_ip
+                        {
+                            identity_fresh = false;
+                            rust_log(
+                                &app,
+                                &state,
+                                "安全",
+                                "发送凭据前检测到 Android Network 或物理 IPv4 已变化，已取消本轮自动登录",
+                                "error",
+                            );
+                        }
+                    }
                     let (whitelist, blacklist) = {
                         let cfg = state.config.read().unwrap();
                         (cfg.whitelist.clone(), cfg.blacklist.clone())
@@ -3635,7 +4024,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                         success = true;
                                         login_succeeded = true;
                                         #[cfg(target_os = "android")]
-                                        report_android_campus_wifi_connected();
+                                        report_android_campus_wifi_connected(&net_info);
                                         break;
                                     }
                                     Ok((false, msg)) => {
@@ -4147,11 +4536,21 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     ));
 
     let portal_started = std::time::Instant::now();
-    let login_type = if online || mobile_data || wifi_route_failed {
-        LoginType::Unknown
+    let detection = if online || mobile_data || wifi_route_failed {
+        None
     } else {
-        detect_login_type_rust(compatibility, &ssid, network_transport(&network)).await
+        Some(
+            detect_login_type_details_rust(compatibility, &ssid, network_transport(&network)).await,
+        )
     };
+    let login_type = detection
+        .as_ref()
+        .filter(|result| result.login_ready)
+        .map(|result| result.login_type.clone())
+        .unwrap_or(LoginType::Unknown);
+    let portal_waiting_for_ipv6 = detection.as_ref().is_some_and(|result| {
+        result.login_type == LoginType::Type3 && result.portal_detected && !result.login_ready
+    });
     let (portal_status, portal_message) = if wifi_route_failed {
         (
             "error",
@@ -4171,6 +4570,12 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
                 "已检测到校园网认证协议 {}，当前需要登录",
                 login_type.as_str()
             ),
+        )
+    } else if portal_waiting_for_ipv6 {
+        (
+            "warning",
+            "已发现 lgn 有线认证门户，但尚未取得可用于双栈登录的 IPv6 地址；本轮不会发送账号密码"
+                .to_string(),
         )
     } else {
         (
@@ -4192,6 +4597,11 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         ("healthy", "网络工作正常，互联网已连通")
     } else if login_type != LoginType::Unknown {
         ("auth_required", "已连接校园网，但需要完成账号认证")
+    } else if portal_waiting_for_ipv6 {
+        (
+            "auth_required",
+            "已发现有线校园网门户，但 IPv6 登录条件尚未就绪",
+        )
     } else if ip.is_empty() || transport == "none" {
         (
             "no_network",
@@ -4757,7 +5167,7 @@ async fn manual_login(
             Ok((true, message)) => {
                 record_account_success(&app, &state, &account.user);
                 #[cfg(target_os = "android")]
-                report_android_campus_wifi_connected();
+                report_android_campus_wifi_connected(&network);
                 rust_log(
                     &app,
                     &state,
@@ -5312,7 +5722,7 @@ async fn perform_billing_action(
 
 fn campus_service_target(state: &AppState, account_user: Option<&str>) -> Result<Account, String> {
     #[cfg(target_os = "android")]
-    clear_android_network_binding();
+    clear_android_network_binding()?;
     let config = state.config.read().unwrap();
     let account = selected_billing_account(&config, account_user).ok_or_else(|| {
         if account_user.is_some() {
@@ -6261,7 +6671,7 @@ fn billing_action_target(
     // physical/default transport is cellular. Never gate an explicit request on
     // transport type, and make sure a short-lived campus Wi-Fi binding is gone.
     #[cfg(target_os = "android")]
-    clear_android_network_binding();
+    clear_android_network_binding()?;
     let config = state.config.read().unwrap();
     let account = selected_billing_account(&config, account_user).ok_or_else(|| {
         if account_user.is_some() {
@@ -6545,7 +6955,7 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         bssid: &bssid,
         ip: &ip,
         transport: &transport,
-        identity_fresh: true,
+        identity_fresh: network_identity_is_fresh(&network),
         whitelist: &config.whitelist,
         blacklist: &config.blacklist,
     }) {
@@ -7144,6 +7554,19 @@ mod tests {
         ));
     }
 
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn desktop_auto_login_requires_a_same_interface_identity() {
+        assert!(network_identity_is_fresh(
+            &serde_json::json!({"identitySource": "sameInterface"})
+        ));
+        for source in ["routeFallback", "unverifiedFallback", "unknown", ""] {
+            assert!(!network_identity_is_fresh(
+                &serde_json::json!({"identitySource": source})
+            ));
+        }
+    }
+
     #[test]
     fn official_update_manifest_urls_are_tightly_scoped() {
         for allowed in [
@@ -7505,12 +7928,12 @@ mod tests {
 
     #[test]
     fn automatic_login_requires_a_recognized_or_explicitly_trusted_network() {
-        let whitelist = vec!["custom-campus|aa:bb".to_string()];
+        let whitelist = vec!["custom-campus|10:20:30:40:50:60".to_string()];
         assert!(!is_known_campus_ssid("evil-bjut-wifi"));
         assert!(automatic_login_network_allowed(NetworkTrustInput {
             login_type: &LoginType::Type1,
             ssid: "bjut-sushe-5G-24vF",
-            bssid: "11:22",
+            bssid: "fa:53:29:12:34:56",
             ip: "10.21.2.3",
             transport: "wifi",
             identity_fresh: true,
@@ -7521,7 +7944,7 @@ mod tests {
         assert!(automatic_login_network_allowed(NetworkTrustInput {
             login_type: &LoginType::Type1,
             ssid: "evil-ap",
-            bssid: "11:22",
+            bssid: "10:20:30:40:50:60",
             ip: "10.21.2.3",
             transport: "wifi",
             identity_fresh: true,
@@ -7532,7 +7955,7 @@ mod tests {
         assert!(automatic_login_network_allowed(NetworkTrustInput {
             login_type: &LoginType::Type2,
             ssid: "custom-campus",
-            bssid: "aa:bb",
+            bssid: "10:20:30:40:50:60",
             ip: "10.21.2.3",
             transport: "wifi",
             identity_fresh: true,
@@ -7711,7 +8134,7 @@ mod tests {
         assert!(automatic_login_network_allowed(NetworkTrustInput {
             login_type: &LoginType::Type3,
             ssid: "bjut_wifi",
-            bssid: "11:22",
+            bssid: "10:20:30:40:50:60",
             ip: "10.21.2.3",
             transport: "wifi",
             identity_fresh: true,

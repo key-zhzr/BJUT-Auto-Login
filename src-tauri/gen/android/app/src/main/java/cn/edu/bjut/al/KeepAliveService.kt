@@ -69,6 +69,7 @@ class KeepAliveService : Service() {
     private var connectivityManager: ConnectivityManager? = null
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var wifiNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var ethernetNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var pausedUntil = 0L
     private var lastNetworkSignature = ""
     private var lastNetworkEventAt = 0L
@@ -94,7 +95,7 @@ class KeepAliveService : Service() {
     private val ipPollRunnable = object : Runnable {
         override fun run() {
             if (destroyed) return
-            val currentIp = NetworkHelper.getLocalIpAddress()
+            val currentIp = NetworkHelper.getPhysicalNetworkIp(this@KeepAliveService)
             if (currentIp != lastLocalIp) {
                 val previousIp = lastLocalIp
                 lastLocalIp = currentIp
@@ -145,7 +146,7 @@ class KeepAliveService : Service() {
         notificationSettings = loadNotificationSettings()
         createNotificationChannels()
         startAsForeground()
-        lastLocalIp = NetworkHelper.getLocalIpAddress()
+        lastLocalIp = NetworkHelper.getPhysicalNetworkIp(this)
         preferences.edit().putString("last_physical_ip", lastLocalIp).apply()
         registerNetworkCallback()
         scheduleAutomaticResume()
@@ -219,8 +220,12 @@ class KeepAliveService : Service() {
         wifiNetworkCallback?.let { callback ->
             try { connectivityManager?.unregisterNetworkCallback(callback) } catch (_: Exception) {}
         }
+        ethernetNetworkCallback?.let { callback ->
+            try { connectivityManager?.unregisterNetworkCallback(callback) } catch (_: Exception) {}
+        }
         defaultNetworkCallback = null
         wifiNetworkCallback = null
+        ethernetNetworkCallback = null
         handler.removeCallbacks(periodicCheckRunnable)
         handler.removeCallbacks(ipPollRunnable)
         handler.removeCallbacks(serviceHeartbeatRunnable)
@@ -483,10 +488,10 @@ class KeepAliveService : Service() {
     }
 
     private fun networkInfoForCheck(fullDetails: Boolean): String {
-        val network = JSONObject(NetworkHelper.getNetworkInfo(this, fullDetails))
-        val physicalIp = NetworkHelper.getLocalIpAddress()
-        if (physicalIp.isNotEmpty()) network.put("ip", physicalIp)
-        return network.toString()
+        // NetworkHelper builds SSID/BSSID/IP/interface from one concrete
+        // android.net.Network. Never replace its IPv4 with an interface-wide
+        // scan because that can mix cellular, VPN and Wi-Fi identities.
+        return NetworkHelper.getNetworkInfo(this, fullDetails)
     }
 
     private fun performHeadlessCheck(reason: String, fullDetails: Boolean) {
@@ -502,7 +507,13 @@ class KeepAliveService : Service() {
                     var networkInfo = networkInfoForCheck(fullDetails)
                     val initialNetwork = JSONObject(networkInfo)
                     val routeBindingRequired = initialNetwork.optBoolean("routeBindingRequired", false)
-                    val routeBound = routeBindingRequired && NetworkHelper.bindProcessToCampusWifi(this)
+                    val routeBindingToken = if (routeBindingRequired) {
+                        NetworkHelper.acquireCampusWifiBindingForNetwork(
+                            this,
+                            initialNetwork.optString("networkId")
+                        )
+                    } else ""
+                    val routeBound = routeBindingToken.isNotEmpty()
                     val accountHealth = NetworkHelper.getAccountHealth(this)
                     var result = if (routeBindingRequired && !routeBound) {
                         JSONObject()
@@ -510,7 +521,7 @@ class KeepAliveService : Service() {
                             .put("notification_category", "login")
                             .put(
                                 "notification",
-                                "无法绑定待认证校园 Wi-Fi，已停止使用 VPN/移动数据结果"
+                                "无法绑定待认证校园网络，已停止使用 VPN/移动数据结果"
                             )
                             .put(
                                 "logs",
@@ -520,7 +531,7 @@ class KeepAliveService : Service() {
                                         .put("type", "error")
                                         .put(
                                             "message",
-                                            "检测到非默认的待认证 Wi-Fi，但进程路由绑定失败；本轮未执行联网判断或登录"
+                                            "检测到非默认的待认证 Wi-Fi/有线网络，但进程路由绑定失败；本轮未执行联网判断或登录"
                                         )
                                 )
                             )
@@ -535,7 +546,9 @@ class KeepAliveService : Service() {
                                 )
                             )
                         } finally {
-                            if (routeBound) NetworkHelper.clearProcessNetworkBinding(this)
+                            if (routeBound) {
+                                NetworkHelper.releaseProcessNetworkBinding(this, routeBindingToken)
+                            }
                         }
                     }
                     if (!fullDetails && result.optString("status") == "needs_fresh_identity") {
@@ -560,14 +573,20 @@ class KeepAliveService : Service() {
                         } else {
                             networkInfo = freshNetworkInfo
                             val freshBindingRequired = freshNetwork.optBoolean("routeBindingRequired", false)
-                            val freshRouteBound = freshBindingRequired && NetworkHelper.bindProcessToCampusWifi(this)
+                            val freshBindingToken = if (freshBindingRequired) {
+                                NetworkHelper.acquireCampusWifiBindingForNetwork(
+                                    this,
+                                    freshNetworkId
+                                )
+                            } else ""
+                            val freshRouteBound = freshBindingToken.isNotEmpty()
                             if (freshBindingRequired && !freshRouteBound) {
                                 JSONObject()
                                     .put("status", "route_binding_failed")
                                     .put("notification_category", "login")
                                     .put(
                                         "notification",
-                                        "无法绑定待认证校园 Wi-Fi，已停止使用 VPN/移动数据结果"
+                                        "无法绑定待认证校园网络，已停止使用 VPN/移动数据结果"
                                     )
                                     .put(
                                         "logs",
@@ -577,7 +596,7 @@ class KeepAliveService : Service() {
                                                 .put("type", "error")
                                                 .put(
                                                     "message",
-                                                    "发送凭据前无法重新绑定校园 Wi-Fi，本轮登录已取消"
+                                                    "发送凭据前无法重新绑定校园 Wi-Fi/有线网络，本轮登录已取消"
                                                 )
                                         )
                                     )
@@ -592,7 +611,12 @@ class KeepAliveService : Service() {
                                         )
                                     )
                                 } finally {
-                                    if (freshRouteBound) NetworkHelper.clearProcessNetworkBinding(this)
+                                    if (freshRouteBound) {
+                                        NetworkHelper.releaseProcessNetworkBinding(
+                                            this,
+                                            freshBindingToken
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -601,7 +625,10 @@ class KeepAliveService : Service() {
                         NetworkHelper.setAccountHealth(this, it.toString())
                     }
                     if (result.optString("status") in setOf("online", "login_success")) {
-                        NetworkHelper.reportCampusWifiConnectivity(this)
+                        NetworkHelper.reportCampusWifiConnectivityForNetwork(
+                            this,
+                            JSONObject(networkInfo).optString("networkId")
+                        )
                     }
                     val logs = result.optJSONArray("logs")
                     if (logs != null) {
@@ -684,6 +711,30 @@ class KeepAliveService : Service() {
                     .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                     .build(),
                 wifiCallback
+            )
+            val ethernetCallback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) =
+                    notifyNetworkChanged("ethernet-available:${network.hashCode()}")
+
+                override fun onLost(network: Network) =
+                    notifyNetworkChanged("ethernet-lost:${network.hashCode()}")
+
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    capabilities: NetworkCapabilities
+                ) {
+                    val signature = "ethernet-cap:${network.hashCode()}:" +
+                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) + ":" +
+                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)
+                    notifyNetworkChanged(signature)
+                }
+            }
+            ethernetNetworkCallback = ethernetCallback
+            manager.registerNetworkCallback(
+                NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+                    .build(),
+                ethernetCallback
             )
         } catch (error: Exception) {
             KeepAliveJournal.append(this, "注册系统网络回调失败：${error.javaClass.simpleName}", "error")

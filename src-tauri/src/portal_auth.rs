@@ -61,6 +61,26 @@ fn login_type_hint(ssid: &str) -> Option<LoginType> {
     }
 }
 
+fn login_probe_candidates(ssid: &str, transport: &str) -> Vec<LoginType> {
+    let mut candidates = if transport.eq_ignore_ascii_case("wifi") {
+        vec![LoginType::Type1, LoginType::Type2]
+    } else if transport.eq_ignore_ascii_case("ethernet") {
+        vec![LoginType::Type3]
+    } else {
+        vec![LoginType::Type1, LoginType::Type2, LoginType::Type3]
+    };
+
+    // SSID is only a priority hint. A matching name must never bypass the
+    // protocol-specific response probe, because SSIDs can be renamed or
+    // spoofed. Ethernet also deliberately ignores Wi-Fi naming hints.
+    if let Some(hint) = login_type_hint(ssid) {
+        if let Some(position) = candidates.iter().position(|candidate| *candidate == hint) {
+            candidates.swap(0, position);
+        }
+    }
+    candidates
+}
+
 pub(crate) async fn portal_client(
     compatibility: VpnCompatibility,
     login_type: &LoginType,
@@ -131,24 +151,129 @@ pub(crate) fn portal_probe_urls(
             let secondary = primary.replacen("172.30.201.2", "172.30.201.10", 1);
             vec![primary, secondary]
         }
-        LoginType::Type3 => vec![
-            lgn_user_info_url(compatibility),
-            lgn_observed_ipv6_url()
-                .map(|url| url.to_string())
-                .unwrap_or_default(),
-        ],
+        LoginType::Type3 => {
+            let mut urls = vec![lgn_user_info_url(compatibility)];
+            if let Ok(ipv6_url) = lgn_observed_ipv6_url() {
+                urls.push(ipv6_url.to_string());
+            }
+            urls
+        }
         LoginType::Unknown => Vec::new(),
+    }
+}
+
+fn login_readiness_probe_urls(
+    compatibility: VpnCompatibility,
+    login_type: &LoginType,
+) -> Vec<String> {
+    let mut urls = portal_probe_urls(compatibility, login_type);
+    if *login_type == LoginType::Type3 && !urls.iter().any(|url| url.contains("/drcom/getipv6")) {
+        if let Ok(ipv6_url) = lgn_observed_ipv6_url() {
+            urls.push(ipv6_url.to_string());
+        }
+    }
+    urls
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PortalProbeResult {
+    NotDetected,
+    PortalDetected,
+    LoginReady,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoginTypeDetection {
+    pub(crate) login_type: LoginType,
+    pub(crate) portal_detected: bool,
+    pub(crate) login_ready: bool,
+}
+
+impl LoginTypeDetection {
+    fn not_detected() -> Self {
+        Self {
+            login_type: LoginType::Unknown,
+            portal_detected: false,
+            login_ready: false,
+        }
+    }
+
+    fn from_probe(login_type: LoginType, result: PortalProbeResult) -> Self {
+        Self {
+            login_type,
+            portal_detected: result != PortalProbeResult::NotDetected,
+            login_ready: result == PortalProbeResult::LoginReady,
+        }
+    }
+
+    fn into_ready_login_type(self) -> LoginType {
+        if self.login_ready {
+            self.login_type
+        } else {
+            LoginType::Unknown
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct Type3ProbeEvidence {
+    portal_detected: bool,
+    ipv6_login_ready: bool,
+}
+
+impl Type3ProbeEvidence {
+    fn record(&mut self, url: &str, body: &str) {
+        if body.trim().is_empty() {
+            return;
+        }
+        if url.contains("loadUserInfo") {
+            self.portal_detected |= probe_body_matches(&LoginType::Type3, url, body);
+            return;
+        }
+        if url.contains("/drcom/getipv6") {
+            // A syntactically valid getipv6 response proves that the Type 3
+            // portal is present. It is only safe to start the two-stack login
+            // flow when that response also contains a usable IPv6 address.
+            self.portal_detected |=
+                jsonp_object(body).is_some_and(|value| value.get("result").is_some());
+            self.ipv6_login_ready |= parse_observed_ip(body, true).is_ok();
+        }
+    }
+
+    fn result(&self) -> PortalProbeResult {
+        if self.ipv6_login_ready {
+            PortalProbeResult::LoginReady
+        } else if self.portal_detected {
+            PortalProbeResult::PortalDetected
+        } else {
+            PortalProbeResult::NotDetected
+        }
     }
 }
 
 async fn probe_login_type(
     compatibility: VpnCompatibility,
     login_type: LoginType,
-) -> Option<LoginType> {
-    let client = portal_client(compatibility, &login_type, Duration::from_millis(1800))
-        .await
-        .ok()?;
-    for url in portal_probe_urls(compatibility, &login_type) {
+) -> PortalProbeResult {
+    // Type 3 maximum compatibility still needs the TLS/SNI-preserving lgn6
+    // endpoint to prove that IPv6 login is actually ready.
+    let client_compatibility =
+        if login_type == LoginType::Type3 && compatibility == VpnCompatibility::Maximum {
+            VpnCompatibility::High
+        } else {
+            compatibility
+        };
+    let Ok(client) = portal_client(
+        client_compatibility,
+        &login_type,
+        Duration::from_millis(1800),
+    )
+    .await
+    else {
+        return PortalProbeResult::NotDetected;
+    };
+    let mut type3_evidence = Type3ProbeEvidence::default();
+    for url in login_readiness_probe_urls(compatibility, &login_type) {
         let Ok(response) = client
             .get(&url)
             .header("Cache-Control", "no-cache, no-store")
@@ -163,11 +288,20 @@ async fn probe_login_type(
         // TCP/TLS request as a confirmed protocol.
         let status_ok = response.status().is_success();
         let body = response.text().await.unwrap_or_default();
-        if status_ok && probe_body_matches(&login_type, &url, &body) {
-            return Some(login_type);
+        if !status_ok {
+            continue;
+        }
+        if login_type == LoginType::Type3 {
+            type3_evidence.record(&url, &body);
+        } else if probe_body_matches(&login_type, &url, &body) {
+            return PortalProbeResult::LoginReady;
         }
     }
-    None
+    if login_type == LoginType::Type3 {
+        type3_evidence.result()
+    } else {
+        PortalProbeResult::NotDetected
+    }
 }
 
 fn jsonp_object(text: &str) -> Option<Value> {
@@ -208,34 +342,32 @@ fn probe_body_matches(login_type: &LoginType, url: &str, body: &str) -> bool {
     }
 }
 
+pub(crate) async fn detect_login_type_details_rust(
+    compatibility: VpnCompatibility,
+    ssid: &str,
+    transport: &str,
+) -> LoginTypeDetection {
+    let mut portal_only = None;
+    for candidate in login_probe_candidates(ssid, transport) {
+        let result = probe_login_type(compatibility, candidate.clone()).await;
+        if result == PortalProbeResult::LoginReady {
+            return LoginTypeDetection::from_probe(candidate, result);
+        }
+        if result == PortalProbeResult::PortalDetected && portal_only.is_none() {
+            portal_only = Some(LoginTypeDetection::from_probe(candidate, result));
+        }
+    }
+    portal_only.unwrap_or_else(LoginTypeDetection::not_detected)
+}
+
 pub(crate) async fn detect_login_type_rust(
     compatibility: VpnCompatibility,
     ssid: &str,
     transport: &str,
 ) -> LoginType {
-    if let Some(hint) = login_type_hint(ssid) {
-        return hint;
-    }
-    let candidates: Vec<LoginType> = if transport.eq_ignore_ascii_case("wifi") {
-        vec![LoginType::Type1, LoginType::Type2]
-    } else if transport.eq_ignore_ascii_case("ethernet") {
-        vec![LoginType::Type3]
-    } else {
-        vec![LoginType::Type1, LoginType::Type2, LoginType::Type3]
-    };
-    let probes = candidates
-        .into_iter()
-        .map(|login_type| probe_login_type(compatibility, login_type));
-    let confirmed: Vec<LoginType> = futures_util::future::join_all(probes)
+    detect_login_type_details_rust(compatibility, ssid, transport)
         .await
-        .into_iter()
-        .flatten()
-        .collect();
-    if confirmed.len() == 1 {
-        confirmed.into_iter().next().unwrap_or(LoginType::Unknown)
-    } else {
-        LoginType::Unknown
-    }
+        .into_ready_login_type()
 }
 
 fn parse_dr_response(text: &str) -> Result<(bool, String), String> {
@@ -739,10 +871,69 @@ mod tests {
             Some(LoginType::Type1)
         );
         assert_eq!(login_type_hint("bjut_wifi"), Some(LoginType::Type2));
-        assert_eq!(login_type_hint("CU_bjut-sushe-28Au"), None);
+        assert_eq!(
+            login_type_hint("CU_bjut-sushe-28Au"),
+            Some(LoginType::Type1)
+        );
         assert_eq!(login_type_hint("room-bjut-sushe-5g"), None);
         assert_eq!(login_type_hint("bjut_wifi_guest"), None);
         assert_eq!(login_type_hint(""), None);
+    }
+
+    #[test]
+    fn ssid_hints_only_reorder_protocol_probe_candidates() {
+        assert_eq!(
+            login_probe_candidates("bjut_wifi", "wifi"),
+            vec![LoginType::Type2, LoginType::Type1]
+        );
+        assert_eq!(
+            login_probe_candidates("bjut-sushe--5G-bEY5", "wifi"),
+            vec![LoginType::Type1, LoginType::Type2]
+        );
+        assert_eq!(
+            login_probe_candidates("CU_bjut-sushe-28Au", "wifi"),
+            vec![LoginType::Type1, LoginType::Type2]
+        );
+        assert_eq!(
+            login_probe_candidates("bjut_wifi", "ethernet"),
+            vec![LoginType::Type3]
+        );
+        assert_eq!(
+            login_probe_candidates("untrusted-lookalike", "unknown"),
+            vec![LoginType::Type1, LoginType::Type2, LoginType::Type3]
+        );
+    }
+
+    #[test]
+    fn type3_portal_detection_is_distinct_from_ipv6_login_readiness() {
+        let mut evidence = Type3ProbeEvidence::default();
+        evidence.record(
+            "https://lgn.bjut.edu.cn:802/eportal/portal/page/loadUserInfo",
+            r#"dr1002({"code":1,"user_info":{"account":"25000000"}});"#,
+        );
+        assert_eq!(evidence.result(), PortalProbeResult::PortalDetected);
+
+        evidence.record(
+            "https://lgn6.bjut.edu.cn/drcom/getipv6",
+            r#"dr1004({"result":0,"ip":""});"#,
+        );
+        assert_eq!(evidence.result(), PortalProbeResult::PortalDetected);
+
+        evidence.record(
+            "https://lgn6.bjut.edu.cn/drcom/getipv6",
+            r#"dr1004({"result":1,"ip":"2001:db8::10"});"#,
+        );
+        assert_eq!(evidence.result(), PortalProbeResult::LoginReady);
+    }
+
+    #[test]
+    fn type3_partial_detection_preserves_details_without_being_ready() {
+        let detection =
+            LoginTypeDetection::from_probe(LoginType::Type3, PortalProbeResult::PortalDetected);
+        assert_eq!(detection.login_type, LoginType::Type3);
+        assert!(detection.portal_detected);
+        assert!(!detection.login_ready);
+        assert_eq!(detection.into_ready_login_type(), LoginType::Unknown);
     }
 
     #[test]
@@ -755,11 +946,13 @@ mod tests {
             portal_probe_urls(VpnCompatibility::Minimum, &LoginType::Type1),
             vec!["https://10.21.221.98:802/eportal/portal/login"]
         );
-        assert!(
-            portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3)
-                .iter()
-                .all(|url| url.contains(":801/"))
-        );
+        let wired = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3);
+        assert_eq!(wired.len(), 2);
+        assert!(wired.iter().all(|url| url.contains(":801/")));
+
+        let readiness = login_readiness_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3);
+        assert_eq!(readiness.len(), 3);
+        assert!(readiness.iter().any(|url| url.contains("/drcom/getipv6")));
     }
 
     #[test]

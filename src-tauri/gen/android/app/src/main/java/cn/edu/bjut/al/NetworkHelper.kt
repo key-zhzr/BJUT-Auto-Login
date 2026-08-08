@@ -2,24 +2,114 @@ package cn.edu.bjut.al
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.wifi.WifiManager
+import android.net.wifi.WifiInfo
+import android.os.Build
 import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import java.net.NetworkInterface
 import java.net.Inet4Address
 import java.io.File
 import java.security.KeyStore
+import java.util.LinkedHashMap
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlin.concurrent.withLock
 import org.json.JSONObject
+
+private data class PhysicalNetworkSnapshot(
+    val network: Network,
+    val capabilities: NetworkCapabilities,
+    val linkProperties: LinkProperties?
+)
+
+/**
+ * Process network binding is global Android process state, so independent Rust
+ * commands and the headless service must share leases instead of pairing raw
+ * bindProcessToNetwork()/bindProcessToNetwork(null) calls. Leases targeting the
+ * same physical network may coexist; the process is only unbound after the
+ * final lease is released. A network handover waits briefly for the previous
+ * users to finish.
+ */
+private object ProcessNetworkBindingCoordinator {
+    private const val HANDOVER_TIMEOUT_MS = 5_000L
+    private val lock = ReentrantLock(true)
+    private val leasesChanged = lock.newCondition()
+    private val leases = LinkedHashMap<String, Network>()
+    private var boundNetwork: Network? = null
+
+    fun acquire(manager: ConnectivityManager, network: Network): String {
+        val deadline = SystemClock.elapsedRealtime() + HANDOVER_TIMEOUT_MS
+        lock.withLock {
+            while (boundNetwork != null && boundNetwork != network) {
+                val remaining = deadline - SystemClock.elapsedRealtime()
+                if (remaining <= 0L) return ""
+                try {
+                    leasesChanged.await(remaining, TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return ""
+                }
+            }
+            if (boundNetwork == null) {
+                if (!manager.bindProcessToNetwork(network)) return ""
+                boundNetwork = network
+            }
+            return UUID.randomUUID().toString().also { token -> leases[token] = network }
+        }
+    }
+
+    fun release(manager: ConnectivityManager, token: String): Boolean {
+        if (token.isBlank()) return false
+        lock.withLock {
+            if (leases.remove(token) == null) return false
+            if (leases.isNotEmpty()) return true
+            val cleared = manager.bindProcessToNetwork(null)
+            // Keep the logical state aligned with Android's process binding.
+            // If unbinding fails, a later acquisition for another Network must
+            // not assume that the process has already returned to its default
+            // route. A same-Network lease may still be acquired safely and a
+            // later waitAndClear() can retry the unbind.
+            if (cleared) {
+                boundNetwork = null
+                leasesChanged.signalAll()
+            }
+            return cleared
+        }
+    }
+
+    fun waitAndClear(manager: ConnectivityManager): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + HANDOVER_TIMEOUT_MS
+        lock.withLock {
+            while (leases.isNotEmpty()) {
+                val remaining = deadline - SystemClock.elapsedRealtime()
+                if (remaining <= 0L) return false
+                try {
+                    leasesChanged.await(remaining, TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return false
+                }
+            }
+            val cleared = manager.bindProcessToNetwork(null)
+            if (cleared) {
+                boundNetwork = null
+                leasesChanged.signalAll()
+            }
+            return cleared
+        }
+    }
+}
 
 class NetworkHelper {
     companion object {
@@ -133,6 +223,147 @@ class NetworkHelper {
             }
         }
 
+        private fun usableIpv4(linkProperties: LinkProperties?): String = linkProperties
+            ?.linkAddresses
+            ?.asSequence()
+            ?.map { it.address }
+            ?.filterIsInstance<Inet4Address>()
+            ?.firstOrNull { address ->
+                val octets = address.address
+                val fakeIp = octets.size == 4
+                    && (octets[0].toInt() and 0xff) == 198
+                    && (octets[1].toInt() and 0xff) in 18..19
+                !address.isAnyLocalAddress
+                    && !address.isLoopbackAddress
+                    && !address.isLinkLocalAddress
+                    && !address.isMulticastAddress
+                    && !fakeIp
+            }
+            ?.hostAddress
+            .orEmpty()
+
+        private fun isCampusWiredIpv4(value: String): Boolean {
+            val octets = value.split('.').mapNotNull { it.toIntOrNull() }
+            if (octets.size != 4 || octets.any { it !in 0..255 }) return false
+            // The wired lgn network and its gateways use 172.30/16. Keeping
+            // this narrow avoids preferring an unrelated home/USB Ethernet
+            // adapter merely because it has a common 10/8 or 172.16/12 IP.
+            return octets[0] == 172 && octets[1] == 30
+        }
+
+        private fun physicalSnapshots(manager: ConnectivityManager): List<PhysicalNetworkSnapshot> =
+            manager.allNetworks.mapNotNull { network ->
+                val capabilities = manager.getNetworkCapabilities(network) ?: return@mapNotNull null
+                if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                    return@mapNotNull null
+                }
+                PhysicalNetworkSnapshot(
+                    network,
+                    capabilities,
+                    manager.getLinkProperties(network)
+                )
+            }
+
+        private fun transportCandidateScore(
+            snapshot: PhysicalNetworkSnapshot,
+            activeNetwork: Network?
+        ): Int {
+            var score = 0
+            if (snapshot.network == activeNetwork) score += 100
+            if (snapshot.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                score += 20
+            }
+            if (snapshot.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) {
+                score += 10
+            }
+            if (snapshot.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                score += 5
+            }
+            if (usableIpv4(snapshot.linkProperties).isNotEmpty()) score += 2
+            return score
+        }
+
+        private fun selectTransportSnapshot(
+            snapshots: List<PhysicalNetworkSnapshot>,
+            activeNetwork: Network?,
+            transport: Int
+        ): PhysicalNetworkSnapshot? = snapshots
+            .asSequence()
+            .filter { it.capabilities.hasTransport(transport) }
+            .sortedWith(
+                compareByDescending<PhysicalNetworkSnapshot> {
+                    transportCandidateScore(it, activeNetwork)
+                }.thenBy { it.network.toString() }
+            )
+            .firstOrNull()
+
+        private fun selectPhysicalSnapshot(
+            manager: ConnectivityManager,
+            activeNetwork: Network?
+        ): Pair<PhysicalNetworkSnapshot?, PhysicalNetworkSnapshot?> {
+            val snapshots = physicalSnapshots(manager)
+            val wifi = selectTransportSnapshot(
+                snapshots,
+                activeNetwork,
+                NetworkCapabilities.TRANSPORT_WIFI
+            )
+            val ethernet = selectTransportSnapshot(
+                snapshots,
+                activeNetwork,
+                NetworkCapabilities.TRANSPORT_ETHERNET
+            )
+            // A campus-wired link is the only valid transport for Type 3 and
+            // should win even while an unrelated Wi-Fi remains associated.
+            // Do not prefer an arbitrary Ethernet adapter: it must carry a
+            // same-Network IPv4 from a known campus range.
+            val campusEthernet = snapshots
+                .asSequence()
+                .filter {
+                    it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                        && isCampusWiredIpv4(usableIpv4(it.linkProperties))
+                }
+                .sortedWith(
+                    compareByDescending<PhysicalNetworkSnapshot> {
+                        transportCandidateScore(it, activeNetwork)
+                    }.thenBy { it.network.toString() }
+                )
+                .firstOrNull()
+            val selected = campusEthernet
+                ?: wifi
+                ?: ethernet
+                ?: selectTransportSnapshot(
+                    snapshots,
+                    activeNetwork,
+                    NetworkCapabilities.TRANSPORT_CELLULAR
+                )
+                ?: snapshots.firstOrNull { it.network == activeNetwork }
+            return selected to wifi
+        }
+
+        @Suppress("DEPRECATION")
+        private fun wifiInfo(capabilities: NetworkCapabilities?): WifiInfo? {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+            return capabilities?.transportInfo as? WifiInfo
+        }
+
+        private fun validSsid(value: String?): String {
+            val normalized = value?.removeSurrounding("\"")?.trim().orEmpty()
+            return if (
+                normalized.isEmpty()
+                || normalized.equals("<unknown ssid>", ignoreCase = true)
+                || normalized.equals("unknown", ignoreCase = true)
+            ) "" else normalized
+        }
+
+        private fun validBssid(value: String?): String {
+            val normalized = value?.trim()?.lowercase().orEmpty()
+            return if (
+                normalized.isEmpty()
+                || normalized == "00:00:00:00:00:00"
+                || normalized == "02:00:00:00:00:00"
+            ) "" else normalized
+        }
+
         @JvmStatic
         fun getNetworkInfo(context: Context, includeWifiDetails: Boolean): String {
             try {
@@ -141,35 +372,21 @@ class NetworkHelper {
                     .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val activeNetwork = connectivityManager.activeNetwork
                 val capabilities = activeNetwork?.let(connectivityManager::getNetworkCapabilities)
-                val vpnActive = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-                val availableNetworks = connectivityManager.allNetworks
-                    .asSequence()
-                    .mapNotNull { network ->
-                        connectivityManager.getNetworkCapabilities(network)
-                            ?.let { network to it }
-                    }
-                    .filter { (_, item) -> !item.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
-                    .toList()
+                val vpnActive = connectivityManager.allNetworks.any { network ->
+                    connectivityManager.getNetworkCapabilities(network)
+                        ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                }
                 // Android may keep an unvalidated Wi-Fi associated while cellular is
                 // the default Internet route. Campus authentication must describe and
                 // target that Wi-Fi instead of mixing cellular capabilities with wlan0.
-                val wifiNetwork = availableNetworks
-                    .firstOrNull { (_, item) -> item.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) }
-                    ?.first
-                val ethernetNetwork = availableNetworks
-                    .firstOrNull { (_, item) -> item.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) }
-                    ?.first
-                val cellularNetwork = availableNetworks
-                    .firstOrNull { (_, item) -> item.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) }
-                    ?.first
-                val physicalNetwork = wifiNetwork
-                    ?: ethernetNetwork
-                    ?: cellularNetwork
-                    ?: if (vpnActive) null else activeNetwork
-                val physicalCapabilities = physicalNetwork
-                    ?.let(connectivityManager::getNetworkCapabilities)
-                val physicalLinkProperties = physicalNetwork
-                    ?.let(connectivityManager::getLinkProperties)
+                val (physicalSnapshot, wifiSnapshot) = selectPhysicalSnapshot(
+                    connectivityManager,
+                    activeNetwork
+                )
+                val physicalNetwork = physicalSnapshot?.network
+                val wifiNetwork = wifiSnapshot?.network
+                val physicalCapabilities = physicalSnapshot?.capabilities
+                val physicalLinkProperties = physicalSnapshot?.linkProperties
                 val transport = when {
                     physicalCapabilities == null -> if (vpnActive) "vpn" else "none"
                     physicalCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
@@ -190,8 +407,10 @@ class NetworkHelper {
                 // campus Wi-Fi is still captive/unvalidated. In that case every
                 // probe and login request must bypass the VPN/mobile default and
                 // target the concrete Wi-Fi Network object.
-                val routeBindingRequired = wifiNetwork != null
-                    && wifiNetwork != activeNetwork
+                val authenticationTransport = transport == "wifi" || transport == "ethernet"
+                val routeBindingRequired = authenticationTransport
+                    && physicalNetwork != null
+                    && physicalNetwork != activeNetwork
                     && (!validated || captivePortal)
                 var ssid = ""
                 var bssid = ""
@@ -199,37 +418,27 @@ class NetworkHelper {
                 var identityObservedAt = 0L
                 // These LinkProperties belong to physicalNetwork, never the VPN.
                 // This keeps TUN/Fake-IP addresses out of the campus login context.
-                var ipString = physicalLinkProperties
-                    ?.linkAddresses
-                    ?.asSequence()
-                    ?.map { it.address }
-                    ?.filterIsInstance<Inet4Address>()
-                    ?.firstOrNull { !it.isLoopbackAddress }
-                    ?.hostAddress
-                    .orEmpty()
+                val ipString = usableIpv4(physicalLinkProperties)
 
                 if (includeWifiDetails && transport == "wifi") {
-                    val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                    val wifiInfo = wifiManager.connectionInfo
-                    ssid = wifiInfo.ssid?.removeSurrounding("\"") ?: "Unknown"
-                    bssid = wifiInfo.bssid ?: "00:00:00:00:00:00"
-                    identityFresh = ssid.isNotEmpty()
-                        && !ssid.contains("unknown", ignoreCase = true)
-                        && bssid.isNotEmpty()
-                        && bssid != "00:00:00:00:00:00"
-                    if (identityFresh) identityObservedAt = SystemClock.elapsedRealtime()
-                    // WifiInfo reports the address assigned to the physical Wi-Fi
-                    // interface and is therefore preferred over any routed/VPN IP.
-                    val ipAddress = wifiInfo.ipAddress
-                    if (ipAddress != 0) {
-                        ipString = String.format(
-                            "%d.%d.%d.%d",
-                            ipAddress and 0xff,
-                            ipAddress shr 8 and 0xff,
-                            ipAddress shr 16 and 0xff,
-                            ipAddress shr 24 and 0xff
-                        )
+                    // transportInfo and LinkProperties are read from the exact same
+                    // NetworkCapabilities/Network pair. The legacy process-wide
+                    // Wi-Fi manager API can describe a different primary connection
+                    // and therefore can belong to
+                    // a different Network during VPN, cellular fallback or Wi-Fi
+                    // concurrency, so it must never be used for authentication.
+                    val selectedWifiInfo = wifiInfo(physicalCapabilities)
+                    try {
+                        ssid = validSsid(selectedWifiInfo?.ssid)
+                        bssid = validBssid(selectedWifiInfo?.bssid)
+                    } catch (_: SecurityException) {
+                        // Preserve the coherent Network/IP result while clearly
+                        // marking protected Wi-Fi identity as unavailable.
+                        ssid = ""
+                        bssid = ""
                     }
+                    identityFresh = ssid.isNotEmpty() && bssid.isNotEmpty() && ipString.isNotEmpty()
+                    if (identityFresh) identityObservedAt = SystemClock.elapsedRealtime()
                 }
                 return JSONObject()
                     .put("ssid", ssid)
@@ -239,9 +448,10 @@ class NetworkHelper {
                     .put("identitySource", if (ipString.isEmpty()) "unknown" else "sameInterface")
                     .put("routeIp", ipString)
                     .put("transport", transport)
-                    .put("networkId", physicalNetwork?.hashCode()?.toString() ?: "")
-                    .put("defaultNetworkId", activeNetwork?.hashCode()?.toString() ?: "")
-                    .put("wifiNetworkId", wifiNetwork?.hashCode()?.toString() ?: "")
+                    .put("networkId", physicalNetwork?.toString() ?: "")
+                    .put("identityNetworkId", physicalNetwork?.toString() ?: "")
+                    .put("defaultNetworkId", activeNetwork?.toString() ?: "")
+                    .put("wifiNetworkId", wifiNetwork?.toString() ?: "")
                     .put("wifiIsDefault", wifiNetwork != null && wifiNetwork == activeNetwork)
                     .put("routeBindingRequired", routeBindingRequired)
                     .put("identityRequested", includeWifiDetails)
@@ -263,6 +473,7 @@ class NetworkHelper {
                     .put("routeIp", "")
                     .put("transport", "unknown")
                     .put("networkId", "")
+                    .put("identityNetworkId", "")
                     .put("defaultNetworkId", "")
                     .put("wifiNetworkId", "")
                     .put("wifiIsDefault", false)
@@ -279,52 +490,104 @@ class NetworkHelper {
             }
         }
 
-        private fun campusWifiNetwork(context: Context): Network? {
+        private fun campusAuthenticationNetwork(
+            context: Context,
+            expectedNetworkId: String
+        ): Network? {
+            if (expectedNetworkId.isBlank()) return null
             val manager = context.applicationContext
                 .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            return manager.allNetworks.firstOrNull { network ->
-                val capabilities = manager.getNetworkCapabilities(network)
-                capabilities != null
-                    && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                    && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-            }
+            return physicalSnapshots(manager).firstOrNull { snapshot ->
+                snapshot.network.toString() == expectedNetworkId
+                    && (
+                        snapshot.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                            || snapshot.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                    )
+                    && usableIpv4(snapshot.linkProperties).isNotEmpty()
+            }?.network
         }
 
-        /** Temporarily route this process through the associated Wi-Fi network. */
+        /** Refuse to bind if the selected physical network changed after capture. */
         @JvmStatic
-        fun bindProcessToCampusWifi(context: Context): Boolean {
+        fun acquireCampusWifiBindingForNetwork(context: Context, networkId: String): String {
             return try {
                 val manager = context.applicationContext
                     .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                val wifi = campusWifiNetwork(context) ?: return false
-                manager.bindProcessToNetwork(wifi)
+                val physical = campusAuthenticationNetwork(context, networkId) ?: return ""
+                ProcessNetworkBindingCoordinator.acquire(manager, physical)
+            } catch (_: Exception) {
+                ""
+            }
+        }
+
+        /** Release only the lease represented by [token]. */
+        @JvmStatic
+        fun releaseProcessNetworkBinding(context: Context, token: String): Boolean {
+            return try {
+                val manager = context.applicationContext
+                    .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                ProcessNetworkBindingCoordinator.release(manager, token)
             } catch (_: Exception) {
                 false
             }
         }
 
+        /**
+         * Wait for campus-network users to leave before restoring Android's default
+         * route. Billing/CAS commands should use this instead of releasing a lease
+         * that belongs to a concurrent connectivity check.
+         */
         @JvmStatic
-        fun clearProcessNetworkBinding(context: Context): Boolean {
+        fun waitAndClearProcessNetworkBinding(context: Context): Boolean {
             return try {
                 val manager = context.applicationContext
                     .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                manager.bindProcessToNetwork(null)
+                ProcessNetworkBindingCoordinator.waitAndClear(manager)
             } catch (_: Exception) {
                 false
             }
         }
 
-        /** Ask Android to revalidate the same Wi-Fi after our own probes succeed. */
+        /** Ask Android to revalidate the same Wi-Fi/Ethernet after our own probes succeed. */
         @JvmStatic
         fun reportCampusWifiConnectivity(context: Context): Boolean {
             return try {
                 val manager = context.applicationContext
                     .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                val wifi = campusWifiNetwork(context) ?: return false
-                manager.reportNetworkConnectivity(wifi, true)
+                val selected = selectPhysicalSnapshot(manager, manager.activeNetwork).first
+                    ?: return false
+                reportCampusWifiConnectivityForNetwork(context, selected.network.toString())
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        @JvmStatic
+        fun reportCampusWifiConnectivityForNetwork(
+            context: Context,
+            networkId: String
+        ): Boolean {
+            return try {
+                val manager = context.applicationContext
+                    .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val physical = campusAuthenticationNetwork(context, networkId) ?: return false
+                manager.reportNetworkConnectivity(physical, true)
                 true
             } catch (_: Exception) {
                 false
+            }
+        }
+
+        /** IPv4 of the same selected physical Network used by getNetworkInfo(). */
+        @JvmStatic
+        fun getPhysicalNetworkIp(context: Context): String {
+            return try {
+                val manager = context.applicationContext
+                    .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val selected = selectPhysicalSnapshot(manager, manager.activeNetwork).first
+                usableIpv4(selected?.linkProperties)
+            } catch (_: Exception) {
+                ""
             }
         }
 
@@ -357,36 +620,5 @@ class NetworkHelper {
             }
         }
 
-        @JvmStatic
-        fun getLocalIpAddress(): String {
-            try {
-                val interfaces = NetworkInterface.getNetworkInterfaces()
-                var bestIp = ""
-                while (interfaces.hasMoreElements()) {
-                    val iface = interfaces.nextElement()
-                    if (iface.isLoopback || !iface.isUp) continue
-                    val ifaceName = iface.name.lowercase()
-                    if (ifaceName.contains("tun") || ifaceName.contains("tap")) continue
-                    
-                    val addresses = iface.inetAddresses
-                    while (addresses.hasMoreElements()) {
-                        val addr = addresses.nextElement()
-                        if (addr is Inet4Address) {
-                            val ip = addr.hostAddress ?: ""
-                            if (ip.isNotEmpty() && !ip.startsWith("127.") && !ip.startsWith("198.18.")) {
-                                if (ifaceName.contains("wlan")) {
-                                    return ip
-                                }
-                                if (bestIp.isEmpty()) {
-                                    bestIp = ip
-                                }
-                            }
-                        }
-                    }
-                }
-                return bestIp
-            } catch (e: Exception) {}
-            return ""
-        }
     }
 }
