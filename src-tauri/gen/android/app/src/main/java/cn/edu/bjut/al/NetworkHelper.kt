@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.WifiInfo
 import android.os.Build
 import android.os.SystemClock
@@ -18,6 +19,7 @@ import java.io.File
 import java.security.KeyStore
 import java.util.LinkedHashMap
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import javax.crypto.Cipher
@@ -346,6 +348,67 @@ class NetworkHelper {
             return capabilities?.transportInfo as? WifiInfo
         }
 
+        /**
+         * Android 12+ redacts location-sensitive fields from a synchronously
+         * queried NetworkCapabilities object. Ask for one short-lived callback
+         * with FLAG_INCLUDE_LOCATION_INFO and accept WifiInfo only for the exact
+         * Network selected together with its LinkProperties/IP.
+         *
+         * This callback is created only during a full identity read. Low-cost
+         * background connectivity probes never request location information.
+         */
+        private fun locationAwareWifiInfo(
+            manager: ConnectivityManager,
+            targetNetwork: Network,
+            fallbackCapabilities: NetworkCapabilities?
+        ): WifiInfo? {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                return wifiInfo(fallbackCapabilities)
+            }
+
+            val latch = CountDownLatch(1)
+            var observed: WifiInfo? = null
+            val callback = object : ConnectivityManager.NetworkCallback(
+                ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO
+            ) {
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    capabilities: NetworkCapabilities
+                ) {
+                    if (network != targetNetwork) return
+                    observed = wifiInfo(capabilities)
+                    latch.countDown()
+                }
+
+                override fun onLost(network: Network) {
+                    if (network == targetNetwork) latch.countDown()
+                }
+            }
+
+            return try {
+                manager.registerNetworkCallback(
+                    NetworkRequest.Builder()
+                        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                        .build(),
+                    callback
+                )
+                // Existing matching Networks are normally delivered
+                // immediately. Keep the wait bounded so a vendor network stack
+                // cannot stall the Rust command or the background service.
+                latch.await(750, TimeUnit.MILLISECONDS)
+                observed
+            } catch (_: SecurityException) {
+                null
+            } finally {
+                try {
+                    manager.unregisterNetworkCallback(callback)
+                } catch (_: Exception) {
+                    // Registration may have failed because permission was
+                    // revoked between the health check and this request.
+                }
+            }
+        }
+
         private fun validSsid(value: String?): String {
             val normalized = value?.removeSurrounding("\"")?.trim().orEmpty()
             return if (
@@ -416,6 +479,7 @@ class NetworkHelper {
                 var bssid = ""
                 var identityFresh = false
                 var identityObservedAt = 0L
+                var wifiIdentityError = ""
                 // These LinkProperties belong to physicalNetwork, never the VPN.
                 // This keeps TUN/Fake-IP addresses out of the campus login context.
                 val ipString = usableIpv4(physicalLinkProperties)
@@ -427,7 +491,13 @@ class NetworkHelper {
                     // and therefore can belong to
                     // a different Network during VPN, cellular fallback or Wi-Fi
                     // concurrency, so it must never be used for authentication.
-                    val selectedWifiInfo = wifiInfo(physicalCapabilities)
+                    val selectedWifiInfo = physicalNetwork?.let {
+                        locationAwareWifiInfo(
+                            connectivityManager,
+                            it,
+                            physicalCapabilities
+                        )
+                    }
                     try {
                         ssid = validSsid(selectedWifiInfo?.ssid)
                         bssid = validBssid(selectedWifiInfo?.bssid)
@@ -436,6 +506,9 @@ class NetworkHelper {
                         // marking protected Wi-Fi identity as unavailable.
                         ssid = ""
                         bssid = ""
+                    }
+                    if (ssid.isEmpty() || bssid.isEmpty()) {
+                        wifiIdentityError = "locationPermissionOrServiceUnavailable"
                     }
                     identityFresh = ssid.isNotEmpty() && bssid.isNotEmpty() && ipString.isNotEmpty()
                     if (identityFresh) identityObservedAt = SystemClock.elapsedRealtime()
@@ -462,6 +535,7 @@ class NetworkHelper {
                     .put("defaultValidated", defaultValidated)
                     .put("captivePortal", captivePortal)
                     .put("metered", metered)
+                    .put("wifiIdentityError", wifiIdentityError)
                     .toString()
             } catch (e: Exception) {
                 return JSONObject()
@@ -486,6 +560,7 @@ class NetworkHelper {
                     .put("defaultValidated", false)
                     .put("captivePortal", false)
                     .put("metered", false)
+                    .put("wifiIdentityError", "networkInfoUnavailable")
                     .toString()
             }
         }

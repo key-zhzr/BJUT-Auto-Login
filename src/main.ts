@@ -1672,10 +1672,16 @@ async function init() {
   } else {
     // Already accepted
     if (window.__TAURI__) {
-      if (IS_ANDROID && !window.AndroidBridge) {
-        invoke('request_foreground_permissions').catch(e => {
+      if (IS_ANDROID) {
+        try {
+          if (window.AndroidBridge) {
+            window.AndroidBridge.requestForegroundPermissions();
+          } else {
+            await invoke('request_foreground_permissions');
+          }
+        } catch (e) {
           console.error('Failed to request foreground permissions:', e);
-        });
+        }
       }
       try {
         await loadConfigFromRust();

@@ -187,21 +187,149 @@ struct WindowsNetworkIdentity {
     ip: String,
     interface_name: String,
     transport: String,
+    wifi_identity_error: String,
 }
 
 #[cfg(target_os = "windows")]
-fn looks_like_windows_interface_guid(value: &str) -> bool {
-    let candidate = value
+#[derive(Default)]
+struct WindowsWlanObservation {
+    guid: String,
+    ssid: String,
+    bssid: String,
+    error: String,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct WindowsAdapterIdentity {
+    guid: String,
+    name: String,
+    ip: String,
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_windows_guid(value: &str) -> String {
+    value
         .trim()
-        .trim_matches(|character| character == '{' || character == '}');
-    candidate.len() == 36
-        && candidate
-            .chars()
-            .enumerate()
-            .all(|(index, character)| match index {
-                8 | 13 | 18 | 23 => character == '-',
-                _ => character.is_ascii_hexdigit(),
-            })
+        .trim_matches(|character| character == '{' || character == '}')
+        .to_ascii_lowercase()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_guid_string(guid: &windows::core::GUID) -> String {
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        guid.data1,
+        guid.data2,
+        guid.data3,
+        guid.data4[0],
+        guid.data4[1],
+        guid.data4[2],
+        guid.data4[3],
+        guid.data4[4],
+        guid.data4[5],
+        guid.data4[6],
+        guid.data4[7]
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn windows_wlan_observations(include_wifi_details: bool) -> Vec<WindowsWlanObservation> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::NetworkManagement::WiFi::{
+        wlan_interface_state_connected, wlan_intf_opcode_current_connection, WlanCloseHandle,
+        WlanEnumInterfaces, WlanFreeMemory, WlanOpenHandle, WlanQueryInterface,
+        WLAN_CONNECTION_ATTRIBUTES, WLAN_INTERFACE_INFO_LIST,
+    };
+
+    let mut observations = Vec::new();
+    let mut handle = HANDLE::default();
+    let mut negotiated_version = 0u32;
+    // SAFETY: all pointers are valid out-parameters and the handle/memory
+    // returned by WLAN API are released before this function returns.
+    let open_result = unsafe { WlanOpenHandle(2, None, &mut negotiated_version, &mut handle) };
+    if open_result != 0 || handle.is_invalid() {
+        return observations;
+    }
+
+    let mut interface_list = std::ptr::null_mut::<WLAN_INTERFACE_INFO_LIST>();
+    // SAFETY: `handle` was opened above and interface_list is a valid
+    // out-parameter initialized to null.
+    let enum_result = unsafe { WlanEnumInterfaces(handle, None, &mut interface_list) };
+    if enum_result == 0 && !interface_list.is_null() {
+        // SAFETY: WLAN_INTERFACE_INFO_LIST is a C flexible-array structure;
+        // the allocation contains dwNumberOfItems contiguous entries.
+        let interfaces = unsafe {
+            let list = &*interface_list;
+            std::slice::from_raw_parts(list.InterfaceInfo.as_ptr(), list.dwNumberOfItems as usize)
+        };
+        for interface in interfaces {
+            if interface.isState != wlan_interface_state_connected {
+                continue;
+            }
+            let mut observation = WindowsWlanObservation {
+                guid: windows_guid_string(&interface.InterfaceGuid),
+                ..Default::default()
+            };
+            if include_wifi_details {
+                let mut data_size = 0u32;
+                let mut data = std::ptr::null_mut::<std::ffi::c_void>();
+                // SAFETY: interface GUID comes from the same WLAN handle; the
+                // returned buffer is checked for size and freed below.
+                let query_result = unsafe {
+                    WlanQueryInterface(
+                        handle,
+                        &interface.InterfaceGuid,
+                        wlan_intf_opcode_current_connection,
+                        None,
+                        &mut data_size,
+                        &mut data,
+                        None,
+                    )
+                };
+                if query_result == 0
+                    && !data.is_null()
+                    && data_size as usize >= std::mem::size_of::<WLAN_CONNECTION_ATTRIBUTES>()
+                {
+                    // SAFETY: successful query guarantees this buffer contains
+                    // WLAN_CONNECTION_ATTRIBUTES and the size was checked.
+                    let attributes = unsafe { &*(data.cast::<WLAN_CONNECTION_ATTRIBUTES>()) };
+                    let association = &attributes.wlanAssociationAttributes;
+                    let ssid_length = (association.dot11Ssid.uSSIDLength as usize)
+                        .min(association.dot11Ssid.ucSSID.len());
+                    observation.ssid =
+                        String::from_utf8_lossy(&association.dot11Ssid.ucSSID[..ssid_length])
+                            .trim()
+                            .to_string();
+                    observation.bssid = association
+                        .dot11Bssid
+                        .iter()
+                        .map(|octet| format!("{octet:02x}"))
+                        .collect::<Vec<_>>()
+                        .join(":");
+                } else if query_result == 5 {
+                    // Windows 11 24H2 gates the current-connection query behind
+                    // precise-location consent. Keep the same-interface IP and
+                    // report the actionable reason instead of dropping all data.
+                    observation.error = "locationPermissionDenied".to_string();
+                } else {
+                    observation.error = format!("wlanQueryFailed:{query_result}");
+                }
+                if !data.is_null() {
+                    // SAFETY: data was allocated by WlanQueryInterface.
+                    unsafe { WlanFreeMemory(data) };
+                }
+            }
+            observations.push(observation);
+        }
+        // SAFETY: interface_list was allocated by WlanEnumInterfaces.
+        unsafe { WlanFreeMemory(interface_list.cast()) };
+    }
+    // SAFETY: handle was returned by WlanOpenHandle and is no longer used.
+    unsafe {
+        WlanCloseHandle(handle, None);
+    }
+    observations
 }
 
 #[cfg(target_os = "windows")]
@@ -219,66 +347,131 @@ fn run_hidden_powershell(script: &str) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentity {
-    use std::os::windows::process::CommandExt;
+fn windows_physical_wifi_adapters() -> Vec<WindowsAdapterIdentity> {
+    use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
+    use windows::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_MULTICAST, IF_TYPE_IEEE80211, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
 
-    let mut identity = WindowsNetworkIdentity::default();
-    let mut wifi_candidates = Vec::<(String, String, String)>::new();
-    let mut current_guid = String::new();
-    let mut current_ssid = String::new();
-    let mut current_bssid = String::new();
-    let mut command = std::process::Command::new("netsh");
-    command.args(["wlan", "show", "interfaces"]);
-    command.creation_flags(0x08000000);
-    if let Ok(output) = command.output() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let Some((label, value)) = line.trim().split_once(':') else {
-                continue;
-            };
-            let label = label.trim();
-            let value = value.trim();
-            if looks_like_windows_interface_guid(value) {
-                if !current_guid.is_empty() {
-                    wifi_candidates.push((current_guid, current_ssid, current_bssid));
-                    current_ssid = String::new();
-                    current_bssid = String::new();
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut byte_count = 0u32;
+    // SAFETY: the first call intentionally provides no buffer so Windows can
+    // return the required allocation size in byte_count.
+    let size_result =
+        unsafe { GetAdaptersAddresses(AF_INET.0 as u32, flags, None, None, &mut byte_count) };
+    if size_result != ERROR_BUFFER_OVERFLOW.0 || byte_count == 0 {
+        return Vec::new();
+    }
+
+    // Use pointer-sized words rather than Vec<u8> so the Windows structures
+    // are correctly aligned when the buffer is cast below.
+    let word_size = std::mem::size_of::<usize>();
+    let word_count = (byte_count as usize).div_ceil(word_size);
+    let mut storage = vec![0usize; word_count];
+    let first_adapter = storage.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+    // SAFETY: storage is writable, suitably aligned and at least byte_count
+    // bytes long; all linked records remain valid while storage is alive.
+    let query_result = unsafe {
+        GetAdaptersAddresses(
+            AF_INET.0 as u32,
+            flags,
+            None,
+            Some(first_adapter),
+            &mut byte_count,
+        )
+    };
+    if query_result != NO_ERROR.0 {
+        return Vec::new();
+    }
+
+    let mut adapters = Vec::new();
+    let mut adapter_ptr = first_adapter;
+    while !adapter_ptr.is_null() {
+        // SAFETY: adapter_ptr belongs to the linked list returned above.
+        let adapter = unsafe { &*adapter_ptr };
+        if adapter.IfType == IF_TYPE_IEEE80211 && adapter.OperStatus == IfOperStatusUp {
+            // AdapterName is the stable interface GUID used by Native Wi-Fi;
+            // FriendlyName is only for display.
+            let guid = normalize_windows_guid(
+                &unsafe { adapter.AdapterName.to_string() }.unwrap_or_default(),
+            );
+            let name = unsafe { adapter.FriendlyName.to_string() }.unwrap_or_default();
+            let mut address_ptr = adapter.FirstUnicastAddress;
+            while !address_ptr.is_null() {
+                // SAFETY: address_ptr is another linked record owned by storage.
+                let address = unsafe { &*address_ptr };
+                let socket_address = address.Address;
+                if !socket_address.lpSockaddr.is_null()
+                    && socket_address.iSockaddrLength as usize >= std::mem::size_of::<SOCKADDR_IN>()
+                {
+                    // SAFETY: GetAdaptersAddresses was restricted to AF_INET
+                    // and the sockaddr length was checked above.
+                    let ipv4 = unsafe { &*socket_address.lpSockaddr.cast::<SOCKADDR_IN>() };
+                    if ipv4.sin_family == AF_INET {
+                        // SAFETY: S_un_b is the byte view of the IPv4 union.
+                        let octets = unsafe { ipv4.sin_addr.S_un.S_un_b };
+                        let ip = std::net::Ipv4Addr::new(
+                            octets.s_b1,
+                            octets.s_b2,
+                            octets.s_b3,
+                            octets.s_b4,
+                        )
+                        .to_string();
+                        if !guid.is_empty()
+                            && !name.is_empty()
+                            && usable_physical_ipv4(&ip).is_some()
+                        {
+                            adapters.push(WindowsAdapterIdentity {
+                                guid: guid.clone(),
+                                name: name.clone(),
+                                ip,
+                            });
+                            break;
+                        }
+                    }
                 }
-                current_guid = value
-                    .trim_matches(|character| character == '{' || character == '}')
-                    .to_string();
-            } else if include_wifi_details && label.eq_ignore_ascii_case("BSSID") {
-                current_bssid = value.to_string();
-            } else if include_wifi_details
-                && label.eq_ignore_ascii_case("SSID")
-                && !label.eq_ignore_ascii_case("BSSID")
-            {
-                current_ssid = value.to_string();
+                address_ptr = address.Next;
             }
         }
+        adapter_ptr = adapter.Next;
     }
-    if !current_guid.is_empty() {
-        wifi_candidates.push((current_guid, current_ssid, current_bssid));
-    }
+    adapters
+}
 
-    // Query each WLAN GUID separately and retain SSID/BSSID from that same
-    // netsh interface block. This prevents a disconnected secondary adapter
-    // from donating its GUID to another adapter's wireless identity.
-    for (wifi_guid, candidate_ssid, candidate_bssid) in wifi_candidates {
-        let script = format!(
-            "$g=[guid]'{}'; $a=Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {{$_.InterfaceGuid -eq $g -and $_.Status -eq 'Up'}} | Select-Object -First 1; if($a){{$ip=Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $a.InterfaceIndex -ErrorAction SilentlyContinue | Where-Object {{$_.IPAddress -notlike '169.254.*'}} | Select-Object -First 1 -ExpandProperty IPAddress; if($ip){{Write-Output ($a.Name + \"`t\" + $ip)}}}}",
-            wifi_guid
-        );
-        let output = run_hidden_powershell(&script);
-        if let Some((interface, address)) = output.split_once('\t') {
-            if usable_physical_ipv4(address).is_some() {
-                identity.ssid = candidate_ssid;
-                identity.bssid = candidate_bssid;
-                identity.interface_name = interface.trim().to_string();
-                identity.ip = address.trim().to_string();
-                identity.transport = "wifi".to_string();
-                break;
-            }
+#[cfg(target_os = "windows")]
+fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentity {
+    let mut identity = WindowsNetworkIdentity::default();
+    let observations = windows_wlan_observations(include_wifi_details);
+    let adapters = windows_physical_wifi_adapters();
+
+    for adapter in &adapters {
+        if let Some(observation) = observations
+            .iter()
+            .find(|observation| observation.guid == adapter.guid)
+        {
+            identity.ssid.clone_from(&observation.ssid);
+            identity.bssid.clone_from(&observation.bssid);
+            identity.wifi_identity_error.clone_from(&observation.error);
+            identity.interface_name.clone_from(&adapter.name);
+            identity.ip.clone_from(&adapter.ip);
+            identity.transport = "wifi".to_string();
+            break;
+        }
+    }
+    // Even when Windows denies location-sensitive SSID/BSSID access,
+    // WlanEnumInterfaces still supplies the interface GUID. The native IP
+    // Helper match above therefore retains a coherent Wi-Fi adapter/IP while
+    // automatic credential submission fails closed on the missing identity.
+    if identity.ip.is_empty() {
+        if include_wifi_details && identity.wifi_identity_error.is_empty() {
+            identity.wifi_identity_error = observations
+                .first()
+                .map(|observation| observation.error.clone())
+                .filter(|error| !error.is_empty())
+                .unwrap_or_else(|| "wlanInterfaceNotMatched".to_string());
         }
     }
 
@@ -296,6 +489,7 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
     }) {
         identity.ssid.clear();
         identity.bssid.clear();
+        identity.wifi_identity_error.clear();
         identity.interface_name = interface.trim().to_string();
         identity.ip = address.trim().to_string();
         identity.transport = "ethernet".to_string();
@@ -316,7 +510,8 @@ fn get_network_info(
             "ip": "",
             "transport": "unknown",
             "validated": false,
-            "metered": false
+            "metered": false,
+            "wifiIdentityError": "networkInfoUnavailable"
         });
         if let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() {
             if let Ok(vm) = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) } {
@@ -391,6 +586,10 @@ fn get_network_info(
         let mut interface_name = String::new();
         let mut identity_source = "unverifiedFallback".to_string();
         let mut transport = "unknown".to_string();
+        #[cfg(target_os = "windows")]
+        let wifi_identity_error: String;
+        #[cfg(not(target_os = "windows"))]
+        let wifi_identity_error = String::new();
         let route_ip = route_source_ipv4("10.21.251.3:80");
 
         #[cfg(target_os = "macos")]
@@ -464,6 +663,7 @@ fn get_network_info(
             ip = identity.ip;
             interface_name = identity.interface_name;
             transport = identity.transport;
+            wifi_identity_error = identity.wifi_identity_error;
             if !ip.is_empty() && !interface_name.is_empty() {
                 identity_source = "sameInterface".to_string();
             }
@@ -561,7 +761,8 @@ fn get_network_info(
             "interfaceName": interface_name,
             "identitySource": identity_source,
             "transport": transport,
-            "routeIp": route_ip
+            "routeIp": route_ip,
+            "wifiIdentityError": wifi_identity_error
         })
     }
 }
@@ -4398,6 +4599,10 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         .get("identitySource")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("unknown");
+    let wifi_identity_error = network
+        .get("wifiIdentityError")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     let route_ip = network
         .get("routeIp")
         .and_then(serde_json::Value::as_str)
@@ -4412,6 +4617,8 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     }
     let identity_status = if ip.is_empty() {
         "error"
+    } else if !wifi_identity_error.is_empty() {
+        "warning"
     } else if mobile_data || !ssid.is_empty() {
         "success"
     } else {
@@ -4421,6 +4628,24 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         "未检测到可用网络接口或 IPv4 地址".to_string()
     } else if mobile_data {
         format!("当前通过移动数据上网，本地 IP {ip}")
+    } else if wifi_identity_error == "locationPermissionDenied" {
+        format!(
+            "已取得接口 {} 的本地 IP {ip}，但 Windows 未授予精确位置权限，无法读取 SSID/BSSID；请在系统“隐私和安全性 → 位置”中允许桌面应用访问位置",
+            if interface_name.is_empty() {
+                "未知"
+            } else {
+                interface_name
+            }
+        )
+    } else if wifi_identity_error == "locationPermissionOrServiceUnavailable" {
+        format!(
+            "已取得接口 {} 的本地 IP {ip}，但 Android 未返回 SSID/BSSID；请确认附近 Wi-Fi、前台位置权限和系统位置服务均已开启",
+            if interface_name.is_empty() {
+                "未知"
+            } else {
+                interface_name
+            }
+        )
     } else if ssid.is_empty() || ssid.eq_ignore_ascii_case("<unknown ssid>") {
         format!("已取得本地 IP {ip}，但未取得无线网络名称（可能为有线网络或权限不足）")
     } else {
