@@ -1,6 +1,6 @@
 use super::{
-    query_campus_dns_ipv4, redact_request_error, route_source_ipv4, usable_physical_ipv4,
-    VpnCompatibility, LGN6_HOST, LGN_HOST, WLGN_HOST,
+    query_campus_dns_ipv4, redact_request_error, usable_physical_ipv4, VpnCompatibility, LGN6_HOST,
+    LGN_HOST, WLGN_HOST,
 };
 use crate::network_trust::{campus_wifi_kind, CampusWifiKind};
 use reqwest::header::{ACCEPT, CACHE_CONTROL, REFERER};
@@ -11,6 +11,39 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) const AMBIGUOUS_LOGIN_RESULT: &str = "认证结果暂无法确认";
+
+/// The physical route that was observed together with the current network
+/// identity. Portal probes and credential-bearing requests must share this
+/// context so a VPN/TUN route cannot take over between detection and login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PortalRouteContext {
+    interface_name: String,
+    physical_ipv4: Ipv4Addr,
+}
+
+impl PortalRouteContext {
+    pub(crate) fn new(interface_name: &str, physical_ipv4: &str) -> Result<Self, String> {
+        let interface_name = interface_name.trim();
+        if interface_name.is_empty() {
+            return Err("无法确定校园网认证所用的物理接口".to_string());
+        }
+        let physical_ipv4 = usable_physical_ipv4(physical_ipv4).ok_or_else(|| {
+            "校园网认证所用的物理接口 IPv4 无效；已拒绝使用 VPN/TUN Fake-IP".to_string()
+        })?;
+        Ok(Self {
+            interface_name: interface_name.to_string(),
+            physical_ipv4,
+        })
+    }
+
+    pub(crate) fn interface_name(&self) -> &str {
+        &self.interface_name
+    }
+
+    pub(crate) fn physical_ipv4(&self) -> Ipv4Addr {
+        self.physical_ipv4
+    }
+}
 
 const DORM_HTTP_LOGIN: &str = "http://10.21.221.98:801/eportal/portal/login";
 const DORM_HTTPS_LOGIN: &str = "https://10.21.221.98:802/eportal/portal/login";
@@ -85,11 +118,34 @@ pub(crate) async fn portal_client(
     compatibility: VpnCompatibility,
     login_type: &LoginType,
     timeout: Duration,
+    route_context: Option<&PortalRouteContext>,
 ) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .use_rustls_tls();
+
+    // Android binds the whole process to the exact ConnectivityManager
+    // Network before entering this module. Rebinding a socket by Linux device
+    // name here would bypass that Network object's DNS and lifecycle rules.
+    // Desktop has no equivalent outer guard, so every portal client must bind
+    // at least its local source address. macOS/Linux additionally support an
+    // explicit interface binding in reqwest.
+    #[cfg(not(target_os = "android"))]
+    {
+        let route_context = route_context
+            .ok_or_else(|| "未取得同一物理接口的网络路由，已停止校园网网关请求".to_string())?;
+        builder = builder.local_address(IpAddr::V4(route_context.physical_ipv4()));
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            builder = builder.interface(route_context.interface_name());
+        }
+        #[cfg(target_os = "windows")]
+        let _ = route_context.interface_name();
+    }
+    #[cfg(target_os = "android")]
+    let _ = route_context;
     let hosts: Vec<(&str, Vec<Ipv4Addr>)> = match login_type {
         LoginType::Type2 => vec![(WLGN_HOST, vec![Ipv4Addr::new(10, 21, 251, 3)])],
         LoginType::Type3 => vec![
@@ -114,10 +170,11 @@ pub(crate) async fn portal_client(
         compatibility,
         VpnCompatibility::Low | VpnCompatibility::High
     ) {
+        let dns_source = route_context.map(PortalRouteContext::physical_ipv4);
         for (host, fixed_addresses) in hosts {
             let addresses = if compatibility == VpnCompatibility::Low {
                 let host_owned = host.to_string();
-                tokio::task::spawn_blocking(move || query_campus_dns_ipv4(&host_owned))
+                tokio::task::spawn_blocking(move || query_campus_dns_ipv4(&host_owned, dns_source))
                     .await
                     .map_err(|error| format!("校园网 DNS 任务失败：{error}"))??
             } else {
@@ -254,6 +311,7 @@ impl Type3ProbeEvidence {
 async fn probe_login_type(
     compatibility: VpnCompatibility,
     login_type: LoginType,
+    route_context: Option<&PortalRouteContext>,
 ) -> PortalProbeResult {
     // Type 3 maximum compatibility still needs the TLS/SNI-preserving lgn6
     // endpoint to prove that IPv6 login is actually ready.
@@ -267,6 +325,7 @@ async fn probe_login_type(
         client_compatibility,
         &login_type,
         Duration::from_millis(1800),
+        route_context,
     )
     .await
     else {
@@ -346,10 +405,11 @@ pub(crate) async fn detect_login_type_details_rust(
     compatibility: VpnCompatibility,
     ssid: &str,
     transport: &str,
+    route_context: Option<&PortalRouteContext>,
 ) -> LoginTypeDetection {
     let mut portal_only = None;
     for candidate in login_probe_candidates(ssid, transport) {
-        let result = probe_login_type(compatibility, candidate.clone()).await;
+        let result = probe_login_type(compatibility, candidate.clone(), route_context).await;
         if result == PortalProbeResult::LoginReady {
             return LoginTypeDetection::from_probe(candidate, result);
         }
@@ -364,8 +424,9 @@ pub(crate) async fn detect_login_type_rust(
     compatibility: VpnCompatibility,
     ssid: &str,
     transport: &str,
+    route_context: Option<&PortalRouteContext>,
 ) -> LoginType {
-    detect_login_type_details_rust(compatibility, ssid, transport)
+    detect_login_type_details_rust(compatibility, ssid, transport, route_context)
         .await
         .into_ready_login_type()
 }
@@ -523,36 +584,42 @@ pub(crate) fn lgn_user_info_url(compatibility: VpnCompatibility) -> String {
 }
 
 fn login_source_ipv4(
-    physical_ipv4: Option<&str>,
+    route_context: Option<&PortalRouteContext>,
     destination: &str,
     network_label: &str,
 ) -> Result<String, String> {
-    if let Some(candidate) = physical_ipv4
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return usable_physical_ipv4(candidate)
-            .map(|address| address.to_string())
-            .ok_or_else(|| {
-                format!("{network_label}登录所需的物理接口 IPv4 无效；已拒绝使用 VPN/TUN Fake-IP")
-            });
+    if let Some(route_context) = route_context {
+        return Ok(route_context.physical_ipv4().to_string());
     }
 
-    let routed = route_source_ipv4(destination);
-    usable_physical_ipv4(&routed)
-        .map(|address| address.to_string())
-        .ok_or_else(|| {
-            format!("{network_label}登录前无法确定物理接口 IPv4；请检查 Wi-Fi/有线接口或 VPN 分流")
-        })
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = destination;
+        Err(format!(
+            "{network_label}登录前未取得同一物理接口的路由；已阻止凭据经过 VPN/TUN"
+        ))
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let routed = super::route_source_ipv4(destination);
+        usable_physical_ipv4(&routed)
+            .map(|address| address.to_string())
+            .ok_or_else(|| {
+                format!(
+                    "{network_label}登录前无法确定物理接口 IPv4；请检查 Wi-Fi/有线接口或 VPN 分流"
+                )
+            })
+    }
 }
 
 async fn login_lgn_once(
     client: &Client,
     user: &str,
     pass: &str,
-    physical_ipv4: Option<&str>,
+    route_context: Option<&PortalRouteContext>,
 ) -> Result<(bool, String), String> {
-    let local_ipv4 = login_source_ipv4(physical_ipv4, "172.30.201.2:802", "lgn 有线")?;
+    let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn 有线")?;
 
     let ipv6_response = client
         .get(lgn_observed_ipv6_url()?)
@@ -690,7 +757,7 @@ pub(crate) async fn login_to_campus_network_rust(
     user: &str,
     pass: &str,
     compatibility: VpnCompatibility,
-    physical_ipv4: Option<&str>,
+    route_context: Option<&PortalRouteContext>,
 ) -> Result<(bool, String), String> {
     // The captured lgn eportal flow requires both HTTPS hostnames: lgn6 obtains
     // the observed IPv6 address and lgn:802 receives the encrypted login GET.
@@ -702,7 +769,13 @@ pub(crate) async fn login_to_campus_network_rust(
         } else {
             compatibility
         };
-    let client = portal_client(client_compatibility, &login_type, Duration::from_secs(5)).await?;
+    let client = portal_client(
+        client_compatibility,
+        &login_type,
+        Duration::from_secs(5),
+        route_context,
+    )
+    .await?;
     match login_type {
         LoginType::Type1 => {
             let destination = if compatibility == VpnCompatibility::Maximum {
@@ -710,7 +783,7 @@ pub(crate) async fn login_to_campus_network_rust(
             } else {
                 "10.21.221.98:802"
             };
-            let local_ip = login_source_ipv4(physical_ipv4, destination, "bjut-sushe")?;
+            let local_ip = login_source_ipv4(route_context, destination, "bjut-sushe")?;
             let (referer, hint) = if compatibility == VpnCompatibility::Maximum {
                 (DORM_HTTP_REFERER, None)
             } else {
@@ -745,7 +818,7 @@ pub(crate) async fn login_to_campus_network_rust(
             )
             .await
         }
-        LoginType::Type3 => login_lgn_once(&client, user, pass, physical_ipv4).await,
+        LoginType::Type3 => login_lgn_once(&client, user, pass, route_context).await,
         LoginType::Unknown => Err("未设定的登录类型".to_string()),
     }
 }
@@ -802,15 +875,17 @@ mod tests {
 
     #[test]
     fn login_source_uses_the_physical_interface_and_rejects_tun_fake_ip() {
+        let route = PortalRouteContext::new("en0", "10.3.219.173").unwrap();
         assert_eq!(
-            login_source_ipv4(Some("10.3.219.173"), "10.21.221.98:801", "fixture").unwrap(),
+            login_source_ipv4(Some(&route), "10.21.221.98:801", "fixture").unwrap(),
             "10.3.219.173"
         );
-        assert!(
-            login_source_ipv4(Some("198.18.12.34"), "10.21.221.98:801", "fixture")
-                .unwrap_err()
-                .contains("Fake-IP")
-        );
+        assert!(PortalRouteContext::new("en0", "198.18.12.34")
+            .unwrap_err()
+            .contains("Fake-IP"));
+        assert!(PortalRouteContext::new("", "10.3.219.173")
+            .unwrap_err()
+            .contains("物理接口"));
     }
 
     #[test]

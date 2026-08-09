@@ -35,6 +35,15 @@ pub(crate) fn usable_physical_ipv4(value: &str) -> Option<std::net::Ipv4Addr> {
     }
 }
 
+/// The Type 3 portal is only valid on BJUT's documented wired 172.30/16
+/// segment. Do not use the broader campus/private-address heuristic here.
+fn is_campus_wired_ipv4(value: &str) -> bool {
+    usable_physical_ipv4(value).is_some_and(|address| {
+        let octets = address.octets();
+        octets[0] == 172 && octets[1] == 30
+    })
+}
+
 #[cfg(target_os = "linux")]
 fn split_nmcli_fields(line: &str) -> Vec<String> {
     let mut fields = vec![String::new()];
@@ -89,8 +98,16 @@ fn macos_ipv4_for_interface(interface: &str) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_is_physical_interface(interface: &str) -> bool {
+fn macos_is_physical_ethernet_interface(interface: &str) -> bool {
     interface.starts_with("en")
+        && corewlan::WiFiClient::shared()
+            .map(|client| {
+                !client
+                    .interface_names()
+                    .iter()
+                    .any(|name| name == interface)
+            })
+            .unwrap_or(false)
 }
 
 #[cfg(target_os = "macos")]
@@ -105,11 +122,11 @@ fn macos_campus_wired_identity(excluded_interface: &str) -> Option<(String, Stri
     String::from_utf8_lossy(&output.stdout)
         .split_whitespace()
         .filter(|interface| {
-            macos_is_physical_interface(interface) && *interface != excluded_interface
+            macos_is_physical_ethernet_interface(interface) && *interface != excluded_interface
         })
         .find_map(|interface| {
             let address = macos_ipv4_for_interface(interface);
-            is_campus_local_ip(&address).then(|| (interface.to_string(), address))
+            is_campus_wired_ipv4(&address).then(|| (interface.to_string(), address))
         })
 }
 
@@ -174,8 +191,7 @@ fn linux_campus_wired_identity(excluded_interface: &str) -> Option<(String, Stri
                 .get(1)?
                 .split('/')
                 .next()?;
-            (is_campus_local_ip(address) && usable_physical_ipv4(address).is_some())
-                .then(|| (interface.to_string(), address.to_string()))
+            is_campus_wired_ipv4(address).then(|| (interface.to_string(), address.to_string()))
         })
 }
 
@@ -479,13 +495,11 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
     // VPN/virtual adapter is rejected, and the fallback still enumerates each
     // physical adapter together with its own IPv4 instead of guessing from a
     // global ipconfig dump.
-    let script = "$found=$false; $r=@(Find-NetRoute -RemoteIPAddress '172.30.201.2' -ErrorAction SilentlyContinue); if($r.Count -gt 0){$local=$r[0]; $i=$local.InterfaceIndex; if(-not $i -and $local.NetRoute){$i=$local.NetRoute.InterfaceIndex}; $a=Get-NetAdapter -InterfaceIndex $i -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.HardwareInterface -and $_.MediaType -eq '802.3'} | Select-Object -First 1; if($a -and $local.IPAddress){Write-Output ($a.Name + \"`t\" + $local.IPAddress); $found=$true}}; if(-not $found){Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.MediaType -eq '802.3'} | ForEach-Object {$adapter=$_; Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $adapter.InterfaceIndex -ErrorAction SilentlyContinue | Where-Object {$_.IPAddress -like '10.*' -or $_.IPAddress -like '172.*'} | ForEach-Object {Write-Output ($adapter.Name + \"`t\" + $_.IPAddress)}}}";
+    let script = "$found=$false; $r=@(Find-NetRoute -RemoteIPAddress '172.30.201.2' -ErrorAction SilentlyContinue); if($r.Count -gt 0){$local=$r[0]; $i=$local.InterfaceIndex; if(-not $i -and $local.NetRoute){$i=$local.NetRoute.InterfaceIndex}; $a=Get-NetAdapter -InterfaceIndex $i -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.HardwareInterface -and $_.MediaType -eq '802.3'} | Select-Object -First 1; if($a -and $local.IPAddress -and $local.IPAddress -like '172.30.*'){Write-Output ($a.Name + \"`t\" + $local.IPAddress); $found=$true}}; if(-not $found){Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.MediaType -eq '802.3'} | ForEach-Object {$adapter=$_; Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $adapter.InterfaceIndex -ErrorAction SilentlyContinue | Where-Object {$_.IPAddress -like '172.30.*'} | ForEach-Object {Write-Output ($adapter.Name + \"`t\" + $_.IPAddress)}}}";
     let output = run_hidden_powershell(script);
     if let Some((interface, address)) = output.lines().find_map(|line| {
         let (interface, address) = line.split_once('\t')?;
-        (usable_physical_ipv4(address).is_some()
-            && (is_campus_local_ip(address) || identity.ip.is_empty()))
-        .then_some((interface, address))
+        is_campus_wired_ipv4(address).then_some((interface, address))
     }) {
         identity.ssid.clear();
         identity.bssid.clear();
@@ -621,11 +635,11 @@ fn get_network_info(
             let wifi_ip = macos_ipv4_for_interface(&wifi_interface_name);
             let route_interface = macos_route_interface("172.30.201.2");
             let route_interface_ip = macos_ipv4_for_interface(&route_interface);
-            let routed_physical_wired = macos_is_physical_interface(&route_interface)
+            let routed_physical_wired = macos_is_physical_ethernet_interface(&route_interface)
                 && route_interface != wifi_interface_name
                 && !route_interface_ip.is_empty();
             let campus_wired = macos_campus_wired_identity(&wifi_interface_name);
-            if routed_physical_wired && is_campus_local_ip(&route_interface_ip) {
+            if routed_physical_wired && is_campus_wired_ipv4(&route_interface_ip) {
                 ssid.clear();
                 bssid.clear();
                 interface_name = route_interface;
@@ -646,11 +660,6 @@ fn get_network_info(
                 interface_name = wifi_interface_name;
                 ip = wifi_ip;
                 transport = "wifi".to_string();
-                identity_source = "sameInterface".to_string();
-            } else if routed_physical_wired {
-                interface_name = route_interface;
-                ip = route_interface_ip;
-                transport = "ethernet".to_string();
                 identity_source = "sameInterface".to_string();
             }
         }
@@ -717,7 +726,7 @@ fn get_network_info(
                 route_identity.filter(|(route_interface, route_ip)| {
                     route_interface != &interface_name
                         && linux_is_physical_ethernet_interface(route_interface)
-                        && is_campus_local_ip(route_ip)
+                        && is_campus_wired_ipv4(route_ip)
                 })
             {
                 ssid.clear();
@@ -738,19 +747,6 @@ fn get_network_info(
                 ip = wired_ip;
                 transport = "ethernet".to_string();
                 identity_source = "sameInterface".to_string();
-            } else if ip.is_empty() {
-                if let Some((route_interface, route_ip)) = linux_route_identity("172.30.201.2") {
-                    let route_transport = if linux_is_physical_ethernet_interface(&route_interface)
-                    {
-                        "ethernet"
-                    } else {
-                        "wifi"
-                    };
-                    interface_name = route_interface;
-                    ip = route_ip;
-                    transport = route_transport.to_string();
-                    identity_source = "sameInterface".to_string();
-                }
             }
         }
 
@@ -1145,8 +1141,10 @@ fn set_dock_visible(
             // Accessory to Regular. Avoid a delayed AppKit callback: it can
             // race with a close/hide event and used to refocus cold starts.
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
+                if window.is_visible().unwrap_or(false) {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
             }
         }
     }
@@ -1157,15 +1155,25 @@ fn set_dock_visible(
 }
 
 #[tauri::command]
-fn frontend_ready(app: tauri::AppHandle) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(window) = app.get_webview_window("main") {
-            window.show().map_err(|e| e.to_string())?;
+fn frontend_ready(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().map_err(|e| e.to_string())?;
+        #[cfg(desktop)]
+        {
             window.set_focus().map_err(|e| e.to_string())?;
         }
     }
-    let _ = app;
+    // A hidden cold-start window is intentionally treated as background by
+    // the initial 100 ms probe. Once the rendered frontend is shown, make the
+    // foreground transition explicit and queue a full identity refresh. If a
+    // cheap check is already running, trigger_network_check records a pending
+    // full check instead of racing it.
+    state.is_in_background.store(false, Ordering::SeqCst);
+    let app_clone = app.clone();
+    let state_clone = state.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        trigger_network_check(app_clone, state_clone, true).await;
+    });
     Ok(())
 }
 
@@ -1193,8 +1201,11 @@ fn get_local_ip() -> String {
             return wifi_ip;
         }
         let route_interface = macos_route_interface("172.30.201.2");
-        if macos_is_physical_interface(&route_interface) {
-            return macos_ipv4_for_interface(&route_interface);
+        if macos_is_physical_ethernet_interface(&route_interface) {
+            let route_ip = macos_ipv4_for_interface(&route_interface);
+            if is_campus_wired_ipv4(&route_ip) {
+                return route_ip;
+            }
         }
         macos_campus_wired_identity(&interface_name)
             .map(|(_interface, address)| address)
@@ -1203,8 +1214,10 @@ fn get_local_ip() -> String {
 
     #[cfg(target_os = "linux")]
     {
-        if let Some((_interface, address)) = linux_route_identity("172.30.201.2") {
-            return address;
+        if let Some((interface, address)) = linux_route_identity("172.30.201.2") {
+            if linux_is_physical_ethernet_interface(&interface) && is_campus_wired_ipv4(&address) {
+                return address;
+            }
         }
         linux_campus_wired_identity("")
             .map(|(_interface, address)| address)
@@ -1263,6 +1276,7 @@ use portal_auth::portal_probe_urls;
 use portal_auth::{
     detect_login_type_details_rust, detect_login_type_rust, lgn_user_info_url,
     login_result_is_ambiguous, login_to_campus_network_rust, portal_client, LoginType,
+    PortalRouteContext,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
@@ -1516,6 +1530,131 @@ fn network_identity_is_fresh(network: &serde_json::Value) -> bool {
     }
 }
 
+fn portal_route_context_from_network(
+    network: &serde_json::Value,
+) -> Result<Option<PortalRouteContext>, String> {
+    #[cfg(target_os = "android")]
+    {
+        // Android's Network object is bound by AndroidWifiRouteGuard (or by
+        // KeepAliveService for the headless core). Do not replace that exact
+        // binding with an interface-name socket option.
+        let _ = network;
+        return Ok(None);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        if !network_identity_is_fresh(network) {
+            return Err("网络身份不是来自同一物理接口，已停止校园网网关请求".to_string());
+        }
+        let interface_name = network
+            .get("interfaceName")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let physical_ipv4 = network
+            .get("ip")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        PortalRouteContext::new(interface_name, physical_ipv4).map(Some)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NetworkIdentitySnapshot {
+    network_id: String,
+    interface_name: String,
+    transport: String,
+    ssid: String,
+    bssid: String,
+    ip: String,
+}
+
+impl NetworkIdentitySnapshot {
+    fn capture(network: &serde_json::Value) -> Self {
+        let component = |name: &str| {
+            network
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        let raw_ssid = component("ssid");
+        let exact_ssid = raw_ssid
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .unwrap_or(&raw_ssid)
+            .to_string();
+        Self {
+            network_id: component("networkId"),
+            interface_name: component("interfaceName"),
+            transport: component("transport").to_ascii_lowercase(),
+            // SSIDs are case-sensitive byte strings. Trust evaluation may
+            // normalize spelling, but a TOCTOU guard must compare the exact
+            // observed identity and must not equate `_` with `-`.
+            ssid: exact_ssid,
+            bssid: component("bssid").to_ascii_lowercase().replace('-', ":"),
+            ip: component("ip"),
+        }
+    }
+
+    fn changed_fields(&self, current: &Self) -> Vec<&'static str> {
+        let mut changed = Vec::new();
+        if self.network_id != current.network_id {
+            changed.push("Network");
+        }
+        if self.interface_name != current.interface_name {
+            changed.push("网络接口");
+        }
+        if self.transport != current.transport {
+            changed.push("连接类型");
+        }
+        if self.ssid != current.ssid {
+            changed.push("SSID");
+        }
+        if self.bssid != current.bssid {
+            changed.push("BSSID");
+        }
+        if self.ip != current.ip {
+            changed.push("IP");
+        }
+        changed
+    }
+}
+
+fn ensure_same_network_identity(
+    expected: &NetworkIdentitySnapshot,
+    current_network: &serde_json::Value,
+) -> Result<(), String> {
+    let current = NetworkIdentitySnapshot::capture(current_network);
+    let changed = expected.changed_fields(&current);
+    if changed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} 已变化", changed.join("、")))
+    }
+}
+
+fn same_exact_wifi_identity(
+    expected_ssid: &str,
+    expected_bssid: &str,
+    current_ssid: &str,
+    current_bssid: &str,
+) -> bool {
+    let expected = NetworkIdentitySnapshot::capture(&serde_json::json!({
+        "ssid": expected_ssid,
+        "bssid": expected_bssid,
+    }));
+    let current = NetworkIdentitySnapshot::capture(&serde_json::json!({
+        "ssid": current_ssid,
+        "bssid": current_bssid,
+    }));
+    !current.ssid.is_empty()
+        && !current.bssid.is_empty()
+        && expected.ssid == current.ssid
+        && expected.bssid == current.bssid
+}
+
 fn mobile_data_check_interval(configured: i32, is_background: bool) -> i32 {
     configured.max(if is_background {
         MOBILE_DATA_CHECK_INTERVAL_BACKGROUND
@@ -1741,7 +1880,10 @@ fn skip_dns_name(packet: &[u8], position: &mut usize) -> Result<(), String> {
     }
 }
 
-fn query_campus_dns_ipv4(host: &str) -> Result<Vec<std::net::Ipv4Addr>, String> {
+fn query_campus_dns_ipv4(
+    host: &str,
+    source_ipv4: Option<std::net::Ipv4Addr>,
+) -> Result<Vec<std::net::Ipv4Addr>, String> {
     let labels: Vec<&str> = host.split('.').collect();
     if labels.is_empty()
         || labels
@@ -1765,7 +1907,9 @@ fn query_campus_dns_ipv4(host: &str) -> Result<Vec<std::net::Ipv4Addr>, String> 
     query.push(0);
     query.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
 
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0")
+    let bind_address =
+        std::net::SocketAddrV4::new(source_ipv4.unwrap_or(std::net::Ipv4Addr::UNSPECIFIED), 0);
+    let socket = std::net::UdpSocket::bind(bind_address)
         .map_err(|error| format!("无法创建校园网 DNS 查询：{error}"))?;
     let timeout = Some(std::time::Duration::from_millis(1200));
     socket
@@ -1968,7 +2112,7 @@ async fn run_headless_network_check(
         });
     }
 
-    let detected = detect_login_type_rust(compatibility, &ssid, &transport).await;
+    let detected = detect_login_type_rust(compatibility, &ssid, &transport, None).await;
     if detected != LoginType::Unknown && transport.eq_ignore_ascii_case("wifi") && !identity_fresh {
         let status = if identity_requested {
             "blocked"
@@ -2105,7 +2249,7 @@ async fn run_headless_network_check(
             &account.user,
             &account.pass,
             compatibility,
-            Some(&ip),
+            None,
         )
         .await
         {
@@ -2270,6 +2414,7 @@ fn redact_request_error(error: reqwest::Error) -> String {
 async fn fetch_portal_user_info(
     local_ip: Option<&str>,
     compatibility: VpnCompatibility,
+    route_context: Option<&PortalRouteContext>,
 ) -> Option<UserInfo> {
     if let Some(ip) = local_ip {
         if !ip.starts_with("10.") && !ip.starts_with("172.") {
@@ -2281,6 +2426,7 @@ async fn fetch_portal_user_info(
         compatibility,
         &LoginType::Type3,
         std::time::Duration::from_secs(3),
+        route_context,
     )
     .await
     .ok()?;
@@ -3688,12 +3834,14 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         #[cfg(target_os = "android")]
         let net_info = get_network_info(app.clone(), Some(full_details));
         #[cfg(not(target_os = "android"))]
-        let net_info = if full_details {
-            get_network_info(app.clone(), Some(true))
-        } else {
-            state.last_network_state.lock().unwrap().clone()
-        };
+        let net_info = get_network_info(app.clone(), Some(full_details));
         let previous_network = state.last_network_state.lock().unwrap().clone();
+        #[cfg(target_os = "android")]
+        let portal_route_context = portal_route_context_from_network(&net_info).ok().flatten();
+        #[cfg(not(target_os = "android"))]
+        let mut portal_route_context = portal_route_context_from_network(&net_info).ok().flatten();
+        #[cfg(not(target_os = "android"))]
+        let mut trusted_portal_identity = NetworkIdentitySnapshot::capture(&net_info);
         #[cfg(target_os = "android")]
         let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&net_info);
         let transport = network_transport(&net_info).to_string();
@@ -3725,10 +3873,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             raw_ssid
         }
         .to_string();
-        #[cfg(target_os = "android")]
         let mut current_ssid = initial_ssid;
-        #[cfg(not(target_os = "android"))]
-        let current_ssid = initial_ssid;
 
         let initial_bssid = if preserve_wifi_identity && raw_bssid.is_empty() {
             previous_network
@@ -3739,10 +3884,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             raw_bssid
         }
         .to_string();
-        #[cfg(target_os = "android")]
         let mut current_bssid = initial_bssid;
-        #[cfg(not(target_os = "android"))]
-        let current_bssid = initial_bssid;
 
         let initial_ip = if preserve_wifi_identity && raw_ip.is_empty() {
             previous_network
@@ -3753,17 +3895,14 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             raw_ip
         }
         .to_string();
-        #[cfg(target_os = "android")]
         let mut current_ip = initial_ip;
-        #[cfg(not(target_os = "android"))]
-        let current_ip = initial_ip;
         #[cfg(target_os = "android")]
         let mut identity_fresh = net_info
             .get("identityFresh")
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
         #[cfg(not(target_os = "android"))]
-        let identity_fresh = network_identity_is_fresh(&net_info);
+        let mut identity_fresh = network_identity_is_fresh(&net_info);
         let preliminary_profile = {
             let cfg = state.config.read().unwrap();
             matching_network_profile(&cfg, &current_ssid, &current_bssid, &LoginType::Unknown)
@@ -3968,8 +4107,58 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             ),
             "debug",
         );
-        let detected_login_type =
-            detect_login_type_rust(compatibility, &current_ssid, &transport).await;
+        let detected_login_type = detect_login_type_rust(
+            compatibility,
+            &current_ssid,
+            &transport,
+            portal_route_context.as_ref(),
+        )
+        .await;
+        #[cfg(not(target_os = "android"))]
+        if detected_login_type != LoginType::Unknown {
+            // Portal probing is asynchronous. Re-sample the physical route
+            // and Wi-Fi identity before any credential can be selected, then
+            // require it to match the exact context used by the probe.
+            let fresh_network = get_network_info(app.clone(), Some(true));
+            let fresh_route_context = portal_route_context_from_network(&fresh_network)
+                .ok()
+                .flatten();
+            let fresh_transport = network_transport(&fresh_network);
+            let fresh_ssid = fresh_network
+                .get("ssid")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let fresh_bssid = fresh_network
+                .get("bssid")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let same_wifi_identity = !transport.eq_ignore_ascii_case("wifi")
+                || same_exact_wifi_identity(&current_ssid, &current_bssid, fresh_ssid, fresh_bssid);
+            let same_route = portal_route_context.is_some()
+                && portal_route_context == fresh_route_context
+                && transport.eq_ignore_ascii_case(fresh_transport);
+            if same_route && same_wifi_identity {
+                trusted_portal_identity = NetworkIdentitySnapshot::capture(&fresh_network);
+                current_ssid = fresh_ssid.to_string();
+                current_bssid = fresh_bssid.to_string();
+                current_ip = fresh_network
+                    .get("ip")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(&current_ip)
+                    .to_string();
+                portal_route_context = fresh_route_context;
+                identity_fresh = true;
+            } else {
+                identity_fresh = false;
+                rust_log(
+                    &app,
+                    &state,
+                    "安全",
+                    "认证网关探测期间物理接口、IP 或 Wi-Fi 身份发生变化，已阻止本轮自动登录",
+                    "error",
+                );
+            }
+        }
         #[cfg(target_os = "android")]
         if !full_details
             && transport.eq_ignore_ascii_case("wifi")
@@ -4189,7 +4378,34 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                         } else {
                             let mut success = false;
                             let mut result_uncertain = false;
+                            let mut aborted_for_network_change = false;
                             for acc in active_accounts {
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    // A rejected account can keep the request in flight long
+                                    // enough for a roam, DHCP renewal, or interface switch.
+                                    // Reconfirm the exact route and Wi-Fi identity before every
+                                    // subsequent credential-bearing request.
+                                    let latest_network = get_network_info(app.clone(), Some(true));
+                                    let route_still_fresh =
+                                        network_identity_is_fresh(&latest_network)
+                                            && ensure_same_network_identity(
+                                                &trusted_portal_identity,
+                                                &latest_network,
+                                            )
+                                            .is_ok()
+                                            && portal_route_context_from_network(&latest_network)
+                                                .ok()
+                                                .flatten()
+                                                == portal_route_context;
+                                    if !route_still_fresh {
+                                        let message = "账号重试前检测到物理接口、IP 或 Wi-Fi 身份变化，已停止发送下一组账号密码";
+                                        login_failure_message = Some(message.to_string());
+                                        aborted_for_network_change = true;
+                                        rust_log(&app, &state, "安全", message, "error");
+                                        break;
+                                    }
+                                }
                                 rust_log(
                                     &app,
                                     &state,
@@ -4202,7 +4418,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                     &acc.user,
                                     &acc.pass,
                                     compatibility,
-                                    Some(&current_ip),
+                                    portal_route_context.as_ref(),
                                 )
                                 .await
                                 {
@@ -4278,7 +4494,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                     }
                                 }
                             }
-                            if !success && !result_uncertain {
+                            if !success && !result_uncertain && !aborted_for_network_change {
                                 if login_failure_message.is_none() {
                                     login_failure_message =
                                         Some("所有账号均未能完成登录".to_string());
@@ -4761,11 +4977,18 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     ));
 
     let portal_started = std::time::Instant::now();
+    let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
     let detection = if online || mobile_data || wifi_route_failed {
         None
     } else {
         Some(
-            detect_login_type_details_rust(compatibility, &ssid, network_transport(&network)).await,
+            detect_login_type_details_rust(
+                compatibility,
+                &ssid,
+                network_transport(&network),
+                portal_route_context.as_ref(),
+            )
+            .await,
         )
     };
     let login_type = detection
@@ -5127,7 +5350,14 @@ async fn evaluate_manual_network_trust(
         .unwrap_or("");
     let config = state.config.read().unwrap().clone();
     let compatibility = effective_vpn_compatibility(&config);
-    let detected = detect_login_type_rust(compatibility, ssid, transport).await;
+    let portal_route_context = portal_route_context_from_network(&network)?;
+    let detected = detect_login_type_rust(
+        compatibility,
+        ssid,
+        transport,
+        portal_route_context.as_ref(),
+    )
+    .await;
     let login_type = parse_login_type_override(login_type_override.as_deref()).unwrap_or(detected);
     let result = if login_type == LoginType::Unknown {
         network_trust::NetworkTrustResult {
@@ -5226,9 +5456,13 @@ async fn manual_login(
     trust_network_once: Option<bool>,
     expected_network_key: Option<String>,
 ) -> Result<ManualLoginResult, String> {
-    let network = get_network_info(app.clone(), Some(true));
+    // Capture a complete identity before the potentially slow portal probe.
+    // The probe result must never be combined with SSID/BSSID/IP collected
+    // from an earlier network.
+    let network_before_probe = get_network_info(app.clone(), Some(true));
+    let identity_before_probe = NetworkIdentitySnapshot::capture(&network_before_probe);
     #[cfg(target_os = "android")]
-    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network_before_probe);
     #[cfg(target_os = "android")]
     if wifi_route_guard.failed() {
         return Ok(ManualLoginResult {
@@ -5236,7 +5470,7 @@ async fn manual_login(
             message: "无法将认证请求绑定到当前校园 Wi-Fi；已停止使用 VPN/移动数据路径".to_string(),
         });
     }
-    if is_mobile_data_network(&network) {
+    if is_mobile_data_network(&network_before_probe) {
         rust_log(
             &app,
             &state,
@@ -5251,15 +5485,27 @@ async fn manual_login(
     }
     let config = state.config.read().unwrap().clone();
     let compatibility = effective_vpn_compatibility(&config);
+    let probe_route_context = portal_route_context_from_network(&network_before_probe)?;
     let detected_type = detect_login_type_rust(
         compatibility,
-        network
+        network_before_probe
             .get("ssid")
             .and_then(|value| value.as_str())
             .unwrap_or(""),
-        network_transport(&network),
+        network_transport(&network_before_probe),
+        probe_route_context.as_ref(),
     )
     .await;
+    let network = get_network_info(app.clone(), Some(true));
+    if let Err(change) = ensure_same_network_identity(&identity_before_probe, &network) {
+        let message = format!("协议探测期间检测到网络切换（{change}），已停止发送账号密码");
+        rust_log(&app, &state, "安全", &message, "error");
+        return Ok(ManualLoginResult {
+            success: false,
+            message,
+        });
+    }
+    let portal_route_context = portal_route_context_from_network(&network)?;
     let login_type =
         parse_login_type_override(login_type_override.as_deref()).unwrap_or(detected_type);
     if login_type == LoginType::Unknown {
@@ -5323,6 +5569,7 @@ async fn manual_login(
             );
         }
     }
+    let trusted_identity = NetworkIdentitySnapshot::capture(&network);
 
     let configured_accounts = config.accounts;
     let accounts: Vec<Account> = match account_index {
@@ -5373,6 +5620,27 @@ async fn manual_login(
             );
             continue;
         }
+        // A failed account may take long enough for the user to roam or switch
+        // interfaces. Re-read the complete identity immediately before every
+        // credential submission, not merely before the first account.
+        let latest_network = get_network_info(app.clone(), Some(true));
+        if !network_identity_is_fresh(&latest_network) {
+            let message =
+                "发送账号密码前无法确认 SSID/BSSID/IP 来自同一物理接口，已停止登录".to_string();
+            rust_log(&app, &state, "安全", &message, "error");
+            return Ok(ManualLoginResult {
+                success: false,
+                message,
+            });
+        }
+        if let Err(change) = ensure_same_network_identity(&trusted_identity, &latest_network) {
+            let message = format!("发送账号密码前检测到网络切换（{change}），已停止登录");
+            rust_log(&app, &state, "安全", &message, "error");
+            return Ok(ManualLoginResult {
+                success: false,
+                message,
+            });
+        }
         rust_log(
             &app,
             &state,
@@ -5385,7 +5653,7 @@ async fn manual_login(
             &account.user,
             &account.pass,
             compatibility,
-            Some(ip),
+            portal_route_context.as_ref(),
         )
         .await
         {
@@ -5736,7 +6004,21 @@ async fn get_user_info(
         effective_vpn_compatibility(&config)
     };
     let _ = force;
-    let info = fetch_portal_user_info(local_ip.as_deref(), compatibility).await;
+    let network = get_network_info(app.clone(), Some(false));
+    #[cfg(target_os = "android")]
+    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    #[cfg(target_os = "android")]
+    if wifi_route_guard.failed() {
+        return Err("无法将用户信息请求绑定到当前校园 Wi-Fi".to_string());
+    }
+    let portal_route_context = portal_route_context_from_network(&network)?;
+    let effective_ip = network
+        .get("ip")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or(local_ip.as_deref());
+    let info =
+        fetch_portal_user_info(effective_ip, compatibility, portal_route_context.as_ref()).await;
     if let Some(info) = info.as_ref() {
         evaluate_usage_alerts(&app, &state, info);
     }
@@ -7157,14 +7439,82 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string();
-    let ip = network
-        .get("ip")
-        .and_then(|value| value.as_str())
-        .unwrap_or("")
-        .to_string();
     let config = state.config.read().unwrap().clone();
     let compatibility = effective_vpn_compatibility(&config);
-    let detected = detect_login_type_rust(compatibility, &ssid, &transport).await;
+    let portal_route_context = match portal_route_context_from_network(&network) {
+        Ok(context) => context,
+        Err(reason) => {
+            rust_log(
+                &app,
+                &state,
+                "安全",
+                &format!("托盘登录已阻止：{reason}"),
+                "error",
+            );
+            let _ = show_native_notification(&app, "校园网登录已阻止", &reason);
+            return;
+        }
+    };
+    let detected = detect_login_type_rust(
+        compatibility,
+        &ssid,
+        &transport,
+        portal_route_context.as_ref(),
+    )
+    .await;
+    let fresh_network = get_network_info(app.clone(), Some(true));
+    let fresh_route_context = match portal_route_context_from_network(&fresh_network) {
+        Ok(context) => context,
+        Err(reason) => {
+            rust_log(
+                &app,
+                &state,
+                "安全",
+                &format!("托盘登录已阻止：{reason}"),
+                "error",
+            );
+            let _ = show_native_notification(&app, "校园网登录已阻止", &reason);
+            return;
+        }
+    };
+    let fresh_transport = network_transport(&fresh_network).to_string();
+    let fresh_ssid = fresh_network
+        .get("ssid")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let fresh_bssid = fresh_network
+        .get("bssid")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let same_wifi_identity = !transport.eq_ignore_ascii_case("wifi")
+        || same_exact_wifi_identity(&ssid, &bssid, &fresh_ssid, &fresh_bssid);
+    if portal_route_context != fresh_route_context
+        || !transport.eq_ignore_ascii_case(&fresh_transport)
+        || !same_wifi_identity
+    {
+        let reason = "认证网关探测期间物理接口、IP 或 Wi-Fi 身份发生变化，请重新登录";
+        rust_log(
+            &app,
+            &state,
+            "安全",
+            &format!("托盘登录已阻止：{reason}"),
+            "error",
+        );
+        let _ = show_native_notification(&app, "校园网登录已阻止", reason);
+        return;
+    }
+    let network = fresh_network;
+    let portal_route_context = fresh_route_context;
+    let transport = fresh_transport;
+    let ssid = fresh_ssid;
+    let bssid = fresh_bssid;
+    let ip = network
+        .get("ip")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let profile = matching_network_profile(&config, &ssid, &bssid, &detected);
     let login_type = profile
         .as_ref()
@@ -7223,7 +7573,7 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         &account.user,
         &account.pass,
         compatibility,
-        Some(&ip),
+        portal_route_context.as_ref(),
     )
     .await
     {
@@ -7790,6 +8140,102 @@ mod tests {
                 &serde_json::json!({"identitySource": source})
             ));
         }
+    }
+
+    #[test]
+    fn wired_type3_classification_requires_the_documented_172_30_segment() {
+        for allowed in ["172.30.0.1", "172.30.201.2", "172.30.255.254"] {
+            assert!(is_campus_wired_ipv4(allowed), "{allowed}");
+        }
+        for rejected in [
+            "10.21.1.2",
+            "10.26.1.2",
+            "172.17.0.2",
+            "172.29.255.1",
+            "172.31.0.1",
+            "198.18.1.2",
+            "0.0.0.0",
+        ] {
+            assert!(!is_campus_wired_ipv4(rejected), "{rejected}");
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn desktop_portal_route_context_requires_same_interface_metadata() {
+        let valid = serde_json::json!({
+            "interfaceName": "en0",
+            "identitySource": "sameInterface",
+            "ip": "10.26.1.2"
+        });
+        let route = portal_route_context_from_network(&valid)
+            .unwrap()
+            .expect("desktop route context");
+        assert_eq!(route.interface_name(), "en0");
+        assert_eq!(route.physical_ipv4().to_string(), "10.26.1.2");
+
+        for invalid in [
+            serde_json::json!({
+                "interfaceName": "en0",
+                "identitySource": "unverifiedFallback",
+                "ip": "10.26.1.2"
+            }),
+            serde_json::json!({
+                "interfaceName": "",
+                "identitySource": "sameInterface",
+                "ip": "10.26.1.2"
+            }),
+            serde_json::json!({
+                "interfaceName": "en0",
+                "identitySource": "sameInterface",
+                "ip": "198.18.1.2"
+            }),
+        ] {
+            assert!(portal_route_context_from_network(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn manual_login_snapshot_detects_every_identity_change() {
+        let network = serde_json::json!({
+            "networkId": "42",
+            "interfaceName": "wlan0",
+            "transport": "wifi",
+            "ssid": "bjut_wifi",
+            "bssid": "AA-BB-CC-DD-EE-FF",
+            "ip": "10.26.1.2"
+        });
+        let expected = NetworkIdentitySnapshot::capture(&network);
+        assert!(ensure_same_network_identity(&expected, &network).is_ok());
+
+        for (field, value) in [
+            ("networkId", "43"),
+            ("interfaceName", "wlan1"),
+            ("transport", "ethernet"),
+            ("ssid", "bjut-wifi"),
+            ("bssid", "aa:bb:cc:dd:ee:00"),
+            ("ip", "10.26.1.3"),
+        ] {
+            let mut changed = network.clone();
+            changed[field] = serde_json::json!(value);
+            assert!(
+                ensure_same_network_identity(&expected, &changed).is_err(),
+                "{field} change must stop credential submission"
+            );
+        }
+
+        assert!(same_exact_wifi_identity(
+            "bjut_wifi",
+            "AA-BB-CC-DD-EE-FF",
+            "\"bjut_wifi\"",
+            "aa:bb:cc:dd:ee:ff"
+        ));
+        assert!(!same_exact_wifi_identity(
+            "bjut_wifi",
+            "AA-BB-CC-DD-EE-FF",
+            "bjut-wifi",
+            "aa:bb:cc:dd:ee:ff"
+        ));
     }
 
     #[test]

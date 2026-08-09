@@ -111,7 +111,7 @@ function setLoadingMaskVisible(visible: boolean, text = '正在启动 BJUT-AL…
 function showResumeMask() {
   if (!appLaunchRevealed) return;
   if (loadingMaskTimer !== null) window.clearTimeout(loadingMaskTimer);
-  setLoadingMaskVisible(true, '正在恢复网络状态…');
+  setLoadingMaskVisible(true, '正在恢复应用…');
   loadingMaskTimer = window.setTimeout(() => {
     setLoadingMaskVisible(false);
     loadingMaskTimer = null;
@@ -149,10 +149,15 @@ async function revealAppWindow() {
   if (appWindowRevealed) return;
   await macosDockPolicyReady;
   await new Promise(resolve => window.setTimeout(resolve, 40));
-  appWindowRevealed = true;
   if (window.__TAURI__) {
-    await invoke('frontend_ready').catch(error => console.error('Failed to reveal main window:', error));
+    try {
+      await invoke('frontend_ready');
+    } catch (error) {
+      console.error('Backend window reveal failed, using the window API fallback:', error);
+      await getCurrentWindow().show();
+    }
   }
+  appWindowRevealed = true;
 }
 
 async function finishAppLaunch() {
@@ -210,6 +215,7 @@ let vpnMaximumUntil = 0;
 let vpnMaximumRollbackTimer: number | null = null;
 let configSyncQueue: Promise<void> = Promise.resolve();
 let missingPasswordWarningShown = false;
+let persistedConfigurationReady = !window.__TAURI__;
 function warnAboutMissingPasswords(storageStatus = 'missing') {
   const missingPasswordUsers = accountsCache
     .filter(account => !account.hasPassword && !account.pass)
@@ -531,14 +537,14 @@ function syncConfigToRust(): Promise<void> {
   return operation;
 }
 
-async function loadConfigFromRust() {
-  if (!window.__TAURI__) return;
+async function loadConfigFromRust(): Promise<boolean> {
+  if (!window.__TAURI__) return true;
   try {
     const [config, credentialStorageStatus] = await Promise.all([
       invoke<BackendConfig>('get_app_config'),
       invoke<string>('get_credential_storage_status'),
     ]);
-    if (!config) return;
+    if (!config) return false;
 
     const backendAccounts: AccountView[] = (config.accounts || []).map((account: Partial<AccountView>) => ({
       user: String(account.user || ''),
@@ -704,170 +710,165 @@ async function loadConfigFromRust() {
     renderAccounts();
     warnAboutMissingPasswords(credentialStorageStatus);
     await Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
+    persistedConfigurationReady = true;
+    if (currentNetworkState === NetworkState.Online) scheduleCurrentCampusAccountDiscovery();
+    return true;
   } catch (e) {
     console.error('Failed to load config from Rust:', e);
+    return false;
   }
+}
+
+function applyNetworkStatePayload(data: NetworkStatePayload) {
+  let state = NetworkState.Offline;
+  if (data.state === 'Online') state = NetworkState.Online;
+  else if (data.state === 'BjutCampus') state = NetworkState.BjutCampus;
+  const loginType = data.loginType === 'Type1_221_98' ? LoginType.Type1_221_98
+    : data.loginType === 'Type2_251_3' ? LoginType.Type2_251_3
+    : data.loginType === 'Type3_172_30' ? LoginType.Type3_172_30
+    : LoginType.Unknown;
+
+  currentNetworkState = state;
+  updateNetworkStatus(state, loginType, data.loginMessage);
+  isChecking = false;
+  if (state === NetworkState.Online) {
+    updateUserInfo().catch(() => {});
+    if (persistedConfigurationReady) scheduleCurrentCampusAccountDiscovery();
+  } else {
+    portalUserInfoCache = null;
+    updateTopUpPackageAction();
+  }
+
+  const moreSsid = document.getElementById('more-ssid');
+  const moreBssid = document.getElementById('more-bssid');
+  const moreIp = document.getElementById('more-ip');
+  if (moreSsid) moreSsid.textContent = data.ssid || '--';
+  if (moreBssid) moreBssid.textContent = data.bssid || '--';
+  if (moreIp) moreIp.textContent = data.ip || '--';
+  if (data.ip) lastKnownIp = data.ip;
+
+  const updateTimestamp = document.getElementById('update-timestamp');
+  if (updateTimestamp) {
+    updateTimestamp.textContent = data.timestamp || new Date().toLocaleString();
+  }
+}
+
+let rustEventInitialization: Promise<void> | null = null;
+
+async function initializeRustEvents() {
+  const failures: string[] = [];
+  const settle = async (label: string, task: Promise<unknown>) => {
+    try {
+      await task;
+    } catch (error) {
+      failures.push(`${label}：${String(error)}`);
+      console.error(`Failed to initialize ${label}:`, error);
+    }
+  };
+
+  // Register every channel independently. One unavailable event must not stop
+  // network, countdown, log, or account events from being wired up.
+  await Promise.all([
+    settle('倒计时事件', listen<CountdownPayload>('countdown-tick', event => {
+      const data = event.payload;
+      const countdownText = document.getElementById('countdown-text');
+      if (!countdownText) return;
+      if (data.status === 'checking') {
+        countdownText.textContent = '检测中...';
+        isChecking = true;
+      } else if (data.status === 'suspended') {
+        countdownText.textContent = '已休眠';
+        isChecking = false;
+      } else if (data.status === 'ticking') {
+        countdownText.textContent = data.seconds.toString();
+        isChecking = false;
+      }
+    })),
+    settle('网络状态事件', listen<NetworkStatePayload>('network-state-change', event => {
+      applyNetworkStatePayload(event.payload);
+    })),
+    settle('运行日志事件', listen<AppLogEntry>('log-event', event => {
+      const data = event.payload;
+      renderLogEntry(data.module, data.message, data.type, data.time);
+    })),
+    settle('更新进度事件', listen<UpdateProgress>('update-progress', event => {
+      updateUpdateProgress(event.payload);
+    })),
+    settle('计费进度事件', listen<{ message: string; percent?: number }>(
+      'billing-center-progress',
+      event => {
+        if (!billingCenterLoading) return;
+        const message = event.payload?.message?.trim();
+        if (!message) return;
+        updateBillingRefreshProgress(event.payload.percent ?? 0, true);
+        billingCenterMessage.textContent = message;
+        syncBillingCenterMessageVisibility();
+      },
+    )),
+    settle('账号健康事件', listen<AccountHealth[]>('account-health-change', event => {
+      setAccountHealth(event.payload);
+    })),
+    settle('默认账号事件', listen<{ index: number; user?: string }>(
+      'preferred-account-change',
+      event => {
+        const preferredIndex = event.payload.user
+          ? accountsCache.findIndex(account => account.user === event.payload.user)
+          : event.payload.index;
+        if (preferredIndex < 0 || preferredIndex >= accountsCache.length) return;
+        const nextAccounts = [...accountsCache];
+        const [preferred] = nextAccounts.splice(preferredIndex, 1);
+        accountsCache = [preferred, ...nextAccounts].map((account, index) => ({
+          ...account,
+          isDefault: index === 0,
+        }));
+        renderAccounts();
+        updateBillingAccountOptions();
+      },
+    )),
+  ]);
+
+  // Initial snapshots are also independent from listener registration and
+  // from one another. A damaged log store, for example, cannot suppress the
+  // live network event channel.
+  await Promise.all([
+    settle('初始运行日志', invoke<AppLogEntry[]>('get_logs').then(initialLogs => {
+      logEntriesCache = initialLogs.map(entry => ({
+        time: entry.time,
+        module: entry.module,
+        message: entry.message,
+        type: entry.type,
+      }));
+      logsDirty = true;
+      logFilterCount.textContent = `${logEntriesCache.length} 条`;
+    })),
+    settle('初始网络状态', invoke<NetworkStatePayload>('get_current_network_state').then(currentState => {
+      if (currentState) applyNetworkStatePayload(currentState);
+    })),
+    settle('初始倒计时状态', invoke<CountdownPayload>('get_countdown_status').then(cStatus => {
+      const countdownText = document.getElementById('countdown-text');
+      if (!countdownText) return;
+      if (cStatus.status === 'checking') countdownText.textContent = '检测中...';
+      else if (cStatus.status === 'suspended') countdownText.textContent = '已休眠';
+      else countdownText.textContent = cStatus.seconds.toString();
+    })),
+  ]);
+
+  const updateBgState = () => {
+    const isBg = document.hidden || (!IS_ANDROID && !document.hasFocus());
+    invoke('set_background_state', { isBg }).catch(() => {});
+  };
+  document.addEventListener('visibilitychange', updateBgState);
+  window.addEventListener('focus', updateBgState);
+  window.addEventListener('blur', updateBgState);
+  updateBgState();
+
+  if (failures.length > 0) throw new Error(failures.join('；'));
 }
 
 async function listenToRustEvents() {
   if (!window.__TAURI__) return;
-  try {
-    listen<CountdownPayload>('countdown-tick', event => {
-      const data = event.payload;
-      const countdownText = document.getElementById('countdown-text');
-      if (countdownText) {
-        if (data.status === 'checking') {
-          countdownText.textContent = '检测中...';
-          isChecking = true;
-        } else if (data.status === 'suspended') {
-          countdownText.textContent = '已休眠';
-          isChecking = false;
-        } else if (data.status === 'ticking') {
-          countdownText.textContent = data.seconds.toString();
-          isChecking = false;
-        }
-      }
-    });
-
-    listen<NetworkStatePayload>('network-state-change', event => {
-      const data = event.payload;
-      let state = NetworkState.Offline;
-      if (data.state === 'Online') state = NetworkState.Online;
-      else if (data.state === 'BjutCampus') state = NetworkState.BjutCampus;
-      const loginType = data.loginType === 'Type1_221_98' ? LoginType.Type1_221_98
-        : data.loginType === 'Type2_251_3' ? LoginType.Type2_251_3
-        : data.loginType === 'Type3_172_30' ? LoginType.Type3_172_30
-        : LoginType.Unknown;
-      
-      currentNetworkState = state;
-      updateNetworkStatus(state, loginType, data.loginMessage);
-      isChecking = false;
-      if (state === NetworkState.Online) {
-        updateUserInfo().catch(() => {});
-        scheduleCurrentCampusAccountDiscovery();
-      } else {
-        portalUserInfoCache = null;
-        updateTopUpPackageAction();
-      }
-
-      const moreSsid = document.getElementById('more-ssid');
-      const moreBssid = document.getElementById('more-bssid');
-      const moreIp = document.getElementById('more-ip');
-      if (moreSsid) moreSsid.textContent = data.ssid || '--';
-      if (moreBssid) moreBssid.textContent = data.bssid || '--';
-      if (moreIp) moreIp.textContent = data.ip || '--';
-      if (data.ip) lastKnownIp = data.ip;
-
-      const updateTimestamp = document.getElementById('update-timestamp');
-      if (updateTimestamp) {
-        updateTimestamp.textContent = data.timestamp || new Date().toLocaleString();
-      }
-    });
-
-    listen<AppLogEntry>('log-event', event => {
-      const data = event.payload;
-      renderLogEntry(data.module, data.message, data.type, data.time);
-    });
-
-    listen<UpdateProgress>('update-progress', event => {
-      updateUpdateProgress(event.payload);
-    });
-
-    listen<{ message: string; percent?: number }>('billing-center-progress', event => {
-      if (!billingCenterLoading) return;
-      const message = event.payload?.message?.trim();
-      if (!message) return;
-      updateBillingRefreshProgress(event.payload.percent ?? 0, true);
-      billingCenterMessage.textContent = message;
-      syncBillingCenterMessageVisibility();
-    });
-
-    listen<AccountHealth[]>('account-health-change', event => {
-      setAccountHealth(event.payload);
-    });
-
-    listen<{ index: number; user?: string }>('preferred-account-change', event => {
-      const preferredIndex = event.payload.user
-        ? accountsCache.findIndex(account => account.user === event.payload.user)
-        : event.payload.index;
-      if (preferredIndex < 0 || preferredIndex >= accountsCache.length) return;
-      const nextAccounts = [...accountsCache];
-      const [preferred] = nextAccounts.splice(preferredIndex, 1);
-      accountsCache = [preferred, ...nextAccounts].map((account, index) => ({
-        ...account,
-        isDefault: index === 0,
-      }));
-      renderAccounts();
-      updateBillingAccountOptions();
-    });
-
-    // Load initial logs
-    const initialLogs = await invoke<AppLogEntry[]>('get_logs');
-    logEntriesCache = initialLogs.map(entry => ({
-      time: entry.time,
-      module: entry.module,
-      message: entry.message,
-      type: entry.type,
-    }));
-    logsDirty = true;
-    logFilterCount.textContent = `${logEntriesCache.length} 条`;
-
-    // Load initial network state
-    try {
-      const currentState = await invoke<NetworkStatePayload>('get_current_network_state');
-      if (currentState) {
-        let state = NetworkState.Offline;
-        if (currentState.state === 'Online') state = NetworkState.Online;
-        else if (currentState.state === 'BjutCampus') state = NetworkState.BjutCampus;
-        const loginType = currentState.loginType === 'Type1_221_98' ? LoginType.Type1_221_98
-          : currentState.loginType === 'Type2_251_3' ? LoginType.Type2_251_3
-          : currentState.loginType === 'Type3_172_30' ? LoginType.Type3_172_30
-          : LoginType.Unknown;
-        currentNetworkState = state;
-        updateNetworkStatus(state, loginType);
-        if (state === NetworkState.Online) {
-          updateUserInfo().catch(() => {});
-          scheduleCurrentCampusAccountDiscovery();
-        }
-
-        const moreSsid = document.getElementById('more-ssid');
-        const moreBssid = document.getElementById('more-bssid');
-        const moreIp = document.getElementById('more-ip');
-        if (moreSsid) moreSsid.textContent = currentState.ssid || '--';
-        if (moreBssid) moreBssid.textContent = currentState.bssid || '--';
-        if (moreIp) moreIp.textContent = currentState.ip || '--';
-        if (currentState.ip) lastKnownIp = currentState.ip;
-
-        const updateTimestamp = document.getElementById('update-timestamp');
-        if (updateTimestamp) {
-          updateTimestamp.textContent = currentState.timestamp || new Date().toLocaleString();
-        }
-      }
-    } catch (err) {
-      console.error('Failed to get current network state from Rust on start:', err);
-    }
-
-    // Load initial countdown status
-    const cStatus = await invoke<CountdownPayload>('get_countdown_status');
-    const countdownText = document.getElementById('countdown-text');
-    if (countdownText) {
-      if (cStatus.status === 'checking') countdownText.textContent = '检测中...';
-      else if (cStatus.status === 'suspended') countdownText.textContent = '已休眠';
-      else countdownText.textContent = cStatus.seconds.toString();
-    }
-
-    // Report visibility background status
-    const updateBgState = () => {
-      const isBg = document.hidden || (!IS_ANDROID && !document.hasFocus());
-      invoke('set_background_state', { isBg }).catch(() => {});
-    };
-    document.addEventListener('visibilitychange', updateBgState);
-    window.addEventListener('focus', updateBgState);
-    window.addEventListener('blur', updateBgState);
-    updateBgState();
-  } catch (e) {
-    console.error('Failed to listen to Rust events:', e);
-  }
+  rustEventInitialization ??= initializeRustEvents();
+  await rustEventInitialization;
 }
 
 function getLogsScroller(): HTMLElement | null {
@@ -1423,7 +1424,7 @@ let isLoopSuspended = false;
 
 async function restoreRecoverableRecharges() {
   if (!window.__TAURI__) return;
-  const transactions = await invoke<RecoverableRecharge[]>('get_recoverable_recharges').catch(() => []);
+  const transactions = await invoke<RecoverableRecharge[]>('get_recoverable_recharges');
   const alipay = transactions.find(item => item.method === 'alipay'
     && ['orderCreated', 'handedOff', 'paymentConfirmed'].includes(item.stage)
     && isTrustedAlipayPaymentUrl(item.paymentUrl));
@@ -1602,11 +1603,6 @@ async function init() {
   
   setupNavigation();
   setupEventListeners();
-  if (window.__TAURI__ && navigator.userAgent.includes('Mac OS X')) {
-    await revealAppWindow().catch(error => {
-      console.error('Failed to reveal macOS launch window:', error);
-    });
-  }
   setupEventDrivenNetworkDetection();
   renderAccounts();
   renderNetworkProfiles();
@@ -1617,6 +1613,29 @@ async function init() {
     if (autoLoginEnabled && !isLoggingIn) {
       manualLogin();
     }
+  };
+
+  const startupFailures: string[] = [];
+  const runStartupTask = async (label: string, task: () => Promise<unknown>) => {
+    try {
+      await task();
+    } catch (error) {
+      const detail = `${label}失败：${String(error)}`;
+      startupFailures.push(detail);
+      console.error(detail, error);
+      log('启动', detail, 'error');
+    }
+  };
+  const loadStartupConfig = async () => {
+    if (!await loadConfigFromRust()) throw new Error('无法读取安全存储或应用配置');
+  };
+  const showStartupFailures = async () => {
+    if (startupFailures.length === 0) return;
+    const detail = startupFailures.splice(0).join('\n');
+    await customAlert(
+      `应用已启动，但部分初始化任务未完成。网络事件监听与其他任务已分别尝试，不会因单项失败全部停用。\n\n${detail}`,
+      '启动未完全成功',
+    );
   };
 
   const tosAccepted = localStorage.getItem('bjut_tos_accepted') === 'true';
@@ -1632,25 +1651,26 @@ async function init() {
       
       // Request foreground permissions
       if (window.__TAURI__) {
-        try {
+        // Event channels are registered before storage and recovery work, and
+        // each startup task is isolated so one failure cannot suppress another.
+        await runStartupTask('事件监听注册', listenToRustEvents);
+        await runStartupTask('前台权限申请', async () => {
           if (IS_ANDROID && window.AndroidBridge) {
             window.AndroidBridge.requestForegroundPermissions();
           } else if (IS_ANDROID) {
             await invoke('request_foreground_permissions');
           }
           if (IS_ANDROID) log('系统', '已申请前台网络定位相关权限');
-        } catch (e) {
-          console.error('Failed to request foreground permissions:', e);
-        }
+        });
         // Load the secure backend configuration before the first sync so accepting the
         // terms cannot overwrite an existing account set with the empty WebView cache.
-        await loadConfigFromRust();
-        await restoreRecoverableRecharges();
-        await listenToRustEvents();
+        await runStartupTask('安全配置加载', loadStartupConfig);
+        await runStartupTask('充值恢复', restoreRecoverableRecharges);
         if (window.AndroidBridge && autoLoginEnabled) {
           window.AndroidBridge.startKeepAliveService();
         }
         log('系统', '应用启动');
+        await showStartupFailures();
       } else {
         startWifiChangeCheckLoop();
         startConnectivityCheckLoop();
@@ -1661,9 +1681,10 @@ async function init() {
     document.getElementById('btn-tos-disagree')!.addEventListener('click', async () => {
       if (window.__TAURI__) {
         try {
-          getCurrentWindow().close();
-        } catch (e) {
-          window.close();
+          await invoke('exit_app');
+        } catch (error) {
+          console.error('Failed to exit after declining the terms:', error);
+          await customAlert(`无法完全退出应用：${String(error)}`, '退出失败');
         }
       } else {
         window.close();
@@ -1672,32 +1693,26 @@ async function init() {
   } else {
     // Already accepted
     if (window.__TAURI__) {
+      await runStartupTask('事件监听注册', listenToRustEvents);
       if (IS_ANDROID) {
-        try {
+        await runStartupTask('前台权限申请', async () => {
           if (window.AndroidBridge) {
             window.AndroidBridge.requestForegroundPermissions();
           } else {
             await invoke('request_foreground_permissions');
           }
-        } catch (e) {
-          console.error('Failed to request foreground permissions:', e);
-        }
+        });
       }
-      try {
-        await loadConfigFromRust();
-        await restoreRecoverableRecharges();
-        await listenToRustEvents();
-        log('系统', '应用启动');
-        if (window.AndroidBridge) {
-          if (autoLoginEnabled) {
-            window.AndroidBridge.startKeepAliveService();
-            log('系统', '后台保活服务已启动');
-          } else {
-            window.AndroidBridge.stopKeepAliveService();
-          }
+      await runStartupTask('安全配置加载', loadStartupConfig);
+      await runStartupTask('充值恢复', restoreRecoverableRecharges);
+      log('系统', '应用启动');
+      if (window.AndroidBridge) {
+        if (autoLoginEnabled) {
+          window.AndroidBridge.startKeepAliveService();
+          log('系统', '后台保活服务已启动');
+        } else {
+          window.AndroidBridge.stopKeepAliveService();
         }
-      } catch (error) {
-        console.error('Failed to initialize persisted configuration:', error);
       }
     } else {
       startWifiChangeCheckLoop();
@@ -1706,6 +1721,7 @@ async function init() {
     }
   }
   await finishAppLaunch();
+  await showStartupFailures();
 }
 
 function formatHealthTime(value: string | null): string {

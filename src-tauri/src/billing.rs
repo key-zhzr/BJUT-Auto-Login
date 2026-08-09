@@ -1997,7 +1997,7 @@ async fn build_client(compatibility: VpnCompatibility) -> Result<Client, Billing
 
     if !matches!(compatibility, VpnCompatibility::Minimum) {
         let addresses = if compatibility == VpnCompatibility::Low {
-            tokio::task::spawn_blocking(|| query_campus_dns_ipv4(BILLING_HOST))
+            tokio::task::spawn_blocking(|| query_campus_dns_ipv4(BILLING_HOST, None))
                 .await
                 .map_err(|error| BillingError::Network(format!("校园网 DNS 任务失败：{error}")))?
                 .map_err(BillingError::Network)?
@@ -2029,11 +2029,11 @@ async fn build_account_discovery_client(
 
     if !matches!(compatibility, VpnCompatibility::Minimum) {
         let (lgn_addresses, billing_addresses) = if compatibility == VpnCompatibility::Low {
-            let lgn = tokio::task::spawn_blocking(|| query_campus_dns_ipv4(LGN_HOST))
+            let lgn = tokio::task::spawn_blocking(|| query_campus_dns_ipv4(LGN_HOST, None))
                 .await
                 .map_err(|error| BillingError::Network(format!("校园网 DNS 任务失败：{error}")))?
                 .map_err(BillingError::Network)?;
-            let billing = tokio::task::spawn_blocking(|| query_campus_dns_ipv4(BILLING_HOST))
+            let billing = tokio::task::spawn_blocking(|| query_campus_dns_ipv4(BILLING_HOST, None))
                 .await
                 .map_err(|error| BillingError::Network(format!("校园网 DNS 任务失败：{error}")))?
                 .map_err(BillingError::Network)?;

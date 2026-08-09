@@ -13,6 +13,7 @@
     "core:window:allow-unmaximize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
+    "core:window:allow-show",
     "opener:default",
     {
       "identifier": "opener:allow-open-url",
