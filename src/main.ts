@@ -169,6 +169,12 @@ async function finishAppLaunch() {
 
 window.__showResumeMask = showResumeMask;
 let documentWasHidden = document.hidden;
+const updateWindowAppearanceState = () => {
+  document.body.classList.toggle(
+    'window-inactive',
+    document.hidden || !document.hasFocus(),
+  );
+};
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) clearTransientWebviewPasswords();
   if (documentWasHidden && !document.hidden) {
@@ -177,7 +183,11 @@ document.addEventListener('visibilitychange', () => {
     scheduleWechatAutomaticCompletionCheck();
   }
   documentWasHidden = document.hidden;
+  updateWindowAppearanceState();
 });
+window.addEventListener('focus', updateWindowAppearanceState);
+window.addEventListener('blur', updateWindowAppearanceState);
+updateWindowAppearanceState();
 
 if (navigator.userAgent.includes('Mac OS X')) {
   document.body.classList.add('is-macos');
@@ -2184,6 +2194,7 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
 }
 
 function activatePage(target: string, navTarget = target) {
+  const pageChanged = !document.getElementById(target)?.classList.contains('active');
   const consoleExpanded = target === 'dashboard' || target === 'billing-center';
   const billingExpanded = target === 'billing-center';
   document.body.classList.toggle('billing-center-active', IS_ANDROID && billingExpanded);
@@ -2208,6 +2219,9 @@ function activatePage(target: string, navTarget = target) {
   nav?.querySelector<HTMLElement>('.nav-billing-tree')
     ?.setAttribute('aria-hidden', String(!billingExpanded));
   pages.forEach(page => page.classList.toggle('active', page.id === target));
+  if (pageChanged) {
+    document.getElementById('main-content')?.scrollTo({ top: 0, behavior: 'auto' });
+  }
   if (target === 'diagnostics') {
     void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
   }

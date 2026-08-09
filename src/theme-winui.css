@@ -1,0 +1,1289 @@
+/*
+ * BJUT-AL — Windows 11 / WinUI 3 appearance
+ *
+ * This file intentionally contains only WinUI overrides and is loaded after
+ * themes.css.  Mica is represented by a restrained solid fallback in the
+ * WebView; transient flyouts use an Acrylic-like surface.  Long-lived content
+ * never relies on live backdrop blur, which also keeps Android inexpensive.
+ */
+
+:root[data-theme="winui"] {
+  /* Geometry */
+  --win-radius-control: 4px;
+  --win-radius-card: 8px;
+  --win-radius-overlay: 8px;
+  --win-control-height: 32px;
+
+  /* Four-pixel spacing rhythm */
+  --win-space-1: 4px;
+  --win-space-2: 8px;
+  --win-space-3: 12px;
+  --win-space-4: 16px;
+  --win-space-5: 20px;
+  --win-space-6: 24px;
+  --win-space-8: 32px;
+
+  /* Fluent motion */
+  --win-duration-fast: 83ms;
+  --win-duration-normal: 167ms;
+  --win-duration-slow: 250ms;
+  --win-ease-enter: cubic-bezier(0, 0, 0, 1);
+  --win-ease-exit: cubic-bezier(1, 0, 1, 1);
+  --win-ease-standard: cubic-bezier(0.33, 0, 0.67, 1);
+
+  /* Accent fallbacks; a supported WebView receives the generated ramp below. */
+  --win-accent-fill-rest: var(--accent-color);
+  --win-accent-fill-hover: var(--accent-hover);
+  --win-accent-fill-pressed: var(--accent-hover);
+  --win-accent-fill-disabled: var(--accent-color);
+
+  /* Preserve the public theme API while using WinUI geometry. */
+  --theme-card-radius: var(--win-radius-card);
+  --theme-panel-radius: var(--win-radius-control);
+  --theme-control-radius: var(--win-radius-control);
+  --theme-modal-radius: var(--win-radius-overlay);
+  --theme-control-height: var(--win-control-height);
+  --theme-blur: 0px;
+  --theme-menu-blur: 24px;
+  --theme-saturation: 1.18;
+
+  font-family:
+    "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+    "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-optical-sizing: auto;
+}
+
+@supports (color: color-mix(in srgb, white, black)) {
+  :root[data-theme="winui"] {
+    --win-accent-fill-hover:
+      color-mix(in srgb, var(--accent-color) 88%, white 12%);
+    --win-accent-fill-pressed:
+      color-mix(in srgb, var(--accent-color) 90%, black 10%);
+    --win-accent-fill-disabled:
+      color-mix(in srgb, var(--accent-color) 42%, transparent);
+  }
+}
+
+:root[data-theme="winui"][data-color-scheme="dark"] {
+  color-scheme: dark;
+
+  /* SolidBackgroundFillColorBase-like Mica fallback: deliberately not black. */
+  --win-mica-base: #202020;
+  --win-pane-fill: rgba(255, 255, 255, 0.018);
+  --win-layer-fill: rgba(255, 255, 255, 0.032);
+  --win-layer-fill-alt: rgba(255, 255, 255, 0.045);
+  --win-card-fill: rgba(255, 255, 255, 0.055);
+  --win-card-fill-secondary: rgba(255, 255, 255, 0.034);
+  --win-flyout-fill: rgba(44, 44, 44, 0.88);
+  --win-flyout-solid: #2c2c2c;
+  --win-dialog-fill: #2c2c2c;
+  --win-smoke-fill: rgba(0, 0, 0, 0.56);
+
+  --win-text-primary: rgba(255, 255, 255, 0.956);
+  --win-text-secondary: rgba(255, 255, 255, 0.786);
+  --win-text-tertiary: rgba(255, 255, 255, 0.544);
+  --win-text-disabled: rgba(255, 255, 255, 0.362);
+
+  --win-control-fill-rest: rgba(255, 255, 255, 0.0605);
+  --win-control-fill-hover: rgba(255, 255, 255, 0.092);
+  --win-control-fill-pressed: rgba(255, 255, 255, 0.125);
+  --win-control-fill-disabled: rgba(255, 255, 255, 0.0303);
+  --win-control-stroke-rest: rgba(255, 255, 255, 0.105);
+  --win-control-stroke-strong: rgba(255, 255, 255, 0.19);
+  --win-divider-stroke: rgba(255, 255, 255, 0.083);
+  --win-focus-outer: #ffffff;
+  --win-focus-inner: #000000;
+
+  --win-shadow-flyout:
+    0 8px 20px rgba(0, 0, 0, 0.34),
+    0 2px 6px rgba(0, 0, 0, 0.28);
+  --win-shadow-dialog:
+    0 24px 48px rgba(0, 0, 0, 0.42),
+    0 2px 8px rgba(0, 0, 0, 0.3);
+
+  --theme-bg: var(--win-mica-base);
+  --theme-body-bg: var(--win-mica-base);
+  --theme-nav-bg: var(--win-pane-fill);
+  --theme-titlebar-bg: transparent;
+  --theme-card-bg: var(--win-card-fill);
+  --theme-card-solid: #2b2b2b;
+  --theme-raised-bg: var(--win-flyout-fill);
+  --theme-subtle-bg: var(--win-card-fill-secondary);
+  --theme-input-bg: var(--win-control-fill-rest);
+  --theme-button-bg: var(--win-control-fill-rest);
+  --theme-hover-bg: var(--win-control-fill-hover);
+  --theme-overlay-bg: var(--win-smoke-fill);
+  --theme-border: var(--win-control-stroke-rest);
+  --theme-border-strong: var(--win-control-stroke-strong);
+  --theme-text: var(--win-text-primary);
+  --theme-text-muted: var(--win-text-secondary);
+  --theme-scrollbar: rgba(255, 255, 255, 0.32);
+  --theme-scrollbar-hover: rgba(255, 255, 255, 0.56);
+}
+
+:root[data-theme="winui"][data-color-scheme="light"] {
+  color-scheme: light;
+
+  --win-mica-base: #f3f3f3;
+  --win-pane-fill: rgba(255, 255, 255, 0.32);
+  --win-layer-fill: rgba(255, 255, 255, 0.48);
+  --win-layer-fill-alt: rgba(255, 255, 255, 0.62);
+  --win-card-fill: rgba(255, 255, 255, 0.72);
+  --win-card-fill-secondary: rgba(255, 255, 255, 0.46);
+  --win-flyout-fill: rgba(252, 252, 252, 0.88);
+  --win-flyout-solid: #fcfcfc;
+  --win-dialog-fill: #ffffff;
+  --win-smoke-fill: rgba(0, 0, 0, 0.32);
+
+  --win-text-primary: rgba(0, 0, 0, 0.895);
+  --win-text-secondary: rgba(0, 0, 0, 0.606);
+  --win-text-tertiary: rgba(0, 0, 0, 0.445);
+  --win-text-disabled: rgba(0, 0, 0, 0.361);
+
+  --win-control-fill-rest: rgba(255, 255, 255, 0.72);
+  --win-control-fill-hover: rgba(255, 255, 255, 0.88);
+  --win-control-fill-pressed: rgba(255, 255, 255, 0.98);
+  --win-control-fill-disabled: rgba(255, 255, 255, 0.42);
+  --win-control-stroke-rest: rgba(0, 0, 0, 0.105);
+  --win-control-stroke-strong: rgba(0, 0, 0, 0.19);
+  --win-divider-stroke: rgba(0, 0, 0, 0.083);
+  --win-focus-outer: #000000;
+  --win-focus-inner: #ffffff;
+
+  --win-shadow-flyout:
+    0 8px 20px rgba(0, 0, 0, 0.14),
+    0 2px 6px rgba(0, 0, 0, 0.09);
+  --win-shadow-dialog:
+    0 24px 48px rgba(0, 0, 0, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.1);
+
+  --theme-bg: var(--win-mica-base);
+  --theme-body-bg: var(--win-mica-base);
+  --theme-nav-bg: var(--win-pane-fill);
+  --theme-titlebar-bg: transparent;
+  --theme-card-bg: var(--win-card-fill);
+  --theme-card-solid: #ffffff;
+  --theme-raised-bg: var(--win-flyout-fill);
+  --theme-subtle-bg: var(--win-card-fill-secondary);
+  --theme-input-bg: var(--win-control-fill-rest);
+  --theme-button-bg: var(--win-control-fill-rest);
+  --theme-hover-bg: var(--win-control-fill-hover);
+  --theme-overlay-bg: var(--win-smoke-fill);
+  --theme-border: var(--win-control-stroke-rest);
+  --theme-border-strong: var(--win-control-stroke-strong);
+  --theme-text: var(--win-text-primary);
+  --theme-text-muted: var(--win-text-secondary);
+  --theme-scrollbar: rgba(0, 0, 0, 0.32);
+  --theme-scrollbar-hover: rgba(0, 0, 0, 0.56);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Window material and content layering                                        */
+/* -------------------------------------------------------------------------- */
+
+:root[data-theme="winui"] body {
+  color: var(--win-text-primary);
+  background: var(--win-mica-base) !important;
+}
+
+:root[data-theme="winui"] .page {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+}
+
+:root[data-theme="winui"] :is(#billing-center, #logs) {
+  max-width: 1320px;
+}
+
+:root[data-theme="winui"] body.is-desktop .app-container {
+  padding-top: 32px;
+}
+
+:root[data-theme="winui"] body::before,
+:root[data-theme="winui"] body::after {
+  display: none !important;
+  content: none !important;
+}
+
+/* Optional hook for a native Windows system backdrop supplied by the host. */
+:root[data-theme="winui"] body.has-native-system-backdrop {
+  background: transparent !important;
+}
+
+:root[data-theme="winui"] .app-container,
+:root[data-theme="winui"] main,
+:root[data-theme="winui"] .page,
+:root[data-theme="winui"] .billing-workbench,
+:root[data-theme="winui"] .billing-workbench-content {
+  background: transparent;
+}
+
+:root[data-theme="winui"] body nav {
+  border-color: var(--win-divider-stroke);
+  background: var(--win-pane-fill);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-theme="winui"] .titlebar {
+  height: 32px;
+  border-color: var(--win-divider-stroke);
+  border-radius: var(--win-radius-overlay) var(--win-radius-overlay) 0 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-theme="winui"] .titlebar-caption {
+  display: flex;
+  color: var(--win-text-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+:root[data-theme="winui"] .titlebar-button {
+  width: 46px;
+  height: 32px;
+  border-radius: 0;
+  color: var(--win-text-secondary);
+  transition:
+    color var(--win-duration-fast) linear,
+    background-color var(--win-duration-fast) linear;
+}
+
+:root[data-theme="winui"] .titlebar-button:hover {
+  color: var(--win-text-primary);
+  background: var(--win-control-fill-hover);
+}
+
+:root[data-theme="winui"] .titlebar-button:active {
+  color: var(--win-text-secondary);
+  background: var(--win-control-fill-pressed);
+}
+
+:root[data-theme="winui"] .titlebar-button.titlebar-close:hover,
+:root[data-theme="winui"] .titlebar-button.titlebar-close:active {
+  color: #ffffff;
+  background: #c42b1c;
+}
+
+:root[data-theme="winui"] .glass-card,
+:root[data-theme="winui"] .account-item,
+:root[data-theme="winui"] .diagnostic-panel,
+:root[data-theme="winui"] .diagnostic-summary,
+:root[data-theme="winui"] .log-filters,
+:root[data-theme="winui"] .settings-group,
+:root[data-theme="winui"] .settings-about-card,
+:root[data-theme="winui"] .billing-center-panel,
+:root[data-theme="winui"] .billing-summary-card {
+  border: 1px solid var(--win-divider-stroke);
+  border-radius: var(--win-radius-card);
+  background: var(--win-card-fill);
+  background-image: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-theme="winui"] :is(
+  .info-card,
+  .billing-action-group,
+  .billing-package-option,
+  .billing-payment-method,
+  .billing-record-item,
+  .billing-session-item,
+  .billing-device-item,
+  .billing-recharge-preview-item,
+  .alipay-payment-order-card,
+  .permission-health-row,
+  .network-profile-row
+) {
+  border-color: var(--win-divider-stroke);
+  border-radius: var(--win-radius-control);
+  background: var(--win-card-fill-secondary);
+  box-shadow: none;
+}
+
+/* A deactivated desktop window uses the neutral fallback, like system Mica. */
+:root[data-theme="winui"] body.is-window-inactive,
+:root[data-theme="winui"] body.window-inactive {
+  --win-pane-fill: transparent;
+  --win-layer-fill: transparent;
+  --win-card-fill: var(--theme-card-solid);
+  --win-card-fill-secondary: var(--theme-subtle-bg);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Type and spacing                                                            */
+/* -------------------------------------------------------------------------- */
+
+:root[data-theme="winui"] main {
+  padding: var(--win-space-6);
+}
+
+:root[data-theme="winui"] .page-header {
+  margin-bottom: var(--win-space-6);
+  gap: var(--win-space-4);
+}
+
+:root[data-theme="winui"] .page-header h1 {
+  margin-bottom: var(--win-space-1);
+  color: var(--win-text-primary);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 36px;
+  letter-spacing: -0.012em;
+}
+
+:root[data-theme="winui"] .page-header p,
+:root[data-theme="winui"] .setting-info p,
+:root[data-theme="winui"] .billing-section-copy,
+:root[data-theme="winui"] .billing-panel-subtitle {
+  color: var(--win-text-secondary);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+:root[data-theme="winui"] .setting-info h4,
+:root[data-theme="winui"] .info-content h4,
+:root[data-theme="winui"] .billing-action-copy h4 {
+  color: var(--win-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+:root[data-theme="winui"] :is(
+  .nav-tree-label,
+  .billing-record-field span,
+  .billing-detail-item span,
+  .billing-recharge-preview-item span,
+  .account-health-badge,
+  .permission-health-row small,
+  .alipay-payment-order-card span,
+  .alipay-payment-modal-status
+) {
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0;
+}
+
+:root[data-theme="winui"] .nav-tree-label {
+  padding: var(--win-space-2) var(--win-space-3) var(--win-space-1);
+  color: var(--win-text-tertiary);
+  font-weight: 600;
+  text-transform: none;
+}
+
+:root[data-theme="winui"] .setting-item {
+  min-height: 56px;
+  padding-block: var(--win-space-3);
+  border-bottom-color: var(--win-divider-stroke);
+}
+
+/* -------------------------------------------------------------------------- */
+/* NavigationView                                                              */
+/* -------------------------------------------------------------------------- */
+
+:root[data-theme="winui"] body.is-desktop .nav-brand {
+  display: none;
+}
+
+:root[data-theme="winui"] body.is-desktop nav {
+  width: 240px;
+  padding: var(--win-space-3) var(--win-space-2);
+}
+
+:root[data-theme="winui"] .nav-items {
+  gap: var(--win-space-1);
+}
+
+:root[data-theme="winui"] .nav-item,
+:root[data-theme="winui"] .nav-tree-link,
+:root[data-theme="winui"] .billing-section-nav-button {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: var(--win-radius-control);
+  color: var(--win-text-secondary);
+  background: transparent;
+  box-shadow: none;
+  font-weight: 400;
+  transition:
+    color var(--win-duration-fast) linear,
+    background-color var(--win-duration-fast) linear,
+    border-color var(--win-duration-fast) linear;
+}
+
+:root[data-theme="winui"] .nav-item {
+  min-height: 40px;
+  gap: var(--win-space-3);
+  padding: var(--win-space-2) var(--win-space-3);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+:root[data-theme="winui"] .nav-tree-link,
+:root[data-theme="winui"] .billing-section-nav-button {
+  min-height: 32px;
+  padding: 6px var(--win-space-2);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+:root[data-theme="winui"] .nav-item:hover,
+:root[data-theme="winui"] .nav-tree-link:hover,
+:root[data-theme="winui"] .billing-section-nav-button:hover:not(:disabled) {
+  color: var(--win-text-primary);
+  border-color: transparent;
+  background: var(--win-control-fill-hover);
+}
+
+:root[data-theme="winui"] .nav-item:active,
+:root[data-theme="winui"] .nav-tree-link:active,
+:root[data-theme="winui"] .billing-section-nav-button:active:not(:disabled) {
+  color: var(--win-text-secondary);
+  background: var(--win-control-fill-pressed);
+}
+
+:root[data-theme="winui"] .nav-item.active,
+:root[data-theme="winui"] .nav-tree-link.active,
+:root[data-theme="winui"] .billing-section-nav-button.active {
+  color: var(--win-text-primary);
+  border-color: transparent;
+  background: var(--win-control-fill-hover);
+  box-shadow: none;
+}
+
+:root[data-theme="winui"] .nav-item.active::before,
+:root[data-theme="winui"] .nav-tree-link.active::before,
+:root[data-theme="winui"] .billing-section-nav-button.active::before {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  display: block;
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--win-accent-fill-rest);
+  transform: translateY(-50%);
+  content: "";
+}
+
+:root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
+:root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
+  background: transparent;
+}
+
+:root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active::before,
+:root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active::before,
+:root[data-theme="winui"] #nav:not(.billing-active) .nav-billing-link.active::before {
+  display: none;
+}
+
+:root[data-theme="winui"] body.is-desktop .nav-item[data-target="settings"] {
+  margin-top: auto;
+  border-top-color: var(--win-divider-stroke);
+}
+
+:root[data-theme="winui"] .nav-dashboard-children,
+:root[data-theme="winui"] .nav-billing-tree {
+  transition:
+    max-height var(--win-duration-slow) var(--win-ease-enter),
+    margin var(--win-duration-slow) var(--win-ease-enter),
+    opacity var(--win-duration-normal) linear,
+    border-color var(--win-duration-normal) linear,
+    visibility 0s linear var(--win-duration-slow);
+}
+
+:root[data-theme="winui"] .nav-tree-chevron {
+  transition:
+    transform var(--win-duration-normal) var(--win-ease-enter),
+    opacity var(--win-duration-fast) linear;
+}
+
+/* NavigationView Auto: compact pane overlays content at medium widths. */
+@media (max-width: 1007px) {
+  :root[data-theme="winui"] body.is-desktop .app-container {
+    padding-left: 56px;
+  }
+
+  :root[data-theme="winui"] body.is-desktop #nav {
+    position: fixed;
+    top: 32px;
+    bottom: 0;
+    left: 0;
+    z-index: 850;
+    width: 56px;
+    padding: var(--win-space-2);
+    overflow: hidden;
+    background: var(--win-flyout-solid);
+    transition:
+      width var(--win-duration-slow) var(--win-ease-enter),
+      box-shadow var(--win-duration-normal) linear;
+  }
+
+  :root[data-theme="winui"] body.is-desktop #nav:hover,
+  :root[data-theme="winui"] body.is-desktop #nav:focus-within {
+    width: 240px;
+    box-shadow: var(--win-shadow-flyout);
+  }
+
+  :root[data-theme="winui"] body.is-desktop #nav .nav-items {
+    width: 224px;
+  }
+
+  :root[data-theme="winui"] body.is-desktop #nav:not(:hover):not(:focus-within) .nav-item {
+    width: 40px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 9px;
+    overflow: hidden;
+  }
+
+  :root[data-theme="winui"] body.is-desktop #nav:not(:hover):not(:focus-within) .nav-item > span,
+  :root[data-theme="winui"] body.is-desktop #nav:not(:hover):not(:focus-within) .nav-item > .nav-tree-chevron {
+    display: none;
+  }
+
+  :root[data-theme="winui"] body.is-desktop #nav:not(:hover):not(:focus-within) :is(
+    .nav-dashboard-children,
+    .nav-billing-tree,
+    .nav-tree-chevron
+  ) {
+    display: none;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Buttons, fields, ComboBox, toggle                                            */
+/* -------------------------------------------------------------------------- */
+
+:root[data-theme="winui"] .btn {
+  min-height: var(--win-control-height);
+  padding: 5px var(--win-space-3);
+  border: 1px solid var(--win-control-stroke-rest);
+  border-bottom-color: var(--win-control-stroke-strong);
+  border-radius: var(--win-radius-control);
+  color: var(--win-text-primary);
+  background: var(--win-control-fill-rest);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  transition:
+    color var(--win-duration-fast) linear,
+    background-color var(--win-duration-fast) linear,
+    border-color var(--win-duration-fast) linear,
+    opacity var(--win-duration-fast) linear;
+}
+
+:root[data-theme="winui"] .btn:hover:not(:disabled) {
+  color: var(--win-text-primary);
+  border-color: var(--win-control-stroke-strong);
+  background: var(--win-control-fill-hover);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  transform: none;
+}
+
+:root[data-theme="winui"] .btn:active:not(:disabled) {
+  color: var(--win-text-secondary);
+  border-color: var(--win-control-stroke-rest);
+  background: var(--win-control-fill-pressed);
+  box-shadow: none;
+  filter: none;
+  transform: none;
+}
+
+:root[data-theme="winui"] .btn-primary {
+  color: var(--accent-contrast);
+  border-color: transparent;
+  border-bottom-color: rgba(0, 0, 0, 0.28);
+  background: var(--win-accent-fill-rest);
+  box-shadow: none;
+}
+
+:root[data-theme="winui"] .btn-primary:hover:not(:disabled) {
+  color: var(--accent-contrast);
+  border-color: transparent;
+  background: var(--win-accent-fill-hover);
+}
+
+:root[data-theme="winui"] .btn-primary:active:not(:disabled) {
+  color: var(--accent-contrast);
+  border-color: transparent;
+  background: var(--win-accent-fill-pressed);
+  filter: none;
+}
+
+:root[data-theme="winui"] .btn:disabled,
+:root[data-theme="winui"] .btn[aria-disabled="true"] {
+  color: var(--win-text-disabled);
+  border-color: var(--win-divider-stroke);
+  background: var(--win-control-fill-disabled);
+  box-shadow: none;
+  filter: none;
+  opacity: 1;
+}
+
+:root[data-theme="winui"] .btn-primary:disabled,
+:root[data-theme="winui"] .btn-primary[aria-disabled="true"] {
+  color: var(--win-text-disabled);
+  background: var(--win-accent-fill-disabled);
+}
+
+:root[data-theme="winui"] .btn-icon {
+  padding: 0;
+  border-radius: var(--win-radius-control);
+}
+
+:root[data-theme="winui"] :is(
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="date"],
+  input[type="search"],
+  textarea,
+  .custom-select-trigger,
+  .custom-select.form-select .custom-select-trigger
+) {
+  min-height: var(--win-control-height);
+  border: 1px solid var(--win-control-stroke-rest);
+  border-bottom-color: var(--win-control-stroke-strong);
+  border-radius: var(--win-radius-control);
+  color: var(--win-text-primary);
+  background: var(--win-control-fill-rest);
+  box-shadow: none;
+  font-size: 14px;
+  line-height: 20px;
+  transition:
+    color var(--win-duration-fast) linear,
+    background-color var(--win-duration-fast) linear,
+    border-color var(--win-duration-fast) linear,
+    box-shadow var(--win-duration-fast) linear;
+}
+
+:root[data-theme="winui"] :is(
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="date"],
+  input[type="search"],
+  .custom-select-trigger,
+  .custom-select.form-select .custom-select-trigger
+) {
+  height: var(--win-control-height);
+  padding-block: 0;
+}
+
+:root[data-theme="winui"] :is(
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="date"],
+  input[type="search"],
+  textarea,
+  .custom-select-trigger
+):hover:not(:disabled) {
+  border-color: var(--win-control-stroke-strong);
+  background: var(--win-control-fill-hover);
+}
+
+:root[data-theme="winui"] input::placeholder,
+:root[data-theme="winui"] textarea::placeholder {
+  color: var(--win-text-tertiary);
+  opacity: 1;
+}
+
+:root[data-theme="winui"] input:disabled,
+:root[data-theme="winui"] textarea:disabled,
+:root[data-theme="winui"] .custom-select.is-disabled .custom-select-trigger {
+  color: var(--win-text-disabled);
+  border-color: var(--win-divider-stroke);
+  background: var(--win-control-fill-disabled);
+  box-shadow: none;
+  filter: none;
+  opacity: 1;
+}
+
+:root[data-theme="winui"] input:focus,
+:root[data-theme="winui"] textarea:focus,
+:root[data-theme="winui"] .custom-select.open .custom-select-trigger {
+  border-color: var(--win-control-stroke-strong);
+  border-bottom-color: var(--win-accent-fill-rest);
+  outline: none;
+  background: var(--win-control-fill-rest);
+  box-shadow: inset 0 -2px 0 var(--win-accent-fill-rest);
+}
+
+:root[data-theme="winui"] .custom-select-options {
+  top: calc(100% + var(--win-space-1));
+  padding: var(--win-space-1);
+  border: 1px solid var(--win-control-stroke-rest);
+  border-radius: var(--win-radius-overlay);
+  color: var(--win-text-primary);
+  background: var(--win-flyout-fill);
+  box-shadow: var(--win-shadow-flyout);
+  opacity: 0;
+  transform: translateY(-4px) scale(0.99);
+  transform-origin: top center;
+  -webkit-backdrop-filter:
+    blur(24px) saturate(1.18);
+  backdrop-filter:
+    blur(24px) saturate(1.18);
+  transition:
+    opacity var(--win-duration-fast) linear,
+    transform var(--win-duration-normal) var(--win-ease-enter),
+    visibility 0s linear var(--win-duration-normal);
+}
+
+:root[data-theme="winui"] .custom-select.open .custom-select-options {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition-delay: 0s;
+}
+
+:root[data-theme="winui"] .custom-option {
+  position: relative;
+  min-height: 32px;
+  padding: 6px var(--win-space-3);
+  border-radius: var(--win-radius-control);
+  color: var(--win-text-primary);
+  background: transparent;
+  font-size: 14px;
+  line-height: 20px;
+  transition:
+    color var(--win-duration-fast) linear,
+    background-color var(--win-duration-fast) linear;
+}
+
+:root[data-theme="winui"] .custom-option:hover,
+:root[data-theme="winui"] .custom-option.is-focused,
+:root[data-theme="winui"] .custom-option:focus-visible {
+  color: var(--win-text-primary);
+  background: var(--win-control-fill-hover);
+}
+
+:root[data-theme="winui"] .custom-option:active {
+  color: var(--win-text-secondary);
+  background: var(--win-control-fill-pressed);
+}
+
+:root[data-theme="winui"] .custom-option.selected {
+  color: var(--win-text-primary);
+  border-color: transparent;
+  background: var(--win-control-fill-hover);
+  font-weight: 400;
+}
+
+:root[data-theme="winui"] .custom-option.selected::before {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--win-accent-fill-rest);
+  transform: translateY(-50%);
+  content: "";
+}
+
+:root[data-theme="winui"] .switch {
+  width: 40px;
+  height: 20px;
+}
+
+:root[data-theme="winui"] .slider {
+  border: 1px solid var(--win-control-stroke-strong);
+  border-radius: 10px;
+  background: transparent;
+  transition:
+    border-color var(--win-duration-fast) linear,
+    background-color var(--win-duration-fast) linear;
+}
+
+:root[data-theme="winui"] .slider::before {
+  bottom: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  background: var(--win-text-secondary);
+  transition:
+    width var(--win-duration-fast) linear,
+    background-color var(--win-duration-fast) linear,
+    transform var(--win-duration-normal) var(--win-ease-enter);
+}
+
+:root[data-theme="winui"] .switch:hover .slider::before {
+  width: 14px;
+}
+
+:root[data-theme="winui"] input:checked + .slider {
+  border-color: var(--win-accent-fill-rest);
+  background: var(--win-accent-fill-rest);
+}
+
+:root[data-theme="winui"] input:checked + .slider::before {
+  background: var(--accent-contrast);
+  transform: translateX(20px);
+}
+
+:root[data-theme="winui"] .switch:hover input:checked + .slider {
+  border-color: var(--win-accent-fill-hover);
+  background: var(--win-accent-fill-hover);
+}
+
+/* Keyboard focus uses two contrasting rings and remains visible for any accent. */
+:root[data-theme="winui"] :is(
+  .btn,
+  .btn-icon,
+  .nav-item,
+  .nav-tree-link,
+  .billing-section-nav-button,
+  .billing-payment-method,
+  .billing-package-option,
+  .custom-select-trigger,
+  .custom-option,
+  .billing-collapsible-panel > summary,
+  .titlebar-button,
+  input,
+  textarea
+):focus-visible,
+:root[data-theme="winui"] .switch:has(input:focus-visible) .slider {
+  outline: none;
+  box-shadow:
+    0 0 0 1px var(--win-focus-inner),
+    0 0 0 3px var(--win-focus-outer);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Dialogs, flyouts and motion                                                  */
+/* -------------------------------------------------------------------------- */
+
+:root[data-theme="winui"] .modal-overlay {
+  background: var(--win-smoke-fill);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  transition:
+    opacity var(--win-duration-normal) linear,
+    visibility 0s linear;
+}
+
+:root[data-theme="winui"] .modal-overlay.hidden {
+  transition:
+    opacity var(--win-duration-fast) linear,
+    visibility 0s linear var(--win-duration-fast);
+}
+
+:root[data-theme="winui"] .modal-content {
+  border: 1px solid var(--win-control-stroke-rest);
+  border-radius: var(--win-radius-overlay);
+  color: var(--win-text-primary);
+  background: var(--win-dialog-fill);
+  box-shadow: var(--win-shadow-dialog);
+  transform: translateY(0) scale(1);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  transition: transform var(--win-duration-normal) var(--win-ease-enter);
+}
+
+:root[data-theme="winui"] .modal-overlay.hidden .modal-content {
+  transform: translateY(8px) scale(0.985);
+  transition-duration: var(--win-duration-fast);
+  transition-timing-function: var(--win-ease-exit);
+}
+
+:root[data-theme="winui"] .modal-actions {
+  gap: var(--win-space-2);
+  margin-top: var(--win-space-6);
+}
+
+:root[data-theme="winui"] .page.active {
+  animation: winui-theme-page-enter var(--win-duration-normal) var(--win-ease-enter);
+}
+
+@keyframes winui-theme-page-enter {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+:root[data-theme="winui"] .billing-section-enter {
+  animation: winui-theme-section-enter var(--win-duration-normal) var(--win-ease-enter) both;
+}
+
+@keyframes winui-theme-section-enter {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Fluent overlay scrollbars                                                   */
+/* -------------------------------------------------------------------------- */
+
+:root[data-theme="winui"] {
+  scrollbar-color: var(--theme-scrollbar) transparent;
+  scrollbar-width: thin;
+}
+
+:root[data-theme="winui"] ::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+:root[data-theme="winui"] ::-webkit-scrollbar-track,
+:root[data-theme="winui"] ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:root[data-theme="winui"] ::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 6px solid transparent;
+  border-radius: 8px;
+  background: var(--theme-scrollbar);
+  background-clip: content-box;
+}
+
+:root[data-theme="winui"] ::-webkit-scrollbar-thumb:hover,
+:root[data-theme="winui"] ::-webkit-scrollbar-thumb:active {
+  border-width: 4px;
+  background: var(--theme-scrollbar-hover);
+  background-clip: content-box;
+}
+
+:root[data-theme="winui"] .nav-items {
+  scrollbar-width: thin;
+}
+
+:root[data-theme="winui"] .nav-items::-webkit-scrollbar {
+  display: block;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Android: same Fluent hierarchy, solid low-cost surfaces and touch sizing    */
+/* -------------------------------------------------------------------------- */
+
+:root[data-theme="winui"] body.is-android {
+  --win-pane-fill: var(--theme-card-solid);
+  --win-card-fill: var(--theme-card-solid);
+  --win-card-fill-secondary: var(--theme-subtle-bg);
+  border-radius: 0;
+  background: var(--win-mica-base) !important;
+}
+
+:root[data-theme="winui"] body.is-android :is(
+  #nav,
+  .billing-mobile-nav,
+  .glass-card,
+  .account-item,
+  .diagnostic-panel,
+  .diagnostic-summary,
+  .log-filters,
+  .custom-select-options,
+  .modal-content
+) {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+:root[data-theme="winui"] body.is-android :is(
+  #nav,
+  .billing-mobile-nav,
+  .glass-card,
+  .account-item,
+  .diagnostic-panel,
+  .diagnostic-summary,
+  .log-filters
+) {
+  background: var(--theme-card-solid);
+  box-shadow: none;
+}
+
+:root[data-theme="winui"] body.is-android :is(
+  .custom-select-options,
+  .modal-content
+) {
+  background: var(--win-flyout-solid);
+}
+
+:root[data-theme="winui"] body.is-android #nav {
+  border-radius: var(--win-radius-card);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme="winui"] body.is-android #nav .nav-item {
+  min-height: 48px;
+  height: 100%;
+  gap: var(--win-space-1);
+  padding: var(--win-space-1) 2px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+:root[data-theme="winui"] body.is-android #nav .nav-item.active::before {
+  top: 2px;
+  left: 50%;
+  width: 16px;
+  height: 3px;
+  transform: translateX(-50%);
+}
+
+:root[data-theme="winui"] body.is-android :is(
+  .btn,
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="date"],
+  input[type="search"],
+  .custom-select-trigger,
+  .custom-select.form-select .custom-select-trigger
+) {
+  min-height: 44px;
+  height: 44px;
+}
+
+/* Keep one persistent bottom navigation. Billing sections become an in-page
+   scrollable Pivot-like strip instead of a second floating dock. */
+:root[data-theme="winui"] body.is-android.billing-center-active main {
+  padding-bottom: calc(6.2rem + env(safe-area-inset-bottom));
+}
+
+:root[data-theme="winui"] body.is-android.billing-center-active .billing-mobile-nav {
+  position: sticky;
+  top: var(--win-space-2);
+  bottom: auto;
+  left: auto;
+  right: auto;
+  z-index: 4;
+  display: grid;
+  grid-auto-columns: minmax(76px, 1fr);
+  grid-auto-flow: column;
+  grid-template-columns: none;
+  width: 100%;
+  height: auto;
+  margin: 0 0 var(--win-space-3);
+  padding: var(--win-space-1);
+  overflow-x: auto;
+  border-radius: var(--win-radius-control);
+  transform: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  scrollbar-width: none;
+}
+
+:root[data-theme="winui"] body.is-android.billing-center-active .billing-mobile-nav::-webkit-scrollbar {
+  display: none;
+}
+
+:root[data-theme="winui"] body.is-android.billing-center-active .billing-section-nav-button {
+  min-height: 44px;
+  height: auto;
+  padding: var(--win-space-2) var(--win-space-1);
+  border-radius: var(--win-radius-control);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+:root[data-theme="winui"] body.is-android.billing-center-active .billing-section-nav-button.active::before {
+  top: 50%;
+  left: 2px;
+  width: 3px;
+  height: 16px;
+  transform: translateY(-50%);
+}
+
+@media (hover: none) {
+  :root[data-theme="winui"] :is(
+    .btn,
+    .nav-item,
+    .nav-tree-link,
+    .billing-section-nav-button,
+    .custom-option,
+    .custom-select-trigger
+  ):hover {
+    filter: none;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Accessibility preferences                                                   */
+/* -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-theme="winui"] :is(
+    body,
+    nav,
+    .titlebar,
+    .billing-mobile-nav,
+    .glass-card,
+    .account-item,
+    .custom-select-options,
+    .modal-overlay,
+    .modal-content
+  ) {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  :root[data-theme="winui"] .custom-select-options {
+    background: var(--win-flyout-solid);
+  }
+
+  :root[data-theme="winui"] .modal-content {
+    background: var(--win-dialog-fill);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="winui"] :is(
+    .page.active,
+    .billing-section-enter,
+    .billing-payment-panel.is-entering
+  ) {
+    animation: none !important;
+  }
+
+  :root[data-theme="winui"] :is(
+    .btn,
+    .btn-icon,
+    .nav-item,
+    .nav-tree-link,
+    .nav-dashboard-children,
+    .nav-billing-tree,
+    .nav-tree-chevron,
+    .billing-section-nav-button,
+    .slider,
+    .slider::before,
+    .custom-select-trigger,
+    .custom-select-trigger i,
+    .custom-select-options,
+    .custom-option,
+    .modal-overlay,
+    .modal-content
+  ) {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :root[data-theme="winui"] {
+    --win-mica-base: Canvas;
+    --win-pane-fill: Canvas;
+    --win-layer-fill: Canvas;
+    --win-card-fill: Canvas;
+    --win-card-fill-secondary: Canvas;
+    --win-flyout-fill: Canvas;
+    --win-flyout-solid: Canvas;
+    --win-dialog-fill: Canvas;
+    --win-smoke-fill: transparent;
+    --win-text-primary: CanvasText;
+    --win-text-secondary: CanvasText;
+    --win-text-tertiary: CanvasText;
+    --win-text-disabled: GrayText;
+    --win-control-fill-rest: ButtonFace;
+    --win-control-fill-hover: ButtonFace;
+    --win-control-fill-pressed: ButtonFace;
+    --win-control-fill-disabled: ButtonFace;
+    --win-control-stroke-rest: ButtonText;
+    --win-control-stroke-strong: ButtonText;
+    --win-divider-stroke: CanvasText;
+    --win-accent-fill-rest: Highlight;
+    --win-accent-fill-hover: Highlight;
+    --win-accent-fill-pressed: Highlight;
+    --win-focus-outer: Highlight;
+    --win-focus-inner: Canvas;
+    forced-color-adjust: auto;
+  }
+
+  :root[data-theme="winui"] *,
+  :root[data-theme="winui"] *::before,
+  :root[data-theme="winui"] *::after {
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  :root[data-theme="winui"] :is(
+    body,
+    nav,
+    .titlebar,
+    .glass-card,
+    .account-item,
+    .diagnostic-panel,
+    .diagnostic-summary,
+    .log-filters,
+    .custom-select-options,
+    .modal-overlay,
+    .modal-content
+  ) {
+    background-image: none !important;
+  }
+
+  :root[data-theme="winui"] :is(
+    .glass-card,
+    .account-item,
+    .diagnostic-panel,
+    .diagnostic-summary,
+    .log-filters,
+    .custom-select-options,
+    .modal-content
+  ) {
+    border: 2px solid CanvasText;
+    background: Canvas;
+  }
+
+  :root[data-theme="winui"] :is(
+    .nav-item.active,
+    .nav-tree-link.active,
+    .billing-section-nav-button.active,
+    .custom-option.selected,
+    .btn-primary
+  ) {
+    color: HighlightText;
+    border-color: Highlight;
+    background: Highlight;
+  }
+
+  :root[data-theme="winui"] :is(
+    .nav-item.active,
+    .nav-tree-link.active,
+    .billing-section-nav-button.active,
+    .custom-option.selected
+  )::before {
+    background: HighlightText;
+  }
+
+  :root[data-theme="winui"] :is(
+    .btn,
+    .btn-icon,
+    .nav-item,
+    .nav-tree-link,
+    .billing-section-nav-button,
+    .billing-payment-method,
+    .billing-package-option,
+    .custom-select-trigger,
+    .custom-option,
+    input,
+    textarea
+  ):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
