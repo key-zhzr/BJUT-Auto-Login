@@ -3503,17 +3503,37 @@ function setupEventListeners() {
       if (parent) {
         const index = parseInt(parent.getAttribute('data-index') || '-1', 10);
         if (index !== -1) {
-          const accounts = getAccounts();
-          accounts[index].isDisabled = !accounts[index].isDisabled;
-          saveAccountsInBackground(accounts);
-          if (accounts[index].isDisabled) {
-            parent.classList.add('disabled');
-            log('账号管理', `已禁用账号: ${accounts[index].user}`);
-          } else {
-            parent.classList.remove('disabled');
-            log('账号管理', `已启用账号: ${accounts[index].user}`);
+          const previousAccounts = getAccounts().map(account => ({ ...account }));
+          const previousBillingAccount = selectedBillingAccountUser();
+          if (!previousAccounts[index]) return;
+          const nextAccounts = previousAccounts.map((account, accountIndex) => accountIndex === index
+            ? { ...account, isDisabled: !account.isDisabled }
+            : { ...account });
+          const updatedAccount = nextAccounts[index];
+          const persistPromise = saveAccounts(nextAccounts);
+
+          // saveAccounts updates the cache synchronously before awaiting Rust.
+          // Rebuild every account-dependent selector now, so the billing page
+          // never keeps a stale list while secure storage is being persisted.
+          renderAccounts();
+          try {
+            await persistPromise;
+            renderAccounts();
+            const currentBillingAccount = selectedBillingAccountUser();
+            log(
+              '账号管理',
+              `${updatedAccount.isDisabled ? '已禁用' : '已启用'}账号: ${updatedAccount.user}`,
+            );
+            if (document.getElementById('billing-center')?.classList.contains('active')
+              && currentBillingAccount
+              && (previousBillingAccount !== currentBillingAccount || !billingCenterData)) {
+              void refreshBillingCenterData();
+            }
+          } catch (error) {
+            accountsCache = previousAccounts;
+            renderAccounts();
+            await customAlert(`账号状态保存失败，已恢复原状态：${String(error)}`);
           }
-          updateOverrideOptions();
         }
       }
       return;

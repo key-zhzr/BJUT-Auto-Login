@@ -1417,6 +1417,25 @@ html:root[data-theme] {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
 }
 
+/* Android WebView can leave :hover latched after a tap. Keep pressed feedback,
+   but never run desktop lift/scale/filter transitions for that synthetic hover. */
+:root[data-theme] body.is-android :is(
+  .btn,
+  .btn-icon,
+  .nav-item,
+  .nav-tree-link,
+  .billing-section-nav-button,
+  .custom-option,
+  .custom-select-trigger,
+  .billing-package-option,
+  .billing-payment-method,
+  .account-avatar
+):hover {
+  filter: none;
+  transform: none;
+  transition: none !important;
+}
+
 @media (prefers-reduced-transparency: reduce) {
   :root[data-theme] body nav,
   :root[data-theme] .titlebar,

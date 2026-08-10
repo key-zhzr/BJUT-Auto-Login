@@ -27,10 +27,10 @@
   --apple-radius-menu: 12px;
   --apple-radius-sheet: 16px;
 
-  --apple-control-height-desktop: 32px;
-  --apple-control-height-touch: 44px;
-  --apple-hit-target-desktop: 28px;
-  --apple-hit-target-touch: 44px;
+  --apple-control-height-desktop: 30px;
+  --apple-control-height-touch: 42px;
+  --apple-hit-target-desktop: 30px;
+  --apple-hit-target-touch: 42px;
 
   --apple-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
   --apple-ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
@@ -663,6 +663,23 @@
   :root[data-theme="apple27"] .nav-tree-link:active {
     transform: scale(0.995);
   }
+}
+
+:root[data-theme="apple27"] body.is-android :is(
+  .btn,
+  .btn-icon,
+  .nav-item,
+  .nav-tree-link,
+  .billing-section-nav-button,
+  .custom-option,
+  .custom-select-trigger,
+  .billing-package-option,
+  .billing-payment-method,
+  .account-avatar
+):hover {
+  filter: none;
+  transform: none;
+  transition: none !important;
 }
 
 @media (hover: none), (pointer: coarse) {
