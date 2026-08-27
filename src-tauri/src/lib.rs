@@ -1535,11 +1535,21 @@ fn portal_route_context_from_network(
 ) -> Result<Option<PortalRouteContext>, String> {
     #[cfg(target_os = "android")]
     {
-        // Android's Network object is bound by AndroidWifiRouteGuard (or by
-        // KeepAliveService for the headless core). Do not replace that exact
-        // binding with an interface-name socket option.
-        let _ = network;
-        return Ok(None);
+        // Android's Network object is still bound by AndroidWifiRouteGuard (or
+        // by KeepAliveService for the headless core). The route context here is
+        // only the coherent physical interface/IP pair used to build portal
+        // parameters (and the read-only probe URL); portal_client deliberately
+        // does not replace the exact Network binding with an interface socket
+        // option.
+        let interface_name = network
+            .get("interfaceName")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let physical_ipv4 = network
+            .get("ip")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        return PortalRouteContext::new(interface_name, physical_ipv4).map(Some);
     }
 
     #[cfg(not(target_os = "android"))]
@@ -8769,18 +8779,15 @@ mod tests {
 
     #[test]
     fn vpn_compatibility_selects_secure_or_direct_probe_endpoints() {
-        assert_eq!(
-            portal_probe_urls(VpnCompatibility::Minimum, &LoginType::Type1),
-            vec!["https://10.21.221.98:802/eportal/portal/login"]
-        );
-        assert_eq!(
-            portal_probe_urls(VpnCompatibility::High, &LoginType::Type2),
-            vec!["https://wlgn.bjut.edu.cn/drcom/login"]
-        );
-        assert_eq!(
-            portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type2),
-            vec!["http://10.21.251.3/drcom/login"]
-        );
+        let dorm = portal_probe_urls(VpnCompatibility::Minimum, &LoginType::Type1);
+        assert_eq!(dorm.len(), 1);
+        assert!(dorm[0].starts_with("https://10.21.221.98:802/eportal/portal/page/loadConfig?"));
+        let wifi = portal_probe_urls(VpnCompatibility::High, &LoginType::Type2);
+        assert_eq!(wifi.len(), 1);
+        assert!(wifi[0].starts_with("https://wlgn.bjut.edu.cn/drcom/chkstatus?"));
+        let wifi_direct = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type2);
+        assert_eq!(wifi_direct.len(), 1);
+        assert!(wifi_direct[0].starts_with("http://10.21.251.3/drcom/chkstatus?"));
         let wired = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3);
         assert_eq!(wired.len(), 2);
         assert!(wired[0].starts_with("http://172.30.201.2:801/eportal/portal/page/loadUserInfo?"));

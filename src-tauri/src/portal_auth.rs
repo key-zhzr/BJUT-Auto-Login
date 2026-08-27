@@ -3,6 +3,7 @@ use super::{
     LGN_HOST, WLGN_HOST,
 };
 use crate::network_trust::{campus_wifi_kind, CampusWifiKind};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::header::{ACCEPT, CACHE_CONTROL, REFERER};
 use reqwest::{Client, Url};
 use serde_json::Value;
@@ -190,19 +191,31 @@ pub(crate) async fn portal_client(
     builder.build().map_err(redact_request_error)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn portal_probe_urls(
     compatibility: VpnCompatibility,
     login_type: &LoginType,
 ) -> Vec<String> {
+    portal_probe_urls_for_route(compatibility, login_type, None)
+}
+
+fn portal_probe_urls_for_route(
+    compatibility: VpnCompatibility,
+    login_type: &LoginType,
+    physical_ipv4: Option<Ipv4Addr>,
+) -> Vec<String> {
     match login_type {
-        LoginType::Type1 if compatibility == VpnCompatibility::Maximum => {
-            vec![DORM_HTTP_LOGIN.to_string()]
-        }
-        LoginType::Type1 => vec![DORM_HTTPS_LOGIN.to_string()],
-        LoginType::Type2 if compatibility == VpnCompatibility::Maximum => {
-            vec![WIFI_HTTP_LOGIN.to_string()]
-        }
-        LoginType::Type2 => vec![WIFI_HTTPS_LOGIN.to_string()],
+        // The login endpoint requires a complete query string.  A bare
+        // `/eportal/portal/login` request is commonly answered with an empty
+        // page (or a redirect), which made a reachable dorm gateway look
+        // offline during automatic detection.  loadConfig is read-only and
+        // is requested by the real portal page before it submits credentials.
+        LoginType::Type1 => vec![type1_probe_url(compatibility, physical_ipv4)],
+        // Dr.COM exposes a read-only status endpoint.  Probing `/login`
+        // without the documented JSONP fields is not reliable on all gateway
+        // versions, while chkstatus is the same request used by the captured
+        // browser flow.
+        LoginType::Type2 => vec![type2_probe_url(compatibility)],
         LoginType::Type3 if compatibility == VpnCompatibility::Maximum => {
             let primary = lgn_user_info_url(compatibility);
             let secondary = primary.replacen("172.30.201.2", "172.30.201.10", 1);
@@ -219,11 +232,60 @@ pub(crate) fn portal_probe_urls(
     }
 }
 
+fn type1_probe_url(compatibility: VpnCompatibility, physical_ipv4: Option<Ipv4Addr>) -> String {
+    let base = if compatibility == VpnCompatibility::Maximum {
+        "http://10.21.221.98:801/eportal/portal/page/loadConfig"
+    } else {
+        "https://10.21.221.98:802/eportal/portal/page/loadConfig"
+    };
+    let mut url = Url::parse(base).expect("static Type 1 probe URL must be valid");
+    url.query_pairs_mut()
+        .append_pair("callback", "dr1001")
+        .append_pair("program_index", "")
+        .append_pair("wlan_vlan_id", "0")
+        .append_pair(
+            "wlan_user_ip",
+            &physical_ipv4
+                .map(|address| BASE64.encode(address.to_string()))
+                .unwrap_or_default(),
+        )
+        .append_pair("wlan_user_ipv6", "")
+        .append_pair("wlan_user_ssid", "")
+        .append_pair("wlan_user_areaid", "")
+        .append_pair("wlan_ac_ip", "")
+        .append_pair("wlan_ap_mac", "000000000000")
+        .append_pair("gw_id", "000000000000")
+        .append_pair("jsVersion", "4.X")
+        .append_pair("v", &random_request_id())
+        .append_pair("lang", "zh");
+    url.to_string()
+}
+
+fn type2_probe_url(compatibility: VpnCompatibility) -> String {
+    let base = if compatibility == VpnCompatibility::Maximum {
+        "http://10.21.251.3/drcom/chkstatus"
+    } else {
+        "https://wlgn.bjut.edu.cn/drcom/chkstatus"
+    };
+    let mut url = Url::parse(base).expect("static Type 2 probe URL must be valid");
+    url.query_pairs_mut()
+        .append_pair("callback", "dr1002")
+        .append_pair("jsVersion", "4.1")
+        .append_pair("v", &random_request_id())
+        .append_pair("lang", "zh");
+    url.to_string()
+}
+
 fn login_readiness_probe_urls(
     compatibility: VpnCompatibility,
     login_type: &LoginType,
+    route_context: Option<&PortalRouteContext>,
 ) -> Vec<String> {
-    let mut urls = portal_probe_urls(compatibility, login_type);
+    let mut urls = portal_probe_urls_for_route(
+        compatibility,
+        login_type,
+        route_context.map(PortalRouteContext::physical_ipv4),
+    );
     if *login_type == LoginType::Type3 && !urls.iter().any(|url| url.contains("/drcom/getipv6")) {
         if let Ok(ipv6_url) = lgn_observed_ipv6_url() {
             urls.push(ipv6_url.to_string());
@@ -332,10 +394,20 @@ async fn probe_login_type(
         return PortalProbeResult::NotDetected;
     };
     let mut type3_evidence = Type3ProbeEvidence::default();
-    for url in login_readiness_probe_urls(compatibility, &login_type) {
+    for url in login_readiness_probe_urls(compatibility, &login_type, route_context) {
+        let referer = match login_type {
+            LoginType::Type1 if compatibility == VpnCompatibility::Maximum => DORM_HTTP_REFERER,
+            LoginType::Type1 => DORM_HTTPS_REFERER,
+            LoginType::Type2 if compatibility == VpnCompatibility::Maximum => WIFI_HTTP_REFERER,
+            LoginType::Type2 => WIFI_HTTPS_REFERER,
+            LoginType::Type3 => LGN_REFERER,
+            LoginType::Unknown => "",
+        };
         let Ok(response) = client
             .get(&url)
-            .header("Cache-Control", "no-cache, no-store")
+            .header(ACCEPT, "*/*")
+            .header(REFERER, referer)
+            .header(CACHE_CONTROL, "no-cache, no-store")
             .send()
             .await
         else {
@@ -375,6 +447,14 @@ fn probe_body_matches(login_type: &LoginType, url: &str, body: &str) -> bool {
     }
     let normalized = body.to_ascii_lowercase();
     match login_type {
+        LoginType::Type1 if url.contains("/page/loadConfig") => {
+            jsonp_object(body).is_some_and(|value| {
+                let code_ok = value
+                    .get("code")
+                    .is_some_and(|code| code.as_i64() == Some(1) || code.as_str() == Some("1"));
+                code_ok && value.get("data").is_some_and(Value::is_object)
+            })
+        }
         LoginType::Type1 => {
             normalized.contains("eportal")
                 || normalized.contains("user_account")
@@ -1013,25 +1093,50 @@ mod tests {
 
     #[test]
     fn probe_endpoints_keep_http_and_https_ports_distinct() {
-        assert_eq!(
-            portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type1),
-            vec!["http://10.21.221.98:801/eportal/portal/login"]
+        let dorm_http = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type1);
+        assert_eq!(dorm_http.len(), 1);
+        assert!(dorm_http[0].starts_with("http://10.21.221.98:801/eportal/portal/page/loadConfig?"));
+        let dorm_https = portal_probe_urls(VpnCompatibility::Minimum, &LoginType::Type1);
+        assert_eq!(dorm_https.len(), 1);
+        assert!(
+            dorm_https[0].starts_with("https://10.21.221.98:802/eportal/portal/page/loadConfig?")
         );
-        assert_eq!(
-            portal_probe_urls(VpnCompatibility::Minimum, &LoginType::Type1),
-            vec!["https://10.21.221.98:802/eportal/portal/login"]
+        let dorm_with_ip = portal_probe_urls_for_route(
+            VpnCompatibility::Maximum,
+            &LoginType::Type1,
+            Some(Ipv4Addr::new(10, 126, 21, 113)),
         );
+        let dorm_with_ip_url = Url::parse(&dorm_with_ip[0]).unwrap();
+        assert_eq!(
+            dorm_with_ip_url
+                .query_pairs()
+                .find(|(name, _)| name == "wlan_user_ip")
+                .map(|(_, value)| value.into_owned()),
+            Some("MTAuMTI2LjIxLjExMw==".to_string())
+        );
+        let wifi_https = portal_probe_urls(VpnCompatibility::High, &LoginType::Type2);
+        assert_eq!(wifi_https.len(), 1);
+        assert!(wifi_https[0].starts_with("https://wlgn.bjut.edu.cn/drcom/chkstatus?"));
+        let wifi_http = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type2);
+        assert_eq!(wifi_http.len(), 1);
+        assert!(wifi_http[0].starts_with("http://10.21.251.3/drcom/chkstatus?"));
         let wired = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3);
         assert_eq!(wired.len(), 2);
         assert!(wired.iter().all(|url| url.contains(":801/")));
 
-        let readiness = login_readiness_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3);
+        let readiness =
+            login_readiness_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3, None);
         assert_eq!(readiness.len(), 3);
         assert!(readiness.iter().any(|url| url.contains("/drcom/getipv6")));
     }
 
     #[test]
     fn probes_require_protocol_specific_response_fingerprints() {
+        assert!(probe_body_matches(
+            &LoginType::Type1,
+            "http://10.21.221.98:801/eportal/portal/page/loadConfig",
+            r#"dr1001({"code":1,"data":{"program_index":"demo"}});"#,
+        ));
         assert!(probe_body_matches(
             &LoginType::Type1,
             "http://10.21.221.98:801/eportal/portal/login",
