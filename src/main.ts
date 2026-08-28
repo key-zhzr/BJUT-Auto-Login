@@ -260,10 +260,8 @@ async function saveAccounts(accs: AccountView[]): Promise<void> {
     await syncConfigToRust();
   } finally {
     accs.forEach(account => {
-      account.hasPassword = account.hasPassword || Boolean(account.pass);
       account.pass = '';
     });
-    accountsCache = accs;
   }
 }
 
@@ -522,10 +520,20 @@ function syncConfigToRust(): Promise<void> {
     android_notify_login_results: localStorage.getItem('bjut_android_notify_login_results') !== 'false',
     android_notify_background_errors: localStorage.getItem('bjut_android_notify_background_errors') !== 'false',
   };
+  let persistedPasswordUsers: Set<string> | null = null;
   const operation = configSyncQueue
     .catch(() => {})
     .then(async () => {
       await invoke<void>('sync_config', { config });
+      const persisted = await invoke<BackendConfig>('get_app_config').catch(() => null);
+      if (persisted) {
+        persistedPasswordUsers = new Set(
+          (persisted.accounts || [])
+            .filter(account => account.hasPassword === true)
+            .map(account => String(account.user || ''))
+            .filter(Boolean),
+        );
+      }
       // Record the original recoverable snapshot once. The next cold start
       // asks Rust to hash the actual secure credentials and only deletes the
       // legacy copy when both fingerprints match.
@@ -540,7 +548,9 @@ function syncConfigToRust(): Promise<void> {
       accountsCache = accountsCache.map(account => ({
         ...account,
         pass: '',
-        hasPassword: account.hasPassword || Boolean(account.pass),
+        hasPassword: persistedPasswordUsers === null
+          ? account.hasPassword || Boolean(account.pass)
+          : persistedPasswordUsers.has(account.user),
       }));
     });
   configSyncQueue = operation;
@@ -3662,11 +3672,19 @@ function setupEventListeners() {
       editAccIndex.value = index.toString();
       editAccUsername.value = accounts[index].user;
       resetSensitivePasswordInput(editAccPassword);
+      editAccPassword.placeholder = '请输入密码';
       try {
         editAccPassword.value = await invoke<string>('get_account_password', { user: accounts[index].user });
         editModal.classList.remove('hidden');
       } catch (error) {
-        await customAlert(`无法读取该账号密码：${String(error)}`);
+        // A missing credential is exactly the state that the edit form must be
+        // able to repair. Correct any stale front-end metadata and let the user
+        // enter a replacement instead of trapping the account behind an error.
+        accounts[index].hasPassword = false;
+        editAccPassword.placeholder = '该账号未保存密码，请输入新密码';
+        renderAccounts();
+        editModal.classList.remove('hidden');
+        log('账号管理', `账号 ${accounts[index].user} 缺少已保存密码，等待用户补录`, 'info');
       }
     }
   });

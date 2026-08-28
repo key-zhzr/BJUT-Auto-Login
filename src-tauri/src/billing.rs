@@ -2126,16 +2126,24 @@ fn validate_account_discovery_url(url: &Url) -> Result<(), BillingError> {
             Ok(())
         }
         (Some(BILLING_HOST), Some(443), BILLING_EPORTAL_LOGIN_PATH) => Ok(()),
-        (Some(BILLING_HOST), Some(443), path)
-            if path == BILLING_DASHBOARD_PATH
-                || path.starts_with(&format!("{BILLING_DASHBOARD_PATH}/")) =>
-        {
-            Ok(())
-        }
+        (Some(BILLING_HOST), Some(443), path) if is_billing_dashboard_path(path) => Ok(()),
         _ => Err(BillingError::Protocol(
             "账号发现流程尝试跳转到非受信任地址".to_string(),
         )),
     }
+}
+
+fn is_billing_dashboard_path(path: &str) -> bool {
+    if path == BILLING_DASHBOARD_PATH || path.starts_with(&format!("{BILLING_DASHBOARD_PATH}/")) {
+        return true;
+    }
+    path.strip_prefix("/Self/dashboard;jsessionid=")
+        .is_some_and(|session_id| {
+            (1..=128).contains(&session_id.len())
+                && session_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
 }
 
 fn parse_self_auth_url(source: &str) -> Result<Option<Url>, BillingError> {
@@ -2306,10 +2314,7 @@ async fn open_current_billing_dashboard_via_lgn(
     let (dashboard_url, dashboard_html) =
         account_discovery_get_follow(&client, auth_url, &mut cookies, Some(&discovery_url)).await?;
     if dashboard_url.host_str() != Some(BILLING_HOST)
-        || !(dashboard_url.path() == BILLING_DASHBOARD_PATH
-            || dashboard_url
-                .path()
-                .starts_with(&format!("{BILLING_DASHBOARD_PATH}/")))
+        || !is_billing_dashboard_path(dashboard_url.path())
     {
         return Err(BillingError::Protocol(
             "计费系统未进入 dashboard".to_string(),
@@ -3853,6 +3858,25 @@ mod tests {
         assert!(parse_self_auth_url(unavailable).unwrap().is_none());
         let attacker = r#"dr1004({"result":1,"self_auth_url":"https:\/\/example.com\/Self\/login\/eportalLogin?account=1&timestamp=2&sign=3"});"#;
         assert!(parse_self_auth_url(attacker).is_err());
+    }
+
+    #[test]
+    fn accepts_tomcat_dashboard_session_path_without_widening_the_allowlist() {
+        let dashboard = Url::parse(
+            "https://jfself.bjut.edu.cn/Self/dashboard;jsessionid=480E0E2E7AF4AFCAAE61D5A6CF6F327C",
+        )
+        .unwrap();
+        assert!(validate_account_discovery_url(&dashboard).is_ok());
+        assert!(is_billing_dashboard_path(dashboard.path()));
+
+        for untrusted in [
+            "https://jfself.bjut.edu.cn/Self/dashboard;jsessionid=abc/other",
+            "https://jfself.bjut.edu.cn/Self/dashboard;jsessionid=abc%2Fother",
+            "https://jfself.bjut.edu.cn/Self/login/",
+            "https://example.com/Self/dashboard;jsessionid=abc",
+        ] {
+            assert!(validate_account_discovery_url(&Url::parse(untrusted).unwrap()).is_err());
+        }
     }
 
     #[test]
