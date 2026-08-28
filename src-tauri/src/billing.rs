@@ -12,6 +12,7 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::cookie_jar::CookieJar;
+use crate::portal_auth::PortalRouteContext;
 
 mod types;
 pub(crate) use types::*;
@@ -40,6 +41,7 @@ type HostCookies = CookieJar;
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardUser {
+    left_flow: Option<f64>,
     left_money: Option<f64>,
     installment_flag: Option<f64>,
     use_money: Option<f64>,
@@ -63,6 +65,13 @@ struct BillingSession {
     dashboard_url: Url,
     dashboard_html: String,
     ajax_csrf_token: Option<String>,
+}
+
+struct AccountDiscoverySession {
+    client: Client,
+    cookies: HostCookies,
+    dashboard_url: Url,
+    dashboard_html: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2016,6 +2025,7 @@ async fn build_client(compatibility: VpnCompatibility) -> Result<Client, Billing
 
 async fn build_account_discovery_client(
     compatibility: VpnCompatibility,
+    route_context: Option<&PortalRouteContext>,
 ) -> Result<Client, BillingError> {
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.6".parse().unwrap());
@@ -2026,6 +2036,19 @@ async fn build_account_discovery_client(
         .use_rustls_tls()
         .user_agent(BILLING_USER_AGENT)
         .default_headers(headers);
+
+    #[cfg(not(target_os = "android"))]
+    if let Some(route_context) = route_context {
+        builder = builder.local_address(IpAddr::V4(route_context.physical_ipv4()));
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            builder = builder.interface(route_context.interface_name());
+        }
+        #[cfg(target_os = "windows")]
+        let _ = route_context.interface_name();
+    }
+    #[cfg(target_os = "android")]
+    let _ = route_context;
 
     if !matches!(compatibility, VpnCompatibility::Minimum) {
         let (lgn_addresses, billing_addresses) = if compatibility == VpnCompatibility::Low {
@@ -2255,10 +2278,11 @@ fn parse_discovered_account(html: &str) -> Result<DiscoveredCampusAccount, Billi
     })
 }
 
-pub(crate) async fn discover_current_campus_account(
+async fn open_current_billing_dashboard_via_lgn(
     compatibility: VpnCompatibility,
-) -> Result<Option<DiscoveredCampusAccount>, BillingError> {
-    let client = build_account_discovery_client(compatibility).await?;
+    route_context: Option<&PortalRouteContext>,
+) -> Result<Option<AccountDiscoverySession>, BillingError> {
+    let client = build_account_discovery_client(compatibility, route_context).await?;
     let discovery_url = account_discovery_url()?;
     validate_account_discovery_url(&discovery_url)?;
     let response = client
@@ -2279,7 +2303,7 @@ pub(crate) async fn discover_current_campus_account(
     };
 
     let mut cookies = HostCookies::default();
-    let (mut dashboard_url, mut dashboard_html) =
+    let (dashboard_url, dashboard_html) =
         account_discovery_get_follow(&client, auth_url, &mut cookies, Some(&discovery_url)).await?;
     if dashboard_url.host_str() != Some(BILLING_HOST)
         || !(dashboard_url.path() == BILLING_DASHBOARD_PATH
@@ -2292,8 +2316,37 @@ pub(crate) async fn discover_current_campus_account(
         ));
     }
 
+    Ok(Some(AccountDiscoverySession {
+        client,
+        cookies,
+        dashboard_url,
+        dashboard_html,
+    }))
+}
+
+pub(crate) async fn fetch_current_remaining_flow_via_lgn(
+    compatibility: VpnCompatibility,
+    route_context: Option<&PortalRouteContext>,
+) -> Result<Option<String>, BillingError> {
+    let Some(session) =
+        open_current_billing_dashboard_via_lgn(compatibility, route_context).await?
+    else {
+        return Ok(None);
+    };
+    let snapshot = parse_dashboard_bounded(&session.dashboard_html, "").await?;
+    Ok((snapshot.remaining_flow != "--").then_some(snapshot.remaining_flow))
+}
+
+pub(crate) async fn discover_current_campus_account(
+    compatibility: VpnCompatibility,
+) -> Result<Option<DiscoveredCampusAccount>, BillingError> {
+    let Some(mut session) = open_current_billing_dashboard_via_lgn(compatibility, None).await?
+    else {
+        return Ok(None);
+    };
+
     for attempt in 0..2 {
-        let account = parse_discovered_account(&dashboard_html)?;
+        let account = parse_discovered_account(&session.dashboard_html)?;
         if !account.pass.contains("DS424:") {
             return Ok(Some(account));
         }
@@ -2302,7 +2355,7 @@ pub(crate) async fn discover_current_campus_account(
                 "dashboard 连续返回临时密码字段，请稍后重试".to_string(),
             ));
         }
-        dashboard_url.query_pairs_mut().append_pair(
+        session.dashboard_url.query_pairs_mut().append_pair(
             "account_refresh",
             &SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -2310,11 +2363,15 @@ pub(crate) async fn discover_current_campus_account(
                 .as_nanos()
                 .to_string(),
         );
-        let refreshed =
-            account_discovery_get_follow(&client, dashboard_url.clone(), &mut cookies, None)
-                .await?;
-        dashboard_url = refreshed.0;
-        dashboard_html = refreshed.1;
+        let refreshed = account_discovery_get_follow(
+            &session.client,
+            session.dashboard_url.clone(),
+            &mut session.cookies,
+            None,
+        )
+        .await?;
+        session.dashboard_url = refreshed.0;
+        session.dashboard_html = refreshed.1;
     }
     Ok(None)
 }
@@ -2864,6 +2921,10 @@ fn parse_dashboard(html: &str, account: &str) -> BillingSnapshot {
         });
     let remaining_flow = extract_dl_metric(html, "可用流量")
         .or_else(|| extract_dl_metric(html, "剩余流量"))
+        .or_else(|| {
+            user.left_flow
+                .map(|value| format!("{} MB", compact_decimal(value, 3)))
+        })
         .map(|raw| {
             format_remaining_flow(&raw).unwrap_or_else(|_| {
                 warnings.push("控制台返回了无法识别的剩余流量格式".to_string());
@@ -3877,6 +3938,18 @@ mod tests {
             snapshot.billing_cycle.as_deref(),
             Some("2026-07-01 至 2026-07-31")
         );
+    }
+
+    #[test]
+    fn dashboard_remaining_flow_falls_back_to_embedded_authoritative_value() {
+        let html = r#"
+            <script>(function (user) { window.user = user || {}; })({
+              "leftFlow":15250.454,"leftMoney":3.12184,"useFlag":1
+            });</script>
+        "#;
+        let snapshot = parse_dashboard(html, "synthetic-account");
+        assert_eq!(snapshot.remaining_flow, "14.89 GB");
+        assert!(snapshot.warnings.is_empty());
     }
 
     #[test]

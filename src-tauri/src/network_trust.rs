@@ -352,6 +352,23 @@ pub(crate) fn evaluate_network_trust(input: NetworkTrustInput<'_>) -> NetworkTru
             network_key: key,
         };
     }
+    if *login_type == LoginType::Type1
+        && !transport.eq_ignore_ascii_case("wifi")
+        && !transport.eq_ignore_ascii_case("ethernet")
+    {
+        return NetworkTrustResult {
+            decision: NetworkTrustDecision::Blocked,
+            reason: "bjut-sushe 协议仅允许在已确认的 Wi-Fi 或有线接口上发送账号密码".to_string(),
+            network_key: key,
+        };
+    }
+    if *login_type == LoginType::Type2 && !transport.eq_ignore_ascii_case("wifi") {
+        return NetworkTrustResult {
+            decision: NetworkTrustDecision::Blocked,
+            reason: "bjut_wifi 协议仅允许在已确认的 Wi-Fi 接口上发送账号密码".to_string(),
+            network_key: key,
+        };
+    }
     if *login_type == LoginType::Type3 && !transport.eq_ignore_ascii_case("ethernet") {
         return NetworkTrustResult {
             decision: NetworkTrustDecision::Blocked,
@@ -377,7 +394,9 @@ pub(crate) fn evaluate_network_trust(input: NetworkTrustInput<'_>) -> NetworkTru
     let dormitory_profile = dormitory_ssid_profile(&normalized_ssid);
     let allowed = match login_type {
         LoginType::Type1 => {
-            dormitory_profile.is_some_and(|profile| dormitory_bssid_matches_scan(profile, bssid))
+            transport.eq_ignore_ascii_case("ethernet")
+                || dormitory_profile
+                    .is_some_and(|profile| dormitory_bssid_matches_scan(profile, bssid))
         }
         LoginType::Type2 => {
             campus_wifi_kind(&normalized_ssid) == Some(CampusWifiKind::Public)
@@ -401,6 +420,8 @@ pub(crate) fn evaluate_network_trust(input: NetworkTrustInput<'_>) -> NetworkTru
             "当前网络符合校园网身份规则".to_string()
         } else if *login_type == LoginType::Type3 {
             "lgn 协议默认仅允许有线网络；当前网络需要明确确认".to_string()
+        } else if *login_type == LoginType::Type1 && transport.eq_ignore_ascii_case("ethernet") {
+            "bjut-sushe 有线认证要求同一物理接口的校园网地址；当前网络需要明确确认".to_string()
         } else if *login_type == LoginType::Type1 && dormitory_profile.is_some() {
             "宿舍网名称符合扫描特征，但 BSSID 硬件族未经观测；当前网络需要明确确认".to_string()
         } else if *login_type == LoginType::Type2
@@ -608,6 +629,48 @@ mod tests {
             blacklist: &[],
         });
         assert_eq!(result.decision, NetworkTrustDecision::Blocked);
+    }
+
+    #[test]
+    fn type2_never_sends_credentials_over_ethernet_even_when_whitelisted() {
+        let result = evaluate_network_trust(NetworkTrustInput {
+            login_type: &LoginType::Type2,
+            ssid: "bjut_wifi",
+            bssid: "44:1a:fa:12:34:56",
+            ip: "10.21.2.3",
+            transport: "ethernet",
+            identity_fresh: true,
+            whitelist: &["bjut-wifi|44:1a:fa:12:34:56".to_string()],
+            blacklist: &[],
+        });
+        assert_eq!(result.decision, NetworkTrustDecision::Blocked);
+    }
+
+    #[test]
+    fn dormitory_type1_accepts_a_same_interface_campus_ethernet_identity() {
+        let result = evaluate_network_trust(NetworkTrustInput {
+            login_type: &LoginType::Type1,
+            ssid: "",
+            bssid: "",
+            ip: "172.26.33.104",
+            transport: "ethernet",
+            identity_fresh: true,
+            whitelist: &[],
+            blacklist: &[],
+        });
+        assert_eq!(result.decision, NetworkTrustDecision::Allowed);
+
+        let non_campus = evaluate_network_trust(NetworkTrustInput {
+            login_type: &LoginType::Type1,
+            ssid: "",
+            bssid: "",
+            ip: "192.168.1.20",
+            transport: "ethernet",
+            identity_fresh: true,
+            whitelist: &[],
+            blacklist: &[],
+        });
+        assert_eq!(non_campus.decision, NetworkTrustDecision::NeedsConfirmation);
     }
 
     #[test]

@@ -2538,6 +2538,23 @@ async fn fetch_portal_user_info(
         .get("use_flow")
         .and_then(|v| v.as_str())
         .unwrap_or("0GB");
+    let remaining_flow = info
+        .get("left_flow")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string);
+    let flow = match remaining_flow {
+        Some(value) => value,
+        None => tokio::time::timeout(
+            std::time::Duration::from_secs(12),
+            billing::fetch_current_remaining_flow_via_lgn(compatibility, route_context),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+        .unwrap_or_else(|| "未知".to_string()),
+    };
     Some(UserInfo {
         account: info
             .get("account")
@@ -2549,15 +2566,10 @@ async fn fetch_portal_user_info(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        // Portal responses do not consistently include an authoritative quota.
-        // Never infer it from a package display name: renamed/new packages would
-        // otherwise show a precise but incorrect remaining amount.
-        flow: info
-            .get("left_flow")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| "未知".to_string()),
+        // Prefer the lightweight portal field. When it is absent, the signed
+        // lgn2jfself handoff above reads the authoritative dashboard value;
+        // never infer a quota from the package display name.
+        flow,
         source: "portal".to_string(),
         status: None,
         status_reason: None,

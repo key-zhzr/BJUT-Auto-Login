@@ -109,14 +109,15 @@ fn login_probe_candidates(ssid: &str, transport: &str) -> Vec<LoginType> {
     let mut candidates = if transport.eq_ignore_ascii_case("wifi") {
         vec![LoginType::Type1, LoginType::Type2]
     } else if transport.eq_ignore_ascii_case("ethernet") {
-        vec![LoginType::Type3]
+        vec![LoginType::Type1, LoginType::Type3]
     } else {
         vec![LoginType::Type1, LoginType::Type2, LoginType::Type3]
     };
 
     // SSID is only a priority hint. A matching name must never bypass the
     // protocol-specific response probe, because SSIDs can be renamed or
-    // spoofed. Ethernet also deliberately ignores Wi-Fi naming hints.
+    // spoofed. Ethernet deliberately excludes the Wi-Fi-only Type 2 protocol,
+    // but can use both the dormitory Type 1 portal and wired-only Type 3.
     if let Some(hint) = login_type_hint(ssid) {
         if let Some(position) = candidates.iter().position(|candidate| *candidate == hint) {
             candidates.swap(0, position);
@@ -1187,7 +1188,7 @@ mod tests {
         );
         assert_eq!(
             login_probe_candidates("bjut_wifi", "ethernet"),
-            vec![LoginType::Type3]
+            vec![LoginType::Type1, LoginType::Type3]
         );
         assert_eq!(
             login_probe_candidates("untrusted-lookalike", "unknown"),
