@@ -147,7 +147,8 @@ export interface RecoverableRecharge {
 
 export interface DiscoveredCampusAccount {
   user: string;
-  token: string;
+  token?: string;
+  passwordRequired?: boolean;
 }
 
 export interface GitHubReleaseAsset {

@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DiscoveredCampusAccount {
     pub user: String,
-    pub pass: String,
+    pub pass: Option<String>,
+    pub password_is_temporary: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

@@ -2273,16 +2273,19 @@ fn parse_discovered_account(html: &str) -> Result<DiscoveredCampusAccount, Billi
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
         })
         .ok_or_else(|| BillingError::Protocol("dashboard 账号格式无效".to_string()))?;
-    let pass = value
+    let raw_password = value
         .get("userPassword")
         .and_then(serde_json::Value::as_str)
         .filter(|value| {
             !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
-        })
-        .ok_or_else(|| BillingError::Protocol("dashboard 密码字段无效".to_string()))?;
+        });
+    let password_is_temporary = raw_password.is_some_and(|password| password.contains("DS424:"));
     Ok(DiscoveredCampusAccount {
         user: user.to_string(),
-        pass: pass.to_string(),
+        pass: raw_password
+            .filter(|_| !password_is_temporary)
+            .map(str::to_string),
+        password_is_temporary,
     })
 }
 
@@ -2352,13 +2355,8 @@ pub(crate) async fn discover_current_campus_account(
 
     for attempt in 0..2 {
         let account = parse_discovered_account(&session.dashboard_html)?;
-        if !account.pass.contains("DS424:") {
+        if account.pass.is_some() || !account.password_is_temporary || attempt == 1 {
             return Ok(Some(account));
-        }
-        if attempt == 1 {
-            return Err(BillingError::Protocol(
-                "dashboard 连续返回临时密码字段，请稍后重试".to_string(),
-            ));
         }
         session.dashboard_url.query_pairs_mut().append_pair(
             "account_refresh",
@@ -3886,15 +3884,15 @@ mod tests {
         "#;
         let account = parse_discovered_account(html).unwrap();
         assert_eq!(account.user, "25000000");
-        assert_eq!(account.pass, ":Pass!word");
+        assert_eq!(account.pass.as_deref(), Some(":Pass!word"));
+        assert!(!account.password_is_temporary);
 
         let temporary = r#"
           <script>(function (user) { window.user = user || {}; })({"userName":"25000000","userPassword":"DS424:temporary"});</script>
         "#;
-        assert!(parse_discovered_account(temporary)
-            .unwrap()
-            .pass
-            .contains("DS424:"));
+        let temporary = parse_discovered_account(temporary).unwrap();
+        assert!(temporary.pass.is_none());
+        assert!(temporary.password_is_temporary);
     }
 
     #[test]

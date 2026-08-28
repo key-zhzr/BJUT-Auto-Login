@@ -6059,6 +6059,24 @@ async fn discover_current_campus_account(
     };
     match result {
         Ok(Ok(Some(account))) => {
+            let user = account.user.clone();
+            let Some(password) = account.pass else {
+                rust_log(
+                    &app,
+                    &state,
+                    "账号",
+                    if account.password_is_temporary {
+                        "已识别当前校园网账号，但 dashboard 仅返回临时密码字段；等待用户自行补录密码"
+                    } else {
+                        "已识别当前校园网账号，但 dashboard 未提供可保存的密码；等待用户自行补录密码"
+                    },
+                    "info",
+                );
+                return Ok(Some(serde_json::json!({
+                    "user": user,
+                    "passwordRequired": true
+                })));
+            };
             rust_log(
                 &app,
                 &state,
@@ -6066,7 +6084,6 @@ async fn discover_current_campus_account(
                 "已识别当前校园网会话中的账号，等待用户确认是否保存",
                 "info",
             );
-            let user = account.user.clone();
             let token_seed = format!(
                 "{}:{}:{:?}",
                 user,
@@ -6077,7 +6094,7 @@ async fn discover_current_campus_account(
             *state.pending_discovered_account.lock().await = Some(PendingDiscoveredAccount {
                 account: Account {
                     user: account.user,
-                    pass: account.pass,
+                    pass: password,
                     is_default: false,
                     is_disabled: Some(false),
                 },

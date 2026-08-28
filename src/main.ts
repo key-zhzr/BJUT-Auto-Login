@@ -288,8 +288,46 @@ function scheduleCurrentCampusAccountDiscovery() {
 async function discoverAndOfferCurrentCampusAccount() {
   const candidate = await invoke<DiscoveredCampusAccount | null>('discover_current_campus_account');
   if (!candidate) return;
-  if (!candidate.user || !candidate.token) return;
-  if (accountsCache.some(account => account.user === candidate.user)) {
+  if (!candidate.user) return;
+  const existingIndex = accountsCache.findIndex(account => account.user === candidate.user);
+  const firstLaunch = localStorage.getItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY) === 'true';
+
+  if (candidate.passwordRequired) {
+    localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
+    if (existingIndex >= 0 && accountsCache[existingIndex].hasPassword) return;
+    if (sessionStorage.getItem(DISMISSED_DISCOVERED_ACCOUNT_KEY) === candidate.user) return;
+
+    const confirmed = await customConfirm(
+      `${firstLaunch ? '首次联网时' : '本次联网时'}已从计费系统识别出账号 ${candidate.user}，但学校页面只返回了不可保存的临时密码字段。\n\n是否打开账号${existingIndex >= 0 ? '编辑' : '添加'}窗口，由你自行输入密码？`,
+      '需要补录账号密码',
+    );
+    if (!confirmed) {
+      sessionStorage.setItem(DISMISSED_DISCOVERED_ACCOUNT_KEY, candidate.user);
+      return;
+    }
+
+    sessionStorage.removeItem(DISMISSED_DISCOVERED_ACCOUNT_KEY);
+    if (existingIndex >= 0) {
+      accountsCache[existingIndex].hasPassword = false;
+      editAccIndex.value = existingIndex.toString();
+      editAccUsername.value = candidate.user;
+      resetSensitivePasswordInput(editAccPassword);
+      editAccPassword.placeholder = '请输入该账号的密码';
+      renderAccounts();
+      editModal.classList.remove('hidden');
+    } else {
+      addAccountForm.reset();
+      (document.getElementById('acc-username') as HTMLInputElement).value = candidate.user;
+      resetSensitivePasswordInput(addAccPassword);
+      addAccPassword.placeholder = '请输入该账号的密码';
+      addModal.classList.remove('hidden');
+    }
+    log('账号管理', `已识别账号 ${candidate.user}，等待用户自行补录密码`, 'info');
+    return;
+  }
+
+  if (!candidate.token) return;
+  if (existingIndex >= 0) {
     await invoke('reject_discovered_campus_account', { token: candidate.token }).catch(() => undefined);
     localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
     return;
@@ -299,7 +337,6 @@ async function discoverAndOfferCurrentCampusAccount() {
     return;
   }
 
-  const firstLaunch = localStorage.getItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY) === 'true';
   const confirmed = await customConfirm(
     `${firstLaunch ? '首次联网时' : '本次联网时'}检测到当前已登录的校园网账号 ${candidate.user}，但它不在账号列表中。\n\n是否从当前计费系统会话读取凭据，并保存到 App 的安全凭据存储？`,
     '添加当前校园网账号',
