@@ -1249,9 +1249,9 @@
                 <div class="custom-select-trigger" tabindex="0"><span>自动检测</span><i data-lucide="chevron-down"></i></div>
                 <div class="custom-select-options">
                   <div class="custom-option selected" data-value="auto">自动检测</div>
-                  <div class="custom-option" data-value="bjut-wifi">教学区无线</div>
-                  <div class="custom-option" data-value="bjut-sushe">宿舍无线</div>
-                  <div class="custom-option" data-value="wired">校园有线</div>
+                  <div class="custom-option" data-value="bjut-wifi">bjut_wifi（仅 Wi-Fi）</div>
+                  <div class="custom-option" data-value="bjut-sushe">bjut-sushe（Wi-Fi / 有线）</div>
+                  <div class="custom-option" data-value="wired">lgn 有线</div>
                 </div>
               </div>
             </div>
@@ -1273,9 +1273,9 @@
           </div>
           <fieldset class="profile-auto-login-types">
             <legend>按认证类型启用自动登录</legend>
-            <label class="profile-checkbox"><input id="network-profile-auto-type1" type="checkbox" checked> 宿舍无线</label>
-            <label class="profile-checkbox"><input id="network-profile-auto-type2" type="checkbox" checked> 教学区无线</label>
-            <label class="profile-checkbox"><input id="network-profile-auto-type3" type="checkbox" checked> 校园有线</label>
+            <label class="profile-checkbox"><input id="network-profile-auto-type1" type="checkbox" checked> bjut-sushe</label>
+            <label class="profile-checkbox"><input id="network-profile-auto-type2" type="checkbox" checked> bjut_wifi</label>
+            <label class="profile-checkbox"><input id="network-profile-auto-type3" type="checkbox" checked> lgn 有线</label>
           </fieldset>
           <div class="modal-actions">
             <button type="button" class="btn btn-secondary" id="btn-cancel-network-profile">取消</button>
@@ -1458,6 +1458,11 @@
         <div id="update-progress-wrap" class="update-progress-wrap hidden">
           <div class="update-progress-track"><div id="update-progress-bar" class="update-progress-bar"></div></div>
           <div id="update-progress-text" class="update-progress-text">准备下载…</div>
+          <div id="update-download-controls" class="update-download-controls" hidden>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-update-pause"><i data-lucide="pause"></i><span>暂停</span></button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-update-background"><i data-lucide="minimize-2"></i><span>后台下载</span></button>
+            <button type="button" class="btn btn-danger btn-sm" id="btn-update-stop"><i data-lucide="square"></i><span>停止</span></button>
+          </div>
         </div>
         <div class="modal-actions" id="update-modal-actions">
           <button type="button" class="btn btn-secondary" id="btn-update-cancel">稍后</button>

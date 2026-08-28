@@ -39,6 +39,7 @@ pub(crate) fn usable_physical_ipv4(value: &str) -> Option<std::net::Ipv4Addr> {
 /// campus address ranges. A captured wired login, for example, used
 /// 172.26.33.104 while talking to 172.30.201.2. Callers additionally require
 /// a physical Ethernet interface before accepting one of these addresses.
+#[cfg(not(target_os = "android"))]
 fn is_campus_wired_ipv4(value: &str) -> bool {
     usable_physical_ipv4(value).is_some() && is_campus_local_ip(value)
 }
@@ -1316,11 +1317,12 @@ use network_trust::{
 #[cfg(test)]
 use portal_auth::portal_probe_urls;
 use portal_auth::{
-    detect_login_type_details_rust, lgn_user_info_url, login_result_is_ambiguous,
-    login_to_campus_network_rust, portal_client, LoginType, PortalRouteContext,
+    detect_login_type_details_rust, diagnose_login_gateways, lgn_user_info_url,
+    login_result_is_ambiguous, login_to_campus_network_rust, portal_client, LoginType,
+    PortalRouteContext,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::Emitter;
 use tauri::Manager;
@@ -1466,7 +1468,10 @@ struct AppState {
     last_network_state: Mutex<serde_json::Value>,
     auto_login_paused_until: std::sync::atomic::AtomicI64,
     usage_alert_history: Mutex<HashMap<String, String>>,
+    update_download: UpdateDownloadControl,
     billing_fetch_lock: tokio::sync::Mutex<()>,
+    billing_sessions: Mutex<billing::BillingSessionPool>,
+    billing_session_expiry_generation: AtomicU64,
     campus_service_lock: tokio::sync::Mutex<()>,
     campus_recharge_pending: tokio::sync::Mutex<Option<campus_services::PendingRecharge>>,
     campus_alipay_recharge_pending:
@@ -1476,6 +1481,34 @@ struct AppState {
     campus_wechat_payment_pending:
         tokio::sync::Mutex<Option<campus_services::PendingWechatPayment>>,
     pending_discovered_account: tokio::sync::Mutex<Option<PendingDiscoveredAccount>>,
+}
+
+#[derive(Default)]
+struct UpdateDownloadControl {
+    active: AtomicBool,
+    paused: AtomicBool,
+    cancelled: AtomicBool,
+}
+
+struct UpdateDownloadGuard<'a>(&'a UpdateDownloadControl);
+
+impl UpdateDownloadControl {
+    fn begin(&self) -> Result<UpdateDownloadGuard<'_>, String> {
+        self.active
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| "已有更新包正在下载".to_string())?;
+        self.paused.store(false, Ordering::SeqCst);
+        self.cancelled.store(false, Ordering::SeqCst);
+        Ok(UpdateDownloadGuard(self))
+    }
+}
+
+impl Drop for UpdateDownloadGuard<'_> {
+    fn drop(&mut self) {
+        self.0.paused.store(false, Ordering::SeqCst);
+        self.0.cancelled.store(false, Ordering::SeqCst);
+        self.0.active.store(false, Ordering::SeqCst);
+    }
 }
 
 struct PendingDiscoveredAccount {
@@ -1699,6 +1732,7 @@ fn ensure_same_network_identity(
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn same_exact_wifi_identity(
     expected_ssid: &str,
     expected_bssid: &str,
@@ -1744,7 +1778,7 @@ fn login_type_from_profile(value: &str) -> Option<LoginType> {
     match value {
         "bjut-sushe" | "bjut_sushe" | "type1" => Some(LoginType::Type1),
         "bjut-wifi" | "bjut_wifi" | "type2" => Some(LoginType::Type2),
-        "wired" | "type3" => Some(LoginType::Type3),
+        "wired" | "lgn-wired" | "type3" => Some(LoginType::Type3),
         _ => None,
     }
 }
@@ -1753,7 +1787,7 @@ fn parse_login_type_override(value: Option<&str>) -> Option<LoginType> {
     match value {
         Some("bjut-sushe") | Some("bjut_sushe") => Some(LoginType::Type1),
         Some("bjut-wifi") | Some("bjut_wifi") => Some(LoginType::Type2),
-        Some("wired") => Some(LoginType::Type3),
+        Some("wired") | Some("lgn-wired") => Some(LoginType::Type3),
         _ => None,
     }
 }
@@ -1857,7 +1891,13 @@ where
     billing_runtime::run_mutation_to_completion(&state.is_in_background, future).await
 }
 
-pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool {
+struct InternetProbeOutcome {
+    label: &'static str,
+    success: bool,
+    detail: String,
+}
+
+async fn probe_internet_targets(source_ip: Option<&str>) -> Vec<InternetProbeOutcome> {
     let builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(1800))
         .redirect(reqwest::redirect::Policy::none())
@@ -1865,7 +1905,7 @@ pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool 
     #[cfg(target_os = "android")]
     let builder = if let Some(candidate) = source_ip {
         let Some(source) = usable_physical_ipv4(candidate) else {
-            return false;
+            return Vec::new();
         };
         builder.local_address(std::net::IpAddr::V4(source))
     } else {
@@ -1882,40 +1922,84 @@ pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool 
     }
     let client = match builder.build() {
         Ok(client) => client,
-        Err(_) => return false,
+        Err(_) => return Vec::new(),
     };
     let targets = [
-        ("https://connectivitycheck.gstatic.com/generate_204", 0u8),
-        ("https://cp.cloudflare.com/generate_204", 0u8),
-        ("http://captive.apple.com/hotspot-detect.html", 1u8),
-        ("http://www.msftconnecttest.com/connecttest.txt", 2u8),
+        (
+            "Google generate_204",
+            "https://connectivitycheck.gstatic.com/generate_204",
+            0u8,
+        ),
+        (
+            "Cloudflare generate_204",
+            "https://cp.cloudflare.com/generate_204",
+            0u8,
+        ),
+        (
+            "Apple Captive Portal",
+            "http://captive.apple.com/hotspot-detect.html",
+            1u8,
+        ),
+        (
+            "Microsoft Connect Test",
+            "http://www.msftconnecttest.com/connecttest.txt",
+            2u8,
+        ),
     ];
-    let checks = targets.into_iter().map(|(url, validation)| {
+    let checks = targets.into_iter().map(|(label, url, validation)| {
         let client = client.clone();
         async move {
-            let response = client
+            let response = match client
                 .get(url)
                 .header("Cache-Control", "no-cache, no-store")
                 .send()
                 .await
-                .ok()?;
-            match validation {
-                0 => Some(response.status() == reqwest::StatusCode::NO_CONTENT),
-                1 if response.status().is_success() => {
-                    Some(response.text().await.ok()?.contains("Success"))
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    return InternetProbeOutcome {
+                        label,
+                        success: false,
+                        detail: format!("请求失败：{error}"),
+                    }
                 }
-                2 if response.status().is_success() => {
-                    Some(response.text().await.ok()?.trim() == "Microsoft Connect Test")
-                }
-                _ => Some(false),
+            };
+            let status = response.status();
+            let success = match validation {
+                0 => status == reqwest::StatusCode::NO_CONTENT,
+                1 if response.status().is_success() => response
+                    .text()
+                    .await
+                    .is_ok_and(|text| text.contains("Success")),
+                2 if response.status().is_success() => response
+                    .text()
+                    .await
+                    .is_ok_and(|text| text.trim() == "Microsoft Connect Test"),
+                _ => false,
+            };
+            InternetProbeOutcome {
+                label,
+                success,
+                detail: format!(
+                    "HTTP {}，{}",
+                    status.as_u16(),
+                    if success {
+                        "校验通过"
+                    } else {
+                        "响应不符合预期"
+                    }
+                ),
             }
         }
     });
-    futures_util::future::join_all(checks)
+    futures_util::future::join_all(checks).await
+}
+
+pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool {
+    probe_internet_targets(source_ip)
         .await
         .into_iter()
-        .flatten()
-        .any(|online| online)
+        .any(|result| result.success)
 }
 
 const CAMPUS_DNS_SERVER: &str = "10.21.200.28:53";
@@ -2842,14 +2926,155 @@ fn launch_update_installer(_app: &tauri::AppHandle, _path: &std::path::Path) -> 
     Err("iOS 版本不支持应用内安装，请使用快捷指令更新".to_string())
 }
 
+const UPDATE_DOWNLOAD_CANCELLED: &str = "更新包下载已停止";
+const MAX_UPDATE_DOWNLOAD_BYTES: usize = 512 * 1024 * 1024;
+
+async fn controlled_update_download(
+    app: &tauri::AppHandle,
+    control: &UpdateDownloadControl,
+    url: reqwest::Url,
+) -> Result<Vec<u8>, String> {
+    use futures_util::StreamExt;
+
+    if !is_official_github_release_download(&url) {
+        return Err("拒绝下载非官方 GitHub Release 资产".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .use_rustls_tls()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/octet-stream")
+        .send()
+        .await
+        .map_err(|error| format!("更新下载连接失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("更新下载失败：HTTP {}", response.status()));
+    }
+    let total = response.content_length();
+    if total.is_some_and(|size| size > MAX_UPDATE_DOWNLOAD_BYTES as u64) {
+        return Err("更新包大小超过安全上限".to_string());
+    }
+
+    let mut received = 0u64;
+    let mut bytes = Vec::with_capacity(
+        total
+            .unwrap_or_default()
+            .min(MAX_UPDATE_DOWNLOAD_BYTES as u64) as usize,
+    );
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = {
+        while control.paused.load(Ordering::SeqCst) {
+            if control.cancelled.load(Ordering::SeqCst) {
+                let _ = app.emit(
+                    "update-progress",
+                    serde_json::json!({"status": "cancelled", "received": received, "total": total}),
+                );
+                return Err(UPDATE_DOWNLOAD_CANCELLED.to_string());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        }
+        if control.cancelled.load(Ordering::SeqCst) {
+            let _ = app.emit(
+                "update-progress",
+                serde_json::json!({"status": "cancelled", "received": received, "total": total}),
+            );
+            return Err(UPDATE_DOWNLOAD_CANCELLED.to_string());
+        }
+        stream.next().await
+    } {
+        let chunk = chunk.map_err(|error| format!("读取更新包失败：{error}"))?;
+        received = received.saturating_add(chunk.len() as u64);
+        if received > MAX_UPDATE_DOWNLOAD_BYTES as u64 {
+            return Err("更新包大小超过安全上限".to_string());
+        }
+        bytes.extend_from_slice(&chunk);
+        let percent = total.map(|size| ((received as f64 / size as f64) * 100.0).min(100.0));
+        let _ = app.emit(
+            "update-progress",
+            serde_json::json!({
+                "status": "downloading",
+                "received": received,
+                "total": total,
+                "percent": percent
+            }),
+        );
+    }
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({
+            "status": "verifying",
+            "received": received,
+            "total": total,
+            "percent": 100.0
+        }),
+    );
+    Ok(bytes)
+}
+
+#[cfg(desktop)]
+fn verify_desktop_update_signature(bytes: &[u8], release_signature: &str) -> Result<(), String> {
+    use base64::Engine;
+    use minisign_verify::{PublicKey, Signature};
+
+    const UPDATE_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkxRkVDODJBOUJDRjYxNjgKUldSb1ljK2JLc2ora2FDUEl1L0tLNkF0alR3Rzl5UXF4U0JrNjhQZVdudGZmQjdmL1BHSVJoVysK";
+    let decode_text = |value: &str| -> Result<String, String> {
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .map_err(|error| format!("更新签名 Base64 无效：{error}"))?;
+        String::from_utf8(decoded).map_err(|_| "更新签名文本不是 UTF-8".to_string())
+    };
+    let public_key = PublicKey::decode(&decode_text(UPDATE_PUBLIC_KEY)?)
+        .map_err(|error| format!("更新公钥无效：{error}"))?;
+    let signature = Signature::decode(&decode_text(release_signature)?)
+        .map_err(|error| format!("更新签名无效：{error}"))?;
+    public_key
+        .verify(bytes, &signature, true)
+        .map_err(|error| format!("更新包签名验证失败：{error}"))
+}
+
+#[tauri::command]
+fn control_update_download(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    action: String,
+) -> Result<(), String> {
+    if !state.update_download.active.load(Ordering::SeqCst) {
+        return Err("当前没有正在进行的更新下载".to_string());
+    }
+    match action.as_str() {
+        "pause" => {
+            state.update_download.paused.store(true, Ordering::SeqCst);
+            let _ = app.emit("update-progress", serde_json::json!({"status": "paused"}));
+        }
+        "resume" => {
+            state.update_download.paused.store(false, Ordering::SeqCst);
+            let _ = app.emit("update-progress", serde_json::json!({"status": "resumed"}));
+        }
+        "stop" => {
+            state
+                .update_download
+                .cancelled
+                .store(true, Ordering::SeqCst);
+            state.update_download.paused.store(false, Ordering::SeqCst);
+            let _ = app.emit("update-progress", serde_json::json!({"status": "stopping"}));
+        }
+        _ => return Err("不支持的更新下载控制操作".to_string()),
+    }
+    Ok(())
+}
+
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[tauri::command]
 async fn download_and_install_update(
     app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
     url: String,
     file_name: String,
 ) -> Result<(), String> {
-    use futures_util::StreamExt;
     use std::io::Write;
 
     let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
@@ -2869,35 +3094,10 @@ async fn download_and_install_update(
     std::fs::create_dir_all(&update_dir).map_err(|e| e.to_string())?;
     let target_path = update_dir.join(safe_name);
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .timeout(std::time::Duration::from_secs(600))
-        .use_rustls_tls()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let response = client.get(parsed).send().await.map_err(|e| e.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!("更新下载失败: HTTP {}", response.status()));
-    }
-    let total = response.content_length();
-    let mut received = 0u64;
+    let _download_guard = state.update_download.begin()?;
+    let bytes = controlled_update_download(&app, &state.update_download, parsed).await?;
     let mut file = std::fs::File::create(&target_path).map_err(|e| e.to_string())?;
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        file.write_all(&chunk).map_err(|e| e.to_string())?;
-        received += chunk.len() as u64;
-        let percent = total.map(|size| ((received as f64 / size as f64) * 100.0).min(100.0));
-        let _ = app.emit(
-            "update-progress",
-            serde_json::json!({
-                "status": "downloading",
-                "received": received,
-                "total": total,
-                "percent": percent
-            }),
-        );
-    }
+    file.write_all(&bytes).map_err(|e| e.to_string())?;
     file.flush().map_err(|e| e.to_string())?;
     let _ = app.emit(
         "update-progress",
@@ -2910,6 +3110,7 @@ async fn download_and_install_update(
 #[tauri::command]
 async fn download_and_install_update(
     app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
     url: String,
     _file_name: String,
 ) -> Result<(), String> {
@@ -2931,35 +3132,18 @@ async fn download_and_install_update(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "签名更新清单未提供适用于当前设备的新版本".to_string())?;
-    let mut received = 0u64;
+    let _download_guard = state.update_download.begin()?;
+    let bytes =
+        controlled_update_download(&app, &state.update_download, update.download_url.clone())
+            .await?;
+    verify_desktop_update_signature(&bytes, &update.signature)?;
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({"status": "installing", "percent": 100.0}),
+    );
     update
-        .download_and_install(
-            |chunk_length, content_length| {
-                received += chunk_length as u64;
-                let percent = content_length
-                    .map(|total| ((received as f64 / total as f64) * 100.0).min(100.0));
-                let _ = app.emit(
-                    "update-progress",
-                    serde_json::json!({
-                        "status": "downloading",
-                        "received": received,
-                        "total": content_length,
-                        "percent": percent,
-                    }),
-                );
-            },
-            || {
-                let _ = app.emit(
-                    "update-progress",
-                    serde_json::json!({
-                        "status": "installing",
-                        "percent": 100.0,
-                    }),
-                );
-            },
-        )
-        .await
-        .map_err(|error| format!("更新签名验证或安装失败：{error}"))?;
+        .install(&bytes)
+        .map_err(|error| format!("更新安装失败：{error}"))?;
     app.restart();
 }
 
@@ -2967,16 +3151,18 @@ async fn download_and_install_update(
 #[tauri::command]
 async fn reinstall_current_version(
     app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
     url: String,
     file_name: String,
 ) -> Result<(), String> {
-    download_and_install_update(app, url, file_name).await
+    download_and_install_update(app, state, url, file_name).await
 }
 
 #[cfg(desktop)]
 #[tauri::command]
 async fn reinstall_current_version(
     app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
     url: String,
     _file_name: String,
 ) -> Result<(), String> {
@@ -2999,35 +3185,18 @@ async fn reinstall_current_version(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "签名更新清单不是当前应用版本，已拒绝重新安装".to_string())?;
-    let mut received = 0u64;
+    let _download_guard = state.update_download.begin()?;
+    let bytes =
+        controlled_update_download(&app, &state.update_download, update.download_url.clone())
+            .await?;
+    verify_desktop_update_signature(&bytes, &update.signature)?;
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({"status": "installing", "percent": 100.0}),
+    );
     update
-        .download_and_install(
-            |chunk_length, content_length| {
-                received += chunk_length as u64;
-                let percent = content_length
-                    .map(|total| ((received as f64 / total as f64) * 100.0).min(100.0));
-                let _ = app.emit(
-                    "update-progress",
-                    serde_json::json!({
-                        "status": "downloading",
-                        "received": received,
-                        "total": content_length,
-                        "percent": percent,
-                    }),
-                );
-            },
-            || {
-                let _ = app.emit(
-                    "update-progress",
-                    serde_json::json!({
-                        "status": "installing",
-                        "percent": 100.0,
-                    }),
-                );
-            },
-        )
-        .await
-        .map_err(|error| format!("完整包签名验证或重新安装失败：{error}"))?;
+        .install(&bytes)
+        .map_err(|error| format!("完整包安装失败：{error}"))?;
     app.restart();
 }
 
@@ -3826,6 +3995,14 @@ fn save_config(
         fill_missing_passwords(&mut new_cfg, &state_cfg);
         state_cfg.clone()
     };
+    let billing_credentials_changed = previous_cfg.accounts.len() != new_cfg.accounts.len()
+        || previous_cfg.accounts.iter().any(|before| {
+            new_cfg
+                .accounts
+                .iter()
+                .find(|after| after.user == before.user)
+                .is_none_or(|after| after.pass != before.pass)
+        });
     new_cfg.campus_service_sessions = previous_cfg
         .campus_service_sessions
         .iter()
@@ -3876,6 +4053,9 @@ fn save_config(
     {
         let mut state_cfg = state.config.write().unwrap();
         *state_cfg = new_cfg.clone();
+    }
+    if billing_credentials_changed {
+        state.billing_sessions.lock().unwrap().clear();
     }
     reconcile_account_health_after_config_save(app, state, &previous_cfg, &new_cfg);
     #[cfg(desktop)]
@@ -4515,7 +4695,10 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             } else {
                                 let mut success = false;
                                 let mut result_uncertain = false;
+                                #[cfg(not(target_os = "android"))]
                                 let mut aborted_for_network_change = false;
+                                #[cfg(target_os = "android")]
+                                let aborted_for_network_change = false;
                                 for acc in active_accounts {
                                     #[cfg(not(target_os = "android"))]
                                     {
@@ -4949,6 +5132,11 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string();
+    let bssid = network
+        .get("bssid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let identity_fresh = network_identity_is_fresh(&network);
     let interface_name = network
         .get("interfaceName")
         .and_then(serde_json::Value::as_str)
@@ -5061,18 +5249,19 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     } else {
         "error"
     };
-    let campus_message = if mobile_data {
-        "移动数据模式不属于校园局域网，已停用校园网环境判定".to_string()
-    } else {
-        match (campus_ip, campus_ssid) {
-            (true, true) => "SSID 与本地网段均符合校园网特征".to_string(),
-            (true, false) => {
-                "本地网段符合校园网，但 SSID 未识别；自动登录需要白名单或有线协议".to_string()
-            }
-            (false, true) => "SSID 符合校园网，但本地 IP 不在已知网段".to_string(),
-            (false, false) => "当前网络不符合已知校园网特征".to_string(),
-        }
-    };
+    let campus_message = format!(
+        "传输类型：{}；本地网段：{}；SSID 特征：{}；Wi-Fi BSSID：{}；身份同接口且新鲜：{}；校园目标路由绑定：{}",
+        if transport.is_empty() { "未知" } else { &transport },
+        if campus_ip { "符合" } else { "不符合" },
+        if campus_ssid { "符合" } else { "不符合" },
+        if transport.eq_ignore_ascii_case("wifi") {
+            if bssid.is_empty() { "缺失" } else { "已取得" }
+        } else {
+            "不适用"
+        },
+        if identity_fresh { "是" } else { "否" },
+        if wifi_route_failed { "失败" } else if route_ip == ip { "同源" } else if route_ip.is_empty() { "未知" } else { "独立路由" },
+    );
     steps.push(make_diagnostic_step(
         "campus_environment",
         "校园网环境",
@@ -5103,82 +5292,114 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     ));
 
     let internet_started = std::time::Instant::now();
-    let online = !wifi_route_failed && check_internet_from_source(Some(&ip)).await;
+    let internet_results = if wifi_route_failed {
+        Vec::new()
+    } else {
+        probe_internet_targets(Some(&ip)).await
+    };
+    let online = internet_results.iter().any(|result| result.success);
+    let internet_message = if internet_results.is_empty() {
+        "未执行互联网目标探测".to_string()
+    } else {
+        internet_results
+            .iter()
+            .map(|result| {
+                format!(
+                    "{}：{}（{}）",
+                    result.label,
+                    if result.success { "成功" } else { "失败" },
+                    result.detail
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("；")
+    };
     steps.push(make_diagnostic_step(
         "internet",
         "互联网连通性",
         internet_started,
         if online { "success" } else { "warning" },
-        if online {
-            "多个独立探测目标中至少一个验证成功，互联网访问正常".to_string()
-        } else if mobile_data {
-            "App 自身的多个独立探测目标均未确认移动数据连通；不会继续探测校园网认证网关".to_string()
-        } else {
-            "App 自身的多个独立探测目标均未验证成功，继续检测认证网关".to_string()
-        },
+        internet_message,
     ));
 
     let portal_started = std::time::Instant::now();
     let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
-    let detection = if online || mobile_data || wifi_route_failed {
-        None
+    let gateway_results = if wifi_route_failed {
+        Vec::new()
     } else {
-        Some(
-            detect_login_type_details_rust(
-                compatibility,
-                &ssid,
-                network_transport(&network),
-                portal_route_context.as_ref(),
-            )
-            .await,
+        diagnose_login_gateways(
+            compatibility,
+            &ssid,
+            network_transport(&network),
+            portal_route_context.as_ref(),
         )
+        .await
     };
+    let detection = gateway_results
+        .iter()
+        .find(|result| result.login_ready)
+        .or_else(|| gateway_results.iter().find(|result| result.portal_detected));
     let login_type = detection
-        .as_ref()
         .filter(|result| result.login_ready)
         .map(|result| result.login_type.clone())
         .unwrap_or(LoginType::Unknown);
-    let portal_waiting_for_ipv6 = detection.as_ref().is_some_and(|result| {
+    let portal_waiting_for_ipv6 = detection.is_some_and(|result| {
         result.login_type == LoginType::Type3 && result.portal_detected && !result.login_ready
     });
-    let type1_requires_maximum = detection
-        .as_ref()
-        .is_some_and(|result| type1_portal_requires_maximum(result, compatibility));
+    let type1_requires_maximum =
+        detection.is_some_and(|result| type1_portal_requires_maximum(result, compatibility));
+    let gateway_details = gateway_results
+        .iter()
+        .map(|result| {
+            format!(
+                "{}：{}",
+                result.login_type.display_name(),
+                if result.login_ready {
+                    "登录接口与响应校验通过"
+                } else if result.portal_detected {
+                    "门户已发现，但登录条件未完全就绪"
+                } else {
+                    "未探测到"
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("；");
     let (portal_status, portal_message) = if wifi_route_failed {
         (
             "error",
             "无法绑定非默认校园 Wi-Fi，已停止认证网关探测以避免误用 VPN/移动数据".to_string(),
         )
-    } else if mobile_data {
-        (
-            "skipped",
-            "当前使用移动数据，已跳过校园网认证网关探测".to_string(),
-        )
-    } else if online {
-        ("success", "互联网已连通，跳过认证网关探测".to_string())
     } else if login_type != LoginType::Unknown {
         (
-            "warning",
+            if online { "success" } else { "warning" },
             format!(
-                "已检测到校园网认证协议 {}，当前需要登录",
-                login_type.as_str()
+                "判定校园网类型为 {}。{}",
+                login_type.display_name(),
+                gateway_details
             ),
         )
     } else if type1_requires_maximum {
         (
             "warning",
-            "已发现 bjut-sushe 认证网关，但当前 HTTPS 兼容模式不能向其发送账号密码；确认网络可信后可临时启用最高兼容（HTTP + IP）".to_string(),
+            format!("已发现 bjut-sushe 认证网关，但当前 HTTPS 兼容模式不能向其发送账号密码；确认网络可信后可临时启用最高兼容（HTTP + IP）。{gateway_details}"),
         )
     } else if portal_waiting_for_ipv6 {
         (
             "warning",
-            "已发现 lgn 有线认证门户，但尚未取得可用于双栈登录的 IPv6 地址；本轮不会发送账号密码"
-                .to_string(),
+            format!("已发现 lgn 有线认证门户，但尚未取得可用于双栈登录的 IPv6 地址；本轮不会发送账号密码。{gateway_details}"),
+        )
+    } else if online {
+        (
+            "success",
+            format!("互联网已联通；校园认证网关仍已逐项探测。{gateway_details}"),
         )
     } else {
         (
             "error",
-            "未找到可访问的校园网认证网关，可能是完全离线或处于非校园网络".to_string(),
+            format!(
+                "未找到可访问的校园网认证网关，可能是完全离线或处于非校园网络。{gateway_details}"
+            ),
         )
     };
     steps.push(make_diagnostic_step(
@@ -5189,9 +5410,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         portal_message,
     ));
 
-    let (overall, summary) = if online && mobile_data {
-        ("healthy", "移动数据网络工作正常；校园网探测已停用")
-    } else if online {
+    let (overall, summary) = if online {
         ("healthy", "网络工作正常，互联网已连通")
     } else if login_type != LoginType::Unknown {
         ("auth_required", "已连接校园网，但需要完成账号认证")
@@ -5997,6 +6216,7 @@ fn selected_billing_account(config: &AppConfig, account_user: Option<&str>) -> O
     }
 }
 
+#[cfg(desktop)]
 fn promote_default_account(accounts: &mut Vec<Account>, index: usize) -> Option<String> {
     if index >= accounts.len() {
         return None;
@@ -6247,11 +6467,30 @@ async fn get_billing_center(
     let emit_progress = move |message: &str, percent: u8| {
         emit_billing_center_progress(&progress_app, &progress_state, message, percent);
     };
+    let module_app = app.clone();
+    let module_account = account.user.clone();
+    let publish_module = move |update: billing::BillingCenterModuleUpdate| {
+        let mut payload = serde_json::to_value(update).unwrap_or_default();
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(
+                "account".to_string(),
+                serde_json::Value::String(module_account.clone()),
+            );
+        }
+        let _ = module_app.emit("billing-center-module", payload);
+    };
     ensure_billing_foreground(&state)?;
     let result = run_billing_read_while_foreground(&state, async {
         match tokio::time::timeout(
             std::time::Duration::from_secs(75),
-            billing::fetch_center(&account.user, &account.pass, compatibility, emit_progress),
+            billing::fetch_center(
+                &account.user,
+                &account.pass,
+                compatibility,
+                &state.billing_sessions,
+                emit_progress,
+                publish_module,
+            ),
         )
         .await
         {
@@ -6292,9 +6531,15 @@ async fn query_billing_records(
     let _fetch_guard = state.billing_fetch_lock.lock().await;
     ensure_billing_foreground(&state)?;
     let result = run_billing_read_while_foreground(&state, async {
-        billing::query_records(&account.user, &account.pass, compatibility, &query)
-            .await
-            .map_err(|error| error.user_message())
+        billing::query_records(
+            &account.user,
+            &account.pass,
+            compatibility,
+            &state.billing_sessions,
+            &query,
+        )
+        .await
+        .map_err(|error| error.user_message())
     })
     .await;
     match &result {
@@ -6332,6 +6577,9 @@ async fn perform_billing_action(
         let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
         (account, Some(compatibility))
     };
+    // A write may succeed even when its response is lost. Never retain a
+    // pre-write dashboard session across any mutation attempt.
+    state.billing_sessions.lock().unwrap().remove(&account.user);
     let new_password = request.new_password.clone();
     let mut result = if action == "changePassword" {
         ensure_billing_foreground(&state)?;
@@ -6394,7 +6642,6 @@ async fn perform_billing_action(
         })?;
         result.message = format!("{}；App 中的账号密码已同步更新", result.message);
     }
-
     let action_label = match action.as_str() {
         "stopNow" => "立即停机",
         "reopenNow" => "立即复通",
@@ -7408,6 +7655,7 @@ async fn disconnect_billing_session(
         .map_err(|error| error.user_message())
     })
     .await;
+    state.billing_sessions.lock().unwrap().remove(&account.user);
     match &result {
         Ok(_) => rust_log(
             &app,
@@ -7437,6 +7685,7 @@ async fn set_billing_mauth(
             .map_err(|error| error.user_message())
     })
     .await;
+    state.billing_sessions.lock().unwrap().remove(&account.user);
     match &result {
         Ok(_) => rust_log(
             &app,
@@ -7520,9 +7769,49 @@ fn log_from_js(
     rust_log(&app, &state, &module, &message, &log_type);
 }
 
+fn update_billing_background_lifecycle(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    is_background: bool,
+) {
+    let previous = state.is_in_background.swap(is_background, Ordering::SeqCst);
+    if previous == is_background {
+        return;
+    }
+    let generation = state
+        .billing_session_expiry_generation
+        .fetch_add(1, Ordering::SeqCst)
+        .wrapping_add(1);
+    if !is_background {
+        return;
+    }
+    let app = app.clone();
+    let state = state.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(15 * 60)).await;
+        if state.is_in_background.load(Ordering::SeqCst)
+            && state
+                .billing_session_expiry_generation
+                .load(Ordering::SeqCst)
+                == generation
+        {
+            let removed = state.billing_sessions.lock().unwrap().clear();
+            if removed > 0 {
+                rust_log(
+                    &app,
+                    &state,
+                    "计费",
+                    &format!("App 已在后台停留 15 分钟，已销毁 {removed} 个计费登录会话"),
+                    "debug",
+                );
+            }
+        }
+    });
+}
+
 #[tauri::command]
 fn set_background_state(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>, is_bg: bool) {
-    state.is_in_background.store(is_bg, Ordering::SeqCst);
+    update_billing_background_lifecycle(&app, state.inner(), is_bg);
     #[cfg(not(target_os = "android"))]
     let _ = &app;
     #[cfg(target_os = "android")]
@@ -7891,7 +8180,10 @@ pub fn run() {
             })),
             auto_login_paused_until: std::sync::atomic::AtomicI64::new(0),
             usage_alert_history: Mutex::new(HashMap::new()),
+            update_download: UpdateDownloadControl::default(),
             billing_fetch_lock: tokio::sync::Mutex::new(()),
+            billing_sessions: Mutex::new(billing::BillingSessionPool::default()),
+            billing_session_expiry_generation: AtomicU64::new(0),
             campus_service_lock: tokio::sync::Mutex::new(()),
             campus_recharge_pending: tokio::sync::Mutex::new(None),
             campus_alipay_recharge_pending: tokio::sync::Mutex::new(None),
@@ -8086,13 +8378,19 @@ pub fn run() {
                 let window_state = state_clone.clone();
                 window.on_window_event(move |event| match event {
                     tauri::WindowEvent::Focused(focused) => {
-                        window_state
-                            .is_in_background
-                            .store(!focused, Ordering::SeqCst);
+                        update_billing_background_lifecycle(
+                            window_clone.app_handle(),
+                            &window_state,
+                            !focused,
+                        );
                     }
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
-                        window_state.is_in_background.store(true, Ordering::SeqCst);
+                        update_billing_background_lifecycle(
+                            window_clone.app_handle(),
+                            &window_state,
+                            true,
+                        );
                         let _ = window_clone.hide();
                     }
                     _ => {}
@@ -8290,6 +8588,7 @@ pub fn run() {
             get_update_target,
             fetch_latest_official_release_tag,
             fetch_official_update_manifest,
+            control_update_download,
             download_and_install_update,
             reinstall_current_version,
             log_from_js,
@@ -8318,6 +8617,18 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_download_control_releases_exclusive_state_on_drop() {
+        let control = UpdateDownloadControl::default();
+        let guard = control.begin().unwrap();
+        assert!(control.begin().is_err());
+        control.paused.store(true, Ordering::SeqCst);
+        drop(guard);
+        assert!(!control.active.load(Ordering::SeqCst));
+        assert!(!control.paused.load(Ordering::SeqCst));
+        assert!(control.begin().is_ok());
+    }
 
     #[test]
     fn mobile_data_runtime_policy_is_android_only() {
@@ -8982,6 +9293,7 @@ mod tests {
         assert_eq!(login_type_from_profile("bjut-wifi"), Some(LoginType::Type2));
         assert_eq!(login_type_from_profile("bjut_wifi"), Some(LoginType::Type2));
         assert_eq!(login_type_from_profile("wired"), Some(LoginType::Type3));
+        assert_eq!(login_type_from_profile("lgn-wired"), Some(LoginType::Type3));
     }
 
     #[test]

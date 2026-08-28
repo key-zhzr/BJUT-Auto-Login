@@ -134,6 +134,22 @@ pub(crate) struct BillingCenterData {
     pub warnings: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "module", content = "data", rename_all = "camelCase")]
+pub(crate) enum BillingCenterModuleUpdate {
+    Overview(BillingSnapshot),
+    Service(BillingServiceState),
+    Devices(BillingTable),
+    Security(BillingSecurityModule),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BillingSecurityModule {
+    pub password_policy: BillingPasswordPolicy,
+    pub security_questions: Vec<BillingSecurityQuestion>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BillingQuestionAnswer {

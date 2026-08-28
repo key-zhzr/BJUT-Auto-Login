@@ -6,10 +6,11 @@ use reqwest::header::SET_COOKIE;
 use reqwest::header::{HeaderMap, ACCEPT, ACCEPT_LANGUAGE, COOKIE, LOCATION, ORIGIN, REFERER};
 use reqwest::{Client, Response, Url};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cookie_jar::CookieJar;
 use crate::portal_auth::PortalRouteContext;
@@ -65,6 +66,62 @@ struct BillingSession {
     dashboard_url: Url,
     dashboard_html: String,
     ajax_csrf_token: Option<String>,
+}
+
+struct CachedBillingSession {
+    session: BillingSession,
+    password_fingerprint: [u8; 32],
+    compatibility: VpnCompatibility,
+    last_used: Instant,
+}
+
+#[derive(Default)]
+pub(crate) struct BillingSessionPool {
+    sessions: HashMap<String, CachedBillingSession>,
+}
+
+impl BillingSessionPool {
+    fn take(
+        &mut self,
+        account: &str,
+        password: &str,
+        compatibility: VpnCompatibility,
+    ) -> Option<BillingSession> {
+        let cached = self.sessions.remove(account)?;
+        let password_fingerprint: [u8; 32] = Sha256::digest(password.as_bytes()).into();
+        (cached.password_fingerprint == password_fingerprint
+            && cached.compatibility == compatibility
+            && cached.last_used.elapsed() <= Duration::from_secs(8 * 60 * 60))
+        .then_some(cached.session)
+    }
+
+    fn put(
+        &mut self,
+        account: &str,
+        password: &str,
+        compatibility: VpnCompatibility,
+        session: BillingSession,
+    ) {
+        self.sessions.insert(
+            account.to_string(),
+            CachedBillingSession {
+                session,
+                password_fingerprint: Sha256::digest(password.as_bytes()).into(),
+                compatibility,
+                last_used: Instant::now(),
+            },
+        );
+    }
+
+    pub(crate) fn remove(&mut self, account: &str) {
+        self.sessions.remove(account);
+    }
+
+    pub(crate) fn clear(&mut self) -> usize {
+        let count = self.sessions.len();
+        self.sessions.clear();
+        count
+    }
 }
 
 struct AccountDiscoverySession {
@@ -141,21 +198,53 @@ struct ValidatedBillingRecordQuery {
     all: bool,
 }
 
-pub(crate) async fn fetch_center<F>(
+async fn acquire_billing_session(
+    pool: &std::sync::Mutex<BillingSessionPool>,
     account: &str,
     password: &str,
     compatibility: VpnCompatibility,
+) -> Result<(BillingSession, bool), BillingError> {
+    let cached = pool.lock().unwrap().take(account, password, compatibility);
+    if let Some(mut session) = cached {
+        if let Ok(dashboard_html) = get_page_text(&mut session, BILLING_DASHBOARD_PATH).await {
+            if embedded_user_json(&dashboard_html).is_some() {
+                session.dashboard_html = dashboard_html;
+                return Ok((session, true));
+            }
+        }
+    }
+    authenticate(account, password, compatibility)
+        .await
+        .map(|session| (session, false))
+}
+
+pub(crate) async fn fetch_center<F, U>(
+    account: &str,
+    password: &str,
+    compatibility: VpnCompatibility,
+    pool: &std::sync::Mutex<BillingSessionPool>,
     progress: F,
+    publish: U,
 ) -> Result<BillingCenterData, BillingError>
 where
     F: Fn(&str, u8) + Send + Sync + 'static,
+    U: Fn(BillingCenterModuleUpdate) + Send + Sync + 'static,
 {
-    progress("正在连接并登录计费系统", 5);
-    let mut session = authenticate(account, password, compatibility).await?;
+    progress("正在恢复或登录计费系统会话", 5);
+    let (mut session, reused) =
+        acquire_billing_session(pool, account, password, compatibility).await?;
     let result = async {
-        progress("登录成功，正在解析账户概览", 18);
+        progress(
+            if reused {
+                "已复用账号会话，正在刷新账户概览"
+            } else {
+                "登录成功，正在解析账户概览"
+            },
+            18,
+        );
         let mut overview = parse_dashboard_bounded(&session.dashboard_html, account).await?;
         populate_dashboard_details(&mut session, &mut overview, &progress).await;
+        publish(BillingCenterModuleUpdate::Overview(overview.clone()));
         let end_date = chrono::Local::now().date_naive();
         let start_date = end_date - chrono::Duration::days(60);
         let query_start_date = start_date.format("%Y-%m-%d").to_string();
@@ -196,6 +285,15 @@ where
             &mut warnings,
         )
         .await;
+        let service = parse_service_state(
+            &session.dashboard_html,
+            &stop_html,
+            &reopen_html,
+            &package_html,
+            &protect_html,
+            active_package_reservation.as_ref(),
+        );
+        publish(BillingCenterModuleUpdate::Service(service.clone()));
 
         let device_params = [
             ("pageSize", "100"),
@@ -215,6 +313,7 @@ where
             &mut warnings,
         )
         .await;
+        publish(BillingCenterModuleUpdate::Devices(devices.clone()));
 
         progress("正在读取安全设置", 91);
         let questions_html = get_page_bounded(
@@ -224,6 +323,19 @@ where
             &mut warnings,
         )
         .await;
+        let password_policy = BillingPasswordPolicy {
+            min_length: 12,
+            max_length: 16,
+            require_uppercase: true,
+            require_lowercase: true,
+            require_digit: true,
+            require_special: true,
+        };
+        let security_questions = parse_security_questions(&questions_html);
+        publish(BillingCenterModuleUpdate::Security(BillingSecurityModule {
+            password_policy: password_policy.clone(),
+            security_questions: security_questions.clone(),
+        }));
 
         let data = BillingCenterData {
             account: account.to_string(),
@@ -241,25 +353,11 @@ where
             package_logs: BillingTable::default(),
             devices,
             tariff_groups: BillingTable::default(),
-            service: parse_service_state(
-                &session.dashboard_html,
-                &stop_html,
-                &reopen_html,
-                &package_html,
-                &protect_html,
-                active_package_reservation.as_ref(),
-            ),
+            service,
             // Password changes are handled by BJUT unified authentication,
             // whose currently deployed rule was verified from /api/register/rules.
-            password_policy: BillingPasswordPolicy {
-                min_length: 12,
-                max_length: 16,
-                require_uppercase: true,
-                require_lowercase: true,
-                require_digit: true,
-                require_special: true,
-            },
-            security_questions: parse_security_questions(&questions_html),
+            password_policy,
+            security_questions,
             // Recharge is provided through unified authentication and the
             // mobile portal, not the legacy jfself recharge page.
             recharge_available: true,
@@ -268,9 +366,13 @@ where
         Ok(data)
     }
     .await;
-    logout(&mut session).await;
     if result.is_ok() {
+        pool.lock()
+            .unwrap()
+            .put(account, password, compatibility, session);
         progress("计费中心数据读取完成", 100);
+    } else {
+        pool.lock().unwrap().remove(account);
     }
     result
 }
@@ -279,11 +381,12 @@ pub(crate) async fn query_records(
     account: &str,
     password: &str,
     compatibility: VpnCompatibility,
+    pool: &std::sync::Mutex<BillingSessionPool>,
     request: &BillingRecordQuery,
 ) -> Result<BillingRecordResult, BillingError> {
     let query = validate_record_query(request)?;
     let spec = record_spec(query.kind);
-    let mut session = authenticate(account, password, compatibility).await?;
+    let (mut session, _) = acquire_billing_session(pool, account, password, compatibility).await?;
     let result = async {
         // Load the corresponding module before its AJAX endpoint so the
         // session has the page-local CSRF state expected by jfself.
@@ -305,7 +408,13 @@ pub(crate) async fn query_records(
         })
     }
     .await;
-    logout(&mut session).await;
+    if result.is_ok() {
+        pool.lock()
+            .unwrap()
+            .put(account, password, compatibility, session);
+    } else {
+        pool.lock().unwrap().remove(account);
+    }
     result
 }
 
@@ -3844,6 +3953,61 @@ fn decode_html_entities(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn synthetic_billing_session() -> BillingSession {
+        BillingSession {
+            client: Client::builder().build().unwrap(),
+            cookies: SessionCookies::default(),
+            dashboard_url: Url::parse("https://jfself.bjut.edu.cn/Self/dashboard").unwrap(),
+            dashboard_html: String::new(),
+            ajax_csrf_token: None,
+        }
+    }
+
+    #[test]
+    fn billing_session_pool_is_scoped_to_account_password_and_compatibility() {
+        let mut pool = BillingSessionPool::default();
+        pool.put(
+            "25000000",
+            "secret",
+            VpnCompatibility::High,
+            synthetic_billing_session(),
+        );
+        assert!(pool
+            .take("25000000", "wrong", VpnCompatibility::High)
+            .is_none());
+
+        pool.put(
+            "25000000",
+            "secret",
+            VpnCompatibility::High,
+            synthetic_billing_session(),
+        );
+        assert!(pool
+            .take("25000000", "secret", VpnCompatibility::Low)
+            .is_none());
+
+        pool.put(
+            "25000000",
+            "secret",
+            VpnCompatibility::High,
+            synthetic_billing_session(),
+        );
+        assert!(pool
+            .take("25000000", "secret", VpnCompatibility::High)
+            .is_some());
+    }
+
+    #[test]
+    fn billing_module_updates_use_stable_frontend_names() {
+        let update = BillingCenterModuleUpdate::Devices(BillingTable::default());
+        let value = serde_json::to_value(update).unwrap();
+        assert_eq!(
+            value.get("module").and_then(|value| value.as_str()),
+            Some("devices")
+        );
+        assert!(value.get("data").is_some_and(serde_json::Value::is_object));
+    }
 
     #[test]
     fn parses_signed_self_service_account_discovery_url() {

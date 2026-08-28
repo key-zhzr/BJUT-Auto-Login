@@ -1,7 +1,7 @@
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
-  Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
+  Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minimize2, Minus, MonitorSmartphone, Pause, Play, Plus, Power, Smartphone,
   QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
   WalletCards, WifiOff, X,
 } from 'lucide';
@@ -33,7 +33,7 @@ import {
 import type {
   AccountView, ActiveAlipayPayment, ActiveWechatPayment, AlipayRechargePreview,
   AlipayRechargeResult, AppLogEntry, BackendConfig, BillingActionRequest,
-  BillingActionResult, BillingCenterData, BillingPasswordPolicy, BillingQuestionAnswer,
+  BillingActionResult, BillingCenterData, BillingCenterModuleUpdate, BillingPasswordPolicy, BillingQuestionAnswer,
   BillingLoginRecord, BillingOnlineSession, BillingOverview, BillingPackageOption,
   BillingRecordKind, BillingRecordQuery, BillingRecordQueryState, BillingRecordResult,
   BillingServiceState, BillingTable, CountdownPayload, CredentialStorageHealth,
@@ -48,7 +48,7 @@ import type {
 const icons = {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
-  Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minus, MonitorSmartphone, Plus, Power, Smartphone,
+  Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minimize2, Minus, MonitorSmartphone, Pause, Play, Plus, Power, Smartphone,
   QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
   WalletCards, WifiOff, X,
 };
@@ -372,6 +372,21 @@ interface PermissionHealthItem {
   detail?: string;
 }
 
+let updateDownloadPaused = false;
+let updateDownloadInProgress = false;
+
+function setUpdateDownloadControls(visible: boolean) {
+  const controls = document.getElementById('update-download-controls');
+  const pause = document.getElementById('btn-update-pause') as HTMLButtonElement | null;
+  if (controls) controls.hidden = !visible;
+  if (pause) {
+    pause.disabled = !visible;
+    const label = pause.querySelector('span');
+    if (label) label.textContent = updateDownloadPaused ? '继续' : '暂停';
+    pause.querySelector('svg')?.setAttribute('data-lucide', updateDownloadPaused ? 'play' : 'pause');
+  }
+}
+
 function updateUpdateProgress(data: UpdateProgress) {
   const progressWrap = document.getElementById('update-progress-wrap');
   const progressBar = document.getElementById('update-progress-bar') as HTMLElement | null;
@@ -379,11 +394,49 @@ function updateUpdateProgress(data: UpdateProgress) {
   if (!progressWrap || !progressBar || !progressText) return;
 
   progressWrap.classList.remove('hidden');
-  if (data.status === 'installing') {
-    progressBar.style.width = '100%';
-    progressText.textContent = '下载完成，正在启动系统安装程序…';
+  if (data.status === 'paused') {
+    updateDownloadPaused = true;
+    progressText.textContent = '下载已暂停，可继续、停止或转到后台。';
+    setUpdateDownloadControls(true);
+    renderIcons(document.getElementById('update-download-controls')!);
     return;
   }
+  if (data.status === 'resumed') {
+    updateDownloadPaused = false;
+    progressText.textContent = '正在继续下载…';
+    setUpdateDownloadControls(true);
+    renderIcons(document.getElementById('update-download-controls')!);
+    return;
+  }
+  if (data.status === 'stopping') {
+    progressText.textContent = '正在停止并丢弃本次下载…';
+    setUpdateDownloadControls(false);
+    return;
+  }
+  if (data.status === 'cancelled') {
+    updateDownloadInProgress = false;
+    updateDownloadPaused = false;
+    progressText.textContent = '下载已停止';
+    setUpdateDownloadControls(false);
+    return;
+  }
+  if (data.status === 'verifying') {
+    progressBar.style.width = '100%';
+    progressText.textContent = '下载完成，正在校验完整包…';
+    setUpdateDownloadControls(false);
+    return;
+  }
+  if (data.status === 'installing') {
+    updateDownloadInProgress = false;
+    updateDownloadPaused = false;
+    progressBar.style.width = '100%';
+    progressText.textContent = '下载完成，正在启动系统安装程序…';
+    setUpdateDownloadControls(false);
+    return;
+  }
+  updateDownloadInProgress = true;
+  updateDownloadPaused = false;
+  setUpdateDownloadControls(true);
   const percent = typeof data.percent === 'number' ? Math.max(0, Math.min(100, data.percent)) : null;
   progressBar.style.width = percent === null ? '35%' : `${percent}%`;
   const received = formatBytes(data.received || 0);
@@ -441,6 +494,9 @@ async function showUpdateDialog(
   progressWrap.classList.add('hidden');
   progressBar.style.width = '0';
   progressText.textContent = '准备下载…';
+  updateDownloadPaused = false;
+  updateDownloadInProgress = false;
+  setUpdateDownloadControls(false);
   modal.classList.remove('hidden');
 
   return new Promise(resolve => {
@@ -463,6 +519,9 @@ async function showUpdateDialog(
       cleanup();
       actions.hidden = true;
       progressWrap.classList.remove('hidden');
+      updateDownloadInProgress = true;
+      setUpdateDownloadControls(true);
+      renderIcons(document.getElementById('update-download-controls')!);
       resolve('install');
     };
     cancelButton.addEventListener('click', onCancel);
@@ -470,6 +529,43 @@ async function showUpdateDialog(
     confirmButton.addEventListener('click', onConfirm);
   });
 }
+
+function setupUpdateDownloadControls() {
+  const pause = document.getElementById('btn-update-pause') as HTMLButtonElement | null;
+  const background = document.getElementById('btn-update-background') as HTMLButtonElement | null;
+  const stop = document.getElementById('btn-update-stop') as HTMLButtonElement | null;
+  if (!pause || !background || !stop || pause.dataset.bound === 'true') return;
+  pause.dataset.bound = 'true';
+  pause.addEventListener('click', async () => {
+    if (!updateDownloadInProgress) return;
+    pause.disabled = true;
+    try {
+      await invoke('control_update_download', { action: updateDownloadPaused ? 'resume' : 'pause' });
+    } catch (error) {
+      await customAlert(`无法控制下载：${String(error)}`, '更新下载');
+    } finally {
+      pause.disabled = false;
+    }
+  });
+  background.addEventListener('click', () => {
+    if (!updateDownloadInProgress) return;
+    document.getElementById('update-modal')?.classList.add('hidden');
+    log('系统', '更新包继续在后台下载', 'info');
+  });
+  stop.addEventListener('click', async () => {
+    if (!updateDownloadInProgress) return;
+    stop.disabled = true;
+    try {
+      await invoke('control_update_download', { action: 'stop' });
+    } catch (error) {
+      await customAlert(`无法停止下载：${String(error)}`, '更新下载');
+    } finally {
+      stop.disabled = false;
+    }
+  });
+}
+
+setupUpdateDownloadControls();
 
 function saveSetting(key: string, value: string) {
   localStorage.setItem(key, value);
@@ -780,9 +876,9 @@ function applyNetworkStatePayload(data: NetworkStatePayload) {
   let state = NetworkState.Offline;
   if (data.state === 'Online') state = NetworkState.Online;
   else if (data.state === 'BjutCampus') state = NetworkState.BjutCampus;
-  const loginType = data.loginType === 'Type1_221_98' ? LoginType.Type1_221_98
-    : data.loginType === 'Type2_251_3' ? LoginType.Type2_251_3
-    : data.loginType === 'Type3_172_30' ? LoginType.Type3_172_30
+  const loginType = ['bjut-sushe', 'Type1_221_98'].includes(data.loginType || '') ? LoginType.BjutSushe
+    : ['bjut_wifi', 'Type2_251_3'].includes(data.loginType || '') ? LoginType.BjutWifi
+    : ['lgn-wired', 'Type3_172_30'].includes(data.loginType || '') ? LoginType.LgnWired
     : LoginType.Unknown;
 
   currentNetworkState = state;
@@ -860,6 +956,26 @@ async function initializeRustEvents() {
         updateBillingRefreshProgress(event.payload.percent ?? 0, true);
         billingCenterMessage.textContent = message;
         syncBillingCenterMessageVisibility();
+      },
+    )),
+    settle('计费模块事件', listen<BillingCenterModuleUpdate>(
+      'billing-center-module',
+      event => {
+        if (!billingCenterLoading || event.payload.account !== selectedBillingAccountUser()) return;
+        const update = event.payload;
+        if (update.module === 'overview') {
+          renderBillingCenter(billingOverviewToUserInfo(update.data));
+        } else if (update.module === 'service') {
+          renderBillingService({ service: update.data } as BillingCenterData);
+        } else if (update.module === 'devices') {
+          renderBillingDevices({ devices: update.data } as BillingCenterData);
+        } else if (update.module === 'security') {
+          renderBillingSecurity({
+            passwordPolicy: update.data.passwordPolicy,
+            securityQuestions: update.data.securityQuestions,
+          } as BillingCenterData);
+        }
+        renderIcons(document.getElementById('billing-center')!);
       },
     )),
     settle('账号健康事件', listen<AccountHealth[]>('account-health-change', event => {
@@ -1194,10 +1310,10 @@ enum NetworkState {
 }
 
 enum LoginType {
-  Type1_221_98,
-  Type2_251_3,
-  Type3_172_30,
-  Unknown
+  BjutSushe = 'bjut-sushe',
+  BjutWifi = 'bjut_wifi',
+  LgnWired = 'lgn 有线',
+  Unknown = '未识别'
 }
 
 // UI Elements
@@ -2003,9 +2119,9 @@ function renderNetworkProfiles() {
     const typePolicy = profile.auto_login_types || {};
     const legacyAutoLogin = profile.auto_login !== false;
     const enabledTypes = [
-      (typePolicy.type1 ?? legacyAutoLogin) ? '宿舍' : '',
-      (typePolicy.type2 ?? legacyAutoLogin) ? '教学' : '',
-      (typePolicy.type3 ?? legacyAutoLogin) ? '有线' : '',
+      (typePolicy.type1 ?? legacyAutoLogin) ? 'bjut-sushe' : '',
+      (typePolicy.type2 ?? legacyAutoLogin) ? 'bjut_wifi' : '',
+      (typePolicy.type3 ?? legacyAutoLogin) ? 'lgn 有线' : '',
     ].filter(Boolean).join('/');
     details.textContent = `${network} · ${profile.login_type === 'auto' ? '自动协议' : profile.login_type} · 自动登录 ${enabledTypes || '全关'} · ${account}`;
     info.append(title, details);
@@ -3269,6 +3385,11 @@ function setupEventListeners() {
           throw error;
         }
       } catch (err) {
+        if (String(err).includes('更新包下载已停止')) {
+          document.getElementById('update-modal')?.classList.add('hidden');
+          log('系统', '用户已停止更新包下载', 'info');
+          return;
+        }
         console.error('Update check failed:', err);
         await customAlert(`检查或安装更新失败：${String(err)}`);
         log('系统', `检查更新失败: ${String(err)}`, 'error');
@@ -3326,6 +3447,10 @@ function setupEventListeners() {
         window.setTimeout(() => document.getElementById('update-modal')?.classList.add('hidden'), 2500);
       } catch (error) {
         document.getElementById('update-modal')?.classList.add('hidden');
+        if (String(error).includes('更新包下载已停止')) {
+          log('系统', '用户已停止完整包下载', 'info');
+          return;
+        }
         await customAlert(`无法重新下载完整包：${String(error)}`, '重新下载完整包');
         log('系统', `重新下载完整包失败：${String(error)}`, 'error');
       } finally {
@@ -3553,6 +3678,10 @@ function setupEventListeners() {
           const previousAccounts = getAccounts().map(account => ({ ...account }));
           const previousBillingAccount = selectedBillingAccountUser();
           if (!previousAccounts[index]) return;
+          const willDisable = !previousAccounts[index].isDisabled;
+          parent.classList.add(willDisable ? 'account-disabling' : 'account-enabling');
+          avatar.classList.add('account-avatar-pressed');
+          await new Promise(resolve => window.setTimeout(resolve, 190));
           const nextAccounts = previousAccounts.map((account, accountIndex) => accountIndex === index
             ? { ...account, isDisabled: !account.isDisabled }
             : { ...account });
@@ -5027,7 +5156,14 @@ function renderBillingCenterData(data: BillingCenterData) {
   renderIcons(document.getElementById('billing-center')!);
 }
 
+let billingRefreshFadeTimer: number | null = null;
+
 function updateBillingRefreshProgress(percent: number, loading: boolean) {
+  if (billingRefreshFadeTimer !== null && loading) {
+    window.clearTimeout(billingRefreshFadeTimer);
+    billingRefreshFadeTimer = null;
+  }
+  btnRefreshBillingCenter.classList.remove('is-complete', 'is-fading');
   const normalized = Math.max(0, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
   btnRefreshBillingCenter.style.setProperty('--billing-refresh-progress', `${normalized}%`);
   btnRefreshBillingCenter.classList.toggle('is-loading', loading);
@@ -5045,6 +5181,25 @@ function updateBillingRefreshProgress(percent: number, loading: boolean) {
   }
 }
 
+function finishBillingRefreshProgress() {
+  if (billingRefreshFadeTimer !== null) window.clearTimeout(billingRefreshFadeTimer);
+  btnRefreshBillingCenter.style.setProperty('--billing-refresh-progress', '100%');
+  btnRefreshBillingCenter.classList.remove('is-loading');
+  btnRefreshBillingCenter.classList.add('is-complete');
+  billingRefreshLabel.textContent = '完成';
+  btnRefreshBillingCenter.removeAttribute('role');
+  btnRefreshBillingCenter.removeAttribute('aria-valuemin');
+  btnRefreshBillingCenter.removeAttribute('aria-valuemax');
+  btnRefreshBillingCenter.removeAttribute('aria-valuenow');
+  requestAnimationFrame(() => btnRefreshBillingCenter.classList.add('is-fading'));
+  billingRefreshFadeTimer = window.setTimeout(() => {
+    billingRefreshFadeTimer = null;
+    btnRefreshBillingCenter.classList.remove('is-complete', 'is-fading');
+    btnRefreshBillingCenter.style.setProperty('--billing-refresh-progress', '0%');
+    billingRefreshLabel.textContent = '刷新';
+  }, 720);
+}
+
 async function refreshBillingCenterData() {
   if (billingRecordQueryBusy || billingCenterLoading) return;
   if (!await ensureBillingRequestForeground()) return;
@@ -5060,10 +5215,12 @@ async function refreshBillingCenterData() {
   updateBillingRefreshProgress(2, true);
   billingCenterMessage.textContent = '正在连接计费系统';
   syncBillingCenterMessageVisibility();
+  let completed = false;
   try {
     const data = await invoke<BillingCenterData>('get_billing_center', { accountUser });
     if (selectedBillingAccountUser() !== accountUser) return;
     renderBillingCenterData(data);
+    completed = true;
   } catch (error) {
     billingCenterMessage.textContent = `完整计费数据读取失败：${String(error)}`;
     syncBillingCenterMessageVisibility();
@@ -5071,7 +5228,8 @@ async function refreshBillingCenterData() {
   } finally {
     btnRefreshBillingCenter.disabled = false;
     billingAccountSelect.setDisabled(false);
-    updateBillingRefreshProgress(0, false);
+    if (completed) finishBillingRefreshProgress();
+    else updateBillingRefreshProgress(0, false);
     setBillingRecordQueryBusy(false);
     billingCenterLoading = false;
   }

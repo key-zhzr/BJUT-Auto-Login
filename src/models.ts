@@ -185,7 +185,7 @@ export interface UpdateTarget {
 }
 
 export interface UpdateProgress {
-  status: 'downloading' | 'installing';
+  status: 'downloading' | 'paused' | 'resumed' | 'stopping' | 'cancelled' | 'verifying' | 'installing';
   received?: number;
   total?: number;
   percent?: number | null;
@@ -377,6 +377,16 @@ export interface BillingCenterData {
   rechargeAvailable: boolean;
   warnings: string[];
 }
+
+export type BillingCenterModuleUpdate =
+  | { account: string; module: 'overview'; data: BillingOverview }
+  | { account: string; module: 'service'; data: BillingServiceState }
+  | { account: string; module: 'devices'; data: BillingTable }
+  | {
+      account: string;
+      module: 'security';
+      data: { passwordPolicy: BillingPasswordPolicy; securityQuestions: BillingSecurityQuestion[] };
+    };
 
 export interface BillingQuestionAnswer {
   questionId: string;

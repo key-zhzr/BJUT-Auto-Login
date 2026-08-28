@@ -622,7 +622,8 @@ main {
   border-radius: inherit;
   background: linear-gradient(90deg, rgba(var(--primary-rgb), 0.78), rgba(var(--primary-rgb), 0.94));
   content: '';
-  transition: width 220ms ease;
+  opacity: 1;
+  transition: width 220ms ease, opacity 620ms ease, background-color 620ms ease;
 }
 
 .billing-refresh-button.is-loading {
@@ -631,6 +632,14 @@ main {
 
 .billing-refresh-button.is-loading svg {
   animation: spin 0.9s linear infinite;
+}
+
+.billing-refresh-button.is-complete::before {
+  background: linear-gradient(90deg, rgba(var(--primary-rgb), 0.78), rgba(var(--primary-rgb), 0.94));
+}
+
+.billing-refresh-button.is-complete.is-fading::before {
+  opacity: 0;
 }
 
 .billing-back-button {
@@ -1720,6 +1729,34 @@ button.billing-package-option:hover,
   transform: scale(0.92);
 }
 
+.account-avatar.account-avatar-pressed {
+  animation: accountAvatarPress 190ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.account-item.account-disabling {
+  animation: accountCardDisable 190ms ease both;
+}
+
+.account-item.account-enabling {
+  animation: accountCardEnable 190ms ease both;
+}
+
+@keyframes accountAvatarPress {
+  0% { transform: scale(1); }
+  48% { transform: scale(0.86); }
+  100% { transform: scale(0.96); }
+}
+
+@keyframes accountCardDisable {
+  from { opacity: 1; filter: grayscale(0); background-color: var(--card-bg); }
+  to { opacity: 0.46; filter: grayscale(0.88); background-color: rgba(15, 23, 42, 0.72); }
+}
+
+@keyframes accountCardEnable {
+  from { opacity: 0.4; filter: grayscale(1); background-color: rgba(15, 23, 42, 0.72); }
+  to { opacity: 0.92; filter: grayscale(0.08); background-color: var(--card-bg); }
+}
+
 .account-left, .account-right {
   display: flex;
   align-items: center;
@@ -2064,7 +2101,7 @@ input:checked + .slider:before { transform: translateX(24px); }
 .account-health-info strong,
 .diagnostic-step-info strong { display: block; margin-bottom: 0.2rem; }
 .account-health-info small,
-.diagnostic-step-info small { color: var(--text-muted); line-height: 1.4; }
+.diagnostic-step-info small { color: var(--text-muted); line-height: 1.4; overflow-wrap: anywhere; }
 .account-health-actions { display: flex; align-items: center; gap: 0.5rem; }
 .diagnostic-step-duration { color: var(--text-muted); font-family: monospace; font-size: 0.75rem; }
 .diagnostic-step-marker {
@@ -3136,7 +3173,7 @@ body.is-android .permission-health-row {
   backdrop-filter: none !important;
 }
 body.is-android .page { animation-duration: 0.16s; }
-body.is-android main { contain: layout style; }
+body.is-android main { contain: style; }
 body.is-android.billing-center-active main { contain: style; }
 body.is-android .logs-container { contain: paint style; }
 body.is-android .logs-content { contain: layout paint style; }
@@ -3167,7 +3204,11 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
 
 /* Modals */
 .modal-overlay {
-  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  position: fixed; inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  padding: max(0.75rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
+  overflow-y: auto;
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(4px);
   display: flex; align-items: center; justify-content: center;
@@ -3184,6 +3225,8 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
 }
 .modal-content {
   width: 90%; max-width: 400px;
+  max-height: calc(100dvh - 1.5rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow-y: auto;
   transform: translateY(0) scale(1);
   transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -3501,6 +3544,15 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
 .update-progress-track { height: 8px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; }
 .update-progress-bar { width: 0; height: 100%; background: var(--primary-color); transition: width 0.2s ease; }
 .update-progress-text { margin-top: 0.5rem; color: var(--text-muted); font-size: 0.85rem; text-align: center; }
+.update-download-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.update-download-controls[hidden] { display: none !important; }
+.update-download-controls .btn { min-width: 0; flex: 1 1 7rem; }
 
 #update-modal-actions[hidden] {
   display: none !important;

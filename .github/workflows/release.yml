@@ -28,9 +28,10 @@ jobs:
           - platform: 'windows-latest'
             args: '--target x86_64-pc-windows-msvc -c tauri.offline.conf.json'
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 50
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
@@ -39,14 +40,19 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.platform == 'windows-latest' && 'aarch64-pc-windows-msvc,x86_64-pc-windows-msvc' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
       - name: Install NPM dependencies
         run: npm ci
@@ -169,38 +175,45 @@ jobs:
               print("Successfully copied all artifacts.")
 
       - name: Upload Local Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-artifacts-${{ matrix.platform }}-${{ strategy.job-index }}
           path: release-artifacts/*
+          if-no-files-found: error
 
   build-android-arm64:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Setup Java
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v6
         with:
           distribution: 'zulu'
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         
       - name: Setup NDK
-        run: echo "y" | sudo /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
+        run: sdkmanager "build-tools;36.0.0" "ndk;27.0.12077973"
 
       - name: Install NPM dependencies
         run: npm ci
@@ -219,15 +232,27 @@ jobs:
           find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
 
       - name: Sign Android Release
-        uses: ilharp/sign-android-release@v1
-        id: sign_app
-        with:
-          releaseDir: apk-to-sign
-          signingKey: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          keyAlias: key0
-          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          buildToolsVersion: 34.0.0
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > release.keystore
+          trap 'rm -f release.keystore' EXIT
+          shopt -s nullglob
+          apks=(apk-to-sign/*-unsigned.apk)
+          test "${#apks[@]}" -gt 0
+          for apk in "${apks[@]}"; do
+            output="${apk%-unsigned.apk}-signed.apk"
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+              --ks release.keystore --ks-key-alias key0 \
+              --ks-pass "pass:$ANDROID_KEYSTORE_PASSWORD" \
+              --key-pass "pass:$ANDROID_KEY_PASSWORD" \
+              --out "$output" "$apk"
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$output"
+          done
 
       - name: Get version
         id: package-version
@@ -260,38 +285,45 @@ jobs:
               sys.exit(1)
 
       - name: Upload Local Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-arm64-artifact
           path: android-release/*.apk
+          if-no-files-found: error
 
   build-android-x86_64:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-linux-android
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Setup Java
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v6
         with:
           distribution: 'zulu'
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         
       - name: Setup NDK
-        run: echo "y" | sudo /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973"
+        run: sdkmanager "build-tools;36.0.0" "ndk;27.0.12077973"
 
       - name: Install NPM dependencies
         run: npm ci
@@ -310,15 +342,27 @@ jobs:
           find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
 
       - name: Sign Android Release
-        uses: ilharp/sign-android-release@v1
-        id: sign_app
-        with:
-          releaseDir: apk-to-sign
-          signingKey: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          keyAlias: key0
-          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          buildToolsVersion: 34.0.0
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > release.keystore
+          trap 'rm -f release.keystore' EXIT
+          shopt -s nullglob
+          apks=(apk-to-sign/*-unsigned.apk)
+          test "${#apks[@]}" -gt 0
+          for apk in "${apks[@]}"; do
+            output="${apk%-unsigned.apk}-signed.apk"
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+              --ks release.keystore --ks-key-alias key0 \
+              --ks-pass "pass:$ANDROID_KEYSTORE_PASSWORD" \
+              --key-pass "pass:$ANDROID_KEY_PASSWORD" \
+              --out "$output" "$apk"
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$output"
+          done
 
       - name: Get version
         id: package-version
@@ -351,18 +395,25 @@ jobs:
               sys.exit(1)
 
       - name: Upload Local Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-x86_64-artifact
           path: android-release/*.apk
+          if-no-files-found: error
 
   publish-release:
     needs: [build-desktop, build-android-arm64, build-android-x86_64]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
 
       - name: Get version
         id: get_version
@@ -370,7 +421,7 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: all-release-artifacts
 
@@ -441,7 +492,7 @@ jobs:
               json.dump(manifest, handle, ensure_ascii=False, indent=2)
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.get_version.outputs.version }}
           name: 'BJUT-Auto-Login v${{ steps.get_version.outputs.version }}'

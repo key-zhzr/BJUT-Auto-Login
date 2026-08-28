@@ -39,6 +39,7 @@ impl PortalRouteContext {
         })
     }
 
+    #[cfg(not(target_os = "android"))]
     pub(crate) fn interface_name(&self) -> &str {
         &self.interface_name
     }
@@ -81,10 +82,19 @@ pub(crate) enum LoginType {
 impl LoginType {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
-            Self::Type1 => "Type1_221_98",
-            Self::Type2 => "Type2_251_3",
-            Self::Type3 => "Type3_172_30",
-            Self::Unknown => "Unknown",
+            Self::Type1 => "bjut-sushe",
+            Self::Type2 => "bjut_wifi",
+            Self::Type3 => "lgn-wired",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub(crate) fn display_name(&self) -> &'static str {
+        match self {
+            Self::Type1 => "bjut-sushe",
+            Self::Type2 => "bjut_wifi",
+            Self::Type3 => "lgn 有线",
+            Self::Unknown => "未识别",
         }
     }
 }
@@ -585,6 +595,20 @@ pub(crate) async fn detect_login_type_details_rust(
         }
     }
     portal_only.unwrap_or_else(LoginTypeDetection::not_detected)
+}
+
+pub(crate) async fn diagnose_login_gateways(
+    compatibility: VpnCompatibility,
+    ssid: &str,
+    transport: &str,
+    route_context: Option<&PortalRouteContext>,
+) -> Vec<LoginTypeDetection> {
+    let mut results = Vec::new();
+    for candidate in login_probe_candidates(ssid, transport) {
+        let result = probe_login_type(compatibility, candidate.clone(), route_context).await;
+        results.push(LoginTypeDetection::from_probe(candidate, result));
+    }
+    results
 }
 
 fn parse_dr_response(text: &str) -> Result<(bool, String), String> {
