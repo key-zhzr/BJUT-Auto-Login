@@ -35,13 +35,12 @@ pub(crate) fn usable_physical_ipv4(value: &str) -> Option<std::net::Ipv4Addr> {
     }
 }
 
-/// The Type 3 portal is only valid on BJUT's documented wired 172.30/16
-/// segment. Do not use the broader campus/private-address heuristic here.
+/// Type 3 gateways live on 172.30/16, but wired clients use BJUT's regular
+/// campus address ranges. A captured wired login, for example, used
+/// 172.26.33.104 while talking to 172.30.201.2. Callers additionally require
+/// a physical Ethernet interface before accepting one of these addresses.
 fn is_campus_wired_ipv4(value: &str) -> bool {
-    usable_physical_ipv4(value).is_some_and(|address| {
-        let octets = address.octets();
-        octets[0] == 172 && octets[1] == 30
-    })
+    usable_physical_ipv4(value).is_some() && is_campus_local_ip(value)
 }
 
 #[cfg(target_os = "linux")]
@@ -221,6 +220,7 @@ struct WindowsAdapterIdentity {
     guid: String,
     name: String,
     ip: String,
+    interface_index: u32,
 }
 
 #[cfg(target_os = "windows")]
@@ -349,25 +349,27 @@ fn windows_wlan_observations(include_wifi_details: bool) -> Vec<WindowsWlanObser
 }
 
 #[cfg(target_os = "windows")]
-fn run_hidden_powershell(script: &str) -> String {
-    use std::os::windows::process::CommandExt;
-    let mut command = std::process::Command::new("powershell.exe");
-    command.creation_flags(0x08000000);
-    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
-    command
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .unwrap_or_default()
+fn windows_interface_is_hardware(interface_index: u32) -> bool {
+    use windows::Win32::Foundation::NO_ERROR;
+    use windows::Win32::NetworkManagement::IpHelper::{GetIfEntry2, MIB_IF_ROW2};
+
+    let mut row = MIB_IF_ROW2 {
+        InterfaceIndex: interface_index,
+        ..Default::default()
+    };
+    // SAFETY: row is an initialized in/out structure and remains valid for the
+    // duration of the synchronous API call. HardwareInterface is the first
+    // one-bit field in InterfaceAndOperStatusFlags.
+    let result = unsafe { GetIfEntry2(&mut row) };
+    result == NO_ERROR && row.InterfaceAndOperStatusFlags._bitfield & 1 != 0
 }
 
 #[cfg(target_os = "windows")]
-fn windows_physical_wifi_adapters() -> Vec<WindowsAdapterIdentity> {
+fn windows_physical_adapters(if_type: u32) -> Vec<WindowsAdapterIdentity> {
     use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
     use windows::Win32::NetworkManagement::IpHelper::{
         GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
-        GAA_FLAG_SKIP_MULTICAST, IF_TYPE_IEEE80211, IP_ADAPTER_ADDRESSES_LH,
+        GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
     };
     use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
     use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
@@ -408,7 +410,13 @@ fn windows_physical_wifi_adapters() -> Vec<WindowsAdapterIdentity> {
     while !adapter_ptr.is_null() {
         // SAFETY: adapter_ptr belongs to the linked list returned above.
         let adapter = unsafe { &*adapter_ptr };
-        if adapter.IfType == IF_TYPE_IEEE80211 && adapter.OperStatus == IfOperStatusUp {
+        // SAFETY: this is the active member of the documented
+        // Length/IfIndex header union.
+        let interface_index = unsafe { adapter.Anonymous1.Anonymous.IfIndex };
+        if adapter.IfType == if_type
+            && adapter.OperStatus == IfOperStatusUp
+            && windows_interface_is_hardware(interface_index)
+        {
             // AdapterName is the stable interface GUID used by Native Wi-Fi;
             // FriendlyName is only for display.
             let guid = normalize_windows_guid(
@@ -444,8 +452,8 @@ fn windows_physical_wifi_adapters() -> Vec<WindowsAdapterIdentity> {
                                 guid: guid.clone(),
                                 name: name.clone(),
                                 ip,
+                                interface_index,
                             });
-                            break;
                         }
                     }
                 }
@@ -458,12 +466,30 @@ fn windows_physical_wifi_adapters() -> Vec<WindowsAdapterIdentity> {
 }
 
 #[cfg(target_os = "windows")]
+fn windows_best_route_interface_index(destination: std::net::Ipv4Addr) -> Option<u32> {
+    use windows::Win32::Foundation::NO_ERROR;
+    use windows::Win32::NetworkManagement::IpHelper::{GetBestRoute2, MIB_IPFORWARD_ROW2};
+    use windows::Win32::Networking::WinSock::SOCKADDR_INET;
+
+    let destination = SOCKADDR_INET::from(std::net::SocketAddrV4::new(destination, 0));
+    let mut route = MIB_IPFORWARD_ROW2::default();
+    let mut source = SOCKADDR_INET::default();
+    // SAFETY: all pointers refer to initialized stack values that outlive the
+    // call. With no interface supplied, Windows reports the route it would
+    // actually use for this Type 3 gateway.
+    let result = unsafe { GetBestRoute2(None, 0, None, &destination, 0, &mut route, &mut source) };
+    (result == NO_ERROR && route.InterfaceIndex != 0).then_some(route.InterfaceIndex)
+}
+
+#[cfg(target_os = "windows")]
 fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentity {
+    use windows::Win32::NetworkManagement::IpHelper::{IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211};
+
     let mut identity = WindowsNetworkIdentity::default();
     let observations = windows_wlan_observations(include_wifi_details);
-    let adapters = windows_physical_wifi_adapters();
+    let wifi_adapters = windows_physical_adapters(IF_TYPE_IEEE80211);
 
-    for adapter in &adapters {
+    for adapter in &wifi_adapters {
         if let Some(observation) = observations
             .iter()
             .find(|observation| observation.guid == adapter.guid)
@@ -491,21 +517,37 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
         }
     }
 
-    // Wired identity is selected by the route to the Type 3 campus portal. A
-    // VPN/virtual adapter is rejected, and the fallback still enumerates each
-    // physical adapter together with its own IPv4 instead of guessing from a
-    // global ipconfig dump.
-    let script = "$found=$false; $r=@(Find-NetRoute -RemoteIPAddress '172.30.201.2' -ErrorAction SilentlyContinue); if($r.Count -gt 0){$local=$r[0]; $i=$local.InterfaceIndex; if(-not $i -and $local.NetRoute){$i=$local.NetRoute.InterfaceIndex}; $a=Get-NetAdapter -InterfaceIndex $i -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.HardwareInterface -and $_.MediaType -eq '802.3'} | Select-Object -First 1; if($a -and $local.IPAddress -and $local.IPAddress -like '172.30.*'){Write-Output ($a.Name + \"`t\" + $local.IPAddress); $found=$true}}; if(-not $found){Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.MediaType -eq '802.3'} | ForEach-Object {$adapter=$_; Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $adapter.InterfaceIndex -ErrorAction SilentlyContinue | Where-Object {$_.IPAddress -like '172.30.*'} | ForEach-Object {Write-Output ($adapter.Name + \"`t\" + $_.IPAddress)}}}";
-    let output = run_hidden_powershell(script);
-    if let Some((interface, address)) = output.lines().find_map(|line| {
-        let (interface, address) = line.split_once('\t')?;
-        is_campus_wired_ipv4(address).then_some((interface, address))
-    }) {
+    // Prefer the physical Ethernet adapter Windows would actually use for the
+    // Type 3 gateway. This prevents simultaneous campus Wi-Fi from supplying
+    // the URL address while Windows sends over its preferred wired route. If
+    // the route is hidden by a TUN, a wired-only machine may still use its
+    // coherent per-interface campus IP; the read-only protocol probe must then
+    // succeed before any credential is sent.
+    let wired_adapters = windows_physical_adapters(IF_TYPE_ETHERNET_CSMACD);
+    let routed_interface =
+        windows_best_route_interface_index(std::net::Ipv4Addr::new(172, 30, 201, 2));
+    let routed_wired = routed_interface.and_then(|index| {
+        wired_adapters
+            .iter()
+            .find(|adapter| adapter.interface_index == index && is_campus_wired_ipv4(&adapter.ip))
+    });
+    let wired = routed_wired.or_else(|| {
+        identity
+            .ip
+            .is_empty()
+            .then(|| {
+                wired_adapters
+                    .iter()
+                    .find(|adapter| is_campus_wired_ipv4(&adapter.ip))
+            })
+            .flatten()
+    });
+    if let Some(adapter) = wired {
         identity.ssid.clear();
         identity.bssid.clear();
         identity.wifi_identity_error.clear();
-        identity.interface_name = interface.trim().to_string();
-        identity.ip = address.trim().to_string();
+        identity.interface_name.clone_from(&adapter.name);
+        identity.ip.clone_from(&adapter.ip);
         identity.transport = "ethernet".to_string();
     }
     identity
@@ -8282,14 +8324,21 @@ mod tests {
     }
 
     #[test]
-    fn wired_type3_classification_requires_the_documented_172_30_segment() {
-        for allowed in ["172.30.0.1", "172.30.201.2", "172.30.255.254"] {
+    fn wired_type3_classification_accepts_observed_campus_client_ranges() {
+        for allowed in [
+            "10.21.1.2",
+            "10.26.1.2",
+            "10.126.1.2",
+            "172.17.0.2",
+            "172.26.33.104",
+            "172.30.201.2",
+        ] {
             assert!(is_campus_wired_ipv4(allowed), "{allowed}");
         }
         for rejected in [
-            "10.21.1.2",
-            "10.26.1.2",
-            "172.17.0.2",
+            "10.0.1.2",
+            "10.28.1.2",
+            "172.16.0.2",
             "172.29.255.1",
             "172.31.0.1",
             "198.18.1.2",
