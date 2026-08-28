@@ -26,6 +26,8 @@ tokio = { version = "1", features = ["time", "rt-multi-thread", "sync"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls-vendored", "rustls-tls", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 futures-util = "0.3"
 md5 = "0.7"
