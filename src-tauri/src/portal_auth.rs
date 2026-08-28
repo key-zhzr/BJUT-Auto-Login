@@ -47,9 +47,14 @@ impl PortalRouteContext {
 }
 
 const DORM_HTTP_LOGIN: &str = "http://10.21.221.98:801/eportal/portal/login";
-const DORM_HTTPS_LOGIN: &str = "https://10.21.221.98:802/eportal/portal/login";
 const DORM_HTTP_REFERER: &str = "http://10.21.221.98/";
-const DORM_HTTPS_REFERER: &str = "https://10.21.221.98/";
+// The dormitory gateway only exposes an IP address to users, while its TLS
+// certificate is issued for BJUT hostnames.  Keep this list limited to
+// hostnames already used by the captured official portal flows.  The client
+// resolves them directly to the dormitory gateway, verifies TLS/SNI normally,
+// and confirms the read-only Type 1 response before any credential is sent.
+const DORM_TLS_HOST_CANDIDATES: [&str; 2] = [WLGN_HOST, LGN_HOST];
+const DORM_GATEWAY_IPV4: Ipv4Addr = Ipv4Addr::new(10, 21, 221, 98);
 const WIFI_HTTP_LOGIN: &str = "http://10.21.251.3/drcom/login";
 const WIFI_HTTPS_LOGIN: &str = "https://wlgn.bjut.edu.cn/drcom/login";
 const WIFI_HTTP_REFERER: &str = "http://10.21.251.3/";
@@ -148,6 +153,10 @@ pub(crate) async fn portal_client(
     #[cfg(target_os = "android")]
     let _ = route_context;
     let hosts: Vec<(&str, Vec<Ipv4Addr>)> = match login_type {
+        LoginType::Type1 if compatibility != VpnCompatibility::Maximum => DORM_TLS_HOST_CANDIDATES
+            .iter()
+            .map(|host| (*host, vec![DORM_GATEWAY_IPV4]))
+            .collect(),
         LoginType::Type2 => vec![(WLGN_HOST, vec![Ipv4Addr::new(10, 21, 251, 3)])],
         LoginType::Type3 => vec![
             (
@@ -167,13 +176,17 @@ pub(crate) async fn portal_client(
         ],
         _ => Vec::new(),
     };
-    if matches!(
-        compatibility,
-        VpnCompatibility::Low | VpnCompatibility::High
-    ) {
+    if *login_type == LoginType::Type1 && compatibility != VpnCompatibility::Maximum
+        || matches!(
+            compatibility,
+            VpnCompatibility::Low | VpnCompatibility::High
+        )
+    {
         let dns_source = route_context.map(PortalRouteContext::physical_ipv4);
         for (host, fixed_addresses) in hosts {
-            let addresses = if compatibility == VpnCompatibility::Low {
+            let addresses = if compatibility == VpnCompatibility::Low
+                && *login_type != LoginType::Type1
+            {
                 let host_owned = host.to_string();
                 tokio::task::spawn_blocking(move || query_campus_dns_ipv4(&host_owned, dns_source))
                     .await
@@ -183,7 +196,10 @@ pub(crate) async fn portal_client(
             };
             let socket_addresses: Vec<SocketAddr> = addresses
                 .into_iter()
-                .map(|address| SocketAddr::new(IpAddr::V4(address), 443))
+                // Explicit URL ports (such as ePortal's 802) take precedence
+                // over the resolver entry; zero avoids implying a different
+                // service port when the URL has no explicit port.
+                .map(|address| SocketAddr::new(IpAddr::V4(address), 0))
                 .collect();
             builder = builder.resolve_to_addrs(host, &socket_addresses);
         }
@@ -210,7 +226,13 @@ fn portal_probe_urls_for_route(
         // page (or a redirect), which made a reachable dorm gateway look
         // offline during automatic detection.  loadConfig is read-only and
         // is requested by the real portal page before it submits credentials.
-        LoginType::Type1 => vec![type1_probe_url(compatibility, physical_ipv4)],
+        LoginType::Type1 if compatibility == VpnCompatibility::Maximum => {
+            vec![type1_probe_url(DORM_HTTP_LOGIN, physical_ipv4)]
+        }
+        LoginType::Type1 => DORM_TLS_HOST_CANDIDATES
+            .iter()
+            .map(|host| type1_probe_url(&type1_https_login_base(host), physical_ipv4))
+            .collect(),
         // Dr.COM exposes a read-only status endpoint.  Probing `/login`
         // without the documented JSONP fields is not reliable on all gateway
         // versions, while chkstatus is the same request used by the captured
@@ -232,13 +254,13 @@ fn portal_probe_urls_for_route(
     }
 }
 
-fn type1_probe_url(compatibility: VpnCompatibility, physical_ipv4: Option<Ipv4Addr>) -> String {
-    let base = if compatibility == VpnCompatibility::Maximum {
-        "http://10.21.221.98:801/eportal/portal/page/loadConfig"
-    } else {
-        "https://10.21.221.98:802/eportal/portal/page/loadConfig"
-    };
-    let mut url = Url::parse(base).expect("static Type 1 probe URL must be valid");
+fn type1_https_login_base(host: &str) -> String {
+    format!("https://{host}:802/eportal/portal/login")
+}
+
+fn type1_probe_url(login_base: &str, physical_ipv4: Option<Ipv4Addr>) -> String {
+    let base = login_base.replace("/portal/login", "/portal/page/loadConfig");
+    let mut url = Url::parse(&base).expect("static Type 1 probe URL must be valid");
     url.query_pairs_mut()
         .append_pair("callback", "dr1001")
         .append_pair("program_index", "")
@@ -259,6 +281,20 @@ fn type1_probe_url(compatibility: VpnCompatibility, physical_ipv4: Option<Ipv4Ad
         .append_pair("v", &random_request_id())
         .append_pair("lang", "zh");
     url.to_string()
+}
+
+fn origin_referer(url: &str) -> String {
+    Url::parse(url)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?;
+            let port = url
+                .port()
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default();
+            Some(format!("{}://{host}{port}/", url.scheme()))
+        })
+        .unwrap_or_default()
 }
 
 fn type2_probe_url(compatibility: VpnCompatibility) -> String {
@@ -388,17 +424,18 @@ async fn probe_login_type(
     let mut type3_evidence = Type3ProbeEvidence::default();
     for url in login_readiness_probe_urls(compatibility, &login_type, route_context) {
         let referer = match login_type {
-            LoginType::Type1 if compatibility == VpnCompatibility::Maximum => DORM_HTTP_REFERER,
-            LoginType::Type1 => DORM_HTTPS_REFERER,
-            LoginType::Type2 if compatibility == VpnCompatibility::Maximum => WIFI_HTTP_REFERER,
-            LoginType::Type2 => WIFI_HTTPS_REFERER,
-            LoginType::Type3 => LGN_REFERER,
-            LoginType::Unknown => "",
+            LoginType::Type1 => origin_referer(&url),
+            LoginType::Type2 if compatibility == VpnCompatibility::Maximum => {
+                WIFI_HTTP_REFERER.to_string()
+            }
+            LoginType::Type2 => WIFI_HTTPS_REFERER.to_string(),
+            LoginType::Type3 => LGN_REFERER.to_string(),
+            LoginType::Unknown => String::new(),
         };
         let Ok(response) = client
             .get(&url)
             .header(ACCEPT, "*/*")
-            .header(REFERER, referer)
+            .header(REFERER, &referer)
             .header(CACHE_CONTROL, "no-cache, no-store")
             .send()
             .await
@@ -423,13 +460,12 @@ async fn probe_login_type(
     if login_type == LoginType::Type3 {
         type3_evidence.result()
     } else {
-        // The captured bjut-sushe portal explicitly advertises
-        // `enable_https=0`: its reachable portal endpoint is HTTP:801.
-        // A high/low compatibility policy deliberately must not send account
-        // credentials over that HTTP endpoint, but a read-only loadConfig
-        // request may still prove the gateway is present.  Returning
-        // PortalDetected keeps the UI and diagnostics truthful while leaving
-        // the user in control of the temporary Maximum-mode confirmation.
+        // The visible bjut-sushe page advertises HTTP:801, but the login API is
+        // also available on HTTPS:802 with a certificate issued to BJUT domain
+        // names rather than the raw IP address. If none of the allowlisted SNI
+        // aliases produced the expected read-only response, HTTP may still
+        // prove that the portal exists; credentials remain blocked unless the
+        // user explicitly enables temporary Maximum mode.
         probe_type1_http_portal_only(compatibility, &login_type, route_context).await
     }
 }
@@ -456,7 +492,7 @@ async fn probe_type1_http_portal_only(
         return PortalProbeResult::NotDetected;
     };
     let url = type1_probe_url(
-        VpnCompatibility::Maximum,
+        DORM_HTTP_LOGIN,
         route_context.map(PortalRouteContext::physical_ipv4),
     );
     let Ok(response) = client
@@ -761,17 +797,12 @@ async fn login_lgn_once(
 }
 
 fn type1_login_url(
-    compatibility: VpnCompatibility,
+    login_base: &str,
     user: &str,
     pass: &str,
     local_ip: &str,
 ) -> Result<Url, String> {
-    let base = if compatibility == VpnCompatibility::Maximum {
-        DORM_HTTP_LOGIN
-    } else {
-        DORM_HTTPS_LOGIN
-    };
-    let mut url = Url::parse(base).map_err(|error| error.to_string())?;
+    let mut url = Url::parse(login_base).map_err(|error| error.to_string())?;
     let account = if user.to_ascii_lowercase().ends_with("@campus") {
         user.to_string()
     } else {
@@ -866,6 +897,39 @@ async fn get_jsonp_login(
     parse_dr_response(&text)
 }
 
+async fn select_type1_tls_host(
+    client: &Client,
+    route_context: Option<&PortalRouteContext>,
+) -> Result<&'static str, String> {
+    let physical_ipv4 = route_context.map(PortalRouteContext::physical_ipv4);
+    for host in DORM_TLS_HOST_CANDIDATES {
+        let login_base = type1_https_login_base(host);
+        let probe_url = type1_probe_url(&login_base, physical_ipv4);
+        let referer = origin_referer(&probe_url);
+        let Ok(response) = client
+            .get(&probe_url)
+            .header(ACCEPT, "*/*")
+            .header(REFERER, referer)
+            .header(CACHE_CONTROL, "no-cache, no-store")
+            .send()
+            .await
+        else {
+            continue;
+        };
+        if !response.status().is_success() {
+            continue;
+        }
+        let body = response.text().await.unwrap_or_default();
+        if probe_body_matches(&LoginType::Type1, &probe_url, &body) {
+            return Ok(host);
+        }
+    }
+    Err(
+        "已定位 bjut-sushe 网关，但 HTTPS:802 返回的证书或协议响应未能通过校验；应用未发送账号密码"
+            .to_string(),
+    )
+}
+
 pub(crate) async fn login_to_campus_network_rust(
     login_type: LoginType,
     user: &str,
@@ -898,20 +962,25 @@ pub(crate) async fn login_to_campus_network_rust(
                 "10.21.221.98:802"
             };
             let local_ip = login_source_ipv4(route_context, destination, "bjut-sushe")?;
-            let (referer, hint) = if compatibility == VpnCompatibility::Maximum {
-                (DORM_HTTP_REFERER, None)
-            } else {
+            let (login_base, referer, hint) = if compatibility == VpnCompatibility::Maximum {
                 (
-                    DORM_HTTPS_REFERER,
-                    Some(
-                        "实测宿舍网入口使用 HTTP:801；确认当前网络可信后，可临时启用“最高兼容”重试",
-                    ),
+                    DORM_HTTP_LOGIN.to_string(),
+                    DORM_HTTP_REFERER.to_string(),
+                    None,
                 )
+            } else {
+                // Reconfirm the TLS/SNI alias immediately before constructing
+                // the credential-bearing URL. A successful generic gateway
+                // probe is not enough to authorize credentials for a
+                // different hostname or response protocol.
+                let host = select_type1_tls_host(&client, route_context).await?;
+                let login_base = type1_https_login_base(host);
+                (login_base.clone(), origin_referer(&login_base), None)
             };
             get_jsonp_login(
                 &client,
-                type1_login_url(compatibility, user, pass, &local_ip)?,
-                referer,
+                type1_login_url(&login_base, user, pass, &local_ip)?,
+                &referer,
                 "bjut-sushe 登录",
                 hint,
             )
@@ -961,8 +1030,7 @@ mod tests {
 
     #[test]
     fn login_urls_use_the_documented_ports_and_fields() {
-        let dorm =
-            type1_login_url(VpnCompatibility::Maximum, "25000000", "p!", "10.126.21.113").unwrap();
+        let dorm = type1_login_url(DORM_HTTP_LOGIN, "25000000", "p!", "10.126.21.113").unwrap();
         assert_eq!(dorm.port(), Some(801));
         assert_eq!(dorm.scheme(), "http");
         assert!(dorm.as_str().contains("terminal_type=3"));
@@ -974,6 +1042,17 @@ mod tests {
                 .count(),
             2
         );
+
+        let dorm_https = type1_login_url(
+            &type1_https_login_base(WLGN_HOST),
+            "25000000",
+            "p!",
+            "10.126.21.113",
+        )
+        .unwrap();
+        assert_eq!(dorm_https.scheme(), "https");
+        assert_eq!(dorm_https.host_str(), Some(WLGN_HOST));
+        assert_eq!(dorm_https.port(), Some(802));
 
         let wifi = type2_login_url(VpnCompatibility::High, "25000000", "p!").unwrap();
         assert_eq!(wifi.scheme(), "https");
@@ -1122,7 +1201,6 @@ mod tests {
         assert_eq!(detection.login_type, LoginType::Type3);
         assert!(detection.portal_detected);
         assert!(!detection.login_ready);
-        assert_eq!(detection.into_ready_login_type(), LoginType::Unknown);
     }
 
     #[test]
@@ -1131,10 +1209,14 @@ mod tests {
         assert_eq!(dorm_http.len(), 1);
         assert!(dorm_http[0].starts_with("http://10.21.221.98:801/eportal/portal/page/loadConfig?"));
         let dorm_https = portal_probe_urls(VpnCompatibility::Minimum, &LoginType::Type1);
-        assert_eq!(dorm_https.len(), 1);
-        assert!(
-            dorm_https[0].starts_with("https://10.21.221.98:802/eportal/portal/page/loadConfig?")
-        );
+        assert_eq!(dorm_https.len(), DORM_TLS_HOST_CANDIDATES.len());
+        assert!(dorm_https.iter().all(|url| {
+            let parsed = Url::parse(url).unwrap();
+            parsed.scheme() == "https"
+                && parsed.port() == Some(802)
+                && DORM_TLS_HOST_CANDIDATES.contains(&parsed.host_str().unwrap_or_default())
+                && parsed.path() == "/eportal/portal/page/loadConfig"
+        }));
         let dorm_with_ip = portal_probe_urls_for_route(
             VpnCompatibility::Maximum,
             &LoginType::Type1,

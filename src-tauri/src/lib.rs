@@ -1491,7 +1491,7 @@ fn effective_vpn_compatibility(config: &AppConfig) -> VpnCompatibility {
 }
 
 const TYPE1_MAXIMUM_MODE_REQUIRED_MESSAGE: &str =
-    "已定位 bjut-sushe 认证网关，但该网关当前仅开放 HTTP:801。为避免在未确认时明文发送账号密码，当前 HTTPS 兼容模式不会自动登录；请确认 Wi-Fi 可信后，在设置中临时启用“最高兼容（HTTP + IP）”。";
+    "已定位 bjut-sushe 认证网关，但未找到可通过证书与协议校验的 HTTPS:802 域名入口。应用不会忽略证书错误或静默发送明文密码；请确认 Wi-Fi 可信后，在设置中临时启用“最高兼容（HTTP + IP）”。";
 
 fn type1_portal_requires_maximum(
     detection: &portal_auth::LoginTypeDetection,
@@ -8909,8 +8909,16 @@ mod tests {
     #[test]
     fn vpn_compatibility_selects_secure_or_direct_probe_endpoints() {
         let dorm = portal_probe_urls(VpnCompatibility::Minimum, &LoginType::Type1);
-        assert_eq!(dorm.len(), 1);
-        assert!(dorm[0].starts_with("https://10.21.221.98:802/eportal/portal/page/loadConfig?"));
+        assert_eq!(dorm.len(), 2);
+        assert!(dorm.iter().all(|url| {
+            let url = reqwest::Url::parse(url).unwrap();
+            url.scheme() == "https"
+                && url.port() == Some(802)
+                && url
+                    .host_str()
+                    .is_some_and(|host| host == WLGN_HOST || host == LGN_HOST)
+                && url.path() == "/eportal/portal/page/loadConfig"
+        }));
         let wifi = portal_probe_urls(VpnCompatibility::High, &LoginType::Type2);
         assert_eq!(wifi.len(), 1);
         assert!(wifi[0].starts_with("https://wlgn.bjut.edu.cn/drcom/chkstatus?"));
