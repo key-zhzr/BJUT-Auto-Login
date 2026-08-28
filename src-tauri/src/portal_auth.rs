@@ -324,14 +324,6 @@ impl LoginTypeDetection {
             login_ready: result == PortalProbeResult::LoginReady,
         }
     }
-
-    fn into_ready_login_type(self) -> LoginType {
-        if self.login_ready {
-            self.login_type
-        } else {
-            LoginType::Unknown
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -383,15 +375,15 @@ async fn probe_login_type(
         } else {
             compatibility
         };
-    let Ok(client) = portal_client(
+    let client = portal_client(
         client_compatibility,
         &login_type,
         Duration::from_millis(1800),
         route_context,
     )
-    .await
-    else {
-        return PortalProbeResult::NotDetected;
+    .await;
+    let Ok(client) = client else {
+        return probe_type1_http_portal_only(compatibility, &login_type, route_context).await;
     };
     let mut type3_evidence = Type3ProbeEvidence::default();
     for url in login_readiness_probe_urls(compatibility, &login_type, route_context) {
@@ -430,6 +422,59 @@ async fn probe_login_type(
     }
     if login_type == LoginType::Type3 {
         type3_evidence.result()
+    } else {
+        // The captured bjut-sushe portal explicitly advertises
+        // `enable_https=0`: its reachable portal endpoint is HTTP:801.
+        // A high/low compatibility policy deliberately must not send account
+        // credentials over that HTTP endpoint, but a read-only loadConfig
+        // request may still prove the gateway is present.  Returning
+        // PortalDetected keeps the UI and diagnostics truthful while leaving
+        // the user in control of the temporary Maximum-mode confirmation.
+        probe_type1_http_portal_only(compatibility, &login_type, route_context).await
+    }
+}
+
+/// Confirms that a Type 1 gateway exists without weakening a configured HTTPS
+/// login policy.  This request contains no credentials and is only used after
+/// the policy-preserving probe did not become login-ready.
+async fn probe_type1_http_portal_only(
+    compatibility: VpnCompatibility,
+    login_type: &LoginType,
+    route_context: Option<&PortalRouteContext>,
+) -> PortalProbeResult {
+    if *login_type != LoginType::Type1 || compatibility == VpnCompatibility::Maximum {
+        return PortalProbeResult::NotDetected;
+    }
+    let Ok(client) = portal_client(
+        VpnCompatibility::Maximum,
+        login_type,
+        Duration::from_millis(1800),
+        route_context,
+    )
+    .await
+    else {
+        return PortalProbeResult::NotDetected;
+    };
+    let url = type1_probe_url(
+        VpnCompatibility::Maximum,
+        route_context.map(PortalRouteContext::physical_ipv4),
+    );
+    let Ok(response) = client
+        .get(&url)
+        .header(ACCEPT, "*/*")
+        .header(REFERER, DORM_HTTP_REFERER)
+        .header(CACHE_CONTROL, "no-cache, no-store")
+        .send()
+        .await
+    else {
+        return PortalProbeResult::NotDetected;
+    };
+    if !response.status().is_success() {
+        return PortalProbeResult::NotDetected;
+    }
+    let body = response.text().await.unwrap_or_default();
+    if probe_body_matches(login_type, &url, &body) {
+        PortalProbeResult::PortalDetected
     } else {
         PortalProbeResult::NotDetected
     }
@@ -498,17 +543,6 @@ pub(crate) async fn detect_login_type_details_rust(
         }
     }
     portal_only.unwrap_or_else(LoginTypeDetection::not_detected)
-}
-
-pub(crate) async fn detect_login_type_rust(
-    compatibility: VpnCompatibility,
-    ssid: &str,
-    transport: &str,
-    route_context: Option<&PortalRouteContext>,
-) -> LoginType {
-    detect_login_type_details_rust(compatibility, ssid, transport, route_context)
-        .await
-        .into_ready_login_type()
 }
 
 fn parse_dr_response(text: &str) -> Result<(bool, String), String> {

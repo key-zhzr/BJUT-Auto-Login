@@ -1274,9 +1274,8 @@ use network_trust::{
 #[cfg(test)]
 use portal_auth::portal_probe_urls;
 use portal_auth::{
-    detect_login_type_details_rust, detect_login_type_rust, lgn_user_info_url,
-    login_result_is_ambiguous, login_to_campus_network_rust, portal_client, LoginType,
-    PortalRouteContext,
+    detect_login_type_details_rust, lgn_user_info_url, login_result_is_ambiguous,
+    login_to_campus_network_rust, portal_client, LoginType, PortalRouteContext,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
@@ -1489,6 +1488,19 @@ fn effective_vpn_compatibility(config: &AppConfig) -> VpnCompatibility {
     } else {
         configured
     }
+}
+
+const TYPE1_MAXIMUM_MODE_REQUIRED_MESSAGE: &str =
+    "已定位 bjut-sushe 认证网关，但该网关当前仅开放 HTTP:801。为避免在未确认时明文发送账号密码，当前 HTTPS 兼容模式不会自动登录；请确认 Wi-Fi 可信后，在设置中临时启用“最高兼容（HTTP + IP）”。";
+
+fn type1_portal_requires_maximum(
+    detection: &portal_auth::LoginTypeDetection,
+    compatibility: VpnCompatibility,
+) -> bool {
+    detection.login_type == LoginType::Type1
+        && detection.portal_detected
+        && !detection.login_ready
+        && compatibility != VpnCompatibility::Maximum
 }
 
 const MOBILE_DATA_CHECK_INTERVAL_FOREGROUND: i32 = 120;
@@ -2122,7 +2134,37 @@ async fn run_headless_network_check(
         });
     }
 
-    let detected = detect_login_type_rust(compatibility, &ssid, &transport, None).await;
+    // Keep the physical IPv4 that belongs to the Android Network object with
+    // the headless probe.  Type 1 loadConfig expects the same Base64-encoded
+    // address the portal page supplies; omitting it can make a reachable
+    // gateway look absent during background automatic login.
+    let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
+    let detection = detect_login_type_details_rust(
+        compatibility,
+        &ssid,
+        &transport,
+        portal_route_context.as_ref(),
+    )
+    .await;
+    if type1_portal_requires_maximum(&detection, compatibility) {
+        headless_log(
+            &mut logs,
+            "网络",
+            TYPE1_MAXIMUM_MODE_REQUIRED_MESSAGE,
+            "info",
+        );
+        return serde_json::json!({
+            "status": "campus",
+            "notification_category": "network",
+            "notification": "已发现宿舍网认证入口，需要确认 HTTP 兼容模式",
+            "logs": logs,
+        });
+    }
+    let detected = if detection.login_ready {
+        detection.login_type.clone()
+    } else {
+        LoginType::Unknown
+    };
     if detected != LoginType::Unknown && transport.eq_ignore_ascii_case("wifi") && !identity_fresh {
         let status = if identity_requested {
             "blocked"
@@ -2259,7 +2301,7 @@ async fn run_headless_network_check(
             &account.user,
             &account.pass,
             compatibility,
-            None,
+            portal_route_context.as_ref(),
         )
         .await
         {
@@ -4117,13 +4159,19 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             ),
             "debug",
         );
-        let detected_login_type = detect_login_type_rust(
+        let detection = detect_login_type_details_rust(
             compatibility,
             &current_ssid,
             &transport,
             portal_route_context.as_ref(),
         )
         .await;
+        let type1_requires_maximum = type1_portal_requires_maximum(&detection, compatibility);
+        let detected_login_type = if detection.login_ready {
+            detection.login_type.clone()
+        } else {
+            LoginType::Unknown
+        };
         #[cfg(not(target_os = "android"))]
         if detected_login_type != LoginType::Unknown {
             // Portal probing is asynchronous. Re-sample the physical route
@@ -4259,222 +4307,251 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             "debug",
         );
 
-        match login_type {
-            LoginType::Unknown => {
-                state.non_campus_count.store(0, Ordering::SeqCst);
-                rust_log(
-                    &app,
-                    &state,
-                    "网络",
-                    "网络检测完毕: 离线或非校园网 (Offline)",
-                    "info",
+        if type1_requires_maximum {
+            state.non_campus_count.store(0, Ordering::SeqCst);
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                TYPE1_MAXIMUM_MODE_REQUIRED_MESSAGE,
+                "info",
+            );
+            let mut payload = make_payload(
+                "BjutCampus",
+                Some(&LoginType::Type1),
+                &current_ssid,
+                &current_bssid,
+                &current_ip,
+            );
+            if let Some(object) = payload.as_object_mut() {
+                object.insert(
+                    "loginMessage".to_string(),
+                    serde_json::json!(TYPE1_MAXIMUM_MODE_REQUIRED_MESSAGE),
                 );
-                let payload =
-                    make_payload("Offline", None, &current_ssid, &current_bssid, &current_ip);
-                {
-                    let mut last_state = state.last_network_state.lock().unwrap();
-                    *last_state = payload.clone();
-                }
-                let _ = app.emit("network-state-change", payload);
             }
-            _ => {
-                rust_log(
-                    &app,
-                    &state,
-                    "网络",
-                    &format!("检测到校园网登录页面 (登录类型: {:?})", login_type),
-                    "info",
-                );
-                let mut login_succeeded = false;
-                let mut login_failure_message: Option<String> = None;
-                let auto_login_paused = state.auto_login_paused_until.load(Ordering::SeqCst)
-                    > chrono::Utc::now().timestamp();
-                let auto_login_enabled = {
-                    let cfg = state.config.read().unwrap();
-                    profile_auto_login_enabled(profile.as_ref(), &login_type, cfg.auto_login)
-                };
-                if auto_login_enabled && !auto_login_paused {
-                    #[cfg(target_os = "android")]
+            *state.last_network_state.lock().unwrap() = payload.clone();
+            let _ = app.emit("network-state-change", payload);
+        } else {
+            match login_type {
+                LoginType::Unknown => {
+                    state.non_campus_count.store(0, Ordering::SeqCst);
+                    rust_log(
+                        &app,
+                        &state,
+                        "网络",
+                        "网络检测完毕: 离线或非校园网 (Offline)",
+                        "info",
+                    );
+                    let payload =
+                        make_payload("Offline", None, &current_ssid, &current_bssid, &current_ip);
                     {
-                        // Re-read only the non-location-protected network/IP
-                        // identity immediately before credentials are used. A
-                        // Network object can be replaced during a long portal
-                        // probe even when SSID/BSSID were coherent at capture.
-                        let latest_network = get_network_info(app.clone(), Some(false));
-                        let captured_network_id = net_info
-                            .get("networkId")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("");
-                        let latest_network_id = latest_network
-                            .get("networkId")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("");
-                        let latest_ip = latest_network
-                            .get("ip")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("");
-                        if captured_network_id.is_empty()
-                            || captured_network_id != latest_network_id
-                            || latest_ip != current_ip
+                        let mut last_state = state.last_network_state.lock().unwrap();
+                        *last_state = payload.clone();
+                    }
+                    let _ = app.emit("network-state-change", payload);
+                }
+                _ => {
+                    rust_log(
+                        &app,
+                        &state,
+                        "网络",
+                        &format!("检测到校园网登录页面 (登录类型: {:?})", login_type),
+                        "info",
+                    );
+                    let mut login_succeeded = false;
+                    let mut login_failure_message: Option<String> = None;
+                    let auto_login_paused = state.auto_login_paused_until.load(Ordering::SeqCst)
+                        > chrono::Utc::now().timestamp();
+                    let auto_login_enabled = {
+                        let cfg = state.config.read().unwrap();
+                        profile_auto_login_enabled(profile.as_ref(), &login_type, cfg.auto_login)
+                    };
+                    if auto_login_enabled && !auto_login_paused {
+                        #[cfg(target_os = "android")]
                         {
-                            identity_fresh = false;
-                            rust_log(
+                            // Re-read only the non-location-protected network/IP
+                            // identity immediately before credentials are used. A
+                            // Network object can be replaced during a long portal
+                            // probe even when SSID/BSSID were coherent at capture.
+                            let latest_network = get_network_info(app.clone(), Some(false));
+                            let captured_network_id = net_info
+                                .get("networkId")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            let latest_network_id = latest_network
+                                .get("networkId")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            let latest_ip = latest_network
+                                .get("ip")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            if captured_network_id.is_empty()
+                                || captured_network_id != latest_network_id
+                                || latest_ip != current_ip
+                            {
+                                identity_fresh = false;
+                                rust_log(
                                 &app,
                                 &state,
                                 "安全",
                                 "发送凭据前检测到 Android Network 或物理 IPv4 已变化，已取消本轮自动登录",
                                 "error",
                             );
-                        }
-                    }
-                    let (whitelist, blacklist) = {
-                        let cfg = state.config.read().unwrap();
-                        (cfg.whitelist.clone(), cfg.blacklist.clone())
-                    };
-                    let proceed = match automatic_login_network_allowed(NetworkTrustInput {
-                        login_type: &login_type,
-                        ssid: &current_ssid,
-                        bssid: &current_bssid,
-                        ip: &current_ip,
-                        transport: &transport,
-                        identity_fresh,
-                        whitelist: &whitelist,
-                        blacklist: &blacklist,
-                    }) {
-                        Ok(()) => true,
-                        Err(reason) => {
-                            login_failure_message = Some(format!("自动登录已阻止：{reason}"));
-                            rust_log(
-                                &app,
-                                &state,
-                                "安全",
-                                &format!("自动登录已阻止: {reason}"),
-                                "error",
-                            );
-                            false
-                        }
-                    };
-                    if proceed {
-                        let accounts = {
-                            let cfg = state.config.read().unwrap();
-                            cfg.accounts.clone()
-                        };
-                        let mut active_accounts = Vec::new();
-                        for account in accounts_for_profile(accounts, profile.as_ref()) {
-                            match account_attempt_allowed(&state, &account.user) {
-                                Ok(()) => active_accounts.push(account),
-                                Err(remaining) => rust_log(
-                                    &app,
-                                    &state,
-                                    "账号健康",
-                                    &format!(
-                                        "账号 {} 仍在冷却中（剩余 {} 秒），跳过本次尝试",
-                                        account.user, remaining
-                                    ),
-                                    "info",
-                                ),
                             }
                         }
-                        if active_accounts.is_empty() {
-                            login_failure_message =
-                                Some("没有带已保存密码且当前可尝试的账号".to_string());
-                            rust_log(
-                                &app,
-                                &state,
-                                "网络",
-                                "未配置带已保存密码的有效账号，跳过自动登录",
-                                "error",
-                            );
-                        } else {
-                            let mut success = false;
-                            let mut result_uncertain = false;
-                            let mut aborted_for_network_change = false;
-                            for acc in active_accounts {
-                                #[cfg(not(target_os = "android"))]
-                                {
-                                    // A rejected account can keep the request in flight long
-                                    // enough for a roam, DHCP renewal, or interface switch.
-                                    // Reconfirm the exact route and Wi-Fi identity before every
-                                    // subsequent credential-bearing request.
-                                    let latest_network = get_network_info(app.clone(), Some(true));
-                                    let route_still_fresh =
-                                        network_identity_is_fresh(&latest_network)
-                                            && ensure_same_network_identity(
-                                                &trusted_portal_identity,
-                                                &latest_network,
-                                            )
-                                            .is_ok()
-                                            && portal_route_context_from_network(&latest_network)
-                                                .ok()
-                                                .flatten()
-                                                == portal_route_context;
-                                    if !route_still_fresh {
-                                        let message = "账号重试前检测到物理接口、IP 或 Wi-Fi 身份变化，已停止发送下一组账号密码";
-                                        login_failure_message = Some(message.to_string());
-                                        aborted_for_network_change = true;
-                                        rust_log(&app, &state, "安全", message, "error");
-                                        break;
-                                    }
+                        let (whitelist, blacklist) = {
+                            let cfg = state.config.read().unwrap();
+                            (cfg.whitelist.clone(), cfg.blacklist.clone())
+                        };
+                        let proceed = match automatic_login_network_allowed(NetworkTrustInput {
+                            login_type: &login_type,
+                            ssid: &current_ssid,
+                            bssid: &current_bssid,
+                            ip: &current_ip,
+                            transport: &transport,
+                            identity_fresh,
+                            whitelist: &whitelist,
+                            blacklist: &blacklist,
+                        }) {
+                            Ok(()) => true,
+                            Err(reason) => {
+                                login_failure_message = Some(format!("自动登录已阻止：{reason}"));
+                                rust_log(
+                                    &app,
+                                    &state,
+                                    "安全",
+                                    &format!("自动登录已阻止: {reason}"),
+                                    "error",
+                                );
+                                false
+                            }
+                        };
+                        if proceed {
+                            let accounts = {
+                                let cfg = state.config.read().unwrap();
+                                cfg.accounts.clone()
+                            };
+                            let mut active_accounts = Vec::new();
+                            for account in accounts_for_profile(accounts, profile.as_ref()) {
+                                match account_attempt_allowed(&state, &account.user) {
+                                    Ok(()) => active_accounts.push(account),
+                                    Err(remaining) => rust_log(
+                                        &app,
+                                        &state,
+                                        "账号健康",
+                                        &format!(
+                                            "账号 {} 仍在冷却中（剩余 {} 秒），跳过本次尝试",
+                                            account.user, remaining
+                                        ),
+                                        "info",
+                                    ),
                                 }
+                            }
+                            if active_accounts.is_empty() {
+                                login_failure_message =
+                                    Some("没有带已保存密码且当前可尝试的账号".to_string());
                                 rust_log(
                                     &app,
                                     &state,
                                     "网络",
-                                    &format!("尝试使用账号 {} 自动登录...", acc.user),
-                                    "info",
+                                    "未配置带已保存密码的有效账号，跳过自动登录",
+                                    "error",
                                 );
-                                match login_to_campus_network_rust(
-                                    login_type.clone(),
-                                    &acc.user,
-                                    &acc.pass,
-                                    compatibility,
-                                    portal_route_context.as_ref(),
-                                )
-                                .await
-                                {
-                                    Ok((true, msg)) => {
-                                        record_account_success(&app, &state, &acc.user);
-                                        rust_log(
-                                            &app,
-                                            &state,
-                                            "网络",
-                                            &format!("登录成功: {}", msg),
-                                            "success",
-                                        );
-                                        if automatic_login_result_notifications_enabled(&state) {
-                                            let _ = show_native_notification(
+                            } else {
+                                let mut success = false;
+                                let mut result_uncertain = false;
+                                let mut aborted_for_network_change = false;
+                                for acc in active_accounts {
+                                    #[cfg(not(target_os = "android"))]
+                                    {
+                                        // A rejected account can keep the request in flight long
+                                        // enough for a roam, DHCP renewal, or interface switch.
+                                        // Reconfirm the exact route and Wi-Fi identity before every
+                                        // subsequent credential-bearing request.
+                                        let latest_network =
+                                            get_network_info(app.clone(), Some(true));
+                                        let route_still_fresh =
+                                            network_identity_is_fresh(&latest_network)
+                                                && ensure_same_network_identity(
+                                                    &trusted_portal_identity,
+                                                    &latest_network,
+                                                )
+                                                .is_ok()
+                                                && portal_route_context_from_network(
+                                                    &latest_network,
+                                                )
+                                                .ok()
+                                                .flatten()
+                                                    == portal_route_context;
+                                        if !route_still_fresh {
+                                            let message = "账号重试前检测到物理接口、IP 或 Wi-Fi 身份变化，已停止发送下一组账号密码";
+                                            login_failure_message = Some(message.to_string());
+                                            aborted_for_network_change = true;
+                                            rust_log(&app, &state, "安全", message, "error");
+                                            break;
+                                        }
+                                    }
+                                    rust_log(
+                                        &app,
+                                        &state,
+                                        "网络",
+                                        &format!("尝试使用账号 {} 自动登录...", acc.user),
+                                        "info",
+                                    );
+                                    match login_to_campus_network_rust(
+                                        login_type.clone(),
+                                        &acc.user,
+                                        &acc.pass,
+                                        compatibility,
+                                        portal_route_context.as_ref(),
+                                    )
+                                    .await
+                                    {
+                                        Ok((true, msg)) => {
+                                            record_account_success(&app, &state, &acc.user);
+                                            rust_log(
                                                 &app,
-                                                "自动登录成功",
-                                                &format!("账号: {}", acc.user),
+                                                &state,
+                                                "网络",
+                                                &format!("登录成功: {}", msg),
+                                                "success",
+                                            );
+                                            if automatic_login_result_notifications_enabled(&state)
+                                            {
+                                                let _ = show_native_notification(
+                                                    &app,
+                                                    "自动登录成功",
+                                                    &format!("账号: {}", acc.user),
+                                                );
+                                            }
+                                            success = true;
+                                            login_succeeded = true;
+                                            #[cfg(target_os = "android")]
+                                            report_android_campus_wifi_connected(&net_info);
+                                            break;
+                                        }
+                                        Ok((false, msg)) => {
+                                            login_failure_message =
+                                                Some(format!("自动登录失败：{msg}"));
+                                            record_account_failure(&app, &state, &acc.user, &msg);
+                                            rust_log(
+                                                &app,
+                                                &state,
+                                                "网络",
+                                                &format!("登录失败: {}", msg),
+                                                "error",
                                             );
                                         }
-                                        success = true;
-                                        login_succeeded = true;
-                                        #[cfg(target_os = "android")]
-                                        report_android_campus_wifi_connected(&net_info);
-                                        break;
-                                    }
-                                    Ok((false, msg)) => {
-                                        login_failure_message =
-                                            Some(format!("自动登录失败：{msg}"));
-                                        record_account_failure(&app, &state, &acc.user, &msg);
-                                        rust_log(
-                                            &app,
-                                            &state,
-                                            "网络",
-                                            &format!("登录失败: {}", msg),
-                                            "error",
-                                        );
-                                    }
-                                    Err(err) => {
-                                        if login_result_is_ambiguous(&err) {
-                                            login_failure_message = Some(err.clone());
-                                            result_uncertain = true;
-                                            state.auto_login_paused_until.store(
-                                                chrono::Utc::now().timestamp() + 60,
-                                                Ordering::SeqCst,
-                                            );
-                                            rust_log(
+                                        Err(err) => {
+                                            if login_result_is_ambiguous(&err) {
+                                                login_failure_message = Some(err.clone());
+                                                result_uncertain = true;
+                                                state.auto_login_paused_until.store(
+                                                    chrono::Utc::now().timestamp() + 60,
+                                                    Ordering::SeqCst,
+                                                );
+                                                rust_log(
                                                 &app,
                                                 &state,
                                                 "网络",
@@ -4484,88 +4561,89 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                                 ),
                                                 "error",
                                             );
-                                            break;
+                                                break;
+                                            }
+                                            login_failure_message =
+                                                Some(format!("自动登录请求失败：{err}"));
+                                            record_account_failure(
+                                                &app,
+                                                &state,
+                                                &acc.user,
+                                                &format!("请求出错: {err}"),
+                                            );
+                                            rust_log(
+                                                &app,
+                                                &state,
+                                                "网络",
+                                                &format!("请求出错: {}", err),
+                                                "error",
+                                            );
                                         }
-                                        login_failure_message =
-                                            Some(format!("自动登录请求失败：{err}"));
-                                        record_account_failure(
-                                            &app,
-                                            &state,
-                                            &acc.user,
-                                            &format!("请求出错: {err}"),
-                                        );
-                                        rust_log(
-                                            &app,
-                                            &state,
-                                            "网络",
-                                            &format!("请求出错: {}", err),
-                                            "error",
-                                        );
                                     }
                                 }
-                            }
-                            if !success && !result_uncertain && !aborted_for_network_change {
-                                if login_failure_message.is_none() {
-                                    login_failure_message =
-                                        Some("所有账号均未能完成登录".to_string());
+                                if !success && !result_uncertain && !aborted_for_network_change {
+                                    if login_failure_message.is_none() {
+                                        login_failure_message =
+                                            Some("所有账号均未能完成登录".to_string());
+                                    }
+                                    rust_log(
+                                        &app,
+                                        &state,
+                                        "网络",
+                                        "所有账号登录尝试完毕，均未成功",
+                                        "error",
+                                    );
                                 }
-                                rust_log(
-                                    &app,
-                                    &state,
-                                    "网络",
-                                    "所有账号登录尝试完毕，均未成功",
-                                    "error",
-                                );
                             }
                         }
+                    } else if auto_login_paused {
+                        login_failure_message = Some("自动登录已临时暂停，请稍后重试".to_string());
+                        rust_log(&app, &state, "网络", "自动登录已临时暂停，忽略重连", "info");
+                    } else {
+                        rust_log(&app, &state, "网络", "自动登录未开启，忽略重连", "info");
                     }
-                } else if auto_login_paused {
-                    login_failure_message = Some("自动登录已临时暂停，请稍后重试".to_string());
-                    rust_log(&app, &state, "网络", "自动登录已临时暂停，忽略重连", "info");
-                } else {
-                    rust_log(&app, &state, "网络", "自动登录未开启，忽略重连", "info");
-                }
-                if login_succeeded {
-                    state.non_campus_count.store(0, Ordering::SeqCst);
-                } else if is_bg {
-                    let count = state.non_campus_count.fetch_add(1, Ordering::SeqCst) + 1;
-                    rust_log(
-                        &app,
-                        &state,
-                        "网络",
-                        &format!("[DEBUG] 后台检测为非校园网环境，当前连续次数: {}/5", count),
-                        "debug",
-                    );
-                    if count >= 5 {
-                        rust_log(&app, &state, "网络", "后台连续5次检测到校园网登录页面（或自动登录失败），进入自动休眠模式以省电。返回前台时将自动恢复。", "info");
-                        state.is_suspended.store(true, Ordering::SeqCst);
+                    if login_succeeded {
+                        state.non_campus_count.store(0, Ordering::SeqCst);
+                    } else if is_bg {
+                        let count = state.non_campus_count.fetch_add(1, Ordering::SeqCst) + 1;
+                        rust_log(
+                            &app,
+                            &state,
+                            "网络",
+                            &format!("[DEBUG] 后台检测为非校园网环境，当前连续次数: {}/5", count),
+                            "debug",
+                        );
+                        if count >= 5 {
+                            rust_log(&app, &state, "网络", "后台连续5次检测到校园网登录页面（或自动登录失败），进入自动休眠模式以省电。返回前台时将自动恢复。", "info");
+                            state.is_suspended.store(true, Ordering::SeqCst);
+                        }
+                    } else {
+                        state.non_campus_count.store(0, Ordering::SeqCst);
                     }
-                } else {
-                    state.non_campus_count.store(0, Ordering::SeqCst);
-                }
-                let mut payload = if login_succeeded {
-                    make_payload("Online", None, &current_ssid, &current_bssid, &current_ip)
-                } else {
-                    make_payload(
-                        "BjutCampus",
-                        Some(&login_type),
-                        &current_ssid,
-                        &current_bssid,
-                        &current_ip,
-                    )
-                };
-                if !login_succeeded {
-                    if let (Some(message), Some(object)) =
-                        (login_failure_message, payload.as_object_mut())
+                    let mut payload = if login_succeeded {
+                        make_payload("Online", None, &current_ssid, &current_bssid, &current_ip)
+                    } else {
+                        make_payload(
+                            "BjutCampus",
+                            Some(&login_type),
+                            &current_ssid,
+                            &current_bssid,
+                            &current_ip,
+                        )
+                    };
+                    if !login_succeeded {
+                        if let (Some(message), Some(object)) =
+                            (login_failure_message, payload.as_object_mut())
+                        {
+                            object.insert("loginMessage".to_string(), serde_json::json!(message));
+                        }
+                    }
                     {
-                        object.insert("loginMessage".to_string(), serde_json::json!(message));
+                        let mut last_state = state.last_network_state.lock().unwrap();
+                        *last_state = payload.clone();
                     }
+                    let _ = app.emit("network-state-change", payload);
                 }
-                {
-                    let mut last_state = state.last_network_state.lock().unwrap();
-                    *last_state = payload.clone();
-                }
-                let _ = app.emit("network-state-change", payload);
             }
         }
         state.is_checking.store(false, Ordering::SeqCst);
@@ -5009,6 +5087,9 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let portal_waiting_for_ipv6 = detection.as_ref().is_some_and(|result| {
         result.login_type == LoginType::Type3 && result.portal_detected && !result.login_ready
     });
+    let type1_requires_maximum = detection
+        .as_ref()
+        .is_some_and(|result| type1_portal_requires_maximum(result, compatibility));
     let (portal_status, portal_message) = if wifi_route_failed {
         (
             "error",
@@ -5028,6 +5109,11 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
                 "已检测到校园网认证协议 {}，当前需要登录",
                 login_type.as_str()
             ),
+        )
+    } else if type1_requires_maximum {
+        (
+            "warning",
+            "已发现 bjut-sushe 认证网关，但当前 HTTPS 兼容模式不能向其发送账号密码；确认网络可信后可临时启用最高兼容（HTTP + IP）".to_string(),
         )
     } else if portal_waiting_for_ipv6 {
         (
@@ -5055,6 +5141,11 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         ("healthy", "网络工作正常，互联网已连通")
     } else if login_type != LoginType::Unknown {
         ("auth_required", "已连接校园网，但需要完成账号认证")
+    } else if type1_requires_maximum {
+        (
+            "auth_required",
+            "已连接宿舍校园网；认证网关仅支持 HTTP，等待用户确认最高兼容模式",
+        )
     } else if portal_waiting_for_ipv6 {
         (
             "auth_required",
@@ -5361,18 +5452,27 @@ async fn evaluate_manual_network_trust(
     let config = state.config.read().unwrap().clone();
     let compatibility = effective_vpn_compatibility(&config);
     let portal_route_context = portal_route_context_from_network(&network)?;
-    let detected = detect_login_type_rust(
+    let detection = detect_login_type_details_rust(
         compatibility,
         ssid,
         transport,
         portal_route_context.as_ref(),
     )
     .await;
+    let detected = if detection.login_ready {
+        detection.login_type.clone()
+    } else {
+        LoginType::Unknown
+    };
     let login_type = parse_login_type_override(login_type_override.as_deref()).unwrap_or(detected);
     let result = if login_type == LoginType::Unknown {
         network_trust::NetworkTrustResult {
             decision: NetworkTrustDecision::Blocked,
-            reason: "未检测到可确认的校园网认证协议".to_string(),
+            reason: if type1_portal_requires_maximum(&detection, compatibility) {
+                TYPE1_MAXIMUM_MODE_REQUIRED_MESSAGE.to_string()
+            } else {
+                "未检测到可确认的校园网认证协议".to_string()
+            },
             network_key: network_trust::network_key(ssid, bssid),
         }
     } else {
@@ -5496,7 +5596,7 @@ async fn manual_login(
     let config = state.config.read().unwrap().clone();
     let compatibility = effective_vpn_compatibility(&config);
     let probe_route_context = portal_route_context_from_network(&network_before_probe)?;
-    let detected_type = detect_login_type_rust(
+    let detection = detect_login_type_details_rust(
         compatibility,
         network_before_probe
             .get("ssid")
@@ -5506,6 +5606,11 @@ async fn manual_login(
         probe_route_context.as_ref(),
     )
     .await;
+    let detected_type = if detection.login_ready {
+        detection.login_type.clone()
+    } else {
+        LoginType::Unknown
+    };
     let network = get_network_info(app.clone(), Some(true));
     if let Err(change) = ensure_same_network_identity(&identity_before_probe, &network) {
         let message = format!("协议探测期间检测到网络切换（{change}），已停止发送账号密码");
@@ -5521,7 +5626,11 @@ async fn manual_login(
     if login_type == LoginType::Unknown {
         return Ok(ManualLoginResult {
             success: false,
-            message: "未检测到校园网登录页面".to_string(),
+            message: if type1_portal_requires_maximum(&detection, compatibility) {
+                TYPE1_MAXIMUM_MODE_REQUIRED_MESSAGE.to_string()
+            } else {
+                "未检测到校园网登录页面".to_string()
+            },
         });
     }
 
@@ -7465,13 +7574,33 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
             return;
         }
     };
-    let detected = detect_login_type_rust(
+    let detection = detect_login_type_details_rust(
         compatibility,
         &ssid,
         &transport,
         portal_route_context.as_ref(),
     )
     .await;
+    if type1_portal_requires_maximum(&detection, compatibility) {
+        rust_log(
+            &app,
+            &state,
+            "托盘",
+            TYPE1_MAXIMUM_MODE_REQUIRED_MESSAGE,
+            "info",
+        );
+        let _ = show_native_notification(
+            &app,
+            "校园网登录需要确认",
+            "已发现宿舍网认证入口，请在设置中临时启用最高兼容模式后重试",
+        );
+        return;
+    }
+    let detected = if detection.login_ready {
+        detection.login_type.clone()
+    } else {
+        LoginType::Unknown
+    };
     let fresh_network = get_network_info(app.clone(), Some(true));
     let fresh_route_context = match portal_route_context_from_network(&fresh_network) {
         Ok(context) => context,
