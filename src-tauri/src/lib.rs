@@ -1868,9 +1868,32 @@ fn app_is_in_background(app: &tauri::AppHandle, state: &AppState) -> bool {
         let visible = window.is_visible().unwrap_or(false);
         let focused = window.is_focused().unwrap_or(false);
         let minimized = window.is_minimized().unwrap_or(false);
-        return reported_background || !visible || !focused || minimized;
+        let window_background = desktop_window_background_state(
+            visible,
+            focused,
+            minimized,
+            !cfg!(target_os = "windows"),
+        );
+        // On Windows, WebView2 focus reporting can remain false even while the
+        // native window is visible and interactive. Derive the state directly
+        // from visibility/minimization so a stale WebView report cannot latch
+        // the whole app in background mode.
+        return if cfg!(target_os = "windows") {
+            window_background
+        } else {
+            reported_background || window_background
+        };
     }
     reported_background
+}
+
+fn desktop_window_background_state(
+    visible: bool,
+    focused: bool,
+    minimized: bool,
+    unfocused_counts_as_background: bool,
+) -> bool {
+    !visible || minimized || (unfocused_counts_as_background && !focused)
 }
 
 fn ensure_billing_foreground(state: &AppState) -> Result<(), String> {
@@ -5105,10 +5128,21 @@ fn make_diagnostic_step(
     }
 }
 
+fn emit_network_diagnostic_progress(app: &tauri::AppHandle, percent: u8, label: &str) {
+    let _ = app.emit(
+        "network-diagnostic-progress",
+        serde_json::json!({
+            "percent": percent.min(100),
+            "label": label,
+        }),
+    );
+}
+
 #[tauri::command]
 async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     use std::net::ToSocketAddrs;
 
+    emit_network_diagnostic_progress(&app, 2, "正在读取当前网络接口…");
     let compatibility = app
         .try_state::<Arc<AppState>>()
         .map(|state| {
@@ -5118,7 +5152,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         .unwrap_or(VpnCompatibility::High);
     let mut steps = Vec::new();
     let identity_started = std::time::Instant::now();
-    let network = get_network_info(app, Some(true));
+    let network = get_network_info(app.clone(), Some(true));
     #[cfg(target_os = "android")]
     let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
     #[cfg(target_os = "android")]
@@ -5211,8 +5245,10 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         identity_status,
         identity_message,
     ));
+    emit_network_diagnostic_progress(&app, 16, "网络接口信息读取完成");
 
     let route_started = std::time::Instant::now();
+    emit_network_diagnostic_progress(&app, 20, "正在核对校园认证目标路由…");
     steps.push(make_diagnostic_step(
         "campus_route",
         "校园目标路由",
@@ -5236,8 +5272,10 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
             )
         },
     ));
+    emit_network_diagnostic_progress(&app, 30, "校园认证目标路由核对完成");
 
     let campus_started = std::time::Instant::now();
+    emit_network_diagnostic_progress(&app, 34, "正在检查校园网环境特征…");
     let campus_ip = is_campus_local_ip(&ip);
     let campus_ssid = is_known_campus_ssid(&ssid);
     let campus_status = if mobile_data {
@@ -5269,8 +5307,10 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         campus_status,
         campus_message,
     ));
+    emit_network_diagnostic_progress(&app, 42, "校园网环境特征检查完成");
 
     let dns_started = std::time::Instant::now();
+    emit_network_diagnostic_progress(&app, 46, "正在检查 DNS 解析…");
     let dns_ok = tauri::async_runtime::spawn_blocking(|| {
         ("www.baidu.com", 443)
             .to_socket_addrs()
@@ -5290,8 +5330,10 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
             "DNS 解析失败或被认证页面限制".to_string()
         },
     ));
+    emit_network_diagnostic_progress(&app, 54, "DNS 解析检查完成");
 
     let internet_started = std::time::Instant::now();
+    emit_network_diagnostic_progress(&app, 58, "正在并发探测互联网目标…");
     let internet_results = if wifi_route_failed {
         Vec::new()
     } else {
@@ -5321,8 +5363,10 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         if online { "success" } else { "warning" },
         internet_message,
     ));
+    emit_network_diagnostic_progress(&app, 72, "互联网目标探测完成");
 
     let portal_started = std::time::Instant::now();
+    emit_network_diagnostic_progress(&app, 76, "正在并发探测校园认证网关…");
     let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
     let gateway_results = if wifi_route_failed {
         Vec::new()
@@ -5358,6 +5402,8 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
                     "登录接口与响应校验通过"
                 } else if result.portal_detected {
                     "门户已发现，但登录条件未完全就绪"
+                } else if result.timed_out {
+                    "在 2.2 秒诊断预算内无响应"
                 } else {
                     "未探测到"
                 }
@@ -5409,6 +5455,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         portal_status,
         portal_message,
     ));
+    emit_network_diagnostic_progress(&app, 100, "网络链路诊断完成");
 
     let (overall, summary) = if online {
         ("healthy", "网络工作正常，互联网已连通")
@@ -8378,10 +8425,27 @@ pub fn run() {
                 let window_state = state_clone.clone();
                 window.on_window_event(move |event| match event {
                     tauri::WindowEvent::Focused(focused) => {
+                        let visible = window_clone.is_visible().unwrap_or(false);
+                        let minimized = window_clone.is_minimized().unwrap_or(false);
                         update_billing_background_lifecycle(
                             window_clone.app_handle(),
                             &window_state,
-                            !focused,
+                            desktop_window_background_state(
+                                visible,
+                                *focused,
+                                minimized,
+                                !cfg!(target_os = "windows"),
+                            ),
+                        );
+                    }
+                    tauri::WindowEvent::Resized(_) if cfg!(target_os = "windows") => {
+                        let visible = window_clone.is_visible().unwrap_or(false);
+                        let focused = window_clone.is_focused().unwrap_or(false);
+                        let minimized = window_clone.is_minimized().unwrap_or(false);
+                        update_billing_background_lifecycle(
+                            window_clone.app_handle(),
+                            &window_state,
+                            desktop_window_background_state(visible, focused, minimized, false),
                         );
                     }
                     tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -8648,6 +8712,15 @@ mod tests {
         assert!(!is_mobile_data_network(
             &serde_json::json!({"transport": "wifi"})
         ));
+    }
+
+    #[test]
+    fn desktop_background_policy_can_ignore_unreliable_focus() {
+        assert!(!desktop_window_background_state(true, false, false, false));
+        assert!(desktop_window_background_state(true, false, false, true));
+        assert!(desktop_window_background_state(false, true, false, false));
+        assert!(desktop_window_background_state(true, true, true, false));
+        assert!(!desktop_window_background_state(true, true, false, true));
     }
 
     #[cfg(not(target_os = "android"))]

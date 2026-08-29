@@ -773,6 +773,13 @@
               <span id="diagnostic-summary-badge" class="health-badge neutral">尚未诊断</span>
               <h3 id="diagnostic-summary-title">点击“开始诊断”检查完整网络链路</h3>
               <p id="diagnostic-summary-meta">诊断不会发送账号密码</p>
+              <div id="diagnostic-progress" class="diagnostic-progress" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="diagnostic-progress-label">
+                  <span id="diagnostic-progress-text">准备诊断…</span>
+                  <strong id="diagnostic-progress-percent">0%</strong>
+                </div>
+                <div class="diagnostic-progress-track"><span id="diagnostic-progress-bar"></span></div>
+              </div>
             </div>
           </div>
 

@@ -229,6 +229,11 @@ export interface DiagnosticReport {
   steps: DiagnosticStep[];
 }
 
+export interface DiagnosticProgress {
+  percent: number;
+  label: string;
+}
+
 export interface AppLogEntry {
   time: string;
   module: string;

@@ -354,6 +354,7 @@ pub(crate) struct LoginTypeDetection {
     pub(crate) login_type: LoginType,
     pub(crate) portal_detected: bool,
     pub(crate) login_ready: bool,
+    pub(crate) timed_out: bool,
 }
 
 impl LoginTypeDetection {
@@ -362,6 +363,7 @@ impl LoginTypeDetection {
             login_type: LoginType::Unknown,
             portal_detected: false,
             login_ready: false,
+            timed_out: false,
         }
     }
 
@@ -370,6 +372,16 @@ impl LoginTypeDetection {
             login_type,
             portal_detected: result != PortalProbeResult::NotDetected,
             login_ready: result == PortalProbeResult::LoginReady,
+            timed_out: false,
+        }
+    }
+
+    fn timed_out(login_type: LoginType) -> Self {
+        Self {
+            login_type,
+            portal_detected: false,
+            login_ready: false,
+            timed_out: true,
         }
     }
 }
@@ -603,12 +615,25 @@ pub(crate) async fn diagnose_login_gateways(
     transport: &str,
     route_context: Option<&PortalRouteContext>,
 ) -> Vec<LoginTypeDetection> {
-    let mut results = Vec::new();
-    for candidate in login_probe_candidates(ssid, transport) {
-        let result = probe_login_type(compatibility, candidate.clone(), route_context).await;
-        results.push(LoginTypeDetection::from_probe(candidate, result));
-    }
-    results
+    const DIAGNOSTIC_CANDIDATE_BUDGET: Duration = Duration::from_millis(2200);
+    let probes = login_probe_candidates(ssid, transport)
+        .into_iter()
+        .map(|candidate| async move {
+            match tokio::time::timeout(
+                DIAGNOSTIC_CANDIDATE_BUDGET,
+                probe_login_type(compatibility, candidate.clone(), route_context),
+            )
+            .await
+            {
+                Ok(result) => LoginTypeDetection::from_probe(candidate, result),
+                Err(_) => LoginTypeDetection::timed_out(candidate),
+            }
+        });
+    // Diagnostics must still inspect every applicable gateway, but independent
+    // bjut-sushe/bjut_wifi/lgn read-only probes do not need to wait for one
+    // another. The bounded concurrent probe reduces a non-campus Wi-Fi check
+    // from roughly three sequential timeouts to one diagnostic budget.
+    futures_util::future::join_all(probes).await
 }
 
 fn parse_dr_response(text: &str) -> Result<(bool, String), String> {

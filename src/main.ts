@@ -37,7 +37,7 @@ import type {
   BillingLoginRecord, BillingOnlineSession, BillingOverview, BillingPackageOption,
   BillingRecordKind, BillingRecordQuery, BillingRecordQueryState, BillingRecordResult,
   BillingServiceState, BillingTable, CountdownPayload, CredentialStorageHealth,
-  DiagnosticReport, DiscoveredCampusAccount, GitHubRelease, GitHubReleaseAsset,
+  DiagnosticProgress, DiagnosticReport, DiscoveredCampusAccount, GitHubRelease, GitHubReleaseAsset,
   NetworkStatePayload,
   OfficialUpdateManifest,
   NetworkProfile, RechargeBalanceSnapshot, RechargePreview, RechargeResult,
@@ -940,6 +940,10 @@ async function initializeRustEvents() {
     settle('网络状态事件', listen<NetworkStatePayload>('network-state-change', event => {
       applyNetworkStatePayload(event.payload);
     })),
+    settle('网络诊断进度事件', listen<DiagnosticProgress>('network-diagnostic-progress', event => {
+      if (!diagnosticRunActive) return;
+      updateDiagnosticProgress(event.payload.percent, event.payload.label, true);
+    })),
     settle('运行日志事件', listen<AppLogEntry>('log-event', event => {
       const data = event.payload;
       renderLogEntry(data.module, data.message, data.type, data.time);
@@ -1027,6 +1031,16 @@ async function initializeRustEvents() {
   ]);
 
   const updateBgState = () => {
+    // WebView2 can report document.hasFocus() as false while the native
+    // Windows window is visible and interactive. On Windows the Rust side
+    // therefore owns the minimized/hidden decision. WebView lifecycle events
+    // merely trigger a fresh native-window query.
+    if (IS_WINDOWS && window.__TAURI__) {
+      void isAppInBackground()
+        .then(isBg => invoke('set_background_state', { isBg }))
+        .catch(() => {});
+      return;
+    }
     const isBg = document.hidden || (!IS_ANDROID && !document.hasFocus());
     invoke('set_background_state', { isBg }).catch(() => {});
   };
@@ -1466,6 +1480,10 @@ const btnCopyDiagnostics = document.getElementById('btn-copy-diagnostics') as HT
 const btnResetAllHealth = document.getElementById('btn-reset-all-health') as HTMLButtonElement;
 const accountHealthList = document.getElementById('account-health-list')!;
 const diagnosticSteps = document.getElementById('diagnostic-steps')!;
+const diagnosticProgress = document.getElementById('diagnostic-progress')!;
+const diagnosticProgressText = document.getElementById('diagnostic-progress-text')!;
+const diagnosticProgressPercent = document.getElementById('diagnostic-progress-percent')!;
+const diagnosticProgressBar = document.getElementById('diagnostic-progress-bar')!;
 const logSearch = document.getElementById('log-search') as HTMLInputElement;
 const logFilterCount = document.getElementById('log-filter-count')!;
 const btnDiagnosticBundle = document.getElementById('btn-diagnostic-bundle') as HTMLButtonElement;
@@ -2059,6 +2077,34 @@ function renderDiagnosticReport(report: DiagnosticReport) {
   btnCopyDiagnostics.disabled = false;
 }
 
+let diagnosticRunActive = false;
+let diagnosticProgressHideTimer: number | null = null;
+
+function updateDiagnosticProgress(percent: number, label: string, visible: boolean) {
+  if (diagnosticProgressHideTimer !== null) {
+    window.clearTimeout(diagnosticProgressHideTimer);
+    diagnosticProgressHideTimer = null;
+  }
+  const normalized = Math.max(0, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
+  diagnosticProgress.hidden = !visible;
+  diagnosticProgress.style.setProperty('--diagnostic-progress', `${normalized}%`);
+  diagnosticProgressBar.style.width = `${normalized}%`;
+  diagnosticProgressText.textContent = label;
+  diagnosticProgressPercent.textContent = `${normalized}%`;
+  diagnosticProgress.setAttribute('aria-valuenow', String(normalized));
+  if (visible) {
+    document.getElementById('diagnostic-summary-title')!.textContent = label;
+  }
+}
+
+function finishDiagnosticProgress() {
+  updateDiagnosticProgress(100, '网络链路诊断完成', true);
+  diagnosticProgressHideTimer = window.setTimeout(() => {
+    diagnosticProgressHideTimer = null;
+    diagnosticProgress.hidden = true;
+  }, 700);
+}
+
 function diagnosticReportText(report: DiagnosticReport): string {
   const maskedIp = report.ip
     ? report.ip.split('.').map((part, index) => index < 2 ? part : '*').join('.')
@@ -2084,14 +2130,18 @@ async function runDiagnostics() {
   btnRunDiagnostics.disabled = true;
   btnCopyDiagnostics.disabled = true;
   btnRunDiagnostics.textContent = '诊断中…';
-  document.getElementById('diagnostic-summary-title')!.textContent = '正在逐项检查网络链路…';
+  diagnosticRunActive = true;
+  updateDiagnosticProgress(0, '正在逐项检查网络链路…', true);
   try {
     lastDiagnosticReport = await invoke<DiagnosticReport>('run_network_diagnostics');
+    finishDiagnosticProgress();
     renderDiagnosticReport(lastDiagnosticReport);
     await Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
   } catch (error) {
     document.getElementById('diagnostic-summary-title')!.textContent = `诊断失败：${String(error)}`;
+    diagnosticProgress.hidden = true;
   } finally {
+    diagnosticRunActive = false;
     btnRunDiagnostics.disabled = false;
     btnRunDiagnostics.textContent = '开始诊断';
   }
@@ -4263,18 +4313,20 @@ function updateBillingAccountOptions() {
 
 // Split Network Check Loops
 async function isAppInBackground(): Promise<boolean> {
-  if (document.hidden) return true;
   if (!window.__TAURI__) {
-    return !IS_ANDROID && !document.hasFocus();
+    return document.hidden || (!IS_ANDROID && !IS_WINDOWS && !document.hasFocus());
   }
   try {
     const win = getCurrentWindow();
     const isVisible = await win.isVisible();
     const isMinimized = await win.isMinimized();
     const isFocused = await win.isFocused();
-    return !isVisible || isMinimized || (!IS_ANDROID && !isFocused);
+    return (!IS_WINDOWS && document.hidden)
+      || !isVisible
+      || isMinimized
+      || (!IS_ANDROID && !IS_WINDOWS && !isFocused);
   } catch (e) {
-    return !IS_ANDROID && !document.hasFocus();
+    return document.hidden || (!IS_ANDROID && !IS_WINDOWS && !document.hasFocus());
   }
 }
 
