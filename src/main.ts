@@ -5157,13 +5157,25 @@ function renderBillingCenterData(data: BillingCenterData) {
 }
 
 let billingRefreshFadeTimer: number | null = null;
+let billingRefreshResetTimer: number | null = null;
+let billingRefreshAnimationGeneration = 0;
 
-function updateBillingRefreshProgress(percent: number, loading: boolean) {
-  if (billingRefreshFadeTimer !== null && loading) {
+function cancelBillingRefreshCompletionAnimation() {
+  billingRefreshAnimationGeneration += 1;
+  if (billingRefreshFadeTimer !== null) {
     window.clearTimeout(billingRefreshFadeTimer);
     billingRefreshFadeTimer = null;
   }
-  btnRefreshBillingCenter.classList.remove('is-complete', 'is-fading');
+  if (billingRefreshResetTimer !== null) {
+    window.clearTimeout(billingRefreshResetTimer);
+    billingRefreshResetTimer = null;
+  }
+  btnRefreshBillingCenter.classList.remove('is-complete', 'is-fading', 'is-resetting');
+}
+
+function updateBillingRefreshProgress(percent: number, loading: boolean) {
+  if (loading) cancelBillingRefreshCompletionAnimation();
+  else btnRefreshBillingCenter.classList.remove('is-complete', 'is-fading', 'is-resetting');
   const normalized = Math.max(0, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
   btnRefreshBillingCenter.style.setProperty('--billing-refresh-progress', `${normalized}%`);
   btnRefreshBillingCenter.classList.toggle('is-loading', loading);
@@ -5182,7 +5194,8 @@ function updateBillingRefreshProgress(percent: number, loading: boolean) {
 }
 
 function finishBillingRefreshProgress() {
-  if (billingRefreshFadeTimer !== null) window.clearTimeout(billingRefreshFadeTimer);
+  cancelBillingRefreshCompletionAnimation();
+  const generation = billingRefreshAnimationGeneration;
   btnRefreshBillingCenter.style.setProperty('--billing-refresh-progress', '100%');
   btnRefreshBillingCenter.classList.remove('is-loading');
   btnRefreshBillingCenter.classList.add('is-complete');
@@ -5191,12 +5204,26 @@ function finishBillingRefreshProgress() {
   btnRefreshBillingCenter.removeAttribute('aria-valuemin');
   btnRefreshBillingCenter.removeAttribute('aria-valuemax');
   btnRefreshBillingCenter.removeAttribute('aria-valuenow');
-  requestAnimationFrame(() => btnRefreshBillingCenter.classList.add('is-fading'));
+  requestAnimationFrame(() => {
+    if (generation === billingRefreshAnimationGeneration) {
+      btnRefreshBillingCenter.classList.add('is-fading');
+    }
+  });
   billingRefreshFadeTimer = window.setTimeout(() => {
+    if (generation !== billingRefreshAnimationGeneration) return;
     billingRefreshFadeTimer = null;
-    btnRefreshBillingCenter.classList.remove('is-complete', 'is-fading');
+    // Keep the already-faded overlay transparent while its width is reset.
+    // Otherwise removing is-fading makes the 100% bar visible again and the
+    // ordinary width transition looks like a failed refresh counting down.
+    btnRefreshBillingCenter.classList.add('is-resetting');
     btnRefreshBillingCenter.style.setProperty('--billing-refresh-progress', '0%');
+    btnRefreshBillingCenter.classList.remove('is-complete', 'is-fading');
     billingRefreshLabel.textContent = '刷新';
+    billingRefreshResetTimer = window.setTimeout(() => {
+      if (generation !== billingRefreshAnimationGeneration) return;
+      billingRefreshResetTimer = null;
+      btnRefreshBillingCenter.classList.remove('is-resetting');
+    }, 34);
   }, 720);
 }
 
