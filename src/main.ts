@@ -375,6 +375,35 @@ interface PermissionHealthItem {
 let updateDownloadPaused = false;
 let updateDownloadInProgress = false;
 
+function restoreUpdateEntryButtons() {
+  const check = document.getElementById('btn-check-update') as HTMLButtonElement | null;
+  const redownload = document.getElementById('btn-redownload-package') as HTMLButtonElement | null;
+  if (check) {
+    check.disabled = false;
+    const label = check.querySelector('span');
+    if (label) label.textContent = '检查更新';
+  }
+  if (redownload) {
+    redownload.disabled = false;
+    const label = redownload.querySelector('span');
+    if (label) label.textContent = '重新下载完整包';
+  }
+}
+
+function revealActiveUpdateDownload(): boolean {
+  if (!updateDownloadInProgress) return false;
+  const modal = document.getElementById('update-modal');
+  const actions = document.getElementById('update-modal-actions');
+  const progress = document.getElementById('update-progress-wrap');
+  if (!modal || !actions || !progress) return false;
+  actions.hidden = true;
+  progress.classList.remove('hidden');
+  modal.classList.remove('hidden');
+  setUpdateDownloadControls(true);
+  renderIcons(document.getElementById('update-download-controls')!);
+  return true;
+}
+
 function setUpdateDownloadControls(visible: boolean) {
   const controls = document.getElementById('update-download-controls');
   const pause = document.getElementById('btn-update-pause') as HTMLButtonElement | null;
@@ -435,7 +464,6 @@ function updateUpdateProgress(data: UpdateProgress) {
     return;
   }
   updateDownloadInProgress = true;
-  updateDownloadPaused = false;
   setUpdateDownloadControls(true);
   const percent = typeof data.percent === 'number' ? Math.max(0, Math.min(100, data.percent)) : null;
   progressBar.style.width = percent === null ? '35%' : `${percent}%`;
@@ -538,9 +566,13 @@ function setupUpdateDownloadControls() {
   pause.dataset.bound = 'true';
   pause.addEventListener('click', async () => {
     if (!updateDownloadInProgress) return;
+    const action = updateDownloadPaused ? 'resume' : 'pause';
     pause.disabled = true;
     try {
-      await invoke('control_update_download', { action: updateDownloadPaused ? 'resume' : 'pause' });
+      await invoke('control_update_download', { action });
+      updateDownloadPaused = action === 'pause';
+      setUpdateDownloadControls(true);
+      renderIcons(document.getElementById('update-download-controls')!);
     } catch (error) {
       await customAlert(`无法控制下载：${String(error)}`, '更新下载');
     } finally {
@@ -550,6 +582,7 @@ function setupUpdateDownloadControls() {
   background.addEventListener('click', () => {
     if (!updateDownloadInProgress) return;
     document.getElementById('update-modal')?.classList.add('hidden');
+    restoreUpdateEntryButtons();
     log('系统', '更新包继续在后台下载', 'info');
   });
   stop.addEventListener('click', async () => {
@@ -873,15 +906,19 @@ async function loadConfigFromRust(): Promise<boolean> {
 }
 
 function applyNetworkStatePayload(data: NetworkStatePayload) {
-  let state = NetworkState.Offline;
+  const networkChanged = Boolean(data.ip && lastKnownIp && data.ip !== lastKnownIp);
+  if (networkChanged) portalUserInfoCache = null;
+  let state = NetworkState.Checking;
   if (data.state === 'Online') state = NetworkState.Online;
   else if (data.state === 'BjutCampus') state = NetworkState.BjutCampus;
+  else if (data.state === 'Offline') state = NetworkState.Offline;
   const loginType = ['bjut-sushe', 'Type1_221_98'].includes(data.loginType || '') ? LoginType.BjutSushe
     : ['bjut_wifi', 'Type2_251_3'].includes(data.loginType || '') ? LoginType.BjutWifi
     : ['lgn-wired', 'Type3_172_30'].includes(data.loginType || '') ? LoginType.LgnWired
     : LoginType.Unknown;
 
   currentNetworkState = state;
+  currentLoginType = loginType;
   updateNetworkStatus(state, loginType, data.loginMessage);
   isChecking = false;
   if (state === NetworkState.Online) {
@@ -1318,6 +1355,7 @@ function showListManageModal(title: string, list: string[], onSave: (list: strin
 }
 
 enum NetworkState {
+  Checking,
   Online,
   BjutCampus,
   Offline
@@ -1338,6 +1376,8 @@ const networkStatus = document.getElementById('network-status')!;
 const networkDetail = document.getElementById('network-detail')!;
 const networkIcon = document.getElementById('network-icon')!;
 const btnLogin = document.getElementById('btn-login') as HTMLButtonElement;
+const btnSwitchAccount = document.getElementById('btn-switch-account') as HTMLButtonElement;
+const btnLogoutCurrent = document.getElementById('btn-logout-current') as HTMLButtonElement;
 const infoAccount = document.getElementById('info-account')!;
 const infoAccountLabel = document.getElementById('info-account-label')!;
 const infoBalance = document.getElementById('info-balance')!;
@@ -1590,7 +1630,8 @@ const editAccPassword = document.getElementById('edit-acc-password') as HTMLInpu
 
 // State
 
-let currentNetworkState = NetworkState.Offline;
+let currentNetworkState = NetworkState.Checking;
+let currentLoginType = LoginType.Unknown;
 let autoLoginEnabled = localStorage.getItem('bjut_auto_login') === 'true';
 let checkInterval = parseInt(localStorage.getItem('bjut_check_interval') || '15', 10);
 let isLoggingIn = false;
@@ -2502,7 +2543,9 @@ function setupNavigation() {
 
 // Event Listeners
 function setupEventListeners() {
-  btnLogin.addEventListener('click', manualLogin);
+  btnLogin.addEventListener('click', () => void manualLogin(false));
+  btnSwitchAccount.addEventListener('click', () => void manualLogin(true));
+  btnLogoutCurrent.addEventListener('click', () => void logoutCurrentCampusSession());
   btnRefreshBillingCenter.addEventListener('click', () => void refreshBillingCenterData());
   btnOpenBilling.addEventListener('click', () => {
     activatePage('billing-center', 'dashboard');
@@ -3342,6 +3385,7 @@ function setupEventListeners() {
   const btnCheckUpdate = document.getElementById('btn-check-update') as HTMLButtonElement | null;
   if (btnCheckUpdate) {
     btnCheckUpdate.addEventListener('click', async () => {
+      if (revealActiveUpdateDownload()) return;
       const channel = settingUpdateChannel.value;
       log('系统', `正在检查更新 (通道: ${channel === 'release' ? '正式版' : '预览版'})...`);
       btnCheckUpdate.disabled = true;
@@ -3431,6 +3475,9 @@ function setupEventListeners() {
           log('系统', `更新包 ${asset.name} 已下载，系统安装程序已启动`, 'success');
           window.setTimeout(() => document.getElementById('update-modal')?.classList.add('hidden'), 2500);
         } catch (error) {
+          updateDownloadInProgress = false;
+          updateDownloadPaused = false;
+          setUpdateDownloadControls(false);
           document.getElementById('update-modal')?.classList.add('hidden');
           throw error;
         }
@@ -3453,6 +3500,7 @@ function setupEventListeners() {
   const btnRedownloadPackage = document.getElementById('btn-redownload-package') as HTMLButtonElement | null;
   if (btnRedownloadPackage) {
     btnRedownloadPackage.addEventListener('click', async () => {
+      if (revealActiveUpdateDownload()) return;
       const label = btnRedownloadPackage.querySelector('span');
       btnRedownloadPackage.disabled = true;
       if (label) label.textContent = '正在查找完整包…';
@@ -3496,6 +3544,9 @@ function setupEventListeners() {
         log('系统', `当前版本 ${asset.name} 已验证并交由系统重新安装`, 'success');
         window.setTimeout(() => document.getElementById('update-modal')?.classList.add('hidden'), 2500);
       } catch (error) {
+        updateDownloadInProgress = false;
+        updateDownloadPaused = false;
+        setUpdateDownloadControls(false);
         document.getElementById('update-modal')?.classList.add('hidden');
         if (String(error).includes('更新包下载已停止')) {
           log('系统', '用户已停止完整包下载', 'info');
@@ -4140,6 +4191,7 @@ function renderAccounts() {
     accountsList.innerHTML = '<div style="color: var(--text-muted); padding: 1rem;">暂无账号，请添加。</div>';
     updateOverrideOptions();
     updateBillingAccountOptions();
+    syncDashboardAccountActions();
     return;
   }
   
@@ -4198,6 +4250,7 @@ function renderAccounts() {
   renderIcons(accountsList);
   updateOverrideOptions();
   updateBillingAccountOptions();
+  syncDashboardAccountActions();
 }
 
 function updateOverrideOptions() {
@@ -4463,8 +4516,15 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType, loginMessage
   currentNetworkState = state;
   networkIcon.className = 'status-icon';
   networkDetail.classList.remove('login-error');
+  syncDashboardAccountActions();
   
-  if (state === NetworkState.Online) {
+  if (state === NetworkState.Checking) {
+    networkStatus.textContent = '正在检测网络…';
+    networkDetail.textContent = '正在检查互联网连通性与校园认证网关';
+    networkIcon.classList.add('warning', 'checking');
+    networkIcon.innerHTML = '<i data-lucide="loader"></i>';
+    btnLogin.disabled = true;
+  } else if (state === NetworkState.Online) {
     networkStatus.textContent = '互联网已连接';
     networkDetail.textContent = '网络畅通无阻';
     networkIcon.classList.add('success');
@@ -4491,14 +4551,32 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType, loginMessage
     infoAccountLabel.textContent = '当前登录账号';
   }
   if (IS_ANDROID && window.AndroidBridge?.updateKeepAliveStatus) {
-    const notification = state === NetworkState.Online
-      ? '互联网已连接，后台自动登录正常'
-      : state === NetworkState.BjutCampus
-        ? '校园网需要认证，自动登录正在处理'
-        : '网络离线或不在校园网环境';
+    const notification = state === NetworkState.Checking
+      ? '正在检查网络连通性与校园认证网关'
+      : state === NetworkState.Online
+        ? '互联网已连接，后台自动登录正常'
+        : state === NetworkState.BjutCampus
+          ? '校园网需要认证，自动登录正在处理'
+          : '网络离线或不在校园网环境';
     window.AndroidBridge.updateKeepAliveStatus(notification);
   }
   renderIcons(networkIcon);
+  renderIcons(btnLogin.parentElement || document);
+}
+
+function syncDashboardAccountActions() {
+  const online = currentNetworkState === NetworkState.Online;
+  const account = portalUserInfoCache?.account?.trim() || '';
+  const campusSessionKnown = currentLoginType !== LoginType.Unknown
+    || (portalUserInfoCache?.source === 'portal' && !['', '--', '未登录'].includes(account));
+  const onlineCampusSession = online && campusSessionKnown;
+  btnLogin.hidden = online;
+  btnSwitchAccount.hidden = !onlineCampusSession;
+  btnLogoutCurrent.hidden = !onlineCampusSession;
+  btnSwitchAccount.disabled = !getAccounts().some(
+    account => !account.isDisabled && account.hasPassword,
+  );
+  btnLogoutCurrent.disabled = false;
 }
 
 function billingValueWithUnit(value: string | null | undefined, unit: string): string {
@@ -5391,6 +5469,7 @@ function billingOverviewToUserInfo(overview: BillingOverview): UserInfo {
     account: overview.account,
     balance: overview.balance,
     flow: overview.remainingFlow,
+    flowPending: false,
     source: 'billing',
     status: overview.status,
     statusReason: overview.statusReason,
@@ -6821,12 +6900,16 @@ async function updateUserInfo(force = false) {
       infoBalance.textContent = info.balance || '--';
       infoFlow.textContent = info.flow || '--';
       infoAccountLabel.textContent = '当前登录账号';
+      if (info.flowPending) {
+        void updateRemainingFlow(requestId, info.account);
+      }
     } else {
       infoAccount.textContent = '--';
       infoBalance.textContent = '--';
       infoFlow.textContent = '--';
       infoAccountLabel.textContent = '当前登录账号';
     }
+    syncDashboardAccountActions();
     updateTopUpPackageAction();
   } catch (error) {
     if (requestId !== userInfoRequestId) return;
@@ -6836,15 +6919,44 @@ async function updateUserInfo(force = false) {
     infoBalance.textContent = '--';
     infoFlow.textContent = '--';
     infoAccountLabel.textContent = '当前登录账号';
+    syncDashboardAccountActions();
     updateTopUpPackageAction();
   } finally {
     userInfoLoading = false;
   }
 }
 
-async function manualLogin() {
-  if (currentNetworkState !== NetworkState.BjutCampus) {
-    customAlert('当前无需登录或未连接校园网');
+async function updateRemainingFlow(requestId: number, account: string) {
+  try {
+    const flow = await invoke<string | null>('get_remaining_flow');
+    if (requestId !== userInfoRequestId || portalUserInfoCache?.account !== account) return;
+    infoFlow.textContent = flow || '未知';
+    if (portalUserInfoCache) {
+      portalUserInfoCache = {
+        ...portalUserInfoCache,
+        flow: flow || '未知',
+        flowPending: false,
+      };
+    }
+    updateTopUpPackageAction();
+  } catch (error) {
+    if (requestId !== userInfoRequestId || portalUserInfoCache?.account !== account) return;
+    infoFlow.textContent = '未知';
+    if (portalUserInfoCache) {
+      portalUserInfoCache = {
+        ...portalUserInfoCache,
+        flow: '未知',
+        flowPending: false,
+      };
+    }
+    log('计费', `套餐剩余流量读取失败，但当前账号和余额已保留：${String(error)}`, 'debug');
+  }
+}
+
+async function manualLogin(switchingAccount = false) {
+  const requiredState = switchingAccount ? NetworkState.Online : NetworkState.BjutCampus;
+  if (currentNetworkState !== requiredState) {
+    customAlert(switchingAccount ? '当前没有可切换的校园网登录会话' : '当前无需登录或未连接校园网');
     return;
   }
   
@@ -6853,13 +6965,35 @@ async function manualLogin() {
     return;
   }
 
-  isLoggingIn = true;
-  btnLogin.disabled = true;
-  btnLogin.innerHTML = '<i data-lucide="loader"></i> 安全检查中...';
-  renderIcons(btnLogin);
-
   const overrideAcc = overrideAccountSelect?.value || 'auto';
   const overrideMethod = overrideMethodSelect?.value || 'auto';
+  const accountIndex = overrideAcc !== 'auto' && overrideAcc !== 'add' ? parseInt(overrideAcc, 10) : null;
+  if (switchingAccount && (accountIndex === null || Number.isNaN(accountIndex))) {
+    await customAlert('请先在控制台上方“登录账号”中明确选择要切换到的目标账号。', '选择目标账号');
+    return;
+  }
+  const targetAccount = accountIndex === null ? null : getAccounts()[accountIndex];
+  const currentAccountUser = portalUserInfoCache?.account
+    || (!["", "--", "未登录"].includes(infoAccount.textContent?.trim() || '')
+      ? infoAccount.textContent?.trim() || null
+      : null);
+  if (switchingAccount && targetAccount?.user === currentAccountUser) {
+    await customAlert(`当前已经使用账号 ${targetAccount.user} 登录。`, '无需切换');
+    return;
+  }
+  if (switchingAccount && !await customConfirm(
+    `确认切换到账号 ${targetAccount?.user || '--'} 吗？\n\nbjut_wifi 会直接提交目标账号；bjut-sushe 与 lgn 有线会先安全注销当前会话，再登录目标账号。`,
+    '切换校园网登录账号',
+    '确认切换',
+    '取消',
+  )) return;
+
+  const actionButton = switchingAccount ? btnSwitchAccount : btnLogin;
+  isLoggingIn = true;
+  actionButton.disabled = true;
+  actionButton.innerHTML = '<i data-lucide="loader"></i> 安全检查中...';
+  renderIcons(actionButton);
+
   const trustApproval = await requestNetworkTrustApproval({
     loginTypeOverride: overrideMethod === 'auto' ? null : overrideMethod,
     onLog: log,
@@ -6872,41 +7006,96 @@ async function manualLogin() {
   if (!trustApproval.allowed) {
     log('安全', '已取消登录：安全检查未通过', 'error');
     isLoggingIn = false;
-    btnLogin.disabled = false;
-    btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
-    renderIcons(btnLogin);
+    actionButton.disabled = false;
+    actionButton.innerHTML = switchingAccount
+      ? '<i data-lucide="users"></i> 切换登录账号'
+      : '<i data-lucide="log-in"></i> 立即登录';
+    renderIcons(actionButton);
     return;
   }
   
-  btnLogin.innerHTML = '<i data-lucide="loader"></i> 登录中...';
-  renderIcons(btnLogin);
+  actionButton.innerHTML = `<i data-lucide="loader"></i> ${switchingAccount ? '切换中...' : '登录中...'}`;
+  renderIcons(actionButton);
 
-  const accountIndex = overrideAcc !== 'auto' && overrideAcc !== 'add' ? parseInt(overrideAcc, 10) : null;
   try {
     const result: { success: boolean, message: string } = await invoke('manual_login', {
       accountIndex: Number.isNaN(accountIndex) ? null : accountIndex,
       loginTypeOverride: overrideMethod === 'auto' ? null : overrideMethod,
       trustNetworkOnce: trustApproval.trustOnce,
       expectedNetworkKey: trustApproval.networkKey,
+      switchContext: {
+        enabled: switchingAccount,
+        currentAccountUser,
+      },
     });
     if (!result.success) {
-      log('登录', `登录失败: ${result.message}`, 'error');
-      updateNetworkStatus(NetworkState.BjutCampus, undefined, result.message);
-      btnLogin.disabled = false;
-      btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
+      log('登录', `${switchingAccount ? '切换账号' : '登录'}失败: ${result.message}`, 'error');
+      if (!switchingAccount) updateNetworkStatus(NetworkState.BjutCampus, undefined, result.message);
       return;
     }
-    btnLogin.innerHTML = '<i data-lucide="check"></i> 已连接';
-    updateNetworkStatus(NetworkState.Online);
-    setTimeout(() => void updateUserInfo(true), 2000);
+    actionButton.innerHTML = '<i data-lucide="check"></i> 已连接';
+    updateNetworkStatus(NetworkState.Online, currentLoginType);
+    if (switchingAccount) {
+      infoAccount.textContent = targetAccount?.user || '--';
+      infoBalance.textContent = '读取中…';
+      infoFlow.textContent = '读取中…';
+      await customAlert(result.message, '账号切换完成');
+    }
+    setTimeout(() => void updateUserInfo(true), switchingAccount ? 900 : 2000);
   } catch (error) {
-    log('登录', `登录请求失败: ${String(error)}`, 'error');
-    updateNetworkStatus(NetworkState.BjutCampus, undefined, `登录请求失败：${String(error)}`);
-    btnLogin.disabled = false;
-    btnLogin.innerHTML = '<i data-lucide="log-in"></i> 立即登录';
+    log('登录', `${switchingAccount ? '切换账号' : '登录'}请求失败: ${String(error)}`, 'error');
+    if (!switchingAccount) {
+      updateNetworkStatus(NetworkState.BjutCampus, undefined, `登录请求失败：${String(error)}`);
+    } else {
+      await customAlert(`切换账号失败：${String(error)}`, '切换失败');
+    }
   } finally {
-    renderIcons(btnLogin);
+    actionButton.disabled = false;
+    actionButton.innerHTML = switchingAccount
+      ? '<i data-lucide="users"></i> 切换登录账号'
+      : '<i data-lucide="log-in"></i> 立即登录';
+    renderIcons(actionButton);
     isLoggingIn = false;
+    syncDashboardAccountActions();
+  }
+}
+
+async function logoutCurrentCampusSession() {
+  if (currentNetworkState !== NetworkState.Online) {
+    await customAlert('当前没有可注销的校园网登录会话。');
+    return;
+  }
+  const currentAccountUser = portalUserInfoCache?.account
+    || (!["", "--", "未登录"].includes(infoAccount.textContent?.trim() || '')
+      ? infoAccount.textContent?.trim() || null
+      : null);
+  if (!await customConfirm(
+    `确认注销当前校园网登录吗？${currentAccountUser ? `\n\n当前账号：${currentAccountUser}` : ''}`,
+    '注销当前登录',
+    '确认注销',
+    '取消',
+  )) return;
+  btnLogoutCurrent.disabled = true;
+  btnLogoutCurrent.innerHTML = '<i data-lucide="loader"></i> 注销中...';
+  renderIcons(btnLogoutCurrent);
+  try {
+    const message = await invoke<string>('logout_current_campus_session', {
+      accountUser: currentAccountUser,
+    });
+    portalUserInfoCache = null;
+    userInfoRequestId += 1;
+    infoAccount.textContent = '未登录';
+    infoBalance.textContent = '--';
+    infoFlow.textContent = '--';
+    updateTopUpPackageAction();
+    await customAlert(message, '注销完成');
+  } catch (error) {
+    await customAlert(`注销失败：${String(error)}`, '注销当前登录');
+  } finally {
+    btnLogoutCurrent.disabled = false;
+    btnLogoutCurrent.innerHTML = '<i data-lucide="power"></i> 注销当前登录';
+    renderIcons(btnLogoutCurrent);
+    syncDashboardAccountActions();
   }
 }
 

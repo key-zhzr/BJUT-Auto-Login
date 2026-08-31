@@ -1135,13 +1135,7 @@ pub(crate) async fn disconnect_session(
     validate_session_action(session_id, ip, mac)?;
     let mut session = authenticate(account, password, compatibility).await?;
     let result = async {
-        let online_text = get_dashboard_text(
-            &mut session,
-            "/Self/dashboard/getOnlineList",
-            "application/json,*/*;q=0.8",
-        )
-        .await?;
-        let online_sessions = parse_online_sessions(&online_text)?;
+        let online_sessions = online_sessions_for_action(&mut session).await?;
         let requested_mac = normalize_mac_for_action(mac);
         let exists = online_sessions.iter().any(|item| {
             item.session_id == session_id
@@ -1154,46 +1148,103 @@ pub(crate) async fn disconnect_session(
             ));
         }
 
-        let mut action_url =
-            same_origin_url(&format!("{BILLING_ORIGIN}/Self/dashboard/tooffline"))?;
-        let ajax_csrf_token = session.ajax_csrf_token.as_deref().ok_or_else(|| {
-            BillingError::Protocol("控制台缺少安全操作令牌，请刷新后重试".to_string())
-        })?;
-        action_url
-            .query_pairs_mut()
-            .append_pair("sessionid", session_id)
-            .append_pair("ip", ip)
-            .append_pair("mac", &requested_mac)
-            .append_pair("ajaxCsrfToken", ajax_csrf_token)
-            .append_pair("t", &cache_buster().to_string());
-        let referer = session.dashboard_url.clone();
-        let (_, response) = get_follow(
-            &session.client,
-            action_url,
-            &mut session.cookies,
-            Some(&referer),
-            "application/json,*/*;q=0.8",
-            "empty",
-        )
-        .await?;
-        let response_text = response.text().await.map_err(network_error)?;
-        let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|_| BillingError::Protocol("注销响应不是有效 JSON".to_string()))?;
-        if response_json
-            .get("success")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-        {
-            Ok("在线会话已注销".to_string())
-        } else {
-            Err(BillingError::ActionRejected(
-                "计费系统未能注销该会话".to_string(),
-            ))
-        }
+        disconnect_online_session_authenticated(&mut session, session_id, ip, &requested_mac).await
     }
     .await;
     logout(&mut session).await;
     result
+}
+
+pub(crate) async fn disconnect_current_session(
+    account: &str,
+    password: &str,
+    compatibility: VpnCompatibility,
+    current_ip: &str,
+) -> Result<String, BillingError> {
+    let current_ip = current_ip.trim();
+    if current_ip.is_empty() {
+        return Err(BillingError::InvalidRequest(
+            "无法确定当前校园网 IPv4，不能选择计费在线会话".to_string(),
+        ));
+    }
+    let mut session = authenticate(account, password, compatibility).await?;
+    let result = async {
+        let online_sessions = online_sessions_for_action(&mut session).await?;
+        let current = online_sessions
+            .into_iter()
+            .find(|item| item.ip.trim() == current_ip)
+            .ok_or_else(|| {
+                BillingError::ActionRejected(
+                    "计费中心未找到与当前本地 IPv4 对应的在线会话".to_string(),
+                )
+            })?;
+        let normalized_mac = normalize_mac_for_action(&current.mac);
+        disconnect_online_session_authenticated(
+            &mut session,
+            &current.session_id,
+            &current.ip,
+            &normalized_mac,
+        )
+        .await
+    }
+    .await;
+    logout(&mut session).await;
+    result
+}
+
+async fn online_sessions_for_action(
+    session: &mut BillingSession,
+) -> Result<Vec<BillingOnlineSession>, BillingError> {
+    let online_text = get_dashboard_text(
+        session,
+        "/Self/dashboard/getOnlineList",
+        "application/json,*/*;q=0.8",
+    )
+    .await?;
+    parse_online_sessions(&online_text)
+}
+
+async fn disconnect_online_session_authenticated(
+    session: &mut BillingSession,
+    session_id: &str,
+    ip: &str,
+    mac: &str,
+) -> Result<String, BillingError> {
+    let mut action_url = same_origin_url(&format!("{BILLING_ORIGIN}/Self/dashboard/tooffline"))?;
+    let ajax_csrf_token = session.ajax_csrf_token.as_deref().ok_or_else(|| {
+        BillingError::Protocol("控制台缺少安全操作令牌，请刷新后重试".to_string())
+    })?;
+    action_url
+        .query_pairs_mut()
+        .append_pair("sessionid", session_id)
+        .append_pair("ip", ip)
+        .append_pair("mac", mac)
+        .append_pair("ajaxCsrfToken", ajax_csrf_token)
+        .append_pair("t", &cache_buster().to_string());
+    let referer = session.dashboard_url.clone();
+    let (_, response) = get_follow(
+        &session.client,
+        action_url,
+        &mut session.cookies,
+        Some(&referer),
+        "application/json,*/*;q=0.8",
+        "empty",
+    )
+    .await?;
+    let response_text = response.text().await.map_err(network_error)?;
+    let response_json: serde_json::Value = serde_json::from_str(&response_text)
+        .map_err(|_| BillingError::Protocol("注销响应不是有效 JSON".to_string()))?;
+    if response_json
+        .get("success")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        Ok("在线会话已注销".to_string())
+    } else {
+        Err(BillingError::ActionRejected(
+            "计费系统未能注销该会话".to_string(),
+        ))
+    }
 }
 
 pub(crate) async fn set_mauth_enabled(

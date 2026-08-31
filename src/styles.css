@@ -421,6 +421,22 @@ main {
   overflow-wrap: anywhere;
 }
 
+.status-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.status-action .btn {
+  white-space: nowrap;
+}
+
+.status-icon.checking svg {
+  animation: spin 0.9s linear infinite;
+}
+
 /* Buttons */
 .btn {
   padding: 0.75rem 1.5rem;

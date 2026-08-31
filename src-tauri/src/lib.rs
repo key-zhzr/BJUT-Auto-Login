@@ -366,13 +366,35 @@ fn windows_interface_is_hardware(interface_index: u32) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn windows_adapter_looks_virtual(name: &str, description: &str) -> bool {
+    let normalized = format!("{name} {description}").to_ascii_lowercase();
+    [
+        "virtual",
+        "hyper-v",
+        "vmware",
+        "virtualbox",
+        "vethernet",
+        "wintun",
+        "wireguard",
+        "tailscale",
+        "zerotier",
+        "tap-windows",
+        "loopback",
+        "bluetooth",
+        "docker",
+        "wsl",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+#[cfg(target_os = "windows")]
 fn windows_physical_adapters(if_type: u32) -> Vec<WindowsAdapterIdentity> {
     use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
     use windows::Win32::NetworkManagement::IpHelper::{
         GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
         GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
     };
-    use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
     use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
 
     let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
@@ -414,16 +436,39 @@ fn windows_physical_adapters(if_type: u32) -> Vec<WindowsAdapterIdentity> {
         // SAFETY: this is the active member of the documented
         // Length/IfIndex header union.
         let interface_index = unsafe { adapter.Anonymous1.Anonymous.IfIndex };
-        if adapter.IfType == if_type
-            && adapter.OperStatus == IfOperStatusUp
-            && windows_interface_is_hardware(interface_index)
-        {
+        if adapter.IfType == if_type {
             // AdapterName is the stable interface GUID used by Native Wi-Fi;
             // FriendlyName is only for display.
             let guid = normalize_windows_guid(
                 &unsafe { adapter.AdapterName.to_string() }.unwrap_or_default(),
             );
-            let name = unsafe { adapter.FriendlyName.to_string() }.unwrap_or_default();
+            let mut name = unsafe { adapter.FriendlyName.to_string() }.unwrap_or_default();
+            let description = unsafe { adapter.Description.to_string() }.unwrap_or_default();
+            let physical_address_length =
+                (adapter.PhysicalAddressLength as usize).min(adapter.PhysicalAddress.len());
+            let has_physical_address = physical_address_length >= 6
+                && adapter.PhysicalAddress[..physical_address_length]
+                    .iter()
+                    .any(|octet| *octet != 0);
+            // Some Windows releases and vendor NDIS drivers do not populate
+            // HardwareInterface consistently. A real non-zero MAC on a
+            // non-virtual Ethernet/WLAN adapter is the stable cross-version
+            // fallback. Do not require OperStatus=Up here: several USB docks
+            // expose an assigned unicast IPv4 while reporting Unknown until
+            // after the first routed packet. A coherent per-interface IPv4
+            // below remains mandatory; no global ipconfig guessing is used.
+            if (!windows_interface_is_hardware(interface_index) && !has_physical_address)
+                || windows_adapter_looks_virtual(&name, &description)
+            {
+                adapter_ptr = adapter.Next;
+                continue;
+            }
+            if name.trim().is_empty() {
+                name.clone_from(&description);
+            }
+            if name.trim().is_empty() {
+                name.clone_from(&guid);
+            }
             let mut address_ptr = adapter.FirstUnicastAddress;
             while !address_ptr.is_null() {
                 // SAFETY: address_ptr is another linked record owned by storage.
@@ -445,10 +490,7 @@ fn windows_physical_adapters(if_type: u32) -> Vec<WindowsAdapterIdentity> {
                             octets.s_b4,
                         )
                         .to_string();
-                        if !guid.is_empty()
-                            && !name.is_empty()
-                            && usable_physical_ipv4(&ip).is_some()
-                        {
+                        if !name.is_empty() && usable_physical_ipv4(&ip).is_some() {
                             adapters.push(WindowsAdapterIdentity {
                                 guid: guid.clone(),
                                 name: name.clone(),
@@ -525,12 +567,21 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
     // coherent per-interface campus IP; the read-only protocol probe must then
     // succeed before any credential is sent.
     let wired_adapters = windows_physical_adapters(IF_TYPE_ETHERNET_CSMACD);
-    let routed_interface =
-        windows_best_route_interface_index(std::net::Ipv4Addr::new(172, 30, 201, 2));
-    let routed_wired = routed_interface.and_then(|index| {
+    let routed_wired = [
+        std::net::Ipv4Addr::new(10, 21, 251, 3),
+        std::net::Ipv4Addr::new(10, 21, 221, 98),
+        std::net::Ipv4Addr::new(172, 30, 201, 2),
+    ]
+    .into_iter()
+    .filter_map(windows_best_route_interface_index)
+    // A default VPN/TUN route may be returned for the first destination even
+    // while a later campus subnet has a more specific physical route. Keep
+    // evaluating destinations until the route index actually matches one of
+    // the coherent physical Ethernet adapters enumerated above.
+    .find_map(|index| {
         wired_adapters
             .iter()
-            .find(|adapter| adapter.interface_index == index && is_campus_wired_ipv4(&adapter.ip))
+            .find(|adapter| adapter.interface_index == index)
     });
     let wired = routed_wired.or_else(|| {
         identity
@@ -1318,8 +1369,8 @@ use network_trust::{
 use portal_auth::portal_probe_urls;
 use portal_auth::{
     detect_login_type_details_rust, diagnose_login_gateways, lgn_user_info_url,
-    login_result_is_ambiguous, login_to_campus_network_rust, portal_client, LoginType,
-    PortalRouteContext,
+    login_result_is_ambiguous, login_to_campus_network_rust, logout_from_campus_network_rust,
+    portal_client, LoginType, PortalRouteContext,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -1331,6 +1382,13 @@ use tauri::Manager;
 struct ManualLoginResult {
     success: bool,
     message: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct LoginSwitchContext {
+    enabled: bool,
+    current_account_user: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -1356,6 +1414,7 @@ struct UserInfo {
     account: String,
     balance: String,
     flow: String,
+    flow_pending: bool,
     source: String,
     status: Option<String>,
     status_reason: Option<String>,
@@ -2650,18 +2709,8 @@ async fn fetch_portal_user_info(
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string);
-    let flow = match remaining_flow {
-        Some(value) => value,
-        None => tokio::time::timeout(
-            std::time::Duration::from_secs(12),
-            billing::fetch_current_remaining_flow_via_lgn(compatibility, route_context),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .flatten()
-        .unwrap_or_else(|| "未知".to_string()),
-    };
+    let flow_pending = remaining_flow.is_none();
+    let flow = remaining_flow.unwrap_or_else(|| "读取中…".to_string());
     Some(UserInfo {
         account: info
             .get("account")
@@ -2677,6 +2726,7 @@ async fn fetch_portal_user_info(
         // lgn2jfself handoff above reads the authoritative dashboard value;
         // never infer a quota from the package display name.
         flow,
+        flow_pending,
         source: "portal".to_string(),
         status: None,
         status_reason: None,
@@ -4881,7 +4931,13 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                         state.non_campus_count.store(0, Ordering::SeqCst);
                     }
                     let mut payload = if login_succeeded {
-                        make_payload("Online", None, &current_ssid, &current_bssid, &current_ip)
+                        make_payload(
+                            "Online",
+                            Some(&login_type),
+                            &current_ssid,
+                            &current_bssid,
+                            &current_ip,
+                        )
                     } else {
                         make_payload(
                             "BjutCampus",
@@ -5249,13 +5305,14 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
 
     let route_started = std::time::Instant::now();
     emit_network_diagnostic_progress(&app, 20, "正在核对校园认证目标路由…");
+    let route_uses_physical_ipv4 = usable_physical_ipv4(route_ip).is_some();
     steps.push(make_diagnostic_step(
         "campus_route",
         "校园目标路由",
         route_started,
         if wifi_route_failed {
             "error"
-        } else if route_ip.is_empty() {
+        } else if route_ip.is_empty() || !route_uses_physical_ipv4 || ip.is_empty() {
             "warning"
         } else {
             "success"
@@ -5264,6 +5321,14 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
             "检测到非默认的待认证 Wi-Fi，但 Android 无法将请求绑定到该网络".to_string()
         } else if route_ip.is_empty() {
             "无法取得访问校园认证目标时系统选择的源 IPv4".to_string()
+        } else if !route_uses_physical_ipv4 {
+            format!(
+                "校园认证目标当前走 {route_ip}，该地址像 VPN/TUN Fake-IP；不会将它当作物理网卡地址"
+            )
+        } else if ip.is_empty() {
+            format!(
+                "系统路由使用 {route_ip}，但未取得对应物理接口及 IPv4；已禁止不绑定接口的认证请求"
+            )
         } else if route_ip == ip {
             format!("校园认证目标与当前网络身份使用同一源 IP：{route_ip}")
         } else {
@@ -5368,7 +5433,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let portal_started = std::time::Instant::now();
     emit_network_diagnostic_progress(&app, 76, "正在并发探测校园认证网关…");
     let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
-    let gateway_results = if wifi_route_failed {
+    let gateway_results = if wifi_route_failed || portal_route_context.is_none() {
         Vec::new()
     } else {
         diagnose_login_gateways(
@@ -5415,6 +5480,11 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         (
             "error",
             "无法绑定非默认校园 Wi-Fi，已停止认证网关探测以避免误用 VPN/移动数据".to_string(),
+        )
+    } else if portal_route_context.is_none() {
+        (
+            "error",
+            "未取得同一物理接口的名称与 IPv4，已阻止不绑定接口的认证网关探测；请检查 Windows 网卡驱动与接口权限".to_string(),
         )
     } else if login_type != LoginType::Unknown {
         (
@@ -5877,6 +5947,238 @@ fn set_current_network_trust(
     Ok(lists)
 }
 
+async fn portal_logout_attempt(
+    method: LoginType,
+    account: Option<&Account>,
+    compatibility: VpnCompatibility,
+    route_context: Option<&PortalRouteContext>,
+) -> Result<String, String> {
+    let label = method.display_name();
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(12),
+        logout_from_campus_network_rust(
+            method,
+            account.map(|value| value.user.as_str()),
+            account.map(|value| value.pass.as_str()),
+            compatibility,
+            route_context,
+        ),
+    )
+    .await
+    {
+        Ok(Ok((true, message))) => Ok(format!("已通过 {label} 完成注销：{message}")),
+        Ok(Ok((false, message))) => Err(format!("{label} 拒绝注销：{message}")),
+        Ok(Err(error)) => Err(format!("{label} 注销失败：{error}")),
+        Err(_) => Err(format!("{label} 注销超过 12 秒")),
+    }
+}
+
+async fn billing_logout_attempt(
+    account: Option<&Account>,
+    compatibility: VpnCompatibility,
+    current_ip: &str,
+) -> Result<String, String> {
+    let account = account
+        .filter(|value| !value.pass.is_empty())
+        .ok_or_else(|| "计费中心注销需要当前账号的已保存密码".to_string())?;
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(25),
+        billing::disconnect_current_session(
+            &account.user,
+            &account.pass,
+            compatibility,
+            current_ip,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(message)) => Ok(format!("已通过计费中心完成注销：{message}")),
+        Ok(Err(error)) => Err(error.user_message()),
+        Err(_) => Err("计费中心注销超过 25 秒".to_string()),
+    }
+}
+
+async fn logout_current_session_by_type(
+    login_type: &LoginType,
+    current_account: Option<&Account>,
+    compatibility: VpnCompatibility,
+    current_ip: &str,
+    route_context: Option<&PortalRouteContext>,
+) -> Result<String, String> {
+    let mut failures = Vec::new();
+    macro_rules! attempt {
+        ($future:expr) => {
+            match $future.await {
+                Ok(message) => return Ok(message),
+                Err(error) => failures.push(error),
+            }
+        };
+    }
+    match login_type {
+        LoginType::Type1 => {
+            attempt!(billing_logout_attempt(
+                current_account,
+                compatibility,
+                current_ip
+            ));
+            attempt!(portal_logout_attempt(
+                LoginType::Type3,
+                None,
+                compatibility,
+                route_context
+            ));
+            attempt!(portal_logout_attempt(
+                LoginType::Type1,
+                current_account,
+                compatibility,
+                route_context
+            ));
+        }
+        LoginType::Type2 => {
+            attempt!(portal_logout_attempt(
+                LoginType::Type3,
+                None,
+                compatibility,
+                route_context
+            ));
+            attempt!(portal_logout_attempt(
+                LoginType::Type2,
+                None,
+                compatibility,
+                route_context
+            ));
+            attempt!(billing_logout_attempt(
+                current_account,
+                compatibility,
+                current_ip
+            ));
+        }
+        LoginType::Type3 => {
+            attempt!(portal_logout_attempt(
+                LoginType::Type3,
+                None,
+                compatibility,
+                route_context
+            ));
+            attempt!(billing_logout_attempt(
+                current_account,
+                compatibility,
+                current_ip
+            ));
+        }
+        LoginType::Unknown => return Err("无法识别当前校园网类型".to_string()),
+    }
+    Err(format!("所有注销途径均未成功：{}", failures.join("；")))
+}
+
+fn emit_session_network_state(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    network: &serde_json::Value,
+    state_name: &str,
+    login_type: &LoginType,
+) {
+    let payload = serde_json::json!({
+        "state": state_name,
+        "loginType": login_type.as_str(),
+        "ssid": network.get("ssid").and_then(|value| value.as_str()).unwrap_or(""),
+        "bssid": network.get("bssid").and_then(|value| value.as_str()).unwrap_or(""),
+        "ip": network.get("ip").and_then(|value| value.as_str()).unwrap_or(""),
+        "timestamp": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    });
+    *state.last_network_state.lock().unwrap() = payload.clone();
+    let _ = app.emit("network-state-change", payload);
+    #[cfg(desktop)]
+    refresh_tray_menu(app, state);
+}
+
+async fn current_or_detected_login_type(
+    state: &AppState,
+    compatibility: VpnCompatibility,
+    network: &serde_json::Value,
+    route_context: Option<&PortalRouteContext>,
+) -> LoginType {
+    let cached = state
+        .last_network_state
+        .lock()
+        .unwrap()
+        .get("loginType")
+        .and_then(serde_json::Value::as_str)
+        .and_then(login_type_from_profile);
+    if let Some(cached) = cached {
+        return cached;
+    }
+    let detection = detect_login_type_details_rust(
+        compatibility,
+        network
+            .get("ssid")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+        network_transport(network),
+        route_context,
+    )
+    .await;
+    if detection.login_ready || detection.portal_detected {
+        detection.login_type
+    } else {
+        LoginType::Unknown
+    }
+}
+
+#[tauri::command]
+async fn logout_current_campus_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    account_user: Option<String>,
+) -> Result<String, String> {
+    ensure_billing_foreground(&state)?;
+    let config = state.config.read().unwrap().clone();
+    let compatibility = effective_vpn_compatibility(&config);
+    let network = get_network_info(app.clone(), Some(true));
+    #[cfg(target_os = "android")]
+    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    #[cfg(target_os = "android")]
+    if wifi_route_guard.failed() {
+        return Err("无法将注销请求绑定到当前校园 Wi-Fi".to_string());
+    }
+    let route_context = portal_route_context_from_network(&network)?;
+    let login_type =
+        current_or_detected_login_type(&state, compatibility, &network, route_context.as_ref())
+            .await;
+    if login_type == LoginType::Unknown {
+        return Err("未能确认当前校园网类型，未发送注销请求".to_string());
+    }
+    let current_account = account_user
+        .as_deref()
+        .and_then(|user| {
+            config
+                .accounts
+                .iter()
+                .find(|account| account.user == user && !account.is_disabled.unwrap_or(false))
+                .cloned()
+        })
+        .or_else(|| preferred_billing_account(&config));
+    let current_ip = network
+        .get("ip")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let message = run_billing_mutation_to_completion(&state, async {
+        logout_current_session_by_type(
+            &login_type,
+            current_account.as_ref(),
+            compatibility,
+            current_ip,
+            route_context.as_ref(),
+        )
+        .await
+    })
+    .await?;
+    state.billing_sessions.lock().unwrap().clear();
+    rust_log(&app, &state, "登录", &message, "success");
+    emit_session_network_state(&app, &state, &network, "BjutCampus", &login_type);
+    Ok(message)
+}
+
 #[tauri::command]
 async fn manual_login(
     app: tauri::AppHandle,
@@ -5885,6 +6187,7 @@ async fn manual_login(
     login_type_override: Option<String>,
     trust_network_once: Option<bool>,
     expected_network_key: Option<String>,
+    switch_context: Option<LoginSwitchContext>,
 ) -> Result<ManualLoginResult, String> {
     // Capture a complete identity before the potentially slow portal probe.
     // The probe result must never be combined with SSID/BSSID/IP collected
@@ -6010,6 +6313,25 @@ async fn manual_login(
     }
     let trusted_identity = NetworkIdentitySnapshot::capture(&network);
 
+    let switch_context = switch_context.unwrap_or_default();
+    let switching_account = switch_context.enabled;
+    if switching_account && account_index.is_none() {
+        return Ok(ManualLoginResult {
+            success: false,
+            message: "切换账号前请明确选择目标账号".to_string(),
+        });
+    }
+    let current_account = switch_context
+        .current_account_user
+        .as_deref()
+        .and_then(|user| {
+            config
+                .accounts
+                .iter()
+                .find(|account| account.user == user && !account.is_disabled.unwrap_or(false))
+                .cloned()
+        })
+        .or_else(|| preferred_billing_account(&config));
     let configured_accounts = config.accounts;
     let accounts: Vec<Account> = match account_index {
         Some(index) => configured_accounts
@@ -6027,6 +6349,46 @@ async fn manual_login(
             success: false,
             message: "未配置可用账号".to_string(),
         });
+    }
+
+    if switching_account {
+        let target = &accounts[0];
+        if target.pass.is_empty() {
+            return Ok(ManualLoginResult {
+                success: false,
+                message: format!("目标账号 {} 缺少已保存的密码", target.user),
+            });
+        }
+        if let Err(remaining) = account_attempt_allowed(&state, &target.user) {
+            return Ok(ManualLoginResult {
+                success: false,
+                message: format!(
+                    "目标账号 {} 正在冷却，剩余 {} 秒；可在网络诊断页解除",
+                    target.user, remaining
+                ),
+            });
+        }
+        if switch_context.current_account_user.as_deref() == Some(target.user.as_str()) {
+            return Ok(ManualLoginResult {
+                success: true,
+                message: format!("当前已经使用账号 {} 登录", target.user),
+            });
+        }
+        if login_type != LoginType::Type2 {
+            let logout_message = logout_current_session_by_type(
+                &login_type,
+                current_account.as_ref(),
+                compatibility,
+                ip,
+                portal_route_context.as_ref(),
+            )
+            .await
+            .map_err(|error| format!("切换账号前注销当前会话失败：{error}"))?;
+            rust_log(&app, &state, "登录", &logout_message, "success");
+            state.billing_sessions.lock().unwrap().clear();
+            emit_session_network_state(&app, &state, &network, "BjutCampus", &login_type);
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
     }
 
     let mut last_failure_message: Option<String> = None;
@@ -6108,17 +6470,7 @@ async fn manual_login(
                     "success",
                 );
                 let net_info = get_network_info(app.clone(), Some(true));
-                let payload = serde_json::json!({
-                    "state": "Online",
-                    "ssid": net_info.get("ssid").and_then(|v| v.as_str()).unwrap_or(""),
-                    "bssid": net_info.get("bssid").and_then(|v| v.as_str()).unwrap_or(""),
-                    "ip": net_info.get("ip").and_then(|v| v.as_str()).unwrap_or(""),
-                    "timestamp": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
-                });
-                *state.last_network_state.lock().unwrap() = payload.clone();
-                let _ = app.emit("network-state-change", payload);
-                #[cfg(desktop)]
-                refresh_tray_menu(&app, &state);
+                emit_session_network_state(&app, &state, &net_info, "Online", &login_type);
                 return Ok(ManualLoginResult {
                     success: true,
                     message,
@@ -6480,6 +6832,36 @@ async fn get_user_info(
         evaluate_usage_alerts(&app, &state, info);
     }
     Ok(info)
+}
+
+#[tauri::command]
+async fn get_remaining_flow(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Option<String>, String> {
+    ensure_billing_foreground(&state)?;
+    let compatibility = {
+        let config = state.config.read().unwrap();
+        effective_vpn_compatibility(&config)
+    };
+    let network = get_network_info(app, Some(false));
+    #[cfg(target_os = "android")]
+    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+    #[cfg(target_os = "android")]
+    if wifi_route_guard.failed() {
+        return Err("无法将剩余流量请求绑定到当前校园 Wi-Fi".to_string());
+    }
+    let route_context = portal_route_context_from_network(&network)?;
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(12),
+        billing::fetch_current_remaining_flow_via_lgn(compatibility, route_context.as_ref()),
+    )
+    .await
+    {
+        Ok(Ok(flow)) => Ok(flow),
+        Ok(Err(error)) => Err(error.user_message()),
+        Err(_) => Err("剩余流量读取超过 12 秒".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -8219,7 +8601,7 @@ pub fn run() {
             non_campus_count: AtomicU32::new(0),
             is_in_background: AtomicBool::new(false),
             last_network_state: Mutex::new(serde_json::json!({
-                "state": "Offline",
+                "state": "Checking",
                 "ssid": "",
                 "bssid": "",
                 "ip": "",
@@ -8625,7 +9007,9 @@ pub fn run() {
             evaluate_manual_network_trust,
             set_current_network_trust,
             manual_login,
+            logout_current_campus_session,
             get_user_info,
+            get_remaining_flow,
             discover_current_campus_account,
             accept_discovered_campus_account,
             reject_discovered_campus_account,

@@ -247,7 +247,7 @@ export interface CountdownPayload {
 }
 
 export interface NetworkStatePayload {
-  state: 'Online' | 'BjutCampus' | 'Offline';
+  state: 'Checking' | 'Online' | 'BjutCampus' | 'Offline';
   loginType?: string;
   ssid?: string;
   bssid?: string;
@@ -282,6 +282,7 @@ export interface UserInfo {
   account: string;
   balance: string;
   flow: string;
+  flowPending: boolean;
   source: 'billing' | 'portal' | 'unavailable';
   status?: string | null;
   statusReason?: string | null;

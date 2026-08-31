@@ -63,6 +63,8 @@ const DORM_HTTPS_REFERER: &str = "https://10.21.221.98:802/";
 const DORM_GATEWAY_IPV4: Ipv4Addr = Ipv4Addr::new(10, 21, 221, 98);
 const WIFI_HTTP_LOGIN: &str = "http://10.21.251.3/drcom/login";
 const WIFI_HTTPS_LOGIN: &str = "https://wlgn.bjut.edu.cn/drcom/login";
+const WIFI_HTTP_LOGOUT: &str = "http://10.21.251.3/drcom/logout";
+const WIFI_HTTPS_LOGOUT: &str = "https://wlgn.bjut.edu.cn/drcom/logout";
 const WIFI_HTTP_REFERER: &str = "http://10.21.251.3/";
 const WIFI_HTTPS_REFERER: &str = "https://wlgn.bjut.edu.cn/";
 const LGN_REFERER: &str = "https://lgn.bjut.edu.cn/";
@@ -616,19 +618,28 @@ pub(crate) async fn diagnose_login_gateways(
     route_context: Option<&PortalRouteContext>,
 ) -> Vec<LoginTypeDetection> {
     const DIAGNOSTIC_CANDIDATE_BUDGET: Duration = Duration::from_millis(2200);
-    let probes = login_probe_candidates(ssid, transport)
-        .into_iter()
-        .map(|candidate| async move {
-            match tokio::time::timeout(
-                DIAGNOSTIC_CANDIDATE_BUDGET,
-                probe_login_type(compatibility, candidate.clone(), route_context),
-            )
-            .await
-            {
-                Ok(result) => LoginTypeDetection::from_probe(candidate, result),
-                Err(_) => LoginTypeDetection::timed_out(candidate),
-            }
-        });
+    let mut candidates = login_probe_candidates(ssid, transport);
+    // Diagnostics are observational and never send credentials. Probe all
+    // three documented gateways even when Windows reports an unknown or
+    // Ethernet transport: wired adapters, USB docks and campus bridge devices
+    // can expose bjut_wifi while still lacking a WLAN identity. Automatic
+    // login keeps the stricter transport-specific candidate set above.
+    for candidate in [LoginType::Type1, LoginType::Type2, LoginType::Type3] {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    let probes = candidates.into_iter().map(|candidate| async move {
+        match tokio::time::timeout(
+            DIAGNOSTIC_CANDIDATE_BUDGET,
+            probe_login_type(compatibility, candidate.clone(), route_context),
+        )
+        .await
+        {
+            Ok(result) => LoginTypeDetection::from_probe(candidate, result),
+            Err(_) => LoginTypeDetection::timed_out(candidate),
+        }
+    });
     // Diagnostics must still inspect every applicable gateway, but independent
     // bjut-sushe/bjut_wifi/lgn read-only probes do not need to wait for one
     // another. The bounded concurrent probe reduces a non-campus Wi-Fi check
@@ -776,6 +787,39 @@ fn lgn_login_url(
     Ok(url)
 }
 
+fn lgn_logout_url(local_ipv4: &str, observed_ipv6: &str) -> Result<Url, String> {
+    let mut url = Url::parse("https://lgn.bjut.edu.cn:802/eportal/portal/logout")
+        .map_err(|error| error.to_string())?;
+    let fields = [
+        ("callback", "dr1008"),
+        ("login_method", "1"),
+        ("user_account", "drcom"),
+        ("user_password", "123"),
+        ("ac_logout", "0"),
+        ("register_mode", "1"),
+        ("wlan_user_ip", local_ipv4),
+        ("wlan_user_ipv6", observed_ipv6),
+        ("wlan_vlan_id", "0"),
+        ("wlan_user_mac", "000000000000"),
+        ("wlan_ac_ip", ""),
+        ("wlan_ac_name", ""),
+        ("jsVersion", LGN_JS_VERSION),
+        ("program_index", LGN_PROGRAM_INDEX),
+        ("page_index", LGN_PAGE_INDEX),
+    ];
+    {
+        let mut query = url.query_pairs_mut();
+        for (name, value) in fields {
+            query.append_pair(name, &eportal_encrypt(value));
+        }
+        query
+            .append_pair("encrypt", "1")
+            .append_pair("v", &random_request_id())
+            .append_pair("lang", "zh");
+    }
+    Ok(url)
+}
+
 pub(crate) fn lgn_user_info_url(compatibility: VpnCompatibility) -> String {
     let query = format!(
         "callback=726427262624&lang=6c7e3b7578&program_index=79225954737327212323222f212e2723&page_index=755e577b7c4e27212323222f212e2320&user_account=&wlan_user_ip=&wlan_user_ipv6=&wlan_user_mac=262626262626262626262626&jsVersion=22384e&encrypt=1&v={}&lang=zh",
@@ -825,7 +869,12 @@ async fn login_lgn_once(
     route_context: Option<&PortalRouteContext>,
 ) -> Result<(bool, String), String> {
     let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn 有线")?;
+    let observed_ipv6 = fetch_lgn_observed_ipv6(client).await?;
+    let login_url = lgn_login_url(user, pass, &local_ipv4, &observed_ipv6)?;
+    get_jsonp_login(client, login_url, LGN_REFERER, "lgn 有线登录", None, None).await
+}
 
+async fn fetch_lgn_observed_ipv6(client: &Client) -> Result<String, String> {
     let ipv6_response = client
         .get(lgn_observed_ipv6_url()?)
         .header(ACCEPT, "*/*")
@@ -846,9 +895,7 @@ async fn login_lgn_once(
             redact_request_error(error)
         )
     })?;
-    let observed_ipv6 = parse_observed_ip(&ipv6_body, true)?;
-    let login_url = lgn_login_url(user, pass, &local_ipv4, &observed_ipv6)?;
-    get_jsonp_login(client, login_url, LGN_REFERER, "lgn 有线登录", None, None).await
+    parse_observed_ip(&ipv6_body, true)
 }
 
 fn type1_login_url(
@@ -879,6 +926,53 @@ fn type1_login_url(
         // observed dormitory login request.
         .append_pair("terminal_type", "1")
         .append_pair("lang", "zh-cn")
+        .append_pair("v", &random_request_id())
+        .append_pair("lang", "zh");
+    Ok(url)
+}
+
+fn type1_logout_url(
+    login_base: &str,
+    user: &str,
+    pass: &str,
+    local_ip: &str,
+) -> Result<Url, String> {
+    let logout_base = login_base.replace("/portal/login", "/portal/logout");
+    let mut url = Url::parse(&logout_base).map_err(|error| error.to_string())?;
+    let account = if user.to_ascii_lowercase().ends_with("@campus") {
+        user.to_string()
+    } else {
+        format!("{user}@campus")
+    };
+    url.query_pairs_mut()
+        .append_pair("callback", "dr1004")
+        .append_pair("login_method", "1")
+        .append_pair("user_account", &account)
+        .append_pair("user_password", pass)
+        .append_pair("ac_logout", "0")
+        .append_pair("register_mode", "0")
+        .append_pair("wlan_user_ip", local_ip)
+        .append_pair("wlan_user_ipv6", "")
+        .append_pair("wlan_vlan_id", "0")
+        .append_pair("wlan_user_mac", "000000000000")
+        .append_pair("wlan_ac_ip", "")
+        .append_pair("wlan_ac_name", "")
+        .append_pair("jsVersion", "4.2.1")
+        .append_pair("v", &random_request_id())
+        .append_pair("lang", "zh");
+    Ok(url)
+}
+
+fn type2_logout_url(compatibility: VpnCompatibility) -> Result<Url, String> {
+    let base = if compatibility == VpnCompatibility::Maximum {
+        WIFI_HTTP_LOGOUT
+    } else {
+        WIFI_HTTPS_LOGOUT
+    };
+    let mut url = Url::parse(base).map_err(|error| error.to_string())?;
+    url.query_pairs_mut()
+        .append_pair("callback", "dr1004")
+        .append_pair("jsVersion", "4.1")
         .append_pair("v", &random_request_id())
         .append_pair("lang", "zh");
     Ok(url)
@@ -1079,6 +1173,94 @@ pub(crate) async fn login_to_campus_network_rust(
     }
 }
 
+pub(crate) async fn logout_from_campus_network_rust(
+    logout_method: LoginType,
+    user: Option<&str>,
+    pass: Option<&str>,
+    compatibility: VpnCompatibility,
+    route_context: Option<&PortalRouteContext>,
+) -> Result<(bool, String), String> {
+    let client_compatibility =
+        if logout_method == LoginType::Type3 && compatibility == VpnCompatibility::Maximum {
+            VpnCompatibility::High
+        } else {
+            compatibility
+        };
+    let client = portal_client(
+        client_compatibility,
+        &logout_method,
+        Duration::from_secs(5),
+        route_context,
+    )
+    .await?;
+    match logout_method {
+        LoginType::Type1 => {
+            let user = user
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "bjut-sushe 注销需要当前账号的已保存凭据".to_string())?;
+            let pass = pass
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "bjut-sushe 注销需要当前账号的已保存凭据".to_string())?;
+            let destination = if compatibility == VpnCompatibility::Maximum {
+                "10.21.221.98:801"
+            } else {
+                "10.21.221.98:802"
+            };
+            let local_ip = login_source_ipv4(route_context, destination, "bjut-sushe")?;
+            let (login_base, referer, host_override) = if compatibility == VpnCompatibility::Maximum
+            {
+                (DORM_HTTP_LOGIN.to_string(), DORM_HTTP_REFERER, None)
+            } else {
+                let host = select_type1_tls_host(&client, route_context).await?;
+                (
+                    type1_https_login_base(host),
+                    DORM_HTTPS_REFERER,
+                    Some(DORM_HTTPS_AUTHORITY),
+                )
+            };
+            get_jsonp_login(
+                &client,
+                type1_logout_url(&login_base, user, pass, &local_ip)?,
+                referer,
+                "bjut-sushe 注销",
+                None,
+                host_override,
+            )
+            .await
+        }
+        LoginType::Type2 => {
+            let referer = if compatibility == VpnCompatibility::Maximum {
+                WIFI_HTTP_REFERER
+            } else {
+                WIFI_HTTPS_REFERER
+            };
+            get_jsonp_login(
+                &client,
+                type2_logout_url(compatibility)?,
+                referer,
+                "bjut_wifi 注销",
+                None,
+                None,
+            )
+            .await
+        }
+        LoginType::Type3 => {
+            let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn")?;
+            let observed_ipv6 = fetch_lgn_observed_ipv6(&client).await?;
+            get_jsonp_login(
+                &client,
+                lgn_logout_url(&local_ipv4, &observed_ipv6)?,
+                LGN_REFERER,
+                "lgn 注销",
+                None,
+                None,
+            )
+            .await
+        }
+        LoginType::Unknown => Err("未识别当前校园网注销类型".to_string()),
+    }
+}
+
 pub(crate) fn login_result_is_ambiguous(error: &str) -> bool {
     error.starts_with(AMBIGUOUS_LOGIN_RESULT)
 }
@@ -1137,6 +1319,43 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn logout_urls_match_the_captured_portal_shapes() {
+        let dorm = type1_logout_url(
+            DORM_HTTP_LOGIN,
+            "25000000",
+            "test-password",
+            "10.126.21.113",
+        )
+        .unwrap();
+        assert_eq!(dorm.path(), "/eportal/portal/logout");
+        assert_eq!(dorm.port(), Some(801));
+        assert!(dorm
+            .query_pairs()
+            .any(|(name, value)| { name == "user_account" && value == "25000000@campus" }));
+        assert!(dorm
+            .query_pairs()
+            .any(|(name, value)| name == "register_mode" && value == "0"));
+
+        let wifi = type2_logout_url(VpnCompatibility::High).unwrap();
+        assert_eq!(wifi.as_str().split('?').next().unwrap(), WIFI_HTTPS_LOGOUT);
+        assert!(wifi
+            .query_pairs()
+            .any(|(name, value)| name == "callback" && value == "dr1004"));
+
+        let lgn = lgn_logout_url("172.26.33.104", "2001:db8::1").unwrap();
+        assert_eq!(lgn.path(), "/eportal/portal/logout");
+        assert!(lgn
+            .query_pairs()
+            .any(|(name, value)| { name == "user_account" && value == eportal_encrypt("drcom") }));
+        assert!(lgn
+            .query_pairs()
+            .any(|(name, value)| { name == "user_password" && value == eportal_encrypt("123") }));
+        assert!(lgn
+            .query_pairs()
+            .any(|(name, value)| name == "encrypt" && value == "1"));
     }
 
     #[test]
