@@ -58,6 +58,8 @@ class KeepAliveService : Service() {
         private const val BACKGROUND_NOTIFICATION_ID = 103
         private const val ENGINE_HEARTBEAT_MAX_AGE = 35_000L
         private const val IP_POLL_INTERVAL = 3_000L
+        private const val NETWORK_READY_POLL_INTERVAL = 1_000L
+        private const val NETWORK_READY_MAX_ATTEMPTS = 10
         private const val SERVICE_HEARTBEAT_INTERVAL = 30_000L
         private const val MIN_CHECK_INTERVAL_SECONDS = 5L
         private const val CELLULAR_CHECK_INTERVAL_SECONDS = 300L
@@ -74,6 +76,8 @@ class KeepAliveService : Service() {
     private var lastNetworkSignature = ""
     private var lastNetworkEventAt = 0L
     private var lastLocalIp = ""
+    @Volatile private var networkReadyGeneration = 0L
+    @Volatile private var networkReadyRunnable: Runnable? = null
     @Volatile private var notificationSettings = AndroidNotificationSettings()
     private val lastEventMessages = ConcurrentHashMap<String, String>()
     @Volatile private var lastStatusCategory = "network"
@@ -85,7 +89,7 @@ class KeepAliveService : Service() {
     private val periodicCheckRunnable = object : Runnable {
         override fun run() {
             if (destroyed) return
-            if (!isPaused() && !interfaceIsForeground()) {
+            if (!isPaused() && !interfaceIsForeground() && networkReadyRunnable == null) {
                 performHeadlessCheck("后台定时检测", false)
             }
             schedulePeriodicCheck()
@@ -105,7 +109,7 @@ class KeepAliveService : Service() {
                         this@KeepAliveService,
                         "物理网络 IPv4 发生变化：${previousIp.ifEmpty { "未分配" }} -> ${currentIp.ifEmpty { "未分配" }}，触发完整检测"
                     )
-                    dispatchNetworkChange("IPv4变化", true)
+                    scheduleNetworkReadyCheck("IPv4变化")
                 }
             }
             handler.postDelayed(this, IP_POLL_INTERVAL)
@@ -230,6 +234,8 @@ class KeepAliveService : Service() {
         handler.removeCallbacks(ipPollRunnable)
         handler.removeCallbacks(serviceHeartbeatRunnable)
         handler.removeCallbacks(automaticResumeRunnable)
+        networkReadyRunnable?.let(handler::removeCallbacks)
+        networkReadyRunnable = null
         preferences.edit().putLong("service_heartbeat", 0L).apply()
         KeepAliveJournal.append(this, "Android 前台保活服务 onDestroy；若并非用户关闭，将安排恢复", "error")
         KeepAliveRestartScheduler.schedule(this, 15_000L, "service_destroyed")
@@ -454,7 +460,45 @@ class KeepAliveService : Service() {
         if (signature == lastNetworkSignature || now - lastNetworkEventAt < 1_500L) return
         lastNetworkSignature = signature
         lastNetworkEventAt = now
-        dispatchNetworkChange("系统网络事件", false)
+        scheduleNetworkReadyCheck("系统网络事件")
+    }
+
+    @Synchronized
+    private fun scheduleNetworkReadyCheck(reason: String) {
+        networkReadyGeneration += 1
+        val generation = networkReadyGeneration
+        networkReadyRunnable?.let(handler::removeCallbacks)
+        var attempts = 0
+        val poll = object : Runnable {
+            override fun run() {
+                if (destroyed || generation != networkReadyGeneration) return
+                attempts += 1
+                val currentIp = NetworkHelper.getPhysicalNetworkIp(this@KeepAliveService)
+                if (currentIp.isNotEmpty()) {
+                    lastLocalIp = currentIp
+                    preferences.edit().putString("last_physical_ip", currentIp).apply()
+                    networkReadyRunnable = null
+                    KeepAliveJournal.append(
+                        this@KeepAliveService,
+                        "$reason 后第 $attempts 次检查取得物理网络 IPv4：$currentIp，触发完整检测"
+                    )
+                    dispatchNetworkChange("$reason-IP已就绪", true)
+                    return
+                }
+                if (attempts >= NETWORK_READY_MAX_ATTEMPTS) {
+                    networkReadyRunnable = null
+                    KeepAliveJournal.append(
+                        this@KeepAliveService,
+                        "$reason 后连续 $NETWORK_READY_MAX_ATTEMPTS 次仍未取得物理网络 IPv4，更新离线状态"
+                    )
+                    dispatchNetworkChange("$reason-IP未就绪", true)
+                    return
+                }
+                handler.postDelayed(this, NETWORK_READY_POLL_INTERVAL)
+            }
+        }
+        networkReadyRunnable = poll
+        handler.postDelayed(poll, NETWORK_READY_POLL_INTERVAL)
     }
 
     private fun dispatchNetworkChange(reason: String, fullDetails: Boolean) {

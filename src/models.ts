@@ -212,6 +212,20 @@ export interface CredentialStorageHealth {
   message: string;
 }
 
+export interface ConfigBackupExport {
+  payload: string;
+  accountCount: number;
+  passwordCount: number;
+  missingPasswordAccounts: string[];
+}
+
+export interface ConfigBackupImport {
+  uiPreferences: Record<string, unknown> | null;
+  accountCount: number;
+  passwordCount: number;
+  missingPasswordAccounts: string[];
+}
+
 export interface DiagnosticStep {
   id: string;
   label: string;

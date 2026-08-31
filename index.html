@@ -679,6 +679,22 @@
               <!-- Dynamically populated -->
             </div>
           </div>
+
+          <section class="diagnostic-panel glass-card account-credential-health">
+            <div class="diagnostic-panel-header">
+              <div>
+                <h3>安全凭据存储</h3>
+                <p id="credential-health-backend">正在读取后端状态…</p>
+              </div>
+              <span id="credential-health-badge" class="health-badge neutral">读取中</span>
+            </div>
+            <p id="credential-health-message" class="diagnostic-panel-message">--</p>
+            <div class="diagnostic-metrics">
+              <div><span>已保存密码</span><strong id="credential-saved-count">0</strong></div>
+              <div><span>需要补录</span><strong id="credential-missing-count">0</strong></div>
+            </div>
+            <div id="credential-missing-users" class="diagnostic-note hidden"></div>
+          </section>
         </section>
 
         <!-- Add Account Modal -->
@@ -761,12 +777,23 @@
           </div>
         </div>
 
+        <div id="switch-account-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="switch-account-modal-title">
+          <div class="modal-content glass-card switch-account-modal-content">
+            <h3 id="switch-account-modal-title">选择要切换到的账号</h3>
+            <p>请选择已启用且已保存密码的账号。此入口不依赖“更多控制台选项”。</p>
+            <div id="switch-account-options" class="switch-account-options"></div>
+            <div class="modal-actions">
+              <button type="button" class="btn btn-secondary" id="btn-switch-account-cancel">取消</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Diagnostics -->
         <section id="diagnostics" class="page">
           <header class="page-header diagnostics-header">
             <div>
               <h1>网络诊断</h1>
-              <p>检查网络链路、安全存储与账号健康状态</p>
+              <p>检查网络链路与账号健康状态</p>
             </div>
             <div class="diagnostics-actions">
               <button id="btn-copy-diagnostics" class="btn btn-secondary btn-sm" disabled><i data-lucide="copy"></i> 复制报告</button>
@@ -790,22 +817,6 @@
           </div>
 
           <div class="diagnostics-grid">
-            <section class="diagnostic-panel glass-card">
-              <div class="diagnostic-panel-header">
-                <div>
-                  <h3>安全凭据存储</h3>
-                  <p id="credential-health-backend">正在读取后端状态…</p>
-                </div>
-                <span id="credential-health-badge" class="health-badge neutral">读取中</span>
-              </div>
-              <p id="credential-health-message" class="diagnostic-panel-message">--</p>
-              <div class="diagnostic-metrics">
-                <div><span>已保存密码</span><strong id="credential-saved-count">0</strong></div>
-                <div><span>需要补录</span><strong id="credential-missing-count">0</strong></div>
-              </div>
-              <div id="credential-missing-users" class="diagnostic-note hidden"></div>
-            </section>
-
             <section class="diagnostic-panel glass-card">
               <div class="diagnostic-panel-header">
                 <div>
@@ -1195,7 +1206,7 @@
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>配置导入/导出</h4>
-                  <p>将当前配置加密并导出到剪贴板，或从剪贴板导入</p>
+                  <p>在 Rust 中加密完整配置与账号密码，并在导入后回读校验安全存储</p>
                 </div>
                 <div style="display:flex; gap: 0.5rem;">
                   <button class="btn btn-secondary btn-sm" id="btn-export-config"><i data-lucide="clipboard-copy"></i> 导出</button>

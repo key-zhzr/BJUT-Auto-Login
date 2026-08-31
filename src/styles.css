@@ -2085,6 +2085,43 @@ input:checked + .slider:before { transform: translateX(24px); }
   margin-bottom: 1rem;
 }
 
+.diagnostics-grid > :only-child {
+  grid-column: 1 / -1;
+}
+
+.account-credential-health {
+  margin-top: 1rem;
+}
+
+.switch-account-modal-content {
+  width: min(92vw, 460px);
+}
+
+.switch-account-modal-content > p {
+  margin: 0.45rem 0 1rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.switch-account-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+}
+
+.switch-account-option {
+  width: 100%;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+}
+
+.switch-account-option small {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .diagnostic-panel-header {
   display: flex;
   align-items: flex-start;
@@ -2161,7 +2198,12 @@ input:checked + .slider:before { transform: translateX(24px); }
 .account-health-info strong,
 .diagnostic-step-info strong { display: block; margin-bottom: 0.2rem; }
 .account-health-info small,
-.diagnostic-step-info small { color: var(--text-muted); line-height: 1.4; overflow-wrap: anywhere; }
+.diagnostic-step-info small {
+  color: var(--text-muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
 .account-health-actions { display: flex; align-items: center; gap: 0.5rem; }
 .diagnostic-step-duration { color: var(--text-muted); font-family: monospace; font-size: 0.75rem; }
 .diagnostic-step-marker {

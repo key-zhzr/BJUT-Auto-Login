@@ -35,6 +35,10 @@ pub(crate) fn usable_physical_ipv4(value: &str) -> Option<std::net::Ipv4Addr> {
     }
 }
 
+fn network_ip_observation_changed(previous: Option<&str>, current: &str) -> bool {
+    previous.is_some_and(|previous| previous != current)
+}
+
 /// Type 3 gateways live on 172.30/16, but wired clients use BJUT's regular
 /// campus address ranges. A captured wired login, for example, used
 /// 172.26.33.104 while talking to 172.30.201.2. Callers additionally require
@@ -222,6 +226,9 @@ struct WindowsAdapterIdentity {
     name: String,
     ip: String,
     interface_index: u32,
+    operational: bool,
+    has_gateway: bool,
+    ipv4_metric: u32,
 }
 
 #[cfg(target_os = "windows")]
@@ -392,12 +399,16 @@ fn windows_adapter_looks_virtual(name: &str, description: &str) -> bool {
 fn windows_physical_adapters(if_type: u32) -> Vec<WindowsAdapterIdentity> {
     use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
     use windows::Win32::NetworkManagement::IpHelper::{
-        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
-        GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+        GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST,
+        GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
     };
+    use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
     use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
 
-    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let flags = GAA_FLAG_SKIP_ANYCAST
+        | GAA_FLAG_SKIP_MULTICAST
+        | GAA_FLAG_SKIP_DNS_SERVER
+        | GAA_FLAG_INCLUDE_GATEWAYS;
     let mut byte_count = 0u32;
     // SAFETY: the first call intentionally provides no buffer so Windows can
     // return the required allocation size in byte_count.
@@ -496,6 +507,9 @@ fn windows_physical_adapters(if_type: u32) -> Vec<WindowsAdapterIdentity> {
                                 name: name.clone(),
                                 ip,
                                 interface_index,
+                                operational: adapter.OperStatus == IfOperStatusUp,
+                                has_gateway: !adapter.FirstGatewayAddress.is_null(),
+                                ipv4_metric: adapter.Ipv4Metric,
                             });
                         }
                     }
@@ -531,6 +545,7 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
     let mut identity = WindowsNetworkIdentity::default();
     let observations = windows_wlan_observations(include_wifi_details);
     let wifi_adapters = windows_physical_adapters(IF_TYPE_IEEE80211);
+    let mut selected_wifi_metric = None;
 
     for adapter in &wifi_adapters {
         if let Some(observation) = observations
@@ -543,6 +558,7 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
             identity.interface_name.clone_from(&adapter.name);
             identity.ip.clone_from(&adapter.ip);
             identity.transport = "wifi".to_string();
+            selected_wifi_metric = Some(adapter.ipv4_metric);
             break;
         }
     }
@@ -563,9 +579,10 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
     // Prefer the physical Ethernet adapter Windows would actually use for the
     // Type 3 gateway. This prevents simultaneous campus Wi-Fi from supplying
     // the URL address while Windows sends over its preferred wired route. If
-    // the route is hidden by a TUN, a wired-only machine may still use its
-    // coherent per-interface campus IP; the read-only protocol probe must then
-    // succeed before any credential is sent.
+    // the route is hidden by a TUN, choose an operational physical adapter by
+    // gateway/metric (or the sole wired adapter). The read-only protocol probe
+    // must still succeed before any credential is sent, so a normal home LAN
+    // is observable in diagnostics without becoming automatically trusted.
     let wired_adapters = windows_physical_adapters(IF_TYPE_ETHERNET_CSMACD);
     let routed_wired = [
         std::net::Ipv4Addr::new(10, 21, 251, 3),
@@ -583,17 +600,31 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
             .iter()
             .find(|adapter| adapter.interface_index == index)
     });
-    let wired = routed_wired.or_else(|| {
-        identity
-            .ip
-            .is_empty()
-            .then(|| {
-                wired_adapters
-                    .iter()
-                    .find(|adapter| is_campus_wired_ipv4(&adapter.ip))
-            })
-            .flatten()
+    let campus_wired = wired_adapters
+        .iter()
+        .filter(|adapter| adapter.operational)
+        .find(|adapter| is_campus_wired_ipv4(&adapter.ip))
+        .or_else(|| {
+            wired_adapters
+                .iter()
+                .find(|adapter| is_campus_wired_ipv4(&adapter.ip))
+        });
+    let best_active_wired = wired_adapters
+        .iter()
+        .filter(|adapter| adapter.operational)
+        .min_by_key(|adapter| (!adapter.has_gateway, adapter.ipv4_metric))
+        .or_else(|| {
+            wired_adapters
+                .iter()
+                .filter(|adapter| adapter.has_gateway)
+                .min_by_key(|adapter| adapter.ipv4_metric)
+        })
+        .or_else(|| (wired_adapters.len() == 1).then(|| &wired_adapters[0]));
+    let metric_preferred_wired = best_active_wired.filter(|adapter| {
+        identity.ip.is_empty()
+            || selected_wifi_metric.is_none_or(|wifi_metric| adapter.ipv4_metric <= wifi_metric)
     });
+    let wired = routed_wired.or(campus_wired).or(metric_preferred_wired);
     if let Some(adapter) = wired {
         identity.ssid.clear();
         identity.bssid.clear();
@@ -1482,6 +1513,45 @@ struct CredentialStorageHealth {
     message: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedConfigBackup {
+    version: u8,
+    kdf: String,
+    iterations: u32,
+    salt: String,
+    iv: String,
+    ciphertext: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigBackupPlaintext {
+    format: String,
+    version: u8,
+    config: AppConfig,
+    #[serde(default)]
+    ui_preferences: serde_json::Value,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigBackupExport {
+    payload: String,
+    account_count: usize,
+    password_count: usize,
+    missing_password_accounts: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigBackupImport {
+    ui_preferences: serde_json::Value,
+    account_count: usize,
+    password_count: usize,
+    missing_password_accounts: Vec<String>,
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiagnosticStep {
@@ -1520,6 +1590,8 @@ struct AppState {
     countdown: AtomicI32,
     is_checking: AtomicBool,
     pending_full_check: AtomicBool,
+    network_change_waiting: AtomicBool,
+    network_change_generation: AtomicU64,
     is_suspended: AtomicBool,
     last_known_ip: Mutex<Option<String>>,
     non_campus_count: AtomicU32,
@@ -3692,6 +3764,155 @@ fn save_secure_config_verified(app: &tauri::AppHandle, config: &AppConfig) -> Re
     }
 }
 
+const CONFIG_BACKUP_VERSION: u8 = 3;
+const CONFIG_BACKUP_ITERATIONS: u32 = 250_000;
+const CONFIG_BACKUP_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+fn validate_config_backup_passphrase(passphrase: &[u8]) -> Result<(), String> {
+    if passphrase.len() < 8 {
+        return Err("配置备份密码至少需要 8 个字节".to_string());
+    }
+    if passphrase.len() > 1024 {
+        return Err("配置备份密码过长".to_string());
+    }
+    Ok(())
+}
+
+fn config_backup_key(passphrase: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(passphrase, salt, iterations, &mut key);
+    key
+}
+
+fn encrypt_config_backup_payload(
+    plaintext: &ConfigBackupPlaintext,
+    passphrase: &[u8],
+) -> Result<String, String> {
+    use aes_gcm::{
+        aead::{rand_core::RngCore, Aead, OsRng},
+        Aes256Gcm, KeyInit, Nonce,
+    };
+    use base64::Engine;
+
+    validate_config_backup_passphrase(passphrase)?;
+    let mut salt = [0u8; 16];
+    let mut iv = [0u8; 12];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut iv);
+    let mut key = config_backup_key(passphrase, &salt, CONFIG_BACKUP_ITERATIONS);
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
+    let mut serialized = serde_json::to_vec(plaintext).map_err(|error| error.to_string())?;
+    if serialized.len() > CONFIG_BACKUP_MAX_BYTES {
+        serialized.fill(0);
+        key.fill(0);
+        return Err("配置备份内容超过安全大小限制".to_string());
+    }
+    let encrypted = cipher
+        .encrypt(Nonce::from_slice(&iv), serialized.as_ref())
+        .map_err(|_| "配置备份加密失败".to_string());
+    serialized.fill(0);
+    key.fill(0);
+    let encrypted = encrypted?;
+    let base64 = base64::engine::general_purpose::STANDARD;
+    serde_json::to_string(&EncryptedConfigBackup {
+        version: CONFIG_BACKUP_VERSION,
+        kdf: "PBKDF2-HMAC-SHA256".to_string(),
+        iterations: CONFIG_BACKUP_ITERATIONS,
+        salt: base64.encode(salt),
+        iv: base64.encode(iv),
+        ciphertext: base64.encode(encrypted),
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn decrypt_config_backup_payload(
+    payload: &str,
+    passphrase: &[u8],
+) -> Result<ConfigBackupPlaintext, String> {
+    use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+    use base64::Engine;
+
+    validate_config_backup_passphrase(passphrase)?;
+    if payload.len() > CONFIG_BACKUP_MAX_BYTES * 2 {
+        return Err("配置备份超过安全大小限制".to_string());
+    }
+    let envelope: EncryptedConfigBackup =
+        serde_json::from_str(payload).map_err(|_| "配置备份外层格式无效".to_string())?;
+    if envelope.version != CONFIG_BACKUP_VERSION
+        || envelope.kdf != "PBKDF2-HMAC-SHA256"
+        || !(100_000..=1_000_000).contains(&envelope.iterations)
+    {
+        return Err("不是受支持的完整配置备份格式".to_string());
+    }
+    let base64 = base64::engine::general_purpose::STANDARD;
+    let salt = base64
+        .decode(envelope.salt)
+        .map_err(|_| "配置备份盐值无效".to_string())?;
+    let iv = base64
+        .decode(envelope.iv)
+        .map_err(|_| "配置备份随机向量无效".to_string())?;
+    let ciphertext = base64
+        .decode(envelope.ciphertext)
+        .map_err(|_| "配置备份密文无效".to_string())?;
+    if salt.len() != 16 || iv.len() != 12 || ciphertext.len() > CONFIG_BACKUP_MAX_BYTES {
+        return Err("配置备份参数长度无效".to_string());
+    }
+    let mut key = config_backup_key(passphrase, &salt, envelope.iterations);
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
+    let decrypted = cipher
+        .decrypt(Nonce::from_slice(&iv), ciphertext.as_ref())
+        .map_err(|_| "配置备份密码错误或内容已损坏".to_string());
+    key.fill(0);
+    let mut decrypted = decrypted?;
+    let plaintext = serde_json::from_slice::<ConfigBackupPlaintext>(&decrypted)
+        .map_err(|_| "配置备份内容无法解析".to_string());
+    decrypted.fill(0);
+    let plaintext = plaintext?;
+    if plaintext.format != "BJUT-AL-CONFIG" || plaintext.version != CONFIG_BACKUP_VERSION {
+        return Err("配置备份内容版本不匹配".to_string());
+    }
+    Ok(plaintext)
+}
+
+fn validate_imported_config(config: &AppConfig) -> Result<(), String> {
+    use std::collections::HashSet;
+
+    if config.accounts.len() > 100 {
+        return Err("配置备份中的账号数量超过 100 个".to_string());
+    }
+    if config.network_profiles.len() > 200 {
+        return Err("配置备份中的网络档案数量超过 200 个".to_string());
+    }
+    let mut users = HashSet::new();
+    for account in &config.accounts {
+        let user = account.user.trim();
+        if user.is_empty() || user.len() > 128 {
+            return Err("配置备份包含空账号或异常长度账号".to_string());
+        }
+        if account.pass.len() > 1024 {
+            return Err(format!("账号 {user} 的密码长度异常"));
+        }
+        if !users.insert(user.to_string()) {
+            return Err(format!("配置备份包含重复账号 {user}"));
+        }
+    }
+    Ok(())
+}
+
+fn config_backup_counts(config: &AppConfig) -> (usize, usize, Vec<String>) {
+    let missing = config
+        .accounts
+        .iter()
+        .filter(|account| account.pass.is_empty())
+        .map(|account| account.user.clone())
+        .collect::<Vec<_>>();
+    (
+        config.accounts.len(),
+        config.accounts.len().saturating_sub(missing.len()),
+        missing,
+    )
+}
+
 #[cfg(target_os = "android")]
 fn android_secure_config(value: Option<&str>) -> Result<Option<String>, String> {
     use jni::objects::{JObject, JString, JValue};
@@ -4969,6 +5190,73 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
 }
 
 #[tauri::command]
+fn export_config_backup(
+    state: tauri::State<Arc<AppState>>,
+    passphrase: String,
+    ui_preferences: serde_json::Value,
+) -> Result<ConfigBackupExport, String> {
+    if !ui_preferences.is_object() && !ui_preferences.is_null() {
+        return Err("界面偏好设置格式无效".to_string());
+    }
+    if serde_json::to_vec(&ui_preferences)
+        .map_err(|error| error.to_string())?
+        .len()
+        > 64 * 1024
+    {
+        return Err("界面偏好设置超过安全大小限制".to_string());
+    }
+    let mut config = state.config.read().unwrap().clone();
+    // Sessions and payment recovery records have their own lifecycles and can
+    // expire while a backup is stored. Export only durable configuration and
+    // credentials; importing must never resurrect an old authenticated or
+    // financial operation context.
+    config.campus_service_sessions.clear();
+    config.recharge_transactions = recharge_state::RechargeJournal::default();
+    validate_imported_config(&config)?;
+    let (account_count, password_count, missing_password_accounts) = config_backup_counts(&config);
+    let plaintext = ConfigBackupPlaintext {
+        format: "BJUT-AL-CONFIG".to_string(),
+        version: CONFIG_BACKUP_VERSION,
+        config,
+        ui_preferences,
+    };
+    let mut passphrase = passphrase.into_bytes();
+    let payload = encrypt_config_backup_payload(&plaintext, &passphrase);
+    passphrase.fill(0);
+    Ok(ConfigBackupExport {
+        payload: payload?,
+        account_count,
+        password_count,
+        missing_password_accounts,
+    })
+}
+
+#[tauri::command]
+fn import_config_backup(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    payload: String,
+    passphrase: String,
+) -> Result<ConfigBackupImport, String> {
+    let mut passphrase = passphrase.into_bytes();
+    let plaintext = decrypt_config_backup_payload(payload.trim(), &passphrase);
+    passphrase.fill(0);
+    let mut plaintext = plaintext?;
+    validate_imported_config(&plaintext.config)?;
+    plaintext.config.campus_service_sessions.clear();
+    plaintext.config.recharge_transactions = recharge_state::RechargeJournal::default();
+    save_config(&app, &state, plaintext.config)?;
+    let saved = state.config.read().unwrap();
+    let (account_count, password_count, missing_password_accounts) = config_backup_counts(&saved);
+    Ok(ConfigBackupImport {
+        ui_preferences: plaintext.ui_preferences,
+        account_count,
+        password_count,
+        missing_password_accounts,
+    })
+}
+
+#[tauri::command]
 fn sync_config(
     app: tauri::AppHandle,
     state: tauri::State<Arc<AppState>>,
@@ -5255,7 +5543,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         "error"
     } else if !wifi_identity_error.is_empty() {
         "warning"
-    } else if mobile_data || !ssid.is_empty() {
+    } else if mobile_data || !ssid.is_empty() || transport.eq_ignore_ascii_case("ethernet") {
         "success"
     } else {
         "warning"
@@ -5276,6 +5564,15 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     } else if wifi_identity_error == "locationPermissionOrServiceUnavailable" {
         format!(
             "已取得接口 {} 的本地 IP {ip}，但 Android 未返回 SSID/BSSID；请确认附近 Wi-Fi、前台位置权限和系统位置服务均已开启",
+            if interface_name.is_empty() {
+                "未知"
+            } else {
+                interface_name
+            }
+        )
+    } else if transport.eq_ignore_ascii_case("ethernet") {
+        format!(
+            "已连接有线接口 {}，本地 IP {ip}（身份来源：{identity_source}）",
             if interface_name.is_empty() {
                 "未知"
             } else {
@@ -5353,7 +5650,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         "error"
     };
     let campus_message = format!(
-        "传输类型：{}；本地网段：{}；SSID 特征：{}；Wi-Fi BSSID：{}；身份同接口且新鲜：{}；校园目标路由绑定：{}",
+        "传输类型：{}\n本地网段：{}\nSSID 特征：{}\nWi-Fi BSSID：{}\n身份同接口且新鲜：{}\n校园目标路由绑定：{}",
         if transport.is_empty() { "未知" } else { &transport },
         if campus_ip { "符合" } else { "不符合" },
         if campus_ssid { "符合" } else { "不符合" },
@@ -5419,7 +5716,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
                 )
             })
             .collect::<Vec<_>>()
-            .join("；")
+            .join("\n")
     };
     steps.push(make_diagnostic_step(
         "internet",
@@ -5475,7 +5772,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
             )
         })
         .collect::<Vec<_>>()
-        .join("；");
+        .join("\n");
     let (portal_status, portal_message) = if wifi_route_failed {
         (
             "error",
@@ -5484,13 +5781,13 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     } else if portal_route_context.is_none() {
         (
             "error",
-            "未取得同一物理接口的名称与 IPv4，已阻止不绑定接口的认证网关探测；请检查 Windows 网卡驱动与接口权限".to_string(),
+            "未取得同一物理接口的名称与 IPv4，已阻止不绑定接口的认证网关探测。\n请检查 Windows 网卡驱动与接口权限。".to_string(),
         )
     } else if login_type != LoginType::Unknown {
         (
             if online { "success" } else { "warning" },
             format!(
-                "判定校园网类型为 {}。{}",
+                "判定校园网类型为 {}。\n{}",
                 login_type.display_name(),
                 gateway_details
             ),
@@ -5498,23 +5795,23 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     } else if type1_requires_maximum {
         (
             "warning",
-            format!("已发现 bjut-sushe 认证网关，但当前 HTTPS 兼容模式不能向其发送账号密码；确认网络可信后可临时启用最高兼容（HTTP + IP）。{gateway_details}"),
+            format!("已发现 bjut-sushe 认证网关，但当前 HTTPS 兼容模式不能向其发送账号密码。\n确认网络可信后可临时启用最高兼容（HTTP + IP）。\n{gateway_details}"),
         )
     } else if portal_waiting_for_ipv6 {
         (
             "warning",
-            format!("已发现 lgn 有线认证门户，但尚未取得可用于双栈登录的 IPv6 地址；本轮不会发送账号密码。{gateway_details}"),
+            format!("已发现 lgn 有线认证门户，但尚未取得可用于双栈登录的 IPv6 地址。\n本轮不会发送账号密码。\n{gateway_details}"),
         )
     } else if online {
         (
             "success",
-            format!("互联网已联通；校园认证网关仍已逐项探测。{gateway_details}"),
+            format!("互联网已联通，校园认证网关仍已逐项探测。\n{gateway_details}"),
         )
     } else {
         (
             "error",
             format!(
-                "未找到可访问的校园网认证网关，可能是完全离线或处于非校园网络。{gateway_details}"
+                "未找到可访问的校园网认证网关，可能是完全离线或处于非校园网络。\n{gateway_details}"
             ),
         )
     };
@@ -6387,7 +6684,12 @@ async fn manual_login(
             rust_log(&app, &state, "登录", &logout_message, "success");
             state.billing_sessions.lock().unwrap().clear();
             emit_session_network_state(&app, &state, &network, "BjutCampus", &login_type);
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            // The accounting backend keeps the released IP/session visible
+            // briefly after a successful logout. Captured and real-device
+            // tests show that submitting the target account immediately can
+            // be rejected as "same IP already online". Give all logout paths
+            // a fixed two-second convergence window before the next login.
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
     }
 
@@ -8128,6 +8430,75 @@ async fn set_billing_mauth(
     result
 }
 
+fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>) {
+    let generation = state
+        .network_change_generation
+        .fetch_add(1, Ordering::SeqCst)
+        .wrapping_add(1);
+    state.network_change_waiting.store(true, Ordering::SeqCst);
+    let mut checking_payload = state.last_network_state.lock().unwrap().clone();
+    if let Some(object) = checking_payload.as_object_mut() {
+        object.insert("state".to_string(), serde_json::json!("Checking"));
+        object.remove("loginMessage");
+        object.insert(
+            "timestamp".to_string(),
+            serde_json::json!(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+        );
+    }
+    let _ = app.emit("network-state-change", checking_payload);
+
+    tauri::async_runtime::spawn(async move {
+        let mut ready_ip = String::new();
+        for attempt in 1..=10 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if state.network_change_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let network = get_network_info(app.clone(), Some(false));
+            let current_ip = network
+                .get("ip")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if usable_physical_ipv4(current_ip).is_some() {
+                ready_ip = current_ip.to_string();
+                rust_log(
+                    &app,
+                    &state,
+                    "网络",
+                    &format!(
+                        "网络变化后第 {attempt} 次检查取得新的物理接口 IPv4：{ready_ip}，开始完整检测"
+                    ),
+                    "info",
+                );
+                break;
+            }
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                &format!("网络变化后第 {attempt}/10 次检查仍未取得物理接口 IPv4"),
+                "debug",
+            );
+        }
+        if state.network_change_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        state.network_change_waiting.store(false, Ordering::SeqCst);
+        if ready_ip.is_empty() {
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                "网络变化后连续 10 次仍未取得物理接口 IPv4，将执行一次完整检测以更新离线状态",
+                "info",
+            );
+        }
+        *state.last_known_ip.lock().unwrap() = Some(ready_ip);
+        trigger_network_check(app, state, true).await;
+    });
+}
+
 #[tauri::command]
 fn notify_network_change(
     app: tauri::AppHandle,
@@ -8136,27 +8507,17 @@ fn notify_network_change(
 ) {
     state.is_suspended.store(false, Ordering::SeqCst);
     state.non_campus_count.store(0, Ordering::SeqCst);
-    let is_bg = app_is_in_background(&app, &state);
     rust_log(
         &app,
         &state,
         "网络",
         &format!(
-            "收到{}网络变化事件，{}",
+            "收到{}网络变化事件，等待新的物理接口 IPv4 就绪后执行完整检测",
             source.unwrap_or_else(|| "系统".to_string()),
-            if is_bg {
-                "当前处于后台，先仅检测连通性；IP 变化后再完整检测"
-            } else {
-                "立即执行完整检测"
-            }
         ),
         "info",
     );
-    let app_clone = app.clone();
-    let state_clone = state.inner().clone();
-    tauri::async_runtime::spawn(async move {
-        trigger_network_check(app_clone, state_clone, !is_bg).await;
-    });
+    schedule_network_change_readiness(app, state.inner().clone());
 }
 
 #[tauri::command]
@@ -8596,6 +8957,8 @@ pub fn run() {
             countdown: AtomicI32::new(15),
             is_checking: AtomicBool::new(false),
             pending_full_check: AtomicBool::new(false),
+            network_change_waiting: AtomicBool::new(false),
+            network_change_generation: AtomicU64::new(0),
             is_suspended: AtomicBool::new(false),
             last_known_ip: Mutex::new(None),
             non_campus_count: AtomicU32::new(0),
@@ -8659,6 +9022,12 @@ pub fn run() {
                 let is_susp = loop_state.is_suspended.load(Ordering::SeqCst);
                 let is_chk = loop_state.is_checking.load(Ordering::SeqCst);
 
+                if loop_state.network_change_waiting.load(Ordering::SeqCst) {
+                    let _ = loop_handle
+                        .emit("countdown-tick", serde_json::json!({"status": "checking"}));
+                    continue;
+                }
+
                 if !is_chk && loop_state.pending_full_check.swap(false, Ordering::SeqCst) {
                     rust_log(
                         &loop_handle,
@@ -8688,17 +9057,13 @@ pub fn run() {
                             let current_ip = get_local_ip();
                             let mut last_ip_lock = loop_state.last_known_ip.lock().unwrap();
                             let last_ip = last_ip_lock.clone();
-                            let mut changed = false;
-                            if !current_ip.is_empty() {
-                                if let Some(ref l_ip) = last_ip {
-                                    if current_ip != *l_ip {
-                                        changed = true;
-                                    }
-                                }
-                                *last_ip_lock = Some(current_ip.clone());
-                            } else if last_ip.is_some() {
-                                *last_ip_lock = None;
-                            }
+                            let changed =
+                                network_ip_observation_changed(last_ip.as_deref(), &current_ip);
+                            // Preserve the empty state as an observation. This
+                            // makes an interface transition old -> empty -> new
+                            // visible instead of treating the new address as a
+                            // fresh startup value and skipping the full check.
+                            *last_ip_lock = Some(current_ip.clone());
                             (changed, current_ip, last_ip)
                         };
                         rust_log(
@@ -8718,16 +9083,22 @@ pub fn run() {
                                 &loop_state,
                                 "网络",
                                 &format!(
-                                    "检测到局域网 IP 发生变更: {} -> {}，重新检测网络环境...",
+                                    "检测到局域网 IP 发生变更: {} -> {}，等待地址稳定...",
                                     last_ip.unwrap_or_default(),
-                                    current_ip
+                                    if current_ip.is_empty() {
+                                        "未分配"
+                                    } else {
+                                        &current_ip
+                                    }
                                 ),
                                 "info",
                             );
                             loop_state.is_suspended.store(false, Ordering::SeqCst);
                             loop_state.non_campus_count.store(0, Ordering::SeqCst);
-                            trigger_network_check(loop_handle.clone(), loop_state.clone(), true)
-                                .await;
+                            schedule_network_change_readiness(
+                                loop_handle.clone(),
+                                loop_state.clone(),
+                            );
                             continue;
                         }
                     }
@@ -8987,6 +9358,8 @@ pub fn run() {
             frontend_ready,
             read_clipboard,
             write_clipboard,
+            export_config_backup,
+            import_config_backup,
             sync_config,
             get_app_config,
             verify_legacy_credential_fingerprint,
@@ -9095,6 +9468,17 @@ mod tests {
         })));
         assert!(!is_mobile_data_network(
             &serde_json::json!({"transport": "wifi"})
+        ));
+    }
+
+    #[test]
+    fn ip_change_detection_preserves_empty_transition_state() {
+        assert!(!network_ip_observation_changed(None, "10.126.0.2"));
+        assert!(network_ip_observation_changed(Some("10.126.0.2"), ""));
+        assert!(network_ip_observation_changed(Some(""), "10.126.0.3"));
+        assert!(!network_ip_observation_changed(
+            Some("10.126.0.3"),
+            "10.126.0.3"
         ));
     }
 
@@ -9405,6 +9789,31 @@ mod tests {
         assert!(public_config(&config).whitelist.is_empty());
         assert!(public_config(&config).blacklist.is_empty());
         assert!(public_config(&config).recharge_transactions.0.is_empty());
+    }
+
+    #[test]
+    fn encrypted_config_backup_round_trip_preserves_every_password() {
+        let config: AppConfig = serde_json::from_value(serde_json::json!({
+            "accounts": [
+                {"user": "a", "pass": "secret-a", "isDefault": true},
+                {"user": "b", "pass": "secret-b", "isDefault": false},
+                {"user": "c", "pass": "secret-c", "isDefault": false}
+            ]
+        }))
+        .unwrap();
+        let plaintext = ConfigBackupPlaintext {
+            format: "BJUT-AL-CONFIG".to_string(),
+            version: CONFIG_BACKUP_VERSION,
+            config,
+            ui_preferences: serde_json::json!({"moreOptions": "false"}),
+        };
+        let payload = encrypt_config_backup_payload(&plaintext, b"backup-passphrase").unwrap();
+        let restored = decrypt_config_backup_payload(&payload, b"backup-passphrase").unwrap();
+        assert_eq!(restored.config.accounts.len(), 3);
+        assert_eq!(restored.config.accounts[0].pass, "secret-a");
+        assert_eq!(restored.config.accounts[1].pass, "secret-b");
+        assert_eq!(restored.config.accounts[2].pass, "secret-c");
+        assert!(decrypt_config_backup_payload(&payload, b"wrong-passphrase").is_err());
     }
 
     #[test]

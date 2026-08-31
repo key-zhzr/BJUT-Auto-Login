@@ -14,7 +14,8 @@ import {
   credentialSnapshotFingerprint, hasLegacyCredentialConflict, LEGACY_ACCOUNTS_KEY,
   LEGACY_MIGRATION_PENDING_KEY, mergeLegacyAccounts, readLegacyAccounts,
 } from './account-migration';
-import { decryptExport, encryptExport } from './config-crypto';
+import { missingImportedCredentialUsers } from './config-backup';
+import { decryptExport } from './config-crypto';
 import { CustomSelect } from './custom-select';
 import {
   applyAppearance, normalizeAccentColor, normalizeAppearanceColorMode, normalizeAppTheme,
@@ -36,7 +37,7 @@ import type {
   BillingActionResult, BillingCenterData, BillingCenterModuleUpdate, BillingPasswordPolicy, BillingQuestionAnswer,
   BillingLoginRecord, BillingOnlineSession, BillingOverview, BillingPackageOption,
   BillingRecordKind, BillingRecordQuery, BillingRecordQueryState, BillingRecordResult,
-  BillingServiceState, BillingTable, CountdownPayload, CredentialStorageHealth,
+  BillingServiceState, BillingTable, ConfigBackupExport, ConfigBackupImport, CountdownPayload, CredentialStorageHealth,
   DiagnosticProgress, DiagnosticReport, DiscoveredCampusAccount, GitHubRelease, GitHubReleaseAsset,
   NetworkStatePayload,
   OfficialUpdateManifest,
@@ -258,6 +259,7 @@ async function saveAccounts(accs: AccountView[]): Promise<void> {
   accountsCache = accs;
   try {
     await syncConfigToRust();
+    await refreshCredentialStorageHealth();
   } finally {
     accs.forEach(account => {
       account.pass = '';
@@ -638,6 +640,23 @@ function saveUsageAlertSetting(enabled: boolean) {
   settingUsageAlerts.checked = enabled;
   settingAndroidNotifyUsageAlerts.checked = enabled;
   saveAndroidNotificationSetting('bjut_usage_alerts', String(enabled));
+}
+
+function configBackupUiPreferences(): Record<string, string | null> {
+  return {
+    moreOptions: localStorage.getItem('bjut_more_options'),
+    updateChannel: localStorage.getItem('bjut_update_channel'),
+  };
+}
+
+function applyConfigBackupUiPreferences(preferences: Record<string, unknown> | null) {
+  if (!preferences) return;
+  const restore = (name: string, key: string) => {
+    const value = preferences[name];
+    if (typeof value === 'string') localStorage.setItem(key, value);
+  };
+  restore('moreOptions', 'bjut_more_options');
+  restore('updateChannel', 'bjut_update_channel');
 }
 
 function scheduleVpnMaximumRollback() {
@@ -1302,6 +1321,60 @@ function customPasswordPrompt(text: string, title = '配置密码'): Promise<str
     requestAnimationFrame(() => input.focus());
   });
 }
+
+function chooseSwitchAccount(currentUser: string | null): Promise<number | null> {
+  return new Promise(resolve => {
+    const modal = document.getElementById('switch-account-modal');
+    const options = document.getElementById('switch-account-options');
+    const cancel = document.getElementById('btn-switch-account-cancel');
+    if (!modal || !options || !cancel) {
+      resolve(null);
+      return;
+    }
+    const candidates = getAccounts()
+      .map((account, index) => ({ account, index }))
+      .filter(({ account }) => !account.isDisabled && account.hasPassword && account.user !== currentUser);
+    options.replaceChildren();
+    candidates.forEach(({ account, index }) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn btn-secondary switch-account-option';
+      button.dataset.accountIndex = String(index);
+      const user = document.createElement('span');
+      user.textContent = account.user;
+      const detail = document.createElement('small');
+      detail.textContent = account.isDefault ? '默认账号' : '已启用';
+      button.append(user, detail);
+      options.appendChild(button);
+    });
+    if (candidates.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'diagnostic-empty';
+      empty.textContent = '没有其他已启用且已保存密码的账号';
+      options.appendChild(empty);
+    }
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      options.removeEventListener('click', onChoose);
+      cancel.removeEventListener('click', onCancel);
+    };
+    const onChoose = (event: Event) => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-account-index]');
+      if (!button) return;
+      const index = Number(button.dataset.accountIndex);
+      cleanup();
+      resolve(Number.isInteger(index) ? index : null);
+    };
+    const onCancel = () => {
+      cleanup();
+      resolve(null);
+    };
+    options.addEventListener('click', onChoose);
+    cancel.addEventListener('click', onCancel);
+    modal.classList.remove('hidden');
+  });
+}
+
 function showListManageModal(title: string, list: string[], onSave: (list: string[]) => void) {
   const modal = document.getElementById('list-manage-modal');
   if (!modal) { alert(list.join('\n')); return; }
@@ -2158,7 +2231,11 @@ function diagnosticReportText(report: DiagnosticReport): string {
     `IP：${maskedIp}`,
     '',
   ];
-  report.steps.forEach(step => lines.push(`[${step.status}] ${step.label}（${step.durationMs} ms）：${step.message}`));
+  report.steps.forEach(step => {
+    const details = step.message.split('\n').filter(Boolean);
+    lines.push(`[${step.status}] ${step.label}（${step.durationMs} ms）：${details.shift() || '--'}`);
+    details.forEach(detail => lines.push(`  ${detail}`));
+  });
   lines.push('', '报告不包含账号密码。');
   return lines.join('\n');
 }
@@ -3588,32 +3665,30 @@ function setupEventListeners() {
   if (btnExportConfig) {
     btnExportConfig.addEventListener('click', async () => {
       try {
-        const passphrase = await customPasswordPrompt('为导出的配置设置密码，请妥善保管。', '导出配置');
+        const passphrase = await customPasswordPrompt(
+          '完整加密备份包含可恢复的账号密码。请设置独立强密码并妥善保管。',
+          '导出完整配置',
+        );
         if (!passphrase) return;
-        const config = {
-          accounts: getAccounts(),
-          autoLogin: localStorage.getItem('bjut_auto_login'),
-          checkInterval: localStorage.getItem('bjut_check_interval'),
-          checkIntervalBg: localStorage.getItem('bjut_check_interval_bg'),
-          theme: localStorage.getItem('bjut_theme'),
-          accentColor: localStorage.getItem('bjut_accent_color'),
-          colorMode: localStorage.getItem('bjut_color_mode'),
-          whitelist: JSON.stringify(whitelistCache),
-          blacklist: JSON.stringify(blacklistCache),
-          moreOptions: localStorage.getItem('bjut_more_options'),
-          networkProfiles: networkProfilesCache,
-          usageAlerts: localStorage.getItem('bjut_usage_alerts'),
-          balanceAlertThreshold: localStorage.getItem('bjut_balance_alert_threshold'),
-          flowAlertThreshold: localStorage.getItem('bjut_flow_alert_threshold'),
-          vpnCompatibility: localStorage.getItem('bjut_vpn_compatibility'),
-          androidNotificationMode: localStorage.getItem('bjut_android_notification_mode'),
-          androidNotifyNetworkStatus: localStorage.getItem('bjut_android_notify_network_status'),
-          androidNotifyLoginResults: localStorage.getItem('bjut_android_notify_login_results'),
-          androidNotifyBackgroundErrors: localStorage.getItem('bjut_android_notify_background_errors'),
-        };
-        const encrypted = await encryptExport(config, passphrase);
-        await writeTextToClipboard(encrypted);
-        customAlert('配置已使用你设置的密码加密并复制到剪贴板。账号密码由 Rust 安全存储管理，不会进入导出内容。');
+        const confirmedPassphrase = await customPasswordPrompt('请再输入一次备份密码。', '确认备份密码');
+        if (confirmedPassphrase === null) return;
+        if (confirmedPassphrase !== passphrase) {
+          await customAlert('两次输入的备份密码不一致，未生成导出内容。', '导出已取消');
+          return;
+        }
+        await syncConfigToRust();
+        const backup = await invoke<ConfigBackupExport>('export_config_backup', {
+          passphrase,
+          uiPreferences: configBackupUiPreferences(),
+        });
+        await writeTextToClipboard(backup.payload);
+        const missing = backup.missingPasswordAccounts.length
+          ? `\n\n未包含密码的账号：${backup.missingPasswordAccounts.join('、')}`
+          : '';
+        await customAlert(
+          `完整配置已在 Rust 中加密并复制到剪贴板。\n\n账号 ${backup.accountCount} 个，其中 ${backup.passwordCount} 个密码已写入加密备份；明文密码未进入 WebView。${missing}`,
+          '导出完成',
+        );
       } catch (e) {
         console.error('Export config failed:', e);
         customAlert('导出失败：' + String(e));
@@ -3635,9 +3710,26 @@ function setupEventListeners() {
         
         const passphrase = await customPasswordPrompt('输入导出该配置时设置的密码。', '导入配置');
         if (!passphrase) return;
+        const envelope = JSON.parse(text.trim()) as { version?: unknown };
+        if (envelope.version === 3) {
+          const imported = await invoke<ConfigBackupImport>('import_config_backup', {
+            payload: text.trim(),
+            passphrase,
+          });
+          applyConfigBackupUiPreferences(imported.uiPreferences);
+          const missing = imported.missingPasswordAccounts.length
+            ? `\n\n仍需补录密码：${imported.missingPasswordAccounts.join('、')}`
+            : '';
+          await customAlert(
+            `完整配置已通过安全存储回读校验。\n\n导入账号 ${imported.accountCount} 个，已恢复密码 ${imported.passwordCount} 个。${missing}`,
+            '导入完成',
+          );
+          location.reload();
+          return;
+        }
         const config = await decryptExport(text.trim(), passphrase);
         if (Array.isArray(config.accounts)) {
-          accountsCache = config.accounts.flatMap((value): AccountView[] => {
+          const importedAccounts = config.accounts.flatMap((value): AccountView[] => {
             if (!value || typeof value !== 'object') return [];
             const account = value as Partial<AccountView>;
             if (typeof account.user !== 'string') return [];
@@ -3649,6 +3741,13 @@ function setupEventListeners() {
               isDisabled: account.isDisabled === true,
             }];
           });
+          const unrecoverable = missingImportedCredentialUsers(importedAccounts, getAccounts());
+          if (unrecoverable.length > 0) {
+            throw new Error(
+              `该旧版备份只记录了“已有密码”，但没有包含这些账号的密码明文：${unrecoverable.join('、')}。为防止覆盖安全存储，本次导入已取消。`,
+            );
+          }
+          accountsCache = importedAccounts;
           config.accounts.forEach(value => {
             if (value && typeof value === 'object' && 'pass' in value) {
               (value as { pass?: unknown }).pass = '';
@@ -3692,14 +3791,24 @@ function setupEventListeners() {
           });
         }
         
-        syncConfigToRust().then(() => {
-          customAlert('导入成功，请刷新以应用更改！');
-          setTimeout(() => location.reload(), 1500);
-        }).catch((err) => {
-          customAlert('导入同步失败：' + String(err));
-        });
+        const expectedPasswords = accountsCache
+          .filter(account => account.hasPassword || Boolean(account.pass))
+          .map(account => account.user);
+        await syncConfigToRust();
+        const persisted = await invoke<BackendConfig>('get_app_config');
+        const persistedPasswords = new Set(
+          (persisted.accounts || [])
+            .filter(account => account.hasPassword === true)
+            .map(account => String(account.user || '')),
+        );
+        const missingAfterSave = expectedPasswords.filter(user => !persistedPasswords.has(user));
+        if (missingAfterSave.length > 0) {
+          throw new Error(`安全存储回读校验失败，这些账号的密码未保存：${missingAfterSave.join('、')}`);
+        }
+        await customAlert('旧版配置已导入并通过安全存储回读校验。', '导入成功');
+        location.reload();
       } catch (e) {
-        customAlert('导入失败：' + String(e));
+        await customAlert('导入失败：' + String(e));
       }
     });
   }
@@ -6967,16 +7076,23 @@ async function manualLogin(switchingAccount = false) {
 
   const overrideAcc = overrideAccountSelect?.value || 'auto';
   const overrideMethod = overrideMethodSelect?.value || 'auto';
-  const accountIndex = overrideAcc !== 'auto' && overrideAcc !== 'add' ? parseInt(overrideAcc, 10) : null;
-  if (switchingAccount && (accountIndex === null || Number.isNaN(accountIndex))) {
-    await customAlert('请先在控制台上方“登录账号”中明确选择要切换到的目标账号。', '选择目标账号');
-    return;
-  }
-  const targetAccount = accountIndex === null ? null : getAccounts()[accountIndex];
   const currentAccountUser = portalUserInfoCache?.account
     || (!["", "--", "未登录"].includes(infoAccount.textContent?.trim() || '')
       ? infoAccount.textContent?.trim() || null
       : null);
+  const moreOptionsEnabled = localStorage.getItem('bjut_more_options') === 'true';
+  let accountIndex = moreOptionsEnabled && overrideAcc !== 'auto' && overrideAcc !== 'add'
+    ? parseInt(overrideAcc, 10)
+    : null;
+  if (switchingAccount && (accountIndex === null || Number.isNaN(accountIndex))) {
+    accountIndex = await chooseSwitchAccount(currentAccountUser);
+    if (accountIndex === null) return;
+  }
+  if (switchingAccount && (accountIndex === null || Number.isNaN(accountIndex))) {
+    await customAlert('请选择要切换到的目标账号。', '选择目标账号');
+    return;
+  }
+  const targetAccount = accountIndex === null ? null : getAccounts()[accountIndex];
   if (switchingAccount && targetAccount?.user === currentAccountUser) {
     await customAlert(`当前已经使用账号 ${targetAccount.user} 登录。`, '无需切换');
     return;

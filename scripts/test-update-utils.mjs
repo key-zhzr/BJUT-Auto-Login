@@ -17,6 +17,7 @@ const {
   observeSystemColorScheme,
   resolveColorScheme,
 } = await import('../src/appearance.ts');
+const { missingImportedCredentialUsers } = await import('../src/config-backup.ts');
 
 const cases = [
   ['1.0.0-alpha.1', '1.0.0-alpha.beta', true],
@@ -39,6 +40,20 @@ for (const [current, latest, expected] of cases) {
 }
 
 console.log(`SemVer regression cases passed: ${cases.length}`);
+
+assert.deepEqual(
+  missingImportedCredentialUsers(
+    [
+      { user: 'saved', pass: '', hasPassword: true },
+      { user: 'missing', pass: '', hasPassword: true },
+      { user: 'embedded', pass: 'secret', hasPassword: true },
+      { user: 'intentionally-empty', pass: '', hasPassword: false },
+    ],
+    [{ user: 'saved', hasPassword: true }],
+  ),
+  ['missing'],
+);
+console.log('Legacy configuration credential guard regression case passed');
 
 const releaseFixture = {
   tag_name: 'v0.1.6',
