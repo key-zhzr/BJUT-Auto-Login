@@ -182,6 +182,7 @@ document.addEventListener('visibilitychange', () => {
     showResumeMask();
     scheduleAlipayAutomaticCompletionCheck();
     scheduleWechatAutomaticCompletionCheck();
+    void updateUserInfo(true);
   }
   documentWasHidden = document.hidden;
   updateWindowAppearanceState();
@@ -926,7 +927,9 @@ async function loadConfigFromRust(): Promise<boolean> {
 
 function applyNetworkStatePayload(data: NetworkStatePayload) {
   const networkChanged = Boolean(data.ip && lastKnownIp && data.ip !== lastKnownIp);
-  if (networkChanged) portalUserInfoCache = null;
+  if (networkChanged && portalUserInfoCache) {
+    infoAccountLabel.textContent = '上次读取账号';
+  }
   let state = NetworkState.Checking;
   if (data.state === 'Online') state = NetworkState.Online;
   else if (data.state === 'BjutCampus') state = NetworkState.BjutCampus;
@@ -940,11 +943,15 @@ function applyNetworkStatePayload(data: NetworkStatePayload) {
   currentLoginType = loginType;
   updateNetworkStatus(state, loginType, data.loginMessage);
   isChecking = false;
+  if (state !== NetworkState.Checking) {
+    // Dashboard session data is a separate read-only signal. Try it on VPN,
+    // ordinary Wi-Fi and unclassified networks too; automatic-login trust
+    // heuristics must not suppress an otherwise reachable portal session.
+    updateUserInfo(state === NetworkState.Online && loginType !== LoginType.Unknown).catch(() => {});
+  }
   if (state === NetworkState.Online) {
-    updateUserInfo().catch(() => {});
     if (persistedConfigurationReady) scheduleCurrentCampusAccountDiscovery();
   } else {
-    portalUserInfoCache = null;
     updateTopUpPackageAction();
   }
 
@@ -995,6 +1002,9 @@ async function initializeRustEvents() {
     })),
     settle('网络状态事件', listen<NetworkStatePayload>('network-state-change', event => {
       applyNetworkStatePayload(event.payload);
+    })),
+    settle('控制台账号刷新事件', listen('dashboard-user-info-refresh', () => {
+      void updateUserInfo(true);
     })),
     settle('网络诊断进度事件', listen<DiagnosticProgress>('network-diagnostic-progress', event => {
       if (!diagnosticRunActive) return;
@@ -1375,56 +1385,136 @@ function chooseSwitchAccount(currentUser: string | null): Promise<number | null>
   });
 }
 
-function showListManageModal(title: string, list: string[], onSave: (list: string[]) => void) {
+function applyNetworkTrustLists(lists: { whitelist: string[]; blacklist: string[] }) {
+  whitelistCache = [...lists.whitelist];
+  blacklistCache = [...lists.blacklist];
+}
+
+function showNetworkTrustListModal(trusted: boolean) {
   const modal = document.getElementById('list-manage-modal');
-  if (!modal) { alert(list.join('\n')); return; }
+  if (!modal) return;
+  const title = trusted ? '信任的 Wi-Fi（白名单）' : '拒绝的 Wi-Fi（黑名单）';
   document.getElementById('list-manage-title')!.textContent = title;
+  document.getElementById('list-manage-description')!.textContent = trusted
+    ? '白名单 Wi-Fi 可用于明确授权自动登录。每条记录同时匹配 SSID 与 BSSID，避免同名热点冒充。'
+    : '黑名单优先于白名单；匹配后不会向该 Wi-Fi 发送校园网账号密码。';
   const content = document.getElementById('list-manage-content')!;
-  content.innerHTML = '';
-  
-  if (list.length === 0) {
-    content.innerHTML = '<div style="color: var(--text-muted); padding: 0.5rem;">暂无数据</div>';
-  } else {
-    list.forEach((item, index) => {
+  const status = document.getElementById('list-manage-status')!;
+  const currentButton = document.getElementById('btn-list-add-current') as HTMLButtonElement;
+  const form = document.getElementById('list-manage-add-form') as HTMLFormElement;
+  const ssidInput = document.getElementById('list-manage-ssid') as HTMLInputElement;
+  const bssidInput = document.getElementById('list-manage-bssid') as HTMLInputElement;
+  const closeBtn = document.getElementById('btn-list-manage-close')!;
+  const activeList = () => trusted ? whitelistCache : blacklistCache;
+  const setBusy = (busy: boolean) => {
+    currentButton.disabled = busy;
+    form.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')
+      .forEach(element => { element.disabled = busy; });
+  };
+  const renderList = () => {
+    const list = activeList();
+    content.replaceChildren();
+    if (list.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'diagnostic-empty';
+      empty.textContent = '暂无记录';
+      content.appendChild(empty);
+      return;
+    }
+    list.forEach(item => {
       const div = document.createElement('div');
-      div.style.display = 'flex';
-      div.style.justifyContent = 'space-between';
-      div.style.padding = '0.5rem';
-      div.style.borderBottom = '1px solid var(--card-border)';
+      div.className = 'network-trust-list-item';
       const label = document.createElement('span');
-      label.style.wordBreak = 'break-all';
       label.textContent = item;
       const removeButton = document.createElement('button');
       removeButton.className = 'btn-icon danger';
-      removeButton.style.padding = '0 0.5rem';
-      removeButton.dataset.idx = index.toString();
+      removeButton.dataset.networkKey = item;
       removeButton.setAttribute('aria-label', '删除');
       removeButton.innerHTML = '<i data-lucide="trash-2"></i>';
       div.append(label, removeButton);
       content.appendChild(div);
     });
-  }
-  
-  const closeBtn = document.getElementById('btn-list-manage-close')!;
+    renderIcons(content);
+  };
+  renderList();
+  status.textContent = '';
+  form.reset();
+
   const cleanup = () => {
     modal.classList.add('hidden');
     content.removeEventListener('click', onClickList);
+    currentButton.removeEventListener('click', onAddCurrent);
+    form.removeEventListener('submit', onAddOther);
     closeBtn.removeEventListener('click', onClose);
   };
-  const onClickList = (e: Event) => {
-    const btn = (e.target as HTMLElement).closest('.danger');
-    if (btn) {
-      const idx = parseInt(btn.getAttribute('data-idx') || '0', 10);
-      list.splice(idx, 1);
-      onSave(list);
-      showListManageModal(title, list, onSave);
+  const onClickList = async (event: Event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-network-key]');
+    if (!button?.dataset.networkKey) return;
+    setBusy(true);
+    status.textContent = '正在删除…';
+    try {
+      const lists = await invoke<{ whitelist: string[]; blacklist: string[] }>(
+        'remove_saved_network_trust',
+        { networkKey: button.dataset.networkKey },
+      );
+      applyNetworkTrustLists(lists);
+      status.textContent = '已删除该 Wi-Fi 记录。';
+      renderList();
+    } catch (error) {
+      status.textContent = `删除失败：${String(error)}`;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onAddCurrent = async () => {
+    setBusy(true);
+    status.textContent = '正在读取当前 Wi-Fi…';
+    try {
+      const lists = await invoke<{ whitelist: string[]; blacklist: string[] }>(
+        'set_current_network_trust',
+        { trusted, expectedNetworkKey: null },
+      );
+      applyNetworkTrustLists(lists);
+      status.textContent = `已将当前 Wi-Fi 加入${trusted ? '白名单' : '黑名单'}。`;
+      renderList();
+    } catch (error) {
+      status.textContent = `无法添加当前 Wi-Fi：${String(error)}`;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onAddOther = async (event: SubmitEvent) => {
+    event.preventDefault();
+    const ssid = ssidInput.value.trim();
+    const bssid = bssidInput.value.trim();
+    if (!ssid || !bssid) {
+      status.textContent = '添加其他 Wi-Fi 时需要同时填写 SSID 与 BSSID。';
+      return;
+    }
+    setBusy(true);
+    status.textContent = '正在保存…';
+    try {
+      const lists = await invoke<{ whitelist: string[]; blacklist: string[] }>(
+        'set_named_network_trust',
+        { trusted, ssid, bssid },
+      );
+      applyNetworkTrustLists(lists);
+      form.reset();
+      status.textContent = `已将 ${ssid} 加入${trusted ? '白名单' : '黑名单'}。`;
+      renderList();
+    } catch (error) {
+      status.textContent = `保存失败：${String(error)}`;
+    } finally {
+      setBusy(false);
     }
   };
   const onClose = () => { cleanup(); };
   content.addEventListener('click', onClickList);
+  currentButton.addEventListener('click', onAddCurrent);
+  form.addEventListener('submit', onAddOther);
   closeBtn.addEventListener('click', onClose);
   modal.classList.remove('hidden');
-  renderIcons(content);
+  renderIcons(modal);
 }
 
 enum NetworkState {
@@ -1717,6 +1807,8 @@ let logsDirty = true;
 let networkEventDebounce: number | null = null;
 let userInfoRequestId = 0;
 let userInfoLoading = false;
+let userInfoRefreshPending = false;
+let userInfoRefreshForce = false;
 
 // New state for split check loops
 let lastKnownIp = '';
@@ -3641,20 +3733,14 @@ function setupEventListeners() {
   const btnManageWhitelist = document.getElementById('btn-manage-whitelist');
   if (btnManageWhitelist) {
     btnManageWhitelist.addEventListener('click', () => {
-      showListManageModal('信任的 WiFi (白名单)', [...whitelistCache], (newList) => {
-        whitelistCache = [...newList];
-        void syncConfigToRust();
-      });
+      showNetworkTrustListModal(true);
     });
   }
 
   const btnManageBlacklist = document.getElementById('btn-manage-blacklist');
   if (btnManageBlacklist) {
     btnManageBlacklist.addEventListener('click', () => {
-      showListManageModal('拒绝的 WiFi (黑名单)', [...blacklistCache], (newList) => {
-        blacklistCache = [...newList];
-        void syncConfigToRust();
-      });
+      showNetworkTrustListModal(false);
     });
   }
 
@@ -4652,12 +4738,10 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType, loginMessage
     networkIcon.classList.add('error');
     networkIcon.innerHTML = '<i data-lucide="wifi-off"></i>';
     btnLogin.disabled = true;
-    
-    // Clear user info
-    infoAccount.textContent = '未登录';
-    infoBalance.textContent = '--';
-    infoFlow.textContent = '--';
-    infoAccountLabel.textContent = '当前登录账号';
+    // Network classification and accounting-session data are independent.
+    // Keep the last successful values visible while the read-only portal
+    // refresh tries the current system/VPN route.
+    if (portalUserInfoCache) infoAccountLabel.textContent = '上次读取账号';
   }
   if (IS_ANDROID && window.AndroidBridge?.updateKeepAliveStatus) {
     const notification = state === NetworkState.Checking
@@ -6993,18 +7077,28 @@ async function toggleBillingMauth() {
 }
 
 async function updateUserInfo(force = false) {
-  if (userInfoLoading) return;
-  if (await isAppInBackground()) return;
+  userInfoRefreshForce ||= force;
+  if (userInfoLoading) {
+    userInfoRefreshPending = true;
+    return;
+  }
+  if (await isAppInBackground()) {
+    userInfoRefreshPending = true;
+    return;
+  }
+  const effectiveForce = userInfoRefreshForce;
+  userInfoRefreshForce = false;
+  userInfoRefreshPending = false;
   userInfoLoading = true;
   const requestId = ++userInfoRequestId;
   try {
     const info: UserInfo | null = await invoke('get_user_info', {
       localIp: lastKnownIp || null,
-      force,
+      force: effectiveForce,
     });
     if (requestId !== userInfoRequestId) return;
-    portalUserInfoCache = info?.source === 'portal' ? info : null;
     if (info) {
+      portalUserInfoCache = info.source === 'portal' ? info : portalUserInfoCache;
       infoAccount.textContent = info.account || '--';
       infoBalance.textContent = info.balance || '--';
       infoFlow.textContent = info.flow || '--';
@@ -7012,6 +7106,21 @@ async function updateUserInfo(force = false) {
       if (info.flowPending) {
         void updateRemainingFlow(requestId, info.account);
       }
+    } else if (!portalUserInfoCache) {
+      infoAccount.textContent = '--';
+      infoBalance.textContent = '--';
+      infoFlow.textContent = '--';
+      infoAccountLabel.textContent = '当前登录账号';
+    } else {
+      infoAccountLabel.textContent = '上次读取账号';
+    }
+    syncDashboardAccountActions();
+    updateTopUpPackageAction();
+  } catch (error) {
+    if (requestId !== userInfoRequestId) return;
+    console.error('Failed to refresh portal user information:', error);
+    if (portalUserInfoCache) {
+      infoAccountLabel.textContent = '上次读取账号';
     } else {
       infoAccount.textContent = '--';
       infoBalance.textContent = '--';
@@ -7020,18 +7129,12 @@ async function updateUserInfo(force = false) {
     }
     syncDashboardAccountActions();
     updateTopUpPackageAction();
-  } catch (error) {
-    if (requestId !== userInfoRequestId) return;
-    portalUserInfoCache = null;
-    console.error('Failed to refresh portal user information:', error);
-    infoAccount.textContent = '--';
-    infoBalance.textContent = '--';
-    infoFlow.textContent = '--';
-    infoAccountLabel.textContent = '当前登录账号';
-    syncDashboardAccountActions();
-    updateTopUpPackageAction();
   } finally {
     userInfoLoading = false;
+    if (userInfoRefreshPending) {
+      const pendingForce = userInfoRefreshForce;
+      window.setTimeout(() => void updateUserInfo(pendingForce), 0);
+    }
   }
 }
 

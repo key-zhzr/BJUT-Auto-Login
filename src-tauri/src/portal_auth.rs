@@ -1265,6 +1265,57 @@ pub(crate) fn login_result_is_ambiguous(error: &str) -> bool {
     error.starts_with(AMBIGUOUS_LOGIN_RESULT)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PortalLoginFailureDisposition {
+    /// The gateway explicitly rejected this username/password. Trying the next
+    /// configured account is meaningful.
+    CredentialRejected,
+    /// The physical client IP already owns a portal session. This is not an
+    /// account-password failure and must never cause every credential to be
+    /// submitted in sequence.
+    SessionAlreadyOnline,
+    /// The response is environmental, rate-limited, or otherwise not specific
+    /// to one credential. Stop the account traversal conservatively.
+    StopTraversal,
+}
+
+pub(crate) fn classify_portal_login_failure(message: &str) -> PortalLoginFailureDisposition {
+    let normalized = message.trim().to_ascii_lowercase();
+    if [
+        "已经在线",
+        "已在线",
+        "already online",
+        "has been online",
+        "ip_already_online",
+        "same ip online",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return PortalLoginFailureDisposition::SessionAlreadyOnline;
+    }
+    if [
+        "ldap auth error",
+        "userid error",
+        "账号不存在",
+        "用户不存在",
+        "密码错误",
+        "余额不足",
+        "欠费",
+        "账号停机",
+        "账户停机",
+        "已停机",
+        "invalid password",
+        "wrong password",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return PortalLoginFailureDisposition::CredentialRejected;
+    }
+    PortalLoginFailureDisposition::StopTraversal
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1281,6 +1332,30 @@ mod tests {
         );
         assert!(parse_dr_response("not json").is_err());
         assert!(parse_dr_response(r#"dr1003({"result":2,"msg":"unknown"});"#).is_err());
+    }
+
+    #[test]
+    fn portal_failures_only_traverse_accounts_for_explicit_credential_rejections() {
+        assert_eq!(
+            classify_portal_login_failure("IP: 10.126.80.236 已经在线！"),
+            PortalLoginFailureDisposition::SessionAlreadyOnline
+        );
+        assert_eq!(
+            classify_portal_login_failure("Rad:ldap auth error"),
+            PortalLoginFailureDisposition::CredentialRejected
+        );
+        assert_eq!(
+            classify_portal_login_failure("Rad:userid error1"),
+            PortalLoginFailureDisposition::CredentialRejected
+        );
+        assert_eq!(
+            classify_portal_login_failure("余额不足，账号已停机"),
+            PortalLoginFailureDisposition::CredentialRejected
+        );
+        assert_eq!(
+            classify_portal_login_failure("认证服务器繁忙，请稍后再试"),
+            PortalLoginFailureDisposition::StopTraversal
+        );
     }
 
     #[test]

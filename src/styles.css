@@ -4014,3 +4014,71 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
 .is-macos .macos-only {
   display: flex !important;
 }
+/* Wi-Fi trust list editor */
+.network-trust-list-modal {
+  max-width: 560px;
+}
+
+.network-trust-add-actions {
+  display: flex;
+  margin: 0.75rem 0;
+}
+
+.network-trust-add-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.65rem;
+}
+
+.network-trust-add-form label {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.network-trust-add-form input {
+  width: 100%;
+  min-width: 0;
+}
+
+.network-trust-list-content {
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0.75rem 0 1rem;
+  background: color-mix(in srgb, var(--card-bg) 72%, transparent);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  padding: 0.4rem;
+}
+
+.network-trust-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.network-trust-list-item:last-child {
+  border-bottom: 0;
+}
+
+.network-trust-list-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .network-trust-add-form {
+    grid-template-columns: 1fr;
+  }
+
+  .network-trust-add-form .btn,
+  .network-trust-add-actions .btn {
+    width: 100%;
+  }
+}

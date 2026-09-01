@@ -1498,9 +1498,29 @@
 
     <!-- List Manage Modal (For Whitelist/Blacklist) -->
     <div id="list-manage-modal" class="modal-overlay hidden">
-      <div class="modal-content glass-card" style="max-width: 500px;">
+      <div class="modal-content glass-card network-trust-list-modal">
         <h3 id="list-manage-title">管理列表</h3>
-        <div id="list-manage-content" style="max-height: 300px; overflow-y: auto; margin-bottom: 1rem; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 0.5rem;">
+        <p class="modal-description" id="list-manage-description">按 SSID 与 BSSID 精确管理 Wi-Fi 身份。</p>
+        <div class="network-trust-add-actions">
+          <button type="button" class="btn btn-secondary" id="btn-list-add-current">
+            <i data-lucide="locate-fixed"></i><span>添加当前 Wi-Fi</span>
+          </button>
+        </div>
+        <form id="list-manage-add-form" class="network-trust-add-form">
+          <label>
+            <span>其他 Wi-Fi 名称（SSID）</span>
+            <input id="list-manage-ssid" type="text" maxlength="32" autocomplete="off" placeholder="例如 bjut_wifi">
+          </label>
+          <label>
+            <span>BSSID</span>
+            <input id="list-manage-bssid" type="text" maxlength="17" autocomplete="off" autocapitalize="characters" placeholder="AA:BB:CC:DD:EE:FF">
+          </label>
+          <button type="submit" class="btn btn-secondary">
+            <i data-lucide="plus"></i><span>添加其他 Wi-Fi</span>
+          </button>
+        </form>
+        <p id="list-manage-status" class="form-hint" aria-live="polite"></p>
+        <div id="list-manage-content" class="network-trust-list-content">
           <!-- Dynamically populated list items -->
         </div>
         <div class="modal-actions">

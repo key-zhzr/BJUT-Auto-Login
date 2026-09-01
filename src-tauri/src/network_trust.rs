@@ -144,7 +144,7 @@ fn bssid_bytes(value: &str) -> Option<[u8; 6]> {
     parts.next().is_none().then_some(bytes)
 }
 
-fn usable_wifi_bssid(value: &str) -> bool {
+pub(crate) fn usable_wifi_bssid(value: &str) -> bool {
     let Some(bytes) = bssid_bytes(value) else {
         return false;
     };
@@ -297,6 +297,19 @@ pub(crate) fn set_network_trust(
     }
     normalize_trust_lists(whitelist, blacklist);
     key
+}
+
+pub(crate) fn remove_network_trust(
+    whitelist: &mut Vec<String>,
+    blacklist: &mut Vec<String>,
+    saved_key: &str,
+) -> bool {
+    let canonical = canonicalize_saved_key(saved_key);
+    let before = whitelist.len() + blacklist.len();
+    whitelist.retain(|entry| canonicalize_saved_key(entry) != canonical);
+    blacklist.retain(|entry| canonicalize_saved_key(entry) != canonical);
+    normalize_trust_lists(whitelist, blacklist);
+    whitelist.len() + blacklist.len() != before
 }
 
 pub(crate) fn is_campus_local_ip(ip: &str) -> bool {
