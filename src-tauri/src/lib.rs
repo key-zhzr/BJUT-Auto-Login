@@ -5508,8 +5508,6 @@ fn emit_network_diagnostic_progress(app: &tauri::AppHandle, percent: u8, label: 
 
 #[tauri::command]
 async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
-    use std::net::ToSocketAddrs;
-
     emit_network_diagnostic_progress(&app, 2, "正在读取当前网络接口…");
     let compatibility = app
         .try_state::<Arc<AppState>>()
@@ -5721,24 +5719,32 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
 
     let dns_started = std::time::Instant::now();
     emit_network_diagnostic_progress(&app, 46, "正在检查 DNS 解析…");
-    let dns_ok = tauri::async_runtime::spawn_blocking(|| {
-        ("www.baidu.com", 443)
-            .to_socket_addrs()
-            .map(|mut addresses| addresses.next().is_some())
-            .unwrap_or(false)
-    })
-    .await
-    .unwrap_or(false);
+    const DNS_DIAGNOSTIC_BUDGET: std::time::Duration = std::time::Duration::from_millis(800);
+    let dns_result = tokio::time::timeout(
+        DNS_DIAGNOSTIC_BUDGET,
+        tokio::net::lookup_host(("www.baidu.com", 443)),
+    )
+    .await;
+    let (dns_ok, dns_message) = match dns_result {
+        Ok(Ok(mut addresses)) => {
+            if addresses.next().is_some() {
+                (true, "DNS 解析正常".to_string())
+            } else {
+                (false, "DNS 未返回可用地址".to_string())
+            }
+        }
+        Ok(Err(error)) => (false, format!("DNS 解析失败：{error}")),
+        Err(_) => (
+            false,
+            "DNS 解析在 800 毫秒内未完成，已继续后续诊断".to_string(),
+        ),
+    };
     steps.push(make_diagnostic_step(
         "dns",
         "DNS 解析",
         dns_started,
         if dns_ok { "success" } else { "warning" },
-        if dns_ok {
-            "DNS 解析正常".to_string()
-        } else {
-            "DNS 解析失败或被认证页面限制".to_string()
-        },
+        dns_message,
     ));
     emit_network_diagnostic_progress(&app, 54, "DNS 解析检查完成");
 

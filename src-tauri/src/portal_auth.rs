@@ -72,6 +72,8 @@ const WIFI_HTTPS_LOGOUT: &str = "https://wlgn.bjut.edu.cn/drcom/logout";
 const WIFI_HTTP_REFERER: &str = "http://10.21.251.3/";
 const WIFI_HTTPS_REFERER: &str = "https://wlgn.bjut.edu.cn/";
 const LGN_REFERER: &str = "https://lgn.bjut.edu.cn/";
+const LGN_ROOT: &str = "https://lgn.bjut.edu.cn/";
+const LGN6_ROOT: &str = "https://lgn6.bjut.edu.cn/";
 const LGN_PROGRAM_INDEX: &str = "o4OBee1755497815";
 const LGN_PAGE_INDEX: &str = "cHAmjX1755497856";
 const LGN_JS_VERSION: &str = "4.2.2";
@@ -358,17 +360,31 @@ fn login_readiness_probe_urls(
     login_type: &LoginType,
     route_context: Option<&PortalRouteContext>,
 ) -> Vec<String> {
-    let mut urls = portal_probe_urls_for_route(
+    let urls = portal_probe_urls_for_route(
         compatibility,
         login_type,
         route_context.map(PortalRouteContext::physical_ipv4),
     );
-    if *login_type == LoginType::Type3 && !urls.iter().any(|url| url.contains("/drcom/getipv6")) {
+    if *login_type != LoginType::Type3 {
+        return urls;
+    }
+
+    // The captured wired flow always begins with these two TLS-protected
+    // landing pages. They are a more stable pre-authentication fingerprint
+    // than loadUserInfo, which may omit user_info until a session exists.
+    // Put them first so diagnostics do not spend their entire budget waiting
+    // for a session-dependent endpoint.
+    let mut readiness = vec![LGN_ROOT.to_string(), LGN6_ROOT.to_string()];
+    readiness.extend(
+        urls.into_iter()
+            .filter(|url| url != LGN_ROOT && url != LGN6_ROOT),
+    );
+    if !readiness.iter().any(|url| url.contains("/drcom/getipv6")) {
         if let Ok(ipv6_url) = lgn_observed_ipv6_url() {
-            urls.push(ipv6_url.to_string());
+            readiness.push(ipv6_url.to_string());
         }
     }
-    urls
+    readiness
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -437,7 +453,9 @@ impl Type3ProbeEvidence {
             self.portal_detected |=
                 jsonp_object(body).is_some_and(|value| value.get("result").is_some());
             self.ipv6_login_ready |= parse_observed_ip(body, true).is_ok();
+            return;
         }
+        self.portal_detected |= probe_body_matches(&LoginType::Type3, url, body);
     }
 
     fn result(&self) -> PortalProbeResult {
@@ -512,6 +530,9 @@ async fn probe_login_type(
         }
         if login_type == LoginType::Type3 {
             type3_evidence.record(&url, &body);
+            if type3_evidence.result() == PortalProbeResult::LoginReady {
+                return PortalProbeResult::LoginReady;
+            }
         } else if probe_body_matches(&login_type, &url, &body) {
             return PortalProbeResult::LoginReady;
         }
@@ -613,7 +634,10 @@ fn probe_body_matches(login_type: &LoginType, url: &str, body: &str) -> bool {
         }
         LoginType::Type3 if url.contains("/drcom/getipv6") => parse_observed_ip(body, true).is_ok(),
         LoginType::Type3 => {
-            normalized.contains("name=\"v6ip\"")
+            (normalized.contains("dr.comwebloginid_")
+                && normalized.contains("authuserfield")
+                && normalized.contains("ddddd"))
+                || normalized.contains("name=\"v6ip\"")
                 || normalized.contains("name='v6ip'")
                 || normalized.contains("lgn.bjut.edu.cn")
         }
@@ -1727,7 +1751,9 @@ mod tests {
 
         let readiness =
             login_readiness_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3, None);
-        assert_eq!(readiness.len(), 3);
+        assert_eq!(readiness.len(), 5);
+        assert_eq!(readiness[0], LGN_ROOT);
+        assert_eq!(readiness[1], LGN6_ROOT);
         assert!(readiness.iter().any(|url| url.contains("/drcom/getipv6")));
     }
 
@@ -1757,6 +1783,11 @@ mod tests {
             &LoginType::Type3,
             "http://172.30.201.2:801/eportal/portal/page/loadUserInfo",
             r#"dr1002({"code":1,"user_info_lang":{"account":"账号"}});"#,
+        ));
+        assert!(probe_body_matches(
+            &LoginType::Type3,
+            LGN_ROOT,
+            r#"<!--Dr.COMWebLoginID_0.htm--><script>authuserfield='DDDDD';</script>"#,
         ));
         assert!(!probe_body_matches(
             &LoginType::Type1,
