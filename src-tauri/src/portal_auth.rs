@@ -8,7 +8,7 @@ use reqwest::header::{ACCEPT, CACHE_CONTROL, HOST, REFERER};
 use reqwest::{Client, Url};
 use serde_json::Value;
 use std::fmt::Write as _;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod dorm_tls;
@@ -61,6 +61,10 @@ const DORM_HTTPS_REFERER: &str = "https://10.21.221.98:802/";
 // The HTTP Host still matches the captured IP endpoint, and a read-only Type 1
 // response must be confirmed before any credential is sent.
 const DORM_GATEWAY_IPV4: Ipv4Addr = Ipv4Addr::new(10, 21, 221, 98);
+const LGN6_GATEWAY_IPV6: [Ipv6Addr; 2] = [
+    Ipv6Addr::new(0x2001, 0x0da8, 0x0216, 0x30c9, 0, 0, 0, 0x0002),
+    Ipv6Addr::new(0x2001, 0x0da8, 0x0216, 0x30c9, 0, 0, 0, 0x000a),
+];
 const WIFI_HTTP_LOGIN: &str = "http://10.21.251.3/drcom/login";
 const WIFI_HTTPS_LOGIN: &str = "https://wlgn.bjut.edu.cn/drcom/login";
 const WIFI_HTTP_LOGOUT: &str = "http://10.21.251.3/drcom/logout";
@@ -200,28 +204,25 @@ pub(crate) async fn portal_client(
     }
     #[cfg(target_os = "android")]
     let _ = route_context;
-    let hosts: Vec<(&str, Vec<Ipv4Addr>)> = match login_type {
+    let hosts: Vec<(&str, Vec<IpAddr>)> = match login_type {
         LoginType::Type1 if compatibility != VpnCompatibility::Maximum => {
             dorm_tls::TLS_HOST_CANDIDATES
                 .iter()
-                .map(|host| (*host, vec![DORM_GATEWAY_IPV4]))
+                .map(|host| (*host, vec![IpAddr::V4(DORM_GATEWAY_IPV4)]))
                 .collect()
         }
-        LoginType::Type2 => vec![(WLGN_HOST, vec![Ipv4Addr::new(10, 21, 251, 3)])],
+        LoginType::Type2 => vec![(WLGN_HOST, vec![IpAddr::V4(Ipv4Addr::new(10, 21, 251, 3))])],
         LoginType::Type3 => vec![
             (
                 LGN_HOST,
                 vec![
-                    Ipv4Addr::new(172, 30, 201, 2),
-                    Ipv4Addr::new(172, 30, 201, 10),
+                    IpAddr::V4(Ipv4Addr::new(172, 30, 201, 2)),
+                    IpAddr::V4(Ipv4Addr::new(172, 30, 201, 10)),
                 ],
             ),
             (
                 LGN6_HOST,
-                vec![
-                    Ipv4Addr::new(172, 30, 201, 2),
-                    Ipv4Addr::new(172, 30, 201, 10),
-                ],
+                LGN6_GATEWAY_IPV6.into_iter().map(IpAddr::V6).collect(),
             ),
         ],
         _ => Vec::new(),
@@ -236,11 +237,15 @@ pub(crate) async fn portal_client(
         for (host, fixed_addresses) in hosts {
             let addresses = if compatibility == VpnCompatibility::Low
                 && *login_type != LoginType::Type1
+                && host != LGN6_HOST
             {
                 let host_owned = host.to_string();
                 tokio::task::spawn_blocking(move || query_campus_dns_ipv4(&host_owned, dns_source))
                     .await
                     .map_err(|error| format!("校园网 DNS 任务失败：{error}"))??
+                    .into_iter()
+                    .map(IpAddr::V4)
+                    .collect()
             } else {
                 fixed_addresses
             };
@@ -249,7 +254,7 @@ pub(crate) async fn portal_client(
                 // Explicit URL ports (such as ePortal's 802) take precedence
                 // over the resolver entry; zero avoids implying a different
                 // service port when the URL has no explicit port.
-                .map(|address| SocketAddr::new(IpAddr::V4(address), 0))
+                .map(|address| SocketAddr::new(address, 0))
                 .collect();
             builder = builder.resolve_to_addrs(host, &socket_addresses);
         }
@@ -1530,6 +1535,17 @@ mod tests {
         assert_eq!(
             ipv4_only_pairs.get("wlan_user_ipv6").map(String::as_str),
             Some("")
+        );
+    }
+
+    #[test]
+    fn lgn6_fixed_resolver_uses_the_observed_ipv6_gateways() {
+        assert_eq!(
+            LGN6_GATEWAY_IPV6.map(|address| address.to_string()),
+            [
+                "2001:da8:216:30c9::2".to_string(),
+                "2001:da8:216:30c9::a".to_string(),
+            ]
         );
     }
 

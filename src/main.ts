@@ -23,7 +23,7 @@ import {
 } from './appearance';
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
 import { requestNetworkTrustApproval, showNetworkTrustListModal } from './network-trust';
-import { UI_TEXT } from './ui-text';
+import { applyConfiguredUiText, UI_TEXT } from './ui-text';
 import { formatBytes, isVersionNewer, renderReleaseNotes, selectUpdateAsset } from './update-utils';
 import { loadGitHubReleases, releaseFromOfficialManifest } from './update-source';
 import {
@@ -1781,6 +1781,8 @@ function restoreRechargeForm(transaction: RecoverableRecharge, method: RechargeM
 
 // Initialize
 async function init() {
+  applyConfiguredUiText();
+
   // Instantiate Custom Selects
   overrideAccountSelect = new CustomSelect('override-account');
   overrideMethodSelect = new CustomSelect('override-method');
