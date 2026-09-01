@@ -935,15 +935,65 @@ async fn login_lgn_once(
     route_context: Option<&PortalRouteContext>,
 ) -> Result<(bool, String), String> {
     let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn 有线")?;
-    // A missing/failed IPv6 discovery must not block IPv4-only wired clients.
-    // lgn's encrypted endpoint accepts an empty wlan_user_ipv6 field.
-    let observed_ipv6 = fetch_lgn_observed_ipv6(client).await.unwrap_or_default();
+    let (observed_ipv6, ipv6_diagnostic) = match fetch_lgn_observed_ipv6(client).await {
+        Ok((address, source)) => (
+            address,
+            format!("lgn IPv6 地址发现成功（{source}），登录请求已携带 IPv6 地址"),
+        ),
+        Err(error) => (
+            String::new(),
+            format!("lgn IPv6 地址发现失败，登录请求已回退为单 IPv4：{error}"),
+        ),
+    };
     let login_url = lgn_login_url(user, pass, &local_ipv4, &observed_ipv6)?;
-    get_jsonp_login(client, login_url, LGN_REFERER, "lgn 有线登录", None, None).await
+    match get_jsonp_login(client, login_url, LGN_REFERER, "lgn 有线登录", None, None).await {
+        Ok((success, message)) => Ok((success, format!("{message}；{ipv6_diagnostic}"))),
+        Err(error) => Err(format!("{error}；{ipv6_diagnostic}")),
+    }
 }
 
-async fn fetch_lgn_observed_ipv6(client: &Client) -> Result<String, String> {
-    let ipv6_response = client
+async fn fetch_lgn_observed_ipv6(client: &Client) -> Result<(String, &'static str), String> {
+    match fetch_lgn_observed_ipv6_jsonp(client).await {
+        Ok(address) => Ok((address, "getipv6 JSONP")),
+        Err(jsonp_error) => fetch_lgn_observed_ipv6_from_page(client)
+            .await
+            .map(|address| (address, "lgn6 登录页 v46ip 回退"))
+            .map_err(|page_error| {
+                format!("getipv6 接口失败：{jsonp_error}；lgn6 登录页回退失败：{page_error}")
+            }),
+    }
+}
+
+pub(crate) async fn diagnose_lgn_ipv6_rust(
+    compatibility: VpnCompatibility,
+    route_context: Option<&PortalRouteContext>,
+) -> Result<String, String> {
+    let client_compatibility = if compatibility == VpnCompatibility::Maximum {
+        VpnCompatibility::High
+    } else {
+        compatibility
+    };
+    let client = portal_client(
+        client_compatibility,
+        &LoginType::Type3,
+        Duration::from_millis(1200),
+        route_context,
+    )
+    .await?;
+    match tokio::time::timeout(
+        Duration::from_millis(1800),
+        fetch_lgn_observed_ipv6(&client),
+    )
+    .await
+    {
+        Ok(Ok((_address, source))) => Ok(format!("可用（{source}）")),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err("IPv6 地址发现超过 1.8 秒诊断预算".to_string()),
+    }
+}
+
+async fn fetch_lgn_observed_ipv6_jsonp(client: &Client) -> Result<String, String> {
+    let response = client
         .get(lgn_observed_ipv6_url()?)
         .header(ACCEPT, "*/*")
         .header(REFERER, LGN_REFERER)
@@ -951,19 +1001,66 @@ async fn fetch_lgn_observed_ipv6(client: &Client) -> Result<String, String> {
         .send()
         .await
         .map_err(|error| portal_request_error("lgn IPv6 地址发现", error, None))?;
-    if !ipv6_response.status().is_success() {
+    if !response.status().is_success() {
         return Err(format!(
             "lgn IPv6 地址发现接口返回 HTTP {}",
-            ipv6_response.status()
+            response.status()
         ));
     }
-    let ipv6_body = ipv6_response.text().await.map_err(|error| {
+    let body = response.text().await.map_err(|error| {
         format!(
             "lgn IPv6 地址发现响应读取失败：{}",
             redact_request_error(error)
         )
     })?;
-    parse_observed_ip(&ipv6_body, true)
+    parse_observed_ip(&body, true)
+}
+
+async fn fetch_lgn_observed_ipv6_from_page(client: &Client) -> Result<String, String> {
+    let response = client
+        .get(LGN6_ROOT)
+        .header(ACCEPT, "text/html,*/*;q=0.8")
+        .header(REFERER, LGN_REFERER)
+        .header(CACHE_CONTROL, "no-cache, no-store")
+        .send()
+        .await
+        .map_err(|error| portal_request_error("lgn6 登录页 IPv6 回退", error, None))?;
+    if !response.status().is_success() {
+        return Err(format!("lgn6 登录页返回 HTTP {}", response.status()));
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("lgn6 登录页读取失败：{}", redact_request_error(error)))?;
+    parse_lgn_page_ipv6(&body)
+}
+
+fn parse_lgn_page_ipv6(text: &str) -> Result<String, String> {
+    for field in ["v46ip", "myv6ip"] {
+        let Some((_, remainder)) = text.split_once(&format!("{field}=")) else {
+            continue;
+        };
+        let remainder = remainder.trim_start();
+        let Some(quote) = remainder
+            .chars()
+            .next()
+            .filter(|character| matches!(character, '\'' | '"'))
+        else {
+            continue;
+        };
+        let value = remainder[quote.len_utf8()..]
+            .split(quote)
+            .next()
+            .unwrap_or_default()
+            .trim();
+        let Ok(address) = value.parse::<Ipv6Addr>() else {
+            continue;
+        };
+        if !address.is_unspecified() {
+            return Ok(address.to_string());
+        }
+    }
+    Err("登录页未包含有效的客户端 IPv6 地址".to_string())
 }
 
 fn type1_login_url(
@@ -1314,7 +1411,10 @@ pub(crate) async fn logout_from_campus_network_rust(
         }
         LoginType::Type3 => {
             let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn")?;
-            let observed_ipv6 = fetch_lgn_observed_ipv6(&client).await.unwrap_or_default();
+            let observed_ipv6 = fetch_lgn_observed_ipv6(&client)
+                .await
+                .map(|(address, _source)| address)
+                .unwrap_or_default();
             get_jsonp_login(
                 &client,
                 lgn_logout_url(&local_ipv4, &observed_ipv6)?,
@@ -1581,6 +1681,16 @@ mod tests {
         );
         assert!(parse_observed_ip(r#"dr1004({"result":1,"ip":"172.30.0.1"});"#, true).is_err());
         assert!(parse_observed_ip(r#"dr1004({"result":0,"ip":""});"#, true).is_err());
+    }
+
+    #[test]
+    fn lgn_landing_page_can_supply_the_client_ipv6_fallback() {
+        let html = r#"<script>v6='[2001:da8:216:30c9::a]'; myv6ip=' '; v46ip='2001:da8:216:2633:5067:13:669b:506c';</script>"#;
+        assert_eq!(
+            parse_lgn_page_ipv6(html).unwrap(),
+            "2001:da8:216:2633:5067:13:669b:506c"
+        );
+        assert!(parse_lgn_page_ipv6("<html>no address</html>").is_err());
     }
 
     #[test]

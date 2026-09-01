@@ -2,7 +2,7 @@ import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
   Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minimize2, Minus, MonitorSmartphone, Pause, Play, Plus, Power, Smartphone,
-  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
+  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, UserSearch, Users, Wifi,
   WalletCards, WifiOff, X,
 } from 'lucide';
 import Sortable from 'sortablejs';
@@ -51,7 +51,7 @@ const icons = {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
   Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minimize2, Minus, MonitorSmartphone, Pause, Play, Plus, Power, Smartphone,
-  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, Users, Wifi,
+  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, UserSearch, Users, Wifi,
   WalletCards, WifiOff, X,
 };
 

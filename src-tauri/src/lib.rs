@@ -1251,10 +1251,10 @@ use network_trust::{
 #[cfg(test)]
 use portal_auth::portal_probe_urls;
 use portal_auth::{
-    classify_portal_login_failure, detect_login_type_details_rust, diagnose_login_gateways,
-    lgn_user_info_url, login_result_is_ambiguous, login_to_campus_network_rust,
-    logout_from_campus_network_rust, portal_client, LoginType, PortalLoginFailureDisposition,
-    PortalRouteContext,
+    classify_portal_login_failure, detect_login_type_details_rust, diagnose_lgn_ipv6_rust,
+    diagnose_login_gateways, lgn_user_info_url, login_result_is_ambiguous,
+    login_to_campus_network_rust, logout_from_campus_network_rust, portal_client, LoginType,
+    PortalLoginFailureDisposition, PortalRouteContext,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -5784,14 +5784,25 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     let portal_started = std::time::Instant::now();
     emit_network_diagnostic_progress(&app, 76, "正在并发探测校园认证网关…");
     let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
-    let gateway_results = if wifi_route_failed || portal_route_context.is_none() {
-        Vec::new()
+    let (gateway_results, lgn_ipv6_diagnostic) = if wifi_route_failed
+        || portal_route_context.is_none()
+    {
+        (Vec::new(), None)
     } else {
-        diagnose_login_gateways(
-            compatibility,
-            &ssid,
-            network_transport(&network),
-            portal_route_context.as_ref(),
+        futures_util::future::join(
+            diagnose_login_gateways(
+                compatibility,
+                &ssid,
+                network_transport(&network),
+                portal_route_context.as_ref(),
+            ),
+            async {
+                if lgn_wired_hint {
+                    Some(diagnose_lgn_ipv6_rust(compatibility, portal_route_context.as_ref()).await)
+                } else {
+                    None
+                }
+            },
         )
         .await
     };
@@ -5805,7 +5816,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         .unwrap_or(LoginType::Unknown);
     let type1_requires_maximum =
         detection.is_some_and(|result| type1_portal_requires_maximum(result, compatibility));
-    let gateway_details = gateway_results
+    let mut gateway_details = gateway_results
         .iter()
         .map(|result| {
             format!(
@@ -5824,6 +5835,13 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    if let Some(result) = lgn_ipv6_diagnostic {
+        gateway_details.push_str("\nlgn IPv6 地址发现：");
+        match result {
+            Ok(detail) => gateway_details.push_str(&detail),
+            Err(error) => gateway_details.push_str(&format!("不可用，将回退单 IPv4（{error}）")),
+        }
+    }
     let (portal_status, portal_message) = if wifi_route_failed {
         (
             "error",

@@ -415,6 +415,10 @@ main {
   border-color: color-mix(in srgb, var(--primary-color) 42%, var(--card-border));
 }
 
+.account-discovery-card.hidden {
+  display: none;
+}
+
 .account-discovery-icon {
   width: 46px;
   height: 46px;
