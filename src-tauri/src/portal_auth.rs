@@ -117,11 +117,31 @@ fn login_type_hint(ssid: &str) -> Option<LoginType> {
     }
 }
 
-fn login_probe_candidates(ssid: &str, transport: &str) -> Vec<LoginType> {
+fn lgn_wired_route_hint(route_context: Option<&PortalRouteContext>) -> bool {
+    route_context.is_some_and(|context| {
+        let octets = context.physical_ipv4().octets();
+        // The supplied lgn wired capture uses 172.26.33.0/24, together with
+        // BJUT IPv6/DNS. Keep the automatic hint at the enclosing 172.26/16
+        // campus client range; an actual lgn response is still mandatory.
+        octets[0] == 172 && octets[1] == 26
+    })
+}
+
+fn login_probe_candidates(
+    ssid: &str,
+    transport: &str,
+    route_context: Option<&PortalRouteContext>,
+) -> Vec<LoginType> {
+    let lgn_wired_hint =
+        transport.eq_ignore_ascii_case("ethernet") && lgn_wired_route_hint(route_context);
     let mut candidates = if transport.eq_ignore_ascii_case("wifi") {
         vec![LoginType::Type1, LoginType::Type2]
+    } else if lgn_wired_hint {
+        vec![LoginType::Type3, LoginType::Type1]
     } else if transport.eq_ignore_ascii_case("ethernet") {
         vec![LoginType::Type1, LoginType::Type3]
+    } else if lgn_wired_route_hint(route_context) {
+        vec![LoginType::Type3, LoginType::Type1, LoginType::Type2]
     } else {
         vec![LoginType::Type1, LoginType::Type2, LoginType::Type3]
     };
@@ -130,9 +150,11 @@ fn login_probe_candidates(ssid: &str, transport: &str) -> Vec<LoginType> {
     // protocol-specific response probe, because SSIDs can be renamed or
     // spoofed. Ethernet deliberately excludes the Wi-Fi-only Type 2 protocol,
     // but can use both the dormitory Type 1 portal and wired-only Type 3.
-    if let Some(hint) = login_type_hint(ssid) {
-        if let Some(position) = candidates.iter().position(|candidate| *candidate == hint) {
-            candidates.swap(0, position);
+    if !lgn_wired_hint {
+        if let Some(hint) = login_type_hint(ssid) {
+            if let Some(position) = candidates.iter().position(|candidate| *candidate == hint) {
+                candidates.swap(0, position);
+            }
         }
     }
     candidates
@@ -405,8 +427,8 @@ impl Type3ProbeEvidence {
         }
         if url.contains("/drcom/getipv6") {
             // A syntactically valid getipv6 response proves that the Type 3
-            // portal is present. It is only safe to start the two-stack login
-            // flow when that response also contains a usable IPv6 address.
+            // portal is present. A usable address enables dual-stack login;
+            // otherwise the same verified portal can use the IPv4 fallback.
             self.portal_detected |=
                 jsonp_object(body).is_some_and(|value| value.get("result").is_some());
             self.ipv6_login_ready |= parse_observed_ip(body, true).is_ok();
@@ -414,10 +436,12 @@ impl Type3ProbeEvidence {
     }
 
     fn result(&self) -> PortalProbeResult {
-        if self.ipv6_login_ready {
+        // lgn supports a documented single-IPv4 fallback: when IPv6 discovery
+        // is unavailable, the encrypted login request leaves
+        // wlan_user_ipv6 empty. A structurally verified lgn portal is
+        // therefore login-ready even without an observed IPv6 address.
+        if self.ipv6_login_ready || self.portal_detected {
             PortalProbeResult::LoginReady
-        } else if self.portal_detected {
-            PortalProbeResult::PortalDetected
         } else {
             PortalProbeResult::NotDetected
         }
@@ -592,23 +616,36 @@ fn probe_body_matches(login_type: &LoginType, url: &str, body: &str) -> bool {
     }
 }
 
+fn select_login_type_detection(
+    candidates: Vec<LoginType>,
+    results: Vec<PortalProbeResult>,
+) -> LoginTypeDetection {
+    for (candidate, result) in candidates.into_iter().zip(results) {
+        // Physical-link priority wins even when the preferred gateway is only
+        // portal-detected while a secondary post-authentication gateway is
+        // fully reachable. This is the expected bjut-sushe + lgn combination.
+        if result != PortalProbeResult::NotDetected {
+            return LoginTypeDetection::from_probe(candidate, result);
+        }
+    }
+    LoginTypeDetection::not_detected()
+}
+
 pub(crate) async fn detect_login_type_details_rust(
     compatibility: VpnCompatibility,
     ssid: &str,
     transport: &str,
     route_context: Option<&PortalRouteContext>,
 ) -> LoginTypeDetection {
-    let mut portal_only = None;
-    for candidate in login_probe_candidates(ssid, transport) {
-        let result = probe_login_type(compatibility, candidate.clone(), route_context).await;
-        if result == PortalProbeResult::LoginReady {
-            return LoginTypeDetection::from_probe(candidate, result);
-        }
-        if result == PortalProbeResult::PortalDetected && portal_only.is_none() {
-            portal_only = Some(LoginTypeDetection::from_probe(candidate, result));
-        }
-    }
-    portal_only.unwrap_or_else(LoginTypeDetection::not_detected)
+    let candidates = login_probe_candidates(ssid, transport, route_context);
+    let probes = candidates.iter().cloned().map(|candidate| async move {
+        probe_login_type(compatibility, candidate, route_context).await
+    });
+    // More than one gateway can be reachable after authentication. Probe all
+    // candidates concurrently, then select in physical-link priority order;
+    // do not let the fastest response redefine the network type.
+    let results = futures_util::future::join_all(probes).await;
+    select_login_type_detection(candidates, results)
 }
 
 pub(crate) async fn diagnose_login_gateways(
@@ -618,7 +655,7 @@ pub(crate) async fn diagnose_login_gateways(
     route_context: Option<&PortalRouteContext>,
 ) -> Vec<LoginTypeDetection> {
     const DIAGNOSTIC_CANDIDATE_BUDGET: Duration = Duration::from_millis(2200);
-    let mut candidates = login_probe_candidates(ssid, transport);
+    let mut candidates = login_probe_candidates(ssid, transport, route_context);
     // Diagnostics are observational and never send credentials. Probe all
     // three documented gateways even when Windows reports an unknown or
     // Ethernet transport: wired adapters, USB docks and campus bridge devices
@@ -869,7 +906,9 @@ async fn login_lgn_once(
     route_context: Option<&PortalRouteContext>,
 ) -> Result<(bool, String), String> {
     let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn 有线")?;
-    let observed_ipv6 = fetch_lgn_observed_ipv6(client).await?;
+    // A missing/failed IPv6 discovery must not block IPv4-only wired clients.
+    // lgn's encrypted endpoint accepts an empty wlan_user_ipv6 field.
+    let observed_ipv6 = fetch_lgn_observed_ipv6(client).await.unwrap_or_default();
     let login_url = lgn_login_url(user, pass, &local_ipv4, &observed_ipv6)?;
     get_jsonp_login(client, login_url, LGN_REFERER, "lgn 有线登录", None, None).await
 }
@@ -1246,7 +1285,7 @@ pub(crate) async fn logout_from_campus_network_rust(
         }
         LoginType::Type3 => {
             let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn")?;
-            let observed_ipv6 = fetch_lgn_observed_ipv6(&client).await?;
+            let observed_ipv6 = fetch_lgn_observed_ipv6(&client).await.unwrap_or_default();
             get_jsonp_login(
                 &client,
                 lgn_logout_url(&local_ipv4, &observed_ipv6)?,
@@ -1483,6 +1522,15 @@ mod tests {
         assert!(!login.as_str().contains("25000000"));
         assert!(!login.as_str().contains("safe-fixture-password"));
         assert!(!login.as_str().contains("172.30.200.10"));
+
+        let ipv4_only =
+            lgn_login_url("25000000", "safe-fixture-password", "172.26.33.104", "").unwrap();
+        let ipv4_only_pairs: std::collections::HashMap<_, _> =
+            ipv4_only.query_pairs().into_owned().collect();
+        assert_eq!(
+            ipv4_only_pairs.get("wlan_user_ipv6").map(String::as_str),
+            Some("")
+        );
     }
 
     #[test]
@@ -1518,41 +1566,95 @@ mod tests {
     #[test]
     fn ssid_hints_only_reorder_protocol_probe_candidates() {
         assert_eq!(
-            login_probe_candidates("bjut_wifi", "wifi"),
+            login_probe_candidates("bjut_wifi", "wifi", None),
             vec![LoginType::Type2, LoginType::Type1]
         );
         assert_eq!(
-            login_probe_candidates("bjut-sushe--5G-bEY5", "wifi"),
+            login_probe_candidates("bjut-sushe--5G-bEY5", "wifi", None),
             vec![LoginType::Type1, LoginType::Type2]
         );
         assert_eq!(
-            login_probe_candidates("CU_bjut-sushe-28Au", "wifi"),
+            login_probe_candidates("CU_bjut-sushe-28Au", "wifi", None),
             vec![LoginType::Type1, LoginType::Type2]
         );
         assert_eq!(
-            login_probe_candidates("bjut_wifi", "ethernet"),
+            login_probe_candidates("bjut_wifi", "ethernet", None),
             vec![LoginType::Type1, LoginType::Type3]
         );
         assert_eq!(
-            login_probe_candidates("untrusted-lookalike", "unknown"),
+            login_probe_candidates("untrusted-lookalike", "unknown", None),
             vec![LoginType::Type1, LoginType::Type2, LoginType::Type3]
+        );
+        let lgn_route = PortalRouteContext::new("en5", "172.26.33.104").unwrap();
+        assert_eq!(
+            login_probe_candidates("", "ethernet", Some(&lgn_route)),
+            vec![LoginType::Type3, LoginType::Type1]
+        );
+        let dorm_wired = PortalRouteContext::new("en5", "10.126.80.236").unwrap();
+        assert_eq!(
+            login_probe_candidates("", "ethernet", Some(&dorm_wired)),
+            vec![LoginType::Type1, LoginType::Type3]
         );
     }
 
     #[test]
-    fn type3_portal_detection_is_distinct_from_ipv6_login_readiness() {
+    fn simultaneous_gateways_follow_physical_network_priority() {
+        let both_ready = vec![PortalProbeResult::LoginReady, PortalProbeResult::LoginReady];
+        assert_eq!(
+            select_login_type_detection(
+                vec![LoginType::Type2, LoginType::Type1],
+                both_ready.clone(),
+            )
+            .login_type,
+            LoginType::Type2
+        );
+        assert_eq!(
+            select_login_type_detection(
+                vec![LoginType::Type1, LoginType::Type2],
+                both_ready.clone(),
+            )
+            .login_type,
+            LoginType::Type1
+        );
+        assert_eq!(
+            select_login_type_detection(
+                vec![LoginType::Type3, LoginType::Type1],
+                both_ready.clone(),
+            )
+            .login_type,
+            LoginType::Type3
+        );
+        assert_eq!(
+            select_login_type_detection(vec![LoginType::Type1, LoginType::Type3], both_ready,)
+                .login_type,
+            LoginType::Type1
+        );
+        let preferred_portal_only = select_login_type_detection(
+            vec![LoginType::Type1, LoginType::Type3],
+            vec![
+                PortalProbeResult::PortalDetected,
+                PortalProbeResult::LoginReady,
+            ],
+        );
+        assert_eq!(preferred_portal_only.login_type, LoginType::Type1);
+        assert!(preferred_portal_only.portal_detected);
+        assert!(!preferred_portal_only.login_ready);
+    }
+
+    #[test]
+    fn type3_verified_portal_allows_ipv4_fallback_without_ipv6() {
         let mut evidence = Type3ProbeEvidence::default();
         evidence.record(
             "https://lgn.bjut.edu.cn:802/eportal/portal/page/loadUserInfo",
             r#"dr1002({"code":1,"user_info":{"account":"25000000"}});"#,
         );
-        assert_eq!(evidence.result(), PortalProbeResult::PortalDetected);
+        assert_eq!(evidence.result(), PortalProbeResult::LoginReady);
 
         evidence.record(
             "https://lgn6.bjut.edu.cn/drcom/getipv6",
             r#"dr1004({"result":0,"ip":""});"#,
         );
-        assert_eq!(evidence.result(), PortalProbeResult::PortalDetected);
+        assert_eq!(evidence.result(), PortalProbeResult::LoginReady);
 
         evidence.record(
             "https://lgn6.bjut.edu.cn/drcom/getipv6",

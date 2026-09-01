@@ -673,6 +673,18 @@
             </div>
             <button id="btn-show-add" class="btn btn-primary"><i data-lucide="plus"></i> 添加账号</button>
           </header>
+
+          <section id="discovered-account-card" class="account-discovery-card glass-card hidden" aria-live="polite">
+            <div class="account-discovery-icon"><i data-lucide="user-search"></i></div>
+            <div class="account-discovery-copy">
+              <h3 id="discovered-account-title">发现当前校园网账号</h3>
+              <p id="discovered-account-description"></p>
+            </div>
+            <div class="account-discovery-actions">
+              <button id="btn-discovered-account-dismiss" class="btn btn-secondary" type="button">本次忽略</button>
+              <button id="btn-discovered-account-accept" class="btn btn-primary" type="button">保存到账号列表</button>
+            </div>
+          </section>
           
           <div class="accounts-container">
             <div id="accounts-list" class="accounts-list">

@@ -3,9 +3,12 @@ mod billing_runtime;
 mod campus_services;
 mod config_model;
 mod cookie_jar;
+mod network_platform;
 mod network_trust;
 mod portal_auth;
 mod recharge_state;
+
+use network_platform::*;
 
 pub(crate) fn route_source_ipv4(destination: &str) -> String {
     std::net::UdpSocket::bind("0.0.0.0:0")
@@ -37,166 +40,6 @@ pub(crate) fn usable_physical_ipv4(value: &str) -> Option<std::net::Ipv4Addr> {
 
 fn network_ip_observation_changed(previous: Option<&str>, current: &str) -> bool {
     previous.is_some_and(|previous| previous != current)
-}
-
-/// Type 3 gateways live on 172.30/16, but wired clients use BJUT's regular
-/// campus address ranges. A captured wired login, for example, used
-/// 172.26.33.104 while talking to 172.30.201.2. Callers additionally require
-/// a physical Ethernet interface before accepting one of these addresses.
-#[cfg(not(target_os = "android"))]
-fn is_campus_wired_ipv4(value: &str) -> bool {
-    usable_physical_ipv4(value).is_some() && is_campus_local_ip(value)
-}
-
-#[cfg(target_os = "linux")]
-fn split_nmcli_fields(line: &str) -> Vec<String> {
-    let mut fields = vec![String::new()];
-    let mut escaped = false;
-    for character in line.chars() {
-        if escaped {
-            fields.last_mut().unwrap().push(character);
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
-        } else if character == ':' {
-            fields.push(String::new());
-        } else {
-            fields.last_mut().unwrap().push(character);
-        }
-    }
-    if escaped {
-        fields.last_mut().unwrap().push('\\');
-    }
-    fields
-}
-
-#[cfg(target_os = "macos")]
-fn macos_route_interface(destination: &str) -> String {
-    std::process::Command::new("route")
-        .args(["-n", "get", destination])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .find_map(|line| line.trim().strip_prefix("interface:").map(str::trim))
-                .map(str::to_string)
-        })
-        .unwrap_or_default()
-}
-
-#[cfg(target_os = "macos")]
-fn macos_ipv4_for_interface(interface: &str) -> String {
-    if interface.is_empty() {
-        return String::new();
-    }
-    std::process::Command::new("ipconfig")
-        .args(["getifaddr", interface])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|candidate| usable_physical_ipv4(candidate).is_some())
-        .unwrap_or_default()
-}
-
-#[cfg(target_os = "macos")]
-fn macos_is_physical_ethernet_interface(interface: &str) -> bool {
-    interface.starts_with("en")
-        && corewlan::WiFiClient::shared()
-            .map(|client| {
-                !client
-                    .interface_names()
-                    .iter()
-                    .any(|name| name == interface)
-            })
-            .unwrap_or(false)
-}
-
-#[cfg(target_os = "macos")]
-fn macos_campus_wired_identity(excluded_interface: &str) -> Option<(String, String)> {
-    let output = std::process::Command::new("ifconfig")
-        .arg("-l")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .filter(|interface| {
-            macos_is_physical_ethernet_interface(interface) && *interface != excluded_interface
-        })
-        .find_map(|interface| {
-            let address = macos_ipv4_for_interface(interface);
-            is_campus_wired_ipv4(&address).then(|| (interface.to_string(), address))
-        })
-}
-
-#[cfg(target_os = "linux")]
-fn linux_is_physical_interface(interface: &str) -> bool {
-    let sysfs = std::path::Path::new("/sys/class/net").join(interface);
-    sysfs.join("device").exists()
-}
-
-#[cfg(target_os = "linux")]
-fn linux_is_physical_ethernet_interface(interface: &str) -> bool {
-    linux_is_physical_interface(interface)
-        && !std::path::Path::new("/sys/class/net")
-            .join(interface)
-            .join("wireless")
-            .exists()
-}
-
-#[cfg(target_os = "linux")]
-fn linux_route_identity(destination: &str) -> Option<(String, String)> {
-    let output = std::process::Command::new("ip")
-        .args(["-4", "route", "get", destination])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let output = String::from_utf8_lossy(&output.stdout);
-    let fields = output.split_whitespace().collect::<Vec<_>>();
-    let interface = fields
-        .windows(2)
-        .find(|pair| pair[0] == "dev")
-        .map(|pair| pair[1])?;
-    let address = fields
-        .windows(2)
-        .find(|pair| pair[0] == "src")
-        .map(|pair| pair[1])?;
-    (linux_is_physical_interface(interface) && usable_physical_ipv4(address).is_some())
-        .then(|| (interface.to_string(), address.to_string()))
-}
-
-#[cfg(target_os = "linux")]
-fn linux_campus_wired_identity(excluded_interface: &str) -> Option<(String, String)> {
-    let output = std::process::Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "scope", "global"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            let interface = fields.get(1)?.trim_end_matches(':');
-            if !linux_is_physical_ethernet_interface(interface) || interface == excluded_interface {
-                return None;
-            }
-            let address = fields
-                .windows(2)
-                .find(|pair| pair[0] == "inet")?
-                .get(1)?
-                .split('/')
-                .next()?;
-            is_campus_wired_ipv4(address).then(|| (interface.to_string(), address.to_string()))
-        })
 }
 
 #[cfg(target_os = "windows")]
@@ -730,6 +573,10 @@ fn get_network_info(
         #[cfg(not(target_os = "windows"))]
         let wifi_identity_error = String::new();
         let route_ip = route_source_ipv4("10.21.251.3:80");
+        #[cfg(target_os = "macos")]
+        let mut lgn_wired_features = Vec::new();
+        #[cfg(not(target_os = "macos"))]
+        let lgn_wired_features: Vec<String> = Vec::new();
 
         #[cfg(target_os = "macos")]
         {
@@ -786,6 +633,9 @@ fn get_network_info(
                 ip = wifi_ip;
                 transport = "wifi".to_string();
                 identity_source = "sameInterface".to_string();
+            }
+            if transport.eq_ignore_ascii_case("ethernet") {
+                lgn_wired_features = macos_lgn_wired_features(&interface_name, &ip);
             }
         }
 
@@ -883,6 +733,8 @@ fn get_network_info(
             "identitySource": identity_source,
             "transport": transport,
             "routeIp": route_ip,
+            "lgnWiredHint": transport.eq_ignore_ascii_case("ethernet") && is_lgn_wired_client_ipv4(&ip),
+            "lgnWiredFeatures": lgn_wired_features,
             "wifiIdentityError": wifi_identity_error
         })
     }
@@ -5812,6 +5664,21 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     emit_network_diagnostic_progress(&app, 34, "正在检查校园网环境特征…");
     let campus_ip = is_campus_local_ip(&ip);
     let campus_ssid = is_known_campus_ssid(&ssid);
+    let lgn_wired_hint = network
+        .get("lgnWiredHint")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let lgn_wired_features = network
+        .get("lgnWiredFeatures")
+        .and_then(serde_json::Value::as_array)
+        .map(|features| {
+            features
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join("、")
+        })
+        .unwrap_or_default();
     let campus_status = if mobile_data {
         "skipped"
     } else if campus_ip && (campus_ssid || ssid.is_empty() || ssid.contains("unknown")) {
@@ -5822,9 +5689,18 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         "error"
     };
     let campus_message = format!(
-        "传输类型：{}\n本地网段：{}\nSSID 特征：{}\nWi-Fi BSSID：{}\n身份同接口且新鲜：{}\n校园目标路由绑定：{}",
+        "传输类型：{}\n本地网段：{}\nlgn 有线特征：{}\nSSID 特征：{}\nWi-Fi BSSID：{}\n身份同接口且新鲜：{}\n校园目标路由绑定：{}",
         if transport.is_empty() { "未知" } else { &transport },
         if campus_ip { "符合" } else { "不符合" },
+        if lgn_wired_hint {
+            if lgn_wired_features.is_empty() {
+                "符合（物理以太网 + 172.26/16；仍需 lgn 响应确认）".to_string()
+            } else {
+                format!("符合（{lgn_wired_features}；仍需 lgn 响应确认）")
+            }
+        } else {
+            "不符合".to_string()
+        },
         if campus_ssid { "符合" } else { "不符合" },
         if transport.eq_ignore_ascii_case("wifi") {
             if bssid.is_empty() { "缺失" } else { "已取得" }
@@ -5913,17 +5789,14 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         )
         .await
     };
-    let detection = gateway_results
-        .iter()
-        .find(|result| result.login_ready)
-        .or_else(|| gateway_results.iter().find(|result| result.portal_detected));
+    // diagnose_login_gateways preserves the same physical-link priority used
+    // by automatic login. Prefer the first verified portal even if a lower
+    // priority gateway becomes reachable only after authentication.
+    let detection = gateway_results.iter().find(|result| result.portal_detected);
     let login_type = detection
         .filter(|result| result.login_ready)
         .map(|result| result.login_type.clone())
         .unwrap_or(LoginType::Unknown);
-    let portal_waiting_for_ipv6 = detection.is_some_and(|result| {
-        result.login_type == LoginType::Type3 && result.portal_detected && !result.login_ready
-    });
     let type1_requires_maximum =
         detection.is_some_and(|result| type1_portal_requires_maximum(result, compatibility));
     let gateway_details = gateway_results
@@ -5969,11 +5842,6 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
             "warning",
             format!("已发现 bjut-sushe 认证网关，但当前 HTTPS 兼容模式不能向其发送账号密码。\n确认网络可信后可临时启用最高兼容（HTTP + IP）。\n{gateway_details}"),
         )
-    } else if portal_waiting_for_ipv6 {
-        (
-            "warning",
-            format!("已发现 lgn 有线认证门户，但尚未取得可用于双栈登录的 IPv6 地址。\n本轮不会发送账号密码。\n{gateway_details}"),
-        )
     } else if online {
         (
             "success",
@@ -6004,11 +5872,6 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         (
             "auth_required",
             "已连接宿舍校园网；认证网关仅支持 HTTP，等待用户确认最高兼容模式",
-        )
-    } else if portal_waiting_for_ipv6 {
-        (
-            "auth_required",
-            "已发现有线校园网门户，但 IPv6 登录条件尚未就绪",
         )
     } else if ip.is_empty() || transport == "none" {
         (
@@ -9884,6 +9747,9 @@ mod tests {
         ] {
             assert!(!is_campus_wired_ipv4(rejected), "{rejected}");
         }
+        assert!(is_lgn_wired_client_ipv4("172.26.33.104"));
+        assert!(!is_lgn_wired_client_ipv4("10.126.80.236"));
+        assert!(!is_lgn_wired_client_ipv4("172.30.201.2"));
     }
 
     #[cfg(not(target_os = "android"))]

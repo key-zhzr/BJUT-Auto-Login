@@ -394,12 +394,57 @@ main {
 .status-icon {
   width: 56px;
   height: 56px;
+  min-width: 56px;
+  min-height: 56px;
+  flex: 0 0 56px;
+  aspect-ratio: 1 / 1;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(255, 255, 255, 0.05);
   font-size: 1.5rem;
+}
+
+.account-discovery-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  border-color: color-mix(in srgb, var(--primary-color) 42%, var(--card-border));
+}
+
+.account-discovery-icon {
+  width: 46px;
+  height: 46px;
+  min-width: 46px;
+  flex: 0 0 46px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--primary-color);
+  background: rgba(var(--primary-rgb), 0.12);
+}
+
+.account-discovery-copy {
+  min-width: 0;
+}
+
+.account-discovery-copy h3 {
+  margin-bottom: 0.3rem;
+}
+
+.account-discovery-copy p {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.account-discovery-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
 }
 
 .status-icon.success { color: var(--success); background: rgba(16, 185, 129, 0.1); }
@@ -3042,6 +3087,17 @@ input:checked + .slider:before { transform: translateX(24px); }
   .settings-about-logo { width: 3.25rem; height: 3.25rem; border-radius: 0.85rem; }
   .settings-about-actions { display: grid; grid-template-columns: 1fr; }
   .settings-about-actions .btn { width: 100%; }
+  .account-discovery-card {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+  .account-discovery-actions {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+  .account-discovery-actions .btn { width: 100%; min-width: 0; }
 }
 
 @media (max-width: 350px) {
@@ -3054,6 +3110,8 @@ input:checked + .slider:before { transform: translateX(24px); }
   .status-icon {
     width: 44px;
     height: 44px;
+    min-width: 44px;
+    min-height: 44px;
     flex: 0 0 44px;
   }
   .status-info {

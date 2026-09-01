@@ -22,7 +22,8 @@ import {
   observeSystemColorScheme,
 } from './appearance';
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
-import { requestNetworkTrustApproval } from './network-trust';
+import { requestNetworkTrustApproval, showNetworkTrustListModal } from './network-trust';
+import { UI_TEXT } from './ui-text';
 import { formatBytes, isVersionNewer, renderReleaseNotes, selectUpdateAsset } from './update-utils';
 import { loadGitHubReleases, releaseFromOfficialManifest } from './update-source';
 import {
@@ -288,83 +289,112 @@ function scheduleCurrentCampusAccountDiscovery() {
     .finally(() => { campusAccountDiscoveryPromise = null; });
 }
 
-async function discoverAndOfferCurrentCampusAccount() {
-  const candidate = await invoke<DiscoveredCampusAccount | null>('discover_current_campus_account');
-  if (!candidate) return;
-  if (!candidate.user) return;
-  const existingIndex = accountsCache.findIndex(account => account.user === candidate.user);
-  const firstLaunch = localStorage.getItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY) === 'true';
+let discoveredCampusAccount: DiscoveredCampusAccount | null = null;
 
-  if (candidate.passwordRequired) {
-    localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
-    if (existingIndex >= 0 && accountsCache[existingIndex].hasPassword) return;
-    if (sessionStorage.getItem(DISMISSED_DISCOVERED_ACCOUNT_KEY) === candidate.user) return;
-
-    const confirmed = await customConfirm(
-      `${firstLaunch ? '首次联网时' : '本次联网时'}已从计费系统识别出账号 ${candidate.user}，但学校页面只返回了不可保存的临时密码字段。\n\n是否打开账号${existingIndex >= 0 ? '编辑' : '添加'}窗口，由你自行输入密码？`,
-      '需要补录账号密码',
-    );
-    if (!confirmed) {
-      sessionStorage.setItem(DISMISSED_DISCOVERED_ACCOUNT_KEY, candidate.user);
-      return;
-    }
-
-    sessionStorage.removeItem(DISMISSED_DISCOVERED_ACCOUNT_KEY);
-    if (existingIndex >= 0) {
-      accountsCache[existingIndex].hasPassword = false;
-      editAccIndex.value = existingIndex.toString();
-      editAccUsername.value = candidate.user;
-      resetSensitivePasswordInput(editAccPassword);
-      editAccPassword.placeholder = '请输入该账号的密码';
-      renderAccounts();
-      editModal.classList.remove('hidden');
-    } else {
-      addAccountForm.reset();
-      (document.getElementById('acc-username') as HTMLInputElement).value = candidate.user;
-      resetSensitivePasswordInput(addAccPassword);
-      addAccPassword.placeholder = '请输入该账号的密码';
-      addModal.classList.remove('hidden');
-    }
-    log('账号管理', `已识别账号 ${candidate.user}，等待用户自行补录密码`, 'info');
+function syncDiscoveredAccountCard() {
+  const card = document.getElementById('discovered-account-card')!;
+  const description = document.getElementById('discovered-account-description')!;
+  const acceptButton = document.getElementById('btn-discovered-account-accept') as HTMLButtonElement;
+  const candidate = discoveredCampusAccount;
+  const alreadyKnown = candidate
+    ? accountsCache.some(account => account.user === candidate.user)
+    : true;
+  if (!candidate?.user || alreadyKnown) {
+    card.classList.add('hidden');
+    if (alreadyKnown) discoveredCampusAccount = null;
     return;
   }
+  document.getElementById('discovered-account-title')!.textContent = UI_TEXT.accountDiscovery.title;
+  description.textContent = candidate.passwordRequired
+    ? UI_TEXT.accountDiscovery.passwordDescription(candidate.user)
+    : UI_TEXT.accountDiscovery.importDescription(candidate.user);
+  acceptButton.textContent = candidate.passwordRequired
+    ? UI_TEXT.accountDiscovery.passwordAction
+    : UI_TEXT.accountDiscovery.importAction;
+  document.getElementById('btn-discovered-account-dismiss')!.textContent =
+    UI_TEXT.accountDiscovery.dismissAction;
+  card.classList.remove('hidden');
+  renderIcons(card);
+}
 
-  if (!candidate.token) return;
+async function discoverAndOfferCurrentCampusAccount() {
+  const candidate = await invoke<DiscoveredCampusAccount | null>('discover_current_campus_account');
+  if (!candidate?.user) {
+    discoveredCampusAccount = null;
+    syncDiscoveredAccountCard();
+    return;
+  }
+  const existingIndex = accountsCache.findIndex(account => account.user === candidate.user);
+  localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
   if (existingIndex >= 0) {
-    await invoke('reject_discovered_campus_account', { token: candidate.token }).catch(() => undefined);
-    localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
+    if (candidate.token) {
+      await invoke('reject_discovered_campus_account', { token: candidate.token })
+        .catch(() => undefined);
+    }
+    discoveredCampusAccount = null;
+    syncDiscoveredAccountCard();
     return;
   }
   if (sessionStorage.getItem(DISMISSED_DISCOVERED_ACCOUNT_KEY) === candidate.user) {
-    await invoke('reject_discovered_campus_account', { token: candidate.token }).catch(() => undefined);
+    if (candidate.token) {
+      await invoke('reject_discovered_campus_account', { token: candidate.token })
+        .catch(() => undefined);
+    }
+    discoveredCampusAccount = null;
+    syncDiscoveredAccountCard();
     return;
   }
+  discoveredCampusAccount = candidate;
+  syncDiscoveredAccountCard();
+}
 
-  const confirmed = await customConfirm(
-    `${firstLaunch ? '首次联网时' : '本次联网时'}检测到当前已登录的校园网账号 ${candidate.user}，但它不在账号列表中。\n\n是否从当前计费系统会话读取凭据，并保存到 App 的安全凭据存储？`,
-    '添加当前校园网账号',
-  );
-  localStorage.removeItem(FIRST_LAUNCH_ACCOUNT_DISCOVERY_KEY);
-  if (!confirmed) {
-    sessionStorage.setItem(DISMISSED_DISCOVERED_ACCOUNT_KEY, candidate.user);
-    await invoke('reject_discovered_campus_account', { token: candidate.token }).catch(() => undefined);
+async function acceptDiscoveredCampusAccount() {
+  const candidate = discoveredCampusAccount;
+  if (!candidate) return;
+  const acceptButton = document.getElementById('btn-discovered-account-accept') as HTMLButtonElement;
+  const description = document.getElementById('discovered-account-description')!;
+  if (candidate.passwordRequired) {
+    addAccountForm.reset();
+    (document.getElementById('acc-username') as HTMLInputElement).value = candidate.user;
+    resetSensitivePasswordInput(addAccPassword);
+    addAccPassword.placeholder = '请输入该账号的密码';
+    addModal.classList.remove('hidden');
+    log('账号管理', `已识别账号 ${candidate.user}，等待用户自行补录密码`, 'info');
     return;
   }
-
+  if (!candidate.token) {
+    description.textContent = '账号发现凭据已经失效，请等待下次联网后重新识别。';
+    acceptButton.disabled = true;
+    return;
+  }
+  acceptButton.disabled = true;
+  description.textContent = '正在写入安全凭据存储…';
   try {
     await invoke<void>('accept_discovered_campus_account', {
       user: candidate.user,
       token: candidate.token,
     });
-    await loadConfigFromRust();
+    discoveredCampusAccount = null;
     sessionStorage.removeItem(DISMISSED_DISCOVERED_ACCOUNT_KEY);
-    renderAccounts();
-    await customAlert(`账号 ${candidate.user} 已保存到安全凭据存储。`, '账号已添加');
-  } catch (error) {
     await loadConfigFromRust();
     renderAccounts();
-    await customAlert(`当前账号保存失败，账号列表未更改：${String(error)}`, '添加账号失败');
+    log('账号管理', `账号 ${candidate.user} 已保存到安全凭据存储`, 'success');
+  } catch (error) {
+    description.textContent = `账号保存失败：${String(error)}`;
+    acceptButton.disabled = false;
   }
+}
+
+async function dismissDiscoveredCampusAccount() {
+  const candidate = discoveredCampusAccount;
+  if (!candidate) return;
+  sessionStorage.setItem(DISMISSED_DISCOVERED_ACCOUNT_KEY, candidate.user);
+  if (candidate.token) {
+    await invoke('reject_discovered_campus_account', { token: candidate.token })
+      .catch(() => undefined);
+  }
+  discoveredCampusAccount = null;
+  syncDiscoveredAccountCard();
 }
 
 interface PermissionHealthItem {
@@ -1383,138 +1413,6 @@ function chooseSwitchAccount(currentUser: string | null): Promise<number | null>
     cancel.addEventListener('click', onCancel);
     modal.classList.remove('hidden');
   });
-}
-
-function applyNetworkTrustLists(lists: { whitelist: string[]; blacklist: string[] }) {
-  whitelistCache = [...lists.whitelist];
-  blacklistCache = [...lists.blacklist];
-}
-
-function showNetworkTrustListModal(trusted: boolean) {
-  const modal = document.getElementById('list-manage-modal');
-  if (!modal) return;
-  const title = trusted ? '信任的 Wi-Fi（白名单）' : '拒绝的 Wi-Fi（黑名单）';
-  document.getElementById('list-manage-title')!.textContent = title;
-  document.getElementById('list-manage-description')!.textContent = trusted
-    ? '白名单 Wi-Fi 可用于明确授权自动登录。每条记录同时匹配 SSID 与 BSSID，避免同名热点冒充。'
-    : '黑名单优先于白名单；匹配后不会向该 Wi-Fi 发送校园网账号密码。';
-  const content = document.getElementById('list-manage-content')!;
-  const status = document.getElementById('list-manage-status')!;
-  const currentButton = document.getElementById('btn-list-add-current') as HTMLButtonElement;
-  const form = document.getElementById('list-manage-add-form') as HTMLFormElement;
-  const ssidInput = document.getElementById('list-manage-ssid') as HTMLInputElement;
-  const bssidInput = document.getElementById('list-manage-bssid') as HTMLInputElement;
-  const closeBtn = document.getElementById('btn-list-manage-close')!;
-  const activeList = () => trusted ? whitelistCache : blacklistCache;
-  const setBusy = (busy: boolean) => {
-    currentButton.disabled = busy;
-    form.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')
-      .forEach(element => { element.disabled = busy; });
-  };
-  const renderList = () => {
-    const list = activeList();
-    content.replaceChildren();
-    if (list.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'diagnostic-empty';
-      empty.textContent = '暂无记录';
-      content.appendChild(empty);
-      return;
-    }
-    list.forEach(item => {
-      const div = document.createElement('div');
-      div.className = 'network-trust-list-item';
-      const label = document.createElement('span');
-      label.textContent = item;
-      const removeButton = document.createElement('button');
-      removeButton.className = 'btn-icon danger';
-      removeButton.dataset.networkKey = item;
-      removeButton.setAttribute('aria-label', '删除');
-      removeButton.innerHTML = '<i data-lucide="trash-2"></i>';
-      div.append(label, removeButton);
-      content.appendChild(div);
-    });
-    renderIcons(content);
-  };
-  renderList();
-  status.textContent = '';
-  form.reset();
-
-  const cleanup = () => {
-    modal.classList.add('hidden');
-    content.removeEventListener('click', onClickList);
-    currentButton.removeEventListener('click', onAddCurrent);
-    form.removeEventListener('submit', onAddOther);
-    closeBtn.removeEventListener('click', onClose);
-  };
-  const onClickList = async (event: Event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-network-key]');
-    if (!button?.dataset.networkKey) return;
-    setBusy(true);
-    status.textContent = '正在删除…';
-    try {
-      const lists = await invoke<{ whitelist: string[]; blacklist: string[] }>(
-        'remove_saved_network_trust',
-        { networkKey: button.dataset.networkKey },
-      );
-      applyNetworkTrustLists(lists);
-      status.textContent = '已删除该 Wi-Fi 记录。';
-      renderList();
-    } catch (error) {
-      status.textContent = `删除失败：${String(error)}`;
-    } finally {
-      setBusy(false);
-    }
-  };
-  const onAddCurrent = async () => {
-    setBusy(true);
-    status.textContent = '正在读取当前 Wi-Fi…';
-    try {
-      const lists = await invoke<{ whitelist: string[]; blacklist: string[] }>(
-        'set_current_network_trust',
-        { trusted, expectedNetworkKey: null },
-      );
-      applyNetworkTrustLists(lists);
-      status.textContent = `已将当前 Wi-Fi 加入${trusted ? '白名单' : '黑名单'}。`;
-      renderList();
-    } catch (error) {
-      status.textContent = `无法添加当前 Wi-Fi：${String(error)}`;
-    } finally {
-      setBusy(false);
-    }
-  };
-  const onAddOther = async (event: SubmitEvent) => {
-    event.preventDefault();
-    const ssid = ssidInput.value.trim();
-    const bssid = bssidInput.value.trim();
-    if (!ssid || !bssid) {
-      status.textContent = '添加其他 Wi-Fi 时需要同时填写 SSID 与 BSSID。';
-      return;
-    }
-    setBusy(true);
-    status.textContent = '正在保存…';
-    try {
-      const lists = await invoke<{ whitelist: string[]; blacklist: string[] }>(
-        'set_named_network_trust',
-        { trusted, ssid, bssid },
-      );
-      applyNetworkTrustLists(lists);
-      form.reset();
-      status.textContent = `已将 ${ssid} 加入${trusted ? '白名单' : '黑名单'}。`;
-      renderList();
-    } catch (error) {
-      status.textContent = `保存失败：${String(error)}`;
-    } finally {
-      setBusy(false);
-    }
-  };
-  const onClose = () => { cleanup(); };
-  content.addEventListener('click', onClickList);
-  currentButton.addEventListener('click', onAddCurrent);
-  form.addEventListener('submit', onAddOther);
-  closeBtn.addEventListener('click', onClose);
-  modal.classList.remove('hidden');
-  renderIcons(modal);
 }
 
 enum NetworkState {
@@ -2712,6 +2610,10 @@ function setupNavigation() {
 
 // Event Listeners
 function setupEventListeners() {
+  document.getElementById('btn-discovered-account-accept')!
+    .addEventListener('click', () => void acceptDiscoveredCampusAccount());
+  document.getElementById('btn-discovered-account-dismiss')!
+    .addEventListener('click', () => void dismissDiscoveredCampusAccount());
   btnLogin.addEventListener('click', () => void manualLogin(false));
   btnSwitchAccount.addEventListener('click', () => void manualLogin(true));
   btnLogoutCurrent.addEventListener('click', () => void logoutCurrentCampusSession());
@@ -3733,14 +3635,32 @@ function setupEventListeners() {
   const btnManageWhitelist = document.getElementById('btn-manage-whitelist');
   if (btnManageWhitelist) {
     btnManageWhitelist.addEventListener('click', () => {
-      showNetworkTrustListModal(true);
+      showNetworkTrustListModal({
+        trusted: true,
+        whitelist: whitelistCache,
+        blacklist: blacklistCache,
+        onListsChanged: lists => {
+          whitelistCache = lists.whitelist;
+          blacklistCache = lists.blacklist;
+        },
+        renderIcons,
+      });
     });
   }
 
   const btnManageBlacklist = document.getElementById('btn-manage-blacklist');
   if (btnManageBlacklist) {
     btnManageBlacklist.addEventListener('click', () => {
-      showNetworkTrustListModal(false);
+      showNetworkTrustListModal({
+        trusted: false,
+        whitelist: whitelistCache,
+        blacklist: blacklistCache,
+        onListsChanged: lists => {
+          whitelistCache = lists.whitelist;
+          blacklistCache = lists.blacklist;
+        },
+        renderIcons,
+      });
     });
   }
 
@@ -4381,6 +4301,7 @@ function log(module: string, message: string, type: 'info' | 'error' | 'success'
 // Accounts
 function renderAccounts() {
   const accounts = getAccounts();
+  syncDiscoveredAccountCard();
   accountsList.innerHTML = '';
   if (accounts.length === 0) {
     accountsList.innerHTML = '<div style="color: var(--text-muted); padding: 1rem;">暂无账号，请添加。</div>';
@@ -4714,27 +4635,29 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType, loginMessage
   syncDashboardAccountActions();
   
   if (state === NetworkState.Checking) {
-    networkStatus.textContent = '正在检测网络…';
-    networkDetail.textContent = '正在检查互联网连通性与校园认证网关';
+    networkStatus.textContent = UI_TEXT.networkStatus.checkingTitle;
+    networkDetail.textContent = UI_TEXT.networkStatus.checkingDetail;
     networkIcon.classList.add('warning', 'checking');
     networkIcon.innerHTML = '<i data-lucide="loader"></i>';
     btnLogin.disabled = true;
   } else if (state === NetworkState.Online) {
-    networkStatus.textContent = '互联网已连接';
-    networkDetail.textContent = '网络畅通无阻';
+    networkStatus.textContent = UI_TEXT.networkStatus.onlineTitle;
+    networkDetail.textContent = UI_TEXT.networkStatus.onlineDetail;
     networkIcon.classList.add('success');
     networkIcon.innerHTML = '<i data-lucide="check-circle"></i>';
     btnLogin.disabled = true;
   } else if (state === NetworkState.BjutCampus) {
-    networkStatus.textContent = loginMessage ? '校园网登录未完成' : '检测到校园网';
+    networkStatus.textContent = loginMessage
+      ? UI_TEXT.networkStatus.campusIncompleteTitle
+      : UI_TEXT.networkStatus.campusTitle;
     networkDetail.textContent = loginMessage || `需要认证 (登录类型: ${type})`;
     networkDetail.classList.toggle('login-error', Boolean(loginMessage));
     networkIcon.classList.add('warning');
     networkIcon.innerHTML = '<i data-lucide="alert-circle"></i>';
     btnLogin.disabled = false;
   } else {
-    networkStatus.textContent = '网络断开或非校园网';
-    networkDetail.textContent = '无法访问互联网和校园网登录页';
+    networkStatus.textContent = UI_TEXT.networkStatus.offlineTitle;
+    networkDetail.textContent = UI_TEXT.networkStatus.offlineDetail;
     networkIcon.classList.add('error');
     networkIcon.innerHTML = '<i data-lucide="wifi-off"></i>';
     btnLogin.disabled = true;
