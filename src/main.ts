@@ -2185,13 +2185,15 @@ function renderDiagnosticReport(report: DiagnosticReport) {
 
 let diagnosticRunActive = false;
 let diagnosticProgressHideTimer: number | null = null;
+let diagnosticProgressValue = 0;
 
 function updateDiagnosticProgress(percent: number, label: string, visible: boolean) {
   if (diagnosticProgressHideTimer !== null) {
     window.clearTimeout(diagnosticProgressHideTimer);
     diagnosticProgressHideTimer = null;
   }
-  const normalized = Math.max(0, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
+  const normalized = Math.max(diagnosticProgressValue, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
+  diagnosticProgressValue = normalized;
   diagnosticProgress.hidden = !visible;
   diagnosticProgress.style.setProperty('--diagnostic-progress', `${normalized}%`);
   diagnosticProgressBar.style.width = `${normalized}%`;
@@ -2241,7 +2243,8 @@ async function runDiagnostics() {
   btnCopyDiagnostics.disabled = true;
   btnRunDiagnostics.textContent = '诊断中…';
   diagnosticRunActive = true;
-  updateDiagnosticProgress(0, '正在逐项检查网络链路…', true);
+  diagnosticProgressValue = 0;
+  updateDiagnosticProgress(0, '正在检查网络链路…', true);
   try {
     lastDiagnosticReport = await invoke<DiagnosticReport>('run_network_diagnostics');
     finishDiagnosticProgress();

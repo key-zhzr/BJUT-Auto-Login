@@ -2166,9 +2166,8 @@ async fn build_client(compatibility: VpnCompatibility) -> Result<Client, Billing
 
     if !matches!(compatibility, VpnCompatibility::Minimum) {
         let addresses = if compatibility == VpnCompatibility::Low {
-            tokio::task::spawn_blocking(|| query_campus_dns_ipv4(BILLING_HOST, None))
+            query_campus_dns_ipv4(BILLING_HOST, None)
                 .await
-                .map_err(|error| BillingError::Network(format!("校园网 DNS 任务失败：{error}")))?
                 .map_err(BillingError::Network)?
         } else {
             vec![BILLING_FIXED_ADDRESS]
@@ -2212,15 +2211,16 @@ async fn build_account_discovery_client(
 
     if !matches!(compatibility, VpnCompatibility::Minimum) {
         let (lgn_addresses, billing_addresses) = if compatibility == VpnCompatibility::Low {
-            let lgn = tokio::task::spawn_blocking(|| query_campus_dns_ipv4(LGN_HOST, None))
-                .await
-                .map_err(|error| BillingError::Network(format!("校园网 DNS 任务失败：{error}")))?
-                .map_err(BillingError::Network)?;
-            let billing = tokio::task::spawn_blocking(|| query_campus_dns_ipv4(BILLING_HOST, None))
-                .await
-                .map_err(|error| BillingError::Network(format!("校园网 DNS 任务失败：{error}")))?
-                .map_err(BillingError::Network)?;
-            (lgn, billing)
+            let source = route_context.map(PortalRouteContext::physical_ipv4);
+            let (lgn, billing) = futures_util::future::join(
+                query_campus_dns_ipv4(LGN_HOST, source),
+                query_campus_dns_ipv4(BILLING_HOST, source),
+            )
+            .await;
+            (
+                lgn.map_err(BillingError::Network)?,
+                billing.map_err(BillingError::Network)?,
+            )
         } else {
             (
                 vec![

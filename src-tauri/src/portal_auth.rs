@@ -2,8 +2,14 @@ use super::{
     query_campus_dns_ipv4, redact_request_error, usable_physical_ipv4, VpnCompatibility, LGN6_HOST,
     LGN_HOST, WLGN_HOST,
 };
+use crate::network_probe::NETWORK_PROBE_TIMEOUT;
 use crate::network_trust::{campus_wifi_kind, CampusWifiKind};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use futures_util::{
+    future::BoxFuture,
+    stream::{FuturesOrdered, FuturesUnordered},
+    FutureExt, StreamExt,
+};
 use reqwest::header::{ACCEPT, CACHE_CONTROL, HOST, REFERER};
 use reqwest::{Client, ClientBuilder, Url};
 use serde_json::Value;
@@ -243,10 +249,8 @@ pub(crate) async fn portal_client(
                 && *login_type != LoginType::Type1
                 && host != LGN6_HOST
             {
-                let host_owned = host.to_string();
-                tokio::task::spawn_blocking(move || query_campus_dns_ipv4(&host_owned, dns_source))
-                    .await
-                    .map_err(|error| format!("校园网 DNS 任务失败：{error}"))??
+                query_campus_dns_ipv4(host, dns_source)
+                    .await?
                     .into_iter()
                     .map(IpAddr::V4)
                     .collect()
@@ -469,15 +473,6 @@ impl LoginTypeDetection {
             timed_out: false,
         }
     }
-
-    fn timed_out(login_type: LoginType) -> Self {
-        Self {
-            login_type,
-            portal_detected: false,
-            login_ready: false,
-            timed_out: true,
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -520,101 +515,152 @@ impl Type3ProbeEvidence {
     }
 }
 
+async fn finish_portal_probes(
+    login_type: LoginType,
+    probes: Vec<BoxFuture<'_, PortalProbeResult>>,
+    budget: Duration,
+) -> LoginTypeDetection {
+    let mut pending: FuturesUnordered<_> = probes.into_iter().collect();
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut evidence = PortalProbeResult::NotDetected;
+    loop {
+        match tokio::time::timeout_at(deadline, pending.next()).await {
+            Ok(Some(PortalProbeResult::LoginReady)) => {
+                return LoginTypeDetection::from_probe(login_type, PortalProbeResult::LoginReady);
+            }
+            Ok(Some(PortalProbeResult::PortalDetected)) => {
+                evidence = PortalProbeResult::PortalDetected
+            }
+            Ok(Some(PortalProbeResult::NotDetected)) => {}
+            Ok(None) => return LoginTypeDetection::from_probe(login_type, evidence),
+            Err(_) => {
+                let mut result = LoginTypeDetection::from_probe(login_type, evidence);
+                result.timed_out = true;
+                return result;
+            }
+        }
+    }
+}
+
 async fn probe_login_type(
     compatibility: VpnCompatibility,
     login_type: LoginType,
     route_context: Option<&PortalRouteContext>,
+) -> LoginTypeDetection {
+    let mut probes = vec![probe_primary_portal(compatibility, &login_type, route_context).boxed()];
+    if login_type == LoginType::Type3 {
+        // IPv4 campus DNS failure must not prevent independent IPv6 evidence
+        // from being observed. Neither branch waits for the other's client.
+        probes.push(
+            async {
+                let Ok(client) =
+                    lgn_ipv6_client(compatibility, NETWORK_PROBE_TIMEOUT, route_context)
+                else {
+                    return PortalProbeResult::NotDetected;
+                };
+                let mut urls = vec![LGN6_ROOT.to_string()];
+                if let Ok(url) = lgn_observed_ipv6_url() {
+                    urls.insert(0, url.to_string());
+                }
+                probe_portal_urls(&client, &login_type, urls, LGN_REFERER, None).await
+            }
+            .boxed(),
+        );
+    } else if login_type == LoginType::Type1 && compatibility != VpnCompatibility::Maximum {
+        // Retain read-only HTTP evidence if TLS is unavailable. A fast HTTP
+        // response cannot outrank a verified TLS login endpoint.
+        probes
+            .push(probe_type1_http_portal_only(compatibility, &login_type, route_context).boxed());
+    }
+    finish_portal_probes(login_type.clone(), probes, NETWORK_PROBE_TIMEOUT).await
+}
+
+async fn probe_primary_portal(
+    compatibility: VpnCompatibility,
+    login_type: &LoginType,
+    route_context: Option<&PortalRouteContext>,
 ) -> PortalProbeResult {
-    // Type 3 maximum compatibility still needs the TLS/SNI-preserving lgn6
-    // endpoint to prove that IPv6 login is actually ready.
     let client_compatibility =
-        if login_type == LoginType::Type3 && compatibility == VpnCompatibility::Maximum {
+        if *login_type == LoginType::Type3 && compatibility == VpnCompatibility::Maximum {
             VpnCompatibility::High
         } else {
             compatibility
         };
-    let client = portal_client(
+    let Ok(client) = portal_client(
         client_compatibility,
-        &login_type,
-        Duration::from_millis(1800),
+        login_type,
+        NETWORK_PROBE_TIMEOUT,
         route_context,
     )
-    .await;
-    let Ok(client) = client else {
-        return probe_type1_http_portal_only(compatibility, &login_type, route_context).await;
+    .await
+    else {
+        return PortalProbeResult::NotDetected;
     };
-    let mut type3_evidence = Type3ProbeEvidence::default();
-    let mut ipv6_client = None;
-    for url in login_readiness_probe_urls(compatibility, &login_type, route_context) {
-        let referer = match login_type {
-            LoginType::Type1 if compatibility == VpnCompatibility::Maximum => {
-                DORM_HTTP_REFERER.to_string()
+    let referer = match login_type {
+        LoginType::Type1 if compatibility == VpnCompatibility::Maximum => DORM_HTTP_REFERER,
+        LoginType::Type1 => DORM_HTTPS_REFERER,
+        LoginType::Type2 if compatibility == VpnCompatibility::Maximum => WIFI_HTTP_REFERER,
+        LoginType::Type2 => WIFI_HTTPS_REFERER,
+        LoginType::Type3 => LGN_REFERER,
+        LoginType::Unknown => "",
+    };
+    let urls = login_readiness_probe_urls(compatibility, login_type, route_context)
+        .into_iter()
+        .filter(|url| !Url::parse(url).is_ok_and(|url| url.host_str() == Some(LGN6_HOST)))
+        .collect();
+    let host_override = (*login_type == LoginType::Type1
+        && compatibility != VpnCompatibility::Maximum)
+        .then_some(DORM_HTTPS_AUTHORITY);
+    probe_portal_urls(&client, login_type, urls, referer, host_override).await
+}
+
+async fn probe_portal_urls(
+    client: &Client,
+    login_type: &LoginType,
+    urls: Vec<String>,
+    referer: &str,
+    host_override: Option<&str>,
+) -> PortalProbeResult {
+    let mut probes: FuturesUnordered<_> = urls
+        .into_iter()
+        .map(|url| async move {
+            let mut request = client
+                .get(&url)
+                .header(ACCEPT, "*/*")
+                .header(REFERER, referer)
+                .header(CACHE_CONTROL, "no-cache, no-store");
+            if let Some(host) = host_override {
+                request = request.header(HOST, host);
             }
-            LoginType::Type1 => DORM_HTTPS_REFERER.to_string(),
-            LoginType::Type2 if compatibility == VpnCompatibility::Maximum => {
-                WIFI_HTTP_REFERER.to_string()
+            let Ok(response) = request.send().await else {
+                return PortalProbeResult::NotDetected;
+            };
+            if !response.status().is_success() {
+                return PortalProbeResult::NotDetected;
             }
-            LoginType::Type2 => WIFI_HTTPS_REFERER.to_string(),
-            LoginType::Type3 => LGN_REFERER.to_string(),
-            LoginType::Unknown => String::new(),
-        };
-        let probe_client: &Client = if login_type == LoginType::Type3
-            && Url::parse(&url).is_ok_and(|url| url.host_str() == Some(LGN6_HOST))
-        {
-            match ipv6_client.get_or_insert_with(|| {
-                lgn_ipv6_client(compatibility, Duration::from_millis(1800), route_context)
-            }) {
-                Ok(client) => client,
-                Err(_) => continue,
+            let body = response.text().await.unwrap_or_default();
+            if *login_type == LoginType::Type3 {
+                let mut evidence = Type3ProbeEvidence::default();
+                evidence.record(&url, &body);
+                evidence.result()
+            } else if probe_body_matches(login_type, &url, &body) {
+                PortalProbeResult::LoginReady
+            } else {
+                PortalProbeResult::NotDetected
             }
-        } else {
-            &client
-        };
-        let mut request = probe_client
-            .get(&url)
-            .header(ACCEPT, "*/*")
-            .header(REFERER, &referer)
-            .header(CACHE_CONTROL, "no-cache, no-store");
-        if login_type == LoginType::Type1 && compatibility != VpnCompatibility::Maximum {
-            request = request.header(HOST, DORM_HTTPS_AUTHORITY);
-        }
-        let Ok(response) = request.send().await else {
-            continue;
-        };
-        // Reachability of the fixed campus endpoint is the only response
-        // characteristic currently documented for probes. Reject redirects,
-        // server errors and empty responses rather than treating any completed
-        // TCP/TLS request as a confirmed protocol.
-        let status_ok = response.status().is_success();
-        let body = response.text().await.unwrap_or_default();
-        if !status_ok {
-            continue;
-        }
-        if login_type == LoginType::Type3 {
-            type3_evidence.record(&url, &body);
-            if type3_evidence.result() == PortalProbeResult::LoginReady {
-                return PortalProbeResult::LoginReady;
-            }
-        } else if probe_body_matches(&login_type, &url, &body) {
-            return PortalProbeResult::LoginReady;
+        })
+        .collect();
+    while let Some(result) = probes.next().await {
+        if result == PortalProbeResult::LoginReady {
+            return result;
         }
     }
-    if login_type == LoginType::Type3 {
-        type3_evidence.result()
-    } else {
-        // The visible bjut-sushe page advertises HTTP:801, but the login API is
-        // also available on HTTPS:802 with a certificate issued to BJUT domain
-        // names rather than the raw IP address. If none of the allowlisted SNI
-        // aliases produced the expected read-only response, HTTP may still
-        // prove that the portal exists; credentials remain blocked unless the
-        // user explicitly enables temporary Maximum mode.
-        probe_type1_http_portal_only(compatibility, &login_type, route_context).await
-    }
+    PortalProbeResult::NotDetected
 }
 
 /// Confirms that a Type 1 gateway exists without weakening a configured HTTPS
-/// login policy.  This request contains no credentials and is only used after
-/// the policy-preserving probe did not become login-ready.
+/// login policy. This request contains no credentials; its evidence is only
+/// selected if the policy-preserving probes do not become login-ready.
 async fn probe_type1_http_portal_only(
     compatibility: VpnCompatibility,
     login_type: &LoginType,
@@ -626,7 +672,7 @@ async fn probe_type1_http_portal_only(
     let Ok(client) = portal_client(
         VpnCompatibility::Maximum,
         login_type,
-        Duration::from_millis(1800),
+        NETWORK_PROBE_TIMEOUT,
         route_context,
     )
     .await
@@ -707,16 +753,15 @@ fn probe_body_matches(login_type: &LoginType, url: &str, body: &str) -> bool {
     }
 }
 
-fn select_login_type_detection(
-    candidates: Vec<LoginType>,
-    results: Vec<PortalProbeResult>,
+async fn select_prioritized_probes<F: std::future::Future<Output = LoginTypeDetection>>(
+    probes: impl IntoIterator<Item = F>,
 ) -> LoginTypeDetection {
-    for (candidate, result) in candidates.into_iter().zip(results) {
-        // Physical-link priority wins even when the preferred gateway is only
-        // portal-detected while a secondary post-authentication gateway is
-        // fully reachable. This is the expected bjut-sushe + lgn combination.
-        if result != PortalProbeResult::NotDetected {
-            return LoginTypeDetection::from_probe(candidate, result);
+    // Poll concurrently, yield in physical-link priority order. As soon as a
+    // preferred gateway is verified, discard lower-priority pending probes.
+    let mut pending: FuturesOrdered<_> = probes.into_iter().collect();
+    while let Some(result) = pending.next().await {
+        if result.portal_detected {
+            return result;
         }
     }
     LoginTypeDetection::not_detected()
@@ -728,15 +773,10 @@ pub(crate) async fn detect_login_type_details_rust(
     transport: &str,
     route_context: Option<&PortalRouteContext>,
 ) -> LoginTypeDetection {
-    let candidates = login_probe_candidates(ssid, transport, route_context);
-    let probes = candidates.iter().cloned().map(|candidate| async move {
-        probe_login_type(compatibility, candidate, route_context).await
-    });
-    // More than one gateway can be reachable after authentication. Probe all
-    // candidates concurrently, then select in physical-link priority order;
-    // do not let the fastest response redefine the network type.
-    let results = futures_util::future::join_all(probes).await;
-    select_login_type_detection(candidates, results)
+    let probes = login_probe_candidates(ssid, transport, route_context)
+        .into_iter()
+        .map(|candidate| probe_login_type(compatibility, candidate, route_context));
+    select_prioritized_probes(probes).await
 }
 
 pub(crate) async fn diagnose_login_gateways(
@@ -745,33 +785,17 @@ pub(crate) async fn diagnose_login_gateways(
     transport: &str,
     route_context: Option<&PortalRouteContext>,
 ) -> Vec<LoginTypeDetection> {
-    const DIAGNOSTIC_CANDIDATE_BUDGET: Duration = Duration::from_millis(2200);
     let mut candidates = login_probe_candidates(ssid, transport, route_context);
-    // Diagnostics are observational and never send credentials. Probe all
-    // three documented gateways even when Windows reports an unknown or
-    // Ethernet transport: wired adapters, USB docks and campus bridge devices
-    // can expose bjut_wifi while still lacking a WLAN identity. Automatic
-    // login keeps the stricter transport-specific candidate set above.
+    // Diagnostics inspect all three gateways; authentication keeps the stricter
+    // transport-specific candidate set. All share one three-second budget.
     for candidate in [LoginType::Type1, LoginType::Type2, LoginType::Type3] {
         if !candidates.contains(&candidate) {
             candidates.push(candidate);
         }
     }
-    let probes = candidates.into_iter().map(|candidate| async move {
-        match tokio::time::timeout(
-            DIAGNOSTIC_CANDIDATE_BUDGET,
-            probe_login_type(compatibility, candidate.clone(), route_context),
-        )
-        .await
-        {
-            Ok(result) => LoginTypeDetection::from_probe(candidate, result),
-            Err(_) => LoginTypeDetection::timed_out(candidate),
-        }
-    });
-    // Diagnostics must still inspect every applicable gateway, but independent
-    // bjut-sushe/bjut_wifi/lgn read-only probes do not need to wait for one
-    // another. The bounded concurrent probe reduces a non-campus Wi-Fi check
-    // from roughly three sequential timeouts to one diagnostic budget.
+    let probes = candidates
+        .into_iter()
+        .map(|candidate| probe_login_type(compatibility, candidate, route_context));
     futures_util::future::join_all(probes).await
 }
 
@@ -1066,7 +1090,7 @@ pub(crate) async fn diagnose_lgn_ipv6_rust(
     compatibility: VpnCompatibility,
     route_context: Option<&PortalRouteContext>,
 ) -> Result<String, String> {
-    discover_lgn_ipv6(compatibility, Duration::from_millis(1800), route_context)
+    discover_lgn_ipv6(compatibility, NETWORK_PROBE_TIMEOUT, route_context)
         .await
         .map(|(_address, source)| {
             format!("可用（{source}）；已取得 IPv4+IPv6 联动认证所需的 IPv6 地址")
@@ -1950,6 +1974,20 @@ mod tests {
 
     #[test]
     fn simultaneous_gateways_follow_physical_network_priority() {
+        fn select_login_type_detection(
+            candidates: Vec<LoginType>,
+            results: Vec<PortalProbeResult>,
+        ) -> LoginTypeDetection {
+            let probes = candidates
+                .into_iter()
+                .zip(results)
+                .map(|(candidate, result)| {
+                    std::future::ready(LoginTypeDetection::from_probe(candidate, result))
+                });
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(select_prioritized_probes(probes))
+        }
         let both_ready = vec![PortalProbeResult::LoginReady, PortalProbeResult::LoginReady];
         assert_eq!(
             select_login_type_detection(
@@ -1990,6 +2028,77 @@ mod tests {
         assert_eq!(preferred_portal_only.login_type, LoginType::Type1);
         assert!(preferred_portal_only.portal_detected);
         assert!(!preferred_portal_only.login_ready);
+    }
+
+    #[test]
+    fn preferred_gateway_does_not_wait_for_unreachable_secondary_gateways() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let probes: Vec<BoxFuture<'_, LoginTypeDetection>> = vec![
+                async {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    LoginTypeDetection::from_probe(LoginType::Type3, PortalProbeResult::LoginReady)
+                }
+                .boxed(),
+                std::future::pending().boxed(),
+            ];
+            let result = tokio::time::timeout(
+                Duration::from_millis(500),
+                select_prioritized_probes(probes),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.login_type, LoginType::Type3);
+        });
+    }
+
+    #[test]
+    fn fast_secondary_gateway_does_not_override_physical_link_priority() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let probes: Vec<BoxFuture<'_, LoginTypeDetection>> = vec![
+                async {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    LoginTypeDetection::from_probe(
+                        LoginType::Type1,
+                        PortalProbeResult::PortalDetected,
+                    )
+                }
+                .boxed(),
+                std::future::ready(LoginTypeDetection::from_probe(
+                    LoginType::Type3,
+                    PortalProbeResult::LoginReady,
+                ))
+                .boxed(),
+            ];
+            let result = select_prioritized_probes(probes).await;
+            assert_eq!(result.login_type, LoginType::Type1);
+            assert!(!result.login_ready);
+        });
+    }
+
+    #[test]
+    fn gateway_timeouts_preserve_partial_evidence_and_do_not_block_ipv6() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let partial = finish_portal_probes(
+                LoginType::Type1,
+                vec![
+                    std::future::ready(PortalProbeResult::PortalDetected).boxed(),
+                    std::future::pending().boxed(),
+                ],
+                Duration::from_millis(30),
+            )
+            .await;
+            assert!(partial.portal_detected && partial.timed_out && !partial.login_ready);
+            let ipv6 = finish_portal_probes(
+                LoginType::Type3,
+                vec![
+                    std::future::pending().boxed(),
+                    std::future::ready(PortalProbeResult::LoginReady).boxed(),
+                ],
+                Duration::from_millis(30),
+            )
+            .await;
+            assert!(ipv6.login_ready && !ipv6.timed_out);
+        });
     }
 
     #[test]

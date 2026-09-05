@@ -4047,6 +4047,12 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
 }
 
 /* Stacking contexts to prevent dropdown clipping */
+.settings-group:has(.custom-select.open) {
+  position: relative;
+  z-index: 20;
+  overflow: visible;
+}
+
 .setting-item {
   position: relative;
 }

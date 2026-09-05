@@ -1479,3 +1479,53 @@ html:root[data-theme] {
     transition: none;
   }
 }
+
+/* Basic controls share a short press/release motion. Keep card transforms
+   owned by the account sorting animation, and never animate disabled controls. */
+:root[data-theme="basic"] :is(
+  button, [role="button"], .nav-item, .nav-tree-link,
+  .custom-select-trigger, .custom-option, .billing-section-nav-button,
+  .billing-package-option, .billing-payment-method, summary
+) {
+  transition: transform 160ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    background-color 160ms ease, border-color 160ms ease,
+    color 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+
+:root[data-theme="basic"] :is(
+  button, [role="button"], .nav-item, .nav-tree-link,
+  .custom-select-trigger, .custom-option, .billing-section-nav-button,
+  .billing-package-option, .billing-payment-method, summary
+):not(:disabled):not([aria-disabled="true"]):active {
+  transform: translateY(1px) scale(0.97);
+  filter: brightness(0.94);
+  transition-duration: 70ms;
+}
+
+:root[data-theme="basic"] .switch:active input:not(:disabled) + .slider {
+  transform: scale(0.96);
+  filter: brightness(0.94);
+  transition-duration: 70ms;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-theme="basic"] body.is-android :is(
+    button, [role="button"], .nav-item, .nav-tree-link,
+    .custom-select-trigger, .custom-option, .billing-section-nav-button,
+    .billing-package-option, .billing-payment-method, summary
+  ):not(:disabled):not([aria-disabled="true"]):active {
+    transition: transform 70ms ease, filter 70ms ease !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="basic"] :is(
+    button, [role="button"], .nav-item, .nav-tree-link,
+    .custom-select-trigger, .custom-option, .billing-section-nav-button,
+    .billing-package-option, .billing-payment-method, summary
+  ):not(:disabled):not([aria-disabled="true"]):active,
+  :root[data-theme="basic"] .switch:active input:not(:disabled) + .slider {
+    transform: none;
+    transition: none !important;
+  }
+}

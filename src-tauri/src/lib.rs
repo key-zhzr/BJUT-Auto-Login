@@ -1,10 +1,14 @@
 mod billing;
 mod billing_runtime;
+mod campus_dns;
 mod campus_services;
 mod config_model;
 mod cookie_jar;
 mod network_platform;
+mod network_probe;
 mod network_trust;
+use campus_dns::{campus_dns_servers, query_campus_dns_ipv4};
+use network_probe::{run_diagnostic_probes, NETWORK_PROBE_TIMEOUT};
 mod portal_auth;
 mod recharge_state;
 
@@ -1928,7 +1932,7 @@ struct InternetProbeOutcome {
 
 async fn probe_internet_targets(source_ip: Option<&str>) -> Vec<InternetProbeOutcome> {
     let builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(1800))
+        .timeout(NETWORK_PROBE_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .use_rustls_tls();
     #[cfg(target_os = "android")]
@@ -2031,129 +2035,9 @@ pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool 
         .any(|result| result.success)
 }
 
-const CAMPUS_DNS_SERVER: &str = "10.21.200.28:53";
 const WLGN_HOST: &str = "wlgn.bjut.edu.cn";
 const LGN_HOST: &str = "lgn.bjut.edu.cn";
 const LGN6_HOST: &str = "lgn6.bjut.edu.cn";
-
-fn skip_dns_name(packet: &[u8], position: &mut usize) -> Result<(), String> {
-    loop {
-        let length = *packet.get(*position).ok_or("校园网 DNS 响应不完整")?;
-        if length & 0xc0 == 0xc0 {
-            if packet.get(*position + 1).is_none() {
-                return Err("校园网 DNS 压缩指针不完整".to_string());
-            }
-            *position += 2;
-            return Ok(());
-        }
-        *position += 1;
-        if length == 0 {
-            return Ok(());
-        }
-        *position = position
-            .checked_add(length as usize)
-            .filter(|next| *next <= packet.len())
-            .ok_or("校园网 DNS 名称越界")?;
-    }
-}
-
-fn query_campus_dns_ipv4(
-    host: &str,
-    source_ipv4: Option<std::net::Ipv4Addr>,
-) -> Result<Vec<std::net::Ipv4Addr>, String> {
-    let labels: Vec<&str> = host.split('.').collect();
-    if labels.is_empty()
-        || labels
-            .iter()
-            .any(|label| label.is_empty() || label.len() > 63)
-    {
-        return Err("校园网 DNS 查询域名无效".to_string());
-    }
-    let query_id = (std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos()
-        & 0xffff) as u16;
-    let mut query = Vec::with_capacity(64);
-    query.extend_from_slice(&query_id.to_be_bytes());
-    query.extend_from_slice(&[0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-    for label in labels {
-        query.push(label.len() as u8);
-        query.extend_from_slice(label.as_bytes());
-    }
-    query.push(0);
-    query.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
-
-    let bind_address =
-        std::net::SocketAddrV4::new(source_ipv4.unwrap_or(std::net::Ipv4Addr::UNSPECIFIED), 0);
-    let socket = std::net::UdpSocket::bind(bind_address)
-        .map_err(|error| format!("无法创建校园网 DNS 查询：{error}"))?;
-    let timeout = Some(std::time::Duration::from_millis(1200));
-    socket
-        .set_read_timeout(timeout)
-        .map_err(|error| error.to_string())?;
-    socket
-        .set_write_timeout(timeout)
-        .map_err(|error| error.to_string())?;
-    socket
-        .connect(CAMPUS_DNS_SERVER)
-        .map_err(|error| format!("无法连接校园网 DNS：{error}"))?;
-    socket
-        .send(&query)
-        .map_err(|error| format!("校园网 DNS 查询发送失败：{error}"))?;
-    let mut packet = [0u8; 2048];
-    let size = socket
-        .recv(&mut packet)
-        .map_err(|error| format!("校园网 DNS 查询失败：{error}"))?;
-    let packet = &packet[..size];
-    if packet.len() < 12 || u16::from_be_bytes([packet[0], packet[1]]) != query_id {
-        return Err("校园网 DNS 返回了无效响应".to_string());
-    }
-    if packet[3] & 0x0f != 0 {
-        return Err(format!("校园网 DNS 返回错误码 {}", packet[3] & 0x0f));
-    }
-    let question_count = u16::from_be_bytes([packet[4], packet[5]]) as usize;
-    let answer_count = u16::from_be_bytes([packet[6], packet[7]]) as usize;
-    let mut position = 12usize;
-    for _ in 0..question_count {
-        skip_dns_name(packet, &mut position)?;
-        position = position
-            .checked_add(4)
-            .filter(|next| *next <= packet.len())
-            .ok_or("校园网 DNS 问题段越界")?;
-    }
-    let mut addresses = Vec::new();
-    for _ in 0..answer_count {
-        skip_dns_name(packet, &mut position)?;
-        if position + 10 > packet.len() {
-            return Err("校园网 DNS 答案段不完整".to_string());
-        }
-        let record_type = u16::from_be_bytes([packet[position], packet[position + 1]]);
-        let record_class = u16::from_be_bytes([packet[position + 2], packet[position + 3]]);
-        let data_length = u16::from_be_bytes([packet[position + 8], packet[position + 9]]) as usize;
-        position += 10;
-        if position + data_length > packet.len() {
-            return Err("校园网 DNS 记录数据越界".to_string());
-        }
-        if record_type == 1 && record_class == 1 && data_length == 4 {
-            let address = std::net::Ipv4Addr::new(
-                packet[position],
-                packet[position + 1],
-                packet[position + 2],
-                packet[position + 3],
-            );
-            if !addresses.contains(&address) {
-                addresses.push(address);
-            }
-        }
-        position += data_length;
-    }
-    if addresses.is_empty() {
-        Err(format!("校园网 DNS 未返回 {host} 的 IPv4 地址"))
-    } else {
-        Ok(addresses)
-    }
-}
 
 #[cfg(target_os = "android")]
 #[derive(serde::Serialize)]
@@ -5717,95 +5601,128 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     ));
     emit_network_diagnostic_progress(&app, 42, "校园网环境特征检查完成");
 
-    let dns_started = std::time::Instant::now();
-    emit_network_diagnostic_progress(&app, 46, "正在检查 DNS 解析…");
-    const DNS_DIAGNOSTIC_BUDGET: std::time::Duration = std::time::Duration::from_millis(800);
-    let dns_result = tokio::time::timeout(
-        DNS_DIAGNOSTIC_BUDGET,
-        tokio::net::lookup_host(("www.baidu.com", 443)),
-    )
-    .await;
-    let (dns_ok, dns_message) = match dns_result {
-        Ok(Ok(mut addresses)) => {
-            if addresses.next().is_some() {
-                (true, "DNS 解析正常".to_string())
-            } else {
-                (false, "DNS 未返回可用地址".to_string())
-            }
-        }
-        Ok(Err(error)) => (false, format!("DNS 解析失败：{error}")),
-        Err(_) => (
-            false,
-            "DNS 解析在 800 毫秒内未完成，已继续后续诊断".to_string(),
-        ),
-    };
-    steps.push(make_diagnostic_step(
-        "dns",
-        "DNS 解析",
-        dns_started,
-        if dns_ok { "success" } else { "warning" },
-        dns_message,
-    ));
-    emit_network_diagnostic_progress(&app, 54, "DNS 解析检查完成");
-
-    let internet_started = std::time::Instant::now();
-    emit_network_diagnostic_progress(&app, 58, "正在并发探测互联网目标…");
-    let internet_results = if wifi_route_failed {
-        Vec::new()
-    } else {
-        probe_internet_targets(Some(&ip)).await
-    };
-    let online = internet_results.iter().any(|result| result.success);
-    let internet_message = if internet_results.is_empty() {
-        "未执行互联网目标探测".to_string()
-    } else {
-        internet_results
-            .iter()
-            .map(|result| {
-                format!(
-                    "{}：{}（{}）",
-                    result.label,
-                    if result.success { "成功" } else { "失败" },
-                    result.detail
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    steps.push(make_diagnostic_step(
-        "internet",
-        "互联网连通性",
-        internet_started,
-        if online { "success" } else { "warning" },
-        internet_message,
-    ));
-    emit_network_diagnostic_progress(&app, 72, "互联网目标探测完成");
-
-    let portal_started = std::time::Instant::now();
-    emit_network_diagnostic_progress(&app, 76, "正在并发探测校园认证网关…");
     let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
-    let (gateway_results, lgn_ipv6_diagnostic) = if wifi_route_failed
-        || portal_route_context.is_none()
-    {
-        (Vec::new(), None)
-    } else {
-        futures_util::future::join(
-            diagnose_login_gateways(
-                compatibility,
-                &ssid,
-                network_transport(&network),
-                portal_route_context.as_ref(),
-            ),
-            async {
-                if lgn_wired_hint {
-                    Some(diagnose_lgn_ipv6_rust(compatibility, portal_route_context.as_ref()).await)
-                } else {
-                    None
+    let dns_probe = async {
+        let started = std::time::Instant::now();
+        let public_dns = async {
+            match tokio::time::timeout(
+                NETWORK_PROBE_TIMEOUT,
+                tokio::net::lookup_host(("www.baidu.com", 443)),
+            )
+            .await
+            {
+                Ok(Ok(mut addresses)) => {
+                    if addresses.next().is_some() {
+                        (true, "系统 DNS 解析正常".to_string())
+                    } else {
+                        (false, "系统 DNS 未返回可用地址".to_string())
+                    }
                 }
-            },
+                Ok(Err(error)) => (false, format!("系统 DNS 解析失败：{error}")),
+                Err(_) => (false, "系统 DNS 解析超过 3 秒".to_string()),
+            }
+        };
+        let campus_dns = async {
+            if compatibility != VpnCompatibility::Low || wifi_route_failed {
+                return None;
+            }
+            let route = portal_route_context.as_ref()?;
+            let host = if lgn_wired_hint { LGN_HOST } else { WLGN_HOST };
+            let servers = campus_dns_servers(host, Some(route.physical_ipv4())).join(" / ");
+            Some(
+                match query_campus_dns_ipv4(host, Some(route.physical_ipv4())).await {
+                    Ok(_) => (true, format!("校园 DNS（{servers}）：{host} 解析成功")),
+                    Err(error) => (false, format!("校园 DNS（{servers}）：{error}")),
+                },
+            )
+        };
+        let ((mut ok, mut message), campus) =
+            futures_util::future::join(public_dns, campus_dns).await;
+        if let Some((campus_ok, detail)) = campus {
+            ok &= campus_ok;
+            message.push('\n');
+            message.push_str(&detail);
+        }
+        make_diagnostic_step(
+            "dns",
+            "DNS 解析",
+            started,
+            if ok { "success" } else { "warning" },
+            message,
         )
-        .await
     };
+    let internet_probe = async {
+        let started = std::time::Instant::now();
+        let results = if wifi_route_failed {
+            Vec::new()
+        } else {
+            probe_internet_targets(Some(&ip)).await
+        };
+        let online = results.iter().any(|result| result.success);
+        let message = if results.is_empty() {
+            "未执行互联网目标探测".to_string()
+        } else {
+            results
+                .iter()
+                .map(|result| {
+                    format!(
+                        "{}：{}（{}）",
+                        result.label,
+                        if result.success { "成功" } else { "失败" },
+                        result.detail
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        (
+            online,
+            make_diagnostic_step(
+                "internet",
+                "互联网连通性",
+                started,
+                if online { "success" } else { "warning" },
+                message,
+            ),
+        )
+    };
+    let gateway_probe = async {
+        let started = std::time::Instant::now();
+        let result = if wifi_route_failed || portal_route_context.is_none() {
+            (Vec::new(), None)
+        } else {
+            futures_util::future::join(
+                diagnose_login_gateways(
+                    compatibility,
+                    &ssid,
+                    network_transport(&network),
+                    portal_route_context.as_ref(),
+                ),
+                async {
+                    if lgn_wired_hint {
+                        Some(
+                            diagnose_lgn_ipv6_rust(compatibility, portal_route_context.as_ref())
+                                .await,
+                        )
+                    } else {
+                        None
+                    }
+                },
+            )
+            .await
+        };
+        (result, started.elapsed().as_millis())
+    };
+    let (
+        dns_step,
+        (online, internet_step),
+        ((gateway_results, lgn_ipv6_diagnostic), portal_duration_ms),
+    ) = run_diagnostic_probes(dns_probe, internet_probe, gateway_probe, |percent| {
+        emit_network_diagnostic_progress(&app, percent, "正在并发检查 DNS、互联网和认证网关…")
+    })
+    .await;
+    steps.push(dns_step);
+    steps.push(internet_step);
     // diagnose_login_gateways preserves the same physical-link priority used
     // by automatic login. Prefer the first verified portal even if a lower
     // priority gateway becomes reachable only after authentication.
@@ -5827,7 +5744,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
                 } else if result.portal_detected {
                     "门户已发现，但登录条件未完全就绪"
                 } else if result.timed_out {
-                    "在 2.2 秒诊断预算内无响应"
+                    "在 3 秒诊断预算内无响应"
                 } else {
                     "未探测到"
                 }
@@ -5879,13 +5796,13 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
             ),
         )
     };
-    steps.push(make_diagnostic_step(
-        "portal",
-        "认证网关",
-        portal_started,
-        portal_status,
-        portal_message,
-    ));
+    steps.push(DiagnosticStep {
+        id: "portal".to_string(),
+        label: "认证网关".to_string(),
+        status: portal_status.to_string(),
+        message: portal_message,
+        duration_ms: portal_duration_ms,
+    });
     emit_network_diagnostic_progress(&app, 100, "网络链路诊断完成");
 
     let (overall, summary) = if online {
