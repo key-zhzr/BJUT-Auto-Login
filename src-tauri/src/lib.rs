@@ -5836,7 +5836,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         .collect::<Vec<_>>()
         .join("\n");
     if let Some(result) = lgn_ipv6_diagnostic {
-        gateway_details.push_str("\nlgn 双栈预认证入口：");
+        gateway_details.push_str("\nlgn IPv6 地址发现：");
         match result {
             Ok(detail) => gateway_details.push_str(&detail),
             Err(error) => gateway_details.push_str(&format!("不可用（{error}）")),

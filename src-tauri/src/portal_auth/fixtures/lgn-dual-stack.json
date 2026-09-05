@@ -1,0 +1,22 @@
+{
+  "description": "Protocol-only fixture derived from lgn.bjut.edu.cn-v4+v6-login+logout.har. Credentials and client addresses are synthetic; no cookies or private account data are retained.",
+  "user": "25000000",
+  "password": "test-only-password",
+  "ipv4": "192.0.2.10",
+  "ipv6": "2001:db8::10",
+  "discovery": {
+    "method": "GET",
+    "url": "https://lgn6.bjut.edu.cn/drcom/getipv6?callback=dr1004&program_index=o4OBee1755497815&page_index=cHAmjX1755497856&jsVersion=4.2.2&v=0000&lang=zh",
+    "response": "      dr1004({\"result\":1,\"ip\":\"2001:db8::10\"})  "
+  },
+  "login": {
+    "method": "GET",
+    "url": "https://lgn.bjut.edu.cn:802/eportal/portal/login?callback=726427262623&login_method=27&user_account=3a263a2423262626262626&user_password=627365623b79787a6f3b6677656561796472&wlan_user_ip=272f2438263824382726&wlan_user_ipv6=242626272c72742e2c2c2726&wlan_user_mac=262626262626262626262626&wlan_vlan_id=26&wlan_ac_ip=&wlan_ac_name=&authex_enable=&jsVersion=2238243824&login_ip_type=26&terminal_type=25&lang=6c7e3b7578&program_index=79225954737327212323222f212e2723&page_index=755e577b7c4e27212323222f212e2320&encrypt=1&v=0000&lang=zh",
+    "response": "dr1005({\"result\":1,\"msg\":\"Portal协议认证成功！\"});"
+  },
+  "logout": {
+    "method": "GET",
+    "url": "https://lgn.bjut.edu.cn:802/eportal/portal/logout?callback=72642726262e&login_method=27&user_account=726475797b&user_password=272425&ac_logout=26&register_mode=27&wlan_user_ip=272f2438263824382726&wlan_user_ipv6=242626272c72742e2c2c2726&wlan_vlan_id=26&wlan_user_mac=262626262626262626262626&wlan_ac_ip=&wlan_ac_name=&jsVersion=2238243824&program_index=79225954737327212323222f212e2723&page_index=755e577b7c4e27212323222f212e2320&encrypt=1&v=0000&lang=zh",
+    "response": "dr1008({\"result\":1,\"msg\":\"Portal协议注销成功！\"});"
+  }
+}
