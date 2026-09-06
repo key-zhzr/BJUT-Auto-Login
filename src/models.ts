@@ -241,6 +241,7 @@ export interface DiagnosticReport {
   ssid: string;
   ip: string;
   steps: DiagnosticStep[];
+  adapterRestart?: { interfaceName: string; ipv4: string; reason: string } | null;
 }
 
 export interface DiagnosticProgress {

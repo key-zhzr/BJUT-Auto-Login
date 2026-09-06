@@ -4,8 +4,12 @@ mod campus_dns;
 mod campus_services;
 mod config_model;
 mod cookie_jar;
+#[cfg(any(target_os = "macos", test))]
+mod macos_network;
 mod network_platform;
 mod network_probe;
+mod network_repair;
+use network_repair::AdapterRestartTarget;
 mod network_trust;
 use campus_dns::{campus_dns_servers, query_campus_dns_ipv4};
 use network_probe::{run_diagnostic_probes, NETWORK_PROBE_TIMEOUT};
@@ -583,12 +587,19 @@ fn get_network_info(
         let lgn_wired_features: Vec<String> = Vec::new();
 
         #[cfg(target_os = "macos")]
-        {
-            let mut wifi_interface_name = String::new();
-            if let Ok(client) = corewlan::WiFiClient::shared() {
-                if let Some(interface) = client.interface() {
-                    wifi_interface_name = interface.interface_name().unwrap_or_default();
-                    if _include_wifi_details.unwrap_or(true) {
+        let mut lgn_link_configuration = serde_json::Value::Null;
+        #[cfg(not(target_os = "macos"))]
+        let lgn_link_configuration = serde_json::Value::Null;
+
+        #[cfg(target_os = "macos")]
+        if let Some(selected) = macos_network::physical_identity() {
+            interface_name = selected.interface;
+            ip = selected.ipv4;
+            transport = selected.transport.to_string();
+            identity_source = "sameInterface".to_string();
+            if selected.transport == "wifi" && _include_wifi_details.unwrap_or(true) {
+                if let Ok(client) = corewlan::WiFiClient::shared() {
+                    if let Some(interface) = client.interface_with_name(Some(&interface_name)) {
                         if let Some(state) = _app.try_state::<Arc<AppState>>() {
                             rust_log(
                                 &_app,
@@ -598,48 +609,15 @@ fn get_network_info(
                                 "debug",
                             );
                         }
-                        if let Some(ssid_str) = interface.ssid() {
-                            ssid = ssid_str;
-                        }
-                        if let Some(bssid_str) = interface.bssid() {
-                            bssid = bssid_str;
-                        }
+                        ssid = interface.ssid().unwrap_or_default();
+                        bssid = interface.bssid().unwrap_or_default();
                     }
                 }
             }
-
-            let wifi_ip = macos_ipv4_for_interface(&wifi_interface_name);
-            let route_interface = macos_route_interface("172.30.201.2");
-            let route_interface_ip = macos_ipv4_for_interface(&route_interface);
-            let routed_physical_wired = macos_is_physical_ethernet_interface(&route_interface)
-                && route_interface != wifi_interface_name
-                && !route_interface_ip.is_empty();
-            let campus_wired = macos_campus_wired_identity(&wifi_interface_name);
-            if routed_physical_wired && is_campus_wired_ipv4(&route_interface_ip) {
-                ssid.clear();
-                bssid.clear();
-                interface_name = route_interface;
-                ip = route_interface_ip;
-                transport = "ethernet".to_string();
-                identity_source = "sameInterface".to_string();
-            } else if let Some((wired_interface, wired_ip)) = campus_wired {
-                // A TUN route can hide the physical route to the Type 3
-                // portal. Prefer a separate, same-interface campus Ethernet
-                // address over an unrelated Wi-Fi that merely has an IPv4.
-                ssid.clear();
-                bssid.clear();
-                interface_name = wired_interface;
-                ip = wired_ip;
-                transport = "ethernet".to_string();
-                identity_source = "sameInterface".to_string();
-            } else if !wifi_ip.is_empty() {
-                interface_name = wifi_interface_name;
-                ip = wifi_ip;
-                transport = "wifi".to_string();
-                identity_source = "sameInterface".to_string();
-            }
-            if transport.eq_ignore_ascii_case("ethernet") {
-                lgn_wired_features = macos_lgn_wired_features(&interface_name, &ip);
+            if selected.transport == "ethernet" {
+                let configuration = macos_network::lgn_link_configuration(&interface_name);
+                lgn_wired_features = configuration.features(&ip);
+                lgn_link_configuration = serde_json::to_value(configuration).unwrap_or_default();
             }
         }
 
@@ -739,6 +717,7 @@ fn get_network_info(
             "routeIp": route_ip,
             "lgnWiredHint": transport.eq_ignore_ascii_case("ethernet") && is_lgn_wired_client_ipv4(&ip),
             "lgnWiredFeatures": lgn_wired_features,
+            "lgnLinkConfiguration": lgn_link_configuration,
             "wifiIdentityError": wifi_identity_error
         })
     }
@@ -1172,24 +1151,8 @@ fn get_local_ip() -> String {
 
     #[cfg(target_os = "macos")]
     {
-        let interface_name = corewlan::WiFiClient::shared()
-            .ok()
-            .and_then(|client| client.interface())
-            .and_then(|interface| interface.interface_name())
-            .unwrap_or_default();
-        let wifi_ip = macos_ipv4_for_interface(&interface_name);
-        if !wifi_ip.is_empty() {
-            return wifi_ip;
-        }
-        let route_interface = macos_route_interface("172.30.201.2");
-        if macos_is_physical_ethernet_interface(&route_interface) {
-            let route_ip = macos_ipv4_for_interface(&route_interface);
-            if is_campus_wired_ipv4(&route_ip) {
-                return route_ip;
-            }
-        }
-        macos_campus_wired_identity(&interface_name)
-            .map(|(_interface, address)| address)
+        macos_network::physical_identity()
+            .map(|identity| identity.ipv4)
             .unwrap_or_default()
     }
 
@@ -1428,6 +1391,7 @@ struct DiagnosticReport {
     ssid: String,
     ip: String,
     steps: Vec<DiagnosticStep>,
+    adapter_restart: Option<AdapterRestartTarget>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -4179,7 +4143,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 &app,
                 &state,
                 "隐私",
-                "macOS 后台完整检测已触发，将读取 SSID/BSSID",
+                "macOS 后台完整检测已触发，将重新核对当前物理接口",
                 "debug",
             );
         }
@@ -5391,6 +5355,91 @@ fn emit_network_diagnostic_progress(app: &tauri::AppHandle, percent: u8, label: 
 }
 
 #[tauri::command]
+async fn restart_lgn_adapter(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    target: AdapterRestartTarget,
+) -> Result<String, String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, state, target);
+        Err("一键重启有线适配器目前仅支持 macOS".to_string())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if state.manual_login_in_progress.swap(true, Ordering::SeqCst) {
+            return Err("已有登录、账号切换或适配器重启正在进行，请稍候".to_string());
+        }
+        state
+            .login_operation_generation
+            .fetch_add(1, Ordering::SeqCst);
+        let operation_guard = ManualLoginOperationGuard {
+            generation: &state.login_operation_generation,
+            active: &state.manual_login_in_progress,
+        };
+        let login_guard = state.login_request_lock.lock().await;
+        let network = get_network_info(app.clone(), Some(false));
+        network_repair::validate_target(&target, &network)?;
+        let route = portal_route_context_from_network(&network)?;
+        let compatibility = effective_vpn_compatibility(&state.config.read().unwrap());
+        let configuration_issue = serde_json::from_value::<macos_network::LgnLinkConfiguration>(
+            network
+                .get("lgnLinkConfiguration")
+                .cloned()
+                .unwrap_or_default(),
+        )
+        .is_ok_and(|configuration| configuration.resembles_reported_ipv6_failure());
+        if diagnose_lgn_ipv6_rust(compatibility, route.as_ref())
+            .await
+            .is_ok()
+            && !configuration_issue
+        {
+            return Ok("IPv6 探测已恢复，无需重启适配器".to_string());
+        }
+        rust_log(
+            &app,
+            &state,
+            "网络",
+            &format!(
+                "用户请求重启有线适配器 {}，等待系统授权",
+                target.interface_name
+            ),
+            "info",
+        );
+        let interface_name = target.interface_name.clone();
+        let mut result =
+            tokio::task::spawn_blocking(move || network_repair::restart_ethernet(&target))
+                .await
+                .map_err(|error| format!("适配器重启任务失败：{error}"))?;
+        if let Ok(message) = &mut result {
+            // Wait for this adapter, not an already-connected Wi-Fi, before
+            // the frontend refreshes the diagnostic report after the restart.
+            let mut address_ready = false;
+            for _ in 0..10 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                if usable_physical_ipv4(&macos_ipv4_for_interface(&interface_name)).is_some() {
+                    address_ready = true;
+                    break;
+                }
+            }
+            if !address_ready {
+                message.push_str("；10 秒内尚未取得有线 IPv4，请稍后再次诊断");
+            }
+        }
+        match &result {
+            Ok(message) => rust_log(&app, &state, "网络", message, "success"),
+            Err(error) => rust_log(&app, &state, "网络", error, "error"),
+        }
+        drop(login_guard);
+        drop(operation_guard);
+        if result.is_ok() {
+            schedule_network_change_readiness(app, state.inner().clone());
+        }
+        result
+    }
+}
+
+#[tauri::command]
 async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     emit_network_diagnostic_progress(&app, 2, "正在读取当前网络接口…");
     let compatibility = app
@@ -5752,6 +5801,48 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    #[cfg(target_os = "macos")]
+    let adapter_restart = if lgn_wired_hint {
+        let mut configuration_issue = false;
+        if let Some(result) = lgn_ipv6_diagnostic.as_ref() {
+            if let Ok(configuration) = serde_json::from_value::<macos_network::LgnLinkConfiguration>(
+                network
+                    .get("lgnLinkConfiguration")
+                    .cloned()
+                    .unwrap_or_default(),
+            ) {
+                configuration_issue = configuration.resembles_reported_ipv6_failure();
+                steps.push(DiagnosticStep {
+                    id: "wired_ipv6_configuration".to_string(),
+                    label: "有线 IPv6 配置".to_string(),
+                    status: if result.is_ok() && !configuration_issue {
+                        "success"
+                    } else {
+                        "warning"
+                    }
+                    .to_string(),
+                    message: configuration.diagnostic(result.is_ok()),
+                    duration_ms: 0,
+                });
+            }
+        }
+        (configuration_issue || lgn_ipv6_diagnostic.as_ref().is_some_and(Result::is_err)).then(
+            || AdapterRestartTarget {
+                interface_name: interface_name.to_string(),
+                ipv4: ip.clone(),
+                reason: if configuration_issue {
+                    "IPv6 配置与已报告的异常组合一致"
+                } else {
+                    "lgn6 IPv6 地址发现未通过"
+                }
+                .to_string(),
+            },
+        )
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "macos"))]
+    let adapter_restart = None;
     if let Some(result) = lgn_ipv6_diagnostic {
         gateway_details.push_str("\nlgn IPv6 地址发现：");
         match result {
@@ -5837,6 +5928,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         ssid,
         ip,
         steps,
+        adapter_restart,
     }
 }
 
@@ -9528,6 +9620,7 @@ pub fn run() {
             get_account_health,
             reset_account_health,
             run_network_diagnostics,
+            restart_lgn_adapter,
             create_diagnostic_bundle,
             get_logs,
             get_log_text,

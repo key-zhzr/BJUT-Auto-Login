@@ -2182,6 +2182,14 @@ input:checked + .slider:before { transform: translateX(24px); }
 .diagnostic-panel-header h3 { margin-bottom: 0.25rem; }
 .diagnostic-panel-message { min-height: 2.6em; line-height: 1.5; }
 
+.diagnostic-adapter-repair[hidden] {
+  display: none !important;
+}
+
+.diagnostic-adapter-repair {
+  margin-bottom: 1rem;
+}
+
 .health-badge,
 .account-health-badge {
   display: inline-flex;

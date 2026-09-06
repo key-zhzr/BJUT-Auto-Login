@@ -1578,6 +1578,9 @@ const btnExportLogs = document.getElementById('btn-export-logs')!;
 const btnScrollLogs = document.getElementById('btn-scroll-logs')!;
 const btnRunDiagnostics = document.getElementById('btn-run-diagnostics') as HTMLButtonElement;
 const btnCopyDiagnostics = document.getElementById('btn-copy-diagnostics') as HTMLButtonElement;
+const adapterRepairPanel = document.getElementById('diagnostic-adapter-repair')!;
+const adapterRepairMessage = document.getElementById('diagnostic-adapter-repair-message')!;
+const btnRestartLgnAdapter = document.getElementById('btn-restart-lgn-adapter') as HTMLButtonElement;
 const btnResetAllHealth = document.getElementById('btn-reset-all-health') as HTMLButtonElement;
 const accountHealthList = document.getElementById('account-health-list')!;
 const diagnosticSteps = document.getElementById('diagnostic-steps')!;
@@ -2146,6 +2149,11 @@ async function refreshCredentialStorageHealth() {
 }
 
 function renderDiagnosticReport(report: DiagnosticReport) {
+  adapterRepairPanel.hidden = !report.adapterRestart;
+  btnRestartLgnAdapter.disabled = diagnosticRunActive || adapterRestartActive;
+  if (report.adapterRestart) {
+    adapterRepairMessage.textContent = `${report.adapterRestart.interfaceName}：${report.adapterRestart.reason}。重启会短暂中断此有线连接并重新获取网络配置，macOS 可能要求管理员授权。`;
+  }
   const summary = document.getElementById('diagnostic-summary')!;
   const badge = document.getElementById('diagnostic-summary-badge')!;
   const title = document.getElementById('diagnostic-summary-title')!;
@@ -2184,6 +2192,7 @@ function renderDiagnosticReport(report: DiagnosticReport) {
 }
 
 let diagnosticRunActive = false;
+let adapterRestartActive = false;
 let diagnosticProgressHideTimer: number | null = null;
 let diagnosticProgressValue = 0;
 
@@ -2243,6 +2252,8 @@ async function runDiagnostics() {
   btnCopyDiagnostics.disabled = true;
   btnRunDiagnostics.textContent = '诊断中…';
   diagnosticRunActive = true;
+  adapterRepairPanel.hidden = true;
+  btnRestartLgnAdapter.disabled = true;
   diagnosticProgressValue = 0;
   updateDiagnosticProgress(0, '正在检查网络链路…', true);
   try {
@@ -2255,8 +2266,34 @@ async function runDiagnostics() {
     diagnosticProgress.hidden = true;
   } finally {
     diagnosticRunActive = false;
+    btnRestartLgnAdapter.disabled = adapterRestartActive;
     btnRunDiagnostics.disabled = false;
     btnRunDiagnostics.textContent = '开始诊断';
+  }
+}
+
+async function restartDiagnosticAdapter() {
+  const target = lastDiagnosticReport?.adapterRestart;
+  if (!target || diagnosticRunActive || adapterRestartActive || !window.__TAURI__) return;
+  adapterRestartActive = true;
+  btnRestartLgnAdapter.disabled = true;
+  btnRunDiagnostics.disabled = true;
+  btnRestartLgnAdapter.textContent = '正在恢复…';
+  adapterRepairMessage.textContent = `正在复核 ${target.interfaceName}。若异常仍存在，将请求系统授权重启此有线适配器。`;
+  try {
+    const message = await invoke<string>('restart_lgn_adapter', { target });
+    adapterRepairMessage.textContent = message;
+    log('网络', message, 'success');
+    await runDiagnostics();
+  } catch (error) {
+    adapterRepairMessage.textContent = String(error);
+    log('网络', `有线适配器恢复未完成：${String(error)}`, 'error');
+  } finally {
+    adapterRestartActive = false;
+    btnRestartLgnAdapter.disabled = diagnosticRunActive;
+    btnRunDiagnostics.disabled = diagnosticRunActive;
+    btnRestartLgnAdapter.innerHTML = '<i data-lucide="refresh-cw"></i> 重启有线适配器';
+    renderIcons(btnRestartLgnAdapter);
   }
 }
 
@@ -2876,6 +2913,7 @@ function setupEventListeners() {
   });
 
   btnRunDiagnostics.addEventListener('click', () => void runDiagnostics());
+  btnRestartLgnAdapter.addEventListener('click', () => void restartDiagnosticAdapter());
   btnCopyDiagnostics.addEventListener('click', async () => {
     if (!lastDiagnosticReport) return;
     try {

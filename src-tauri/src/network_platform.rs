@@ -75,49 +75,6 @@ pub(crate) fn macos_ipv4_for_interface(interface: &str) -> String {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn macos_lgn_wired_features(interface: &str, ipv4: &str) -> Vec<String> {
-    let mut features = Vec::new();
-    if is_lgn_wired_client_ipv4(ipv4) {
-        features.push("IPv4 172.26/16".to_string());
-    }
-    let interface_output = std::process::Command::new("ifconfig")
-        .arg(interface)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).to_ascii_lowercase())
-        .unwrap_or_default();
-    if interface_output.contains("inet6 2001:da8:216:") {
-        features.push("IPv6 2001:da8:216::/48".to_string());
-    }
-    let dhcp_output = std::process::Command::new("ipconfig")
-        .args(["getpacket", interface])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).to_ascii_lowercase())
-        .unwrap_or_default();
-    let dns_output = std::process::Command::new("scutil")
-        .arg("--dns")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).to_ascii_lowercase())
-        .unwrap_or_default();
-    let combined = format!("{dhcp_output}\n{dns_output}");
-    if combined.contains("172.21.0.21") && combined.contains("172.21.201.22") {
-        features.push("BJUT DNS 172.21.0.21 / 172.21.201.22".to_string());
-    }
-    if combined.contains("bjut6.edu.cn") {
-        features.push("搜索域 bjut6.edu.cn".to_string());
-    }
-    if dhcp_output.contains("172.26.33.254") {
-        features.push("网关 172.26.33.254".to_string());
-    }
-    features
-}
-
-#[cfg(target_os = "macos")]
 pub(crate) fn macos_is_physical_ethernet_interface(interface: &str) -> bool {
     interface.starts_with("en")
         && corewlan::WiFiClient::shared()
