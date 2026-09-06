@@ -23,7 +23,7 @@
         "hiddenTitle": true,
         "transparent": true,
         "backgroundColor": "#0f172a",
-        "shadow": false,
+        "shadow": true,
         "backgroundThrottling": "disabled"
       }
     ],

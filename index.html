@@ -169,24 +169,10 @@
             <div id="login-progress-phases" class="login-progress-phases"></div>
           </section>
 
-          <section class="glass-card network-experience">
-            <div class="diagnostic-panel-header">
-              <div><h3>认证网卡与双栈状态</h3><p id="network-selection-caption">正在读取网卡…</p></div>
-              <button id="btn-refresh-adapters" class="btn btn-secondary btn-sm" type="button">刷新检测</button>
-            </div>
-            <div class="network-adapter-choice">
-              <label for="preferred-network-adapter">认证使用的网卡</label>
-              <select id="preferred-network-adapter" aria-describedby="network-adapter-message"><option value="">自动选择</option></select>
-            </div>
-            <p id="network-adapter-message" role="status">自动优先选择校园有线。指定网卡断开时，将等待该网卡恢复。</p>
-            <div id="network-adapter-list" class="network-adapter-list"></div>
-            <div class="dual-stack-grid">
-              <article id="ipv4-health" class="family-health"><h4>IPv4</h4><strong>等待检测</strong><small></small></article>
-              <article id="ipv6-health" class="family-health"><h4>IPv6</h4><strong>等待检测</strong><small></small></article>
-            </div>
-            <div class="network-result-summary"><span id="network-authentication-status">门户认证：待核对</span><span id="network-system-status">系统互联网：待检测</span></div>
-            <p id="dual-stack-checked-at">双栈检测通过当前认证网卡直接连接外网，分别验证 IPv4 与 IPv6。</p>
-          </section>
+          <div class="dual-stack-status" aria-label="IPv4 与 IPv6 互联网状态" role="status">
+            <span id="ipv4-health" class="family-status"><span class="family-marker">…</span> IPv4 <strong>检测中</strong></span>
+            <span id="ipv6-health" class="family-status"><span class="family-marker">…</span> IPv6 <strong>检测中</strong></span>
+          </div>
 
           <!-- Network Data Update Status Bar -->
           <div class="glass-card" style="display: flex; justify-content: space-between; align-items: center; padding: 0.8rem 1.5rem; margin-bottom: 2rem; border-radius: 12px; font-size: 0.85rem; color: var(--text-muted);">
@@ -1051,6 +1037,15 @@
               <p id="network-schedule-summary" class="diagnostic-panel-message" role="status">等待首次检测后显示实际检测频率</p>
             </div>
             
+            <section class="settings-group glass-card network-adapter-settings" style="margin-top: 1rem;">
+              <div class="diagnostic-panel-header">
+                <div><h3>认证网卡</h3><p id="network-selection-caption">正在读取网卡…</p></div>
+                <button id="btn-refresh-adapters" class="btn btn-secondary btn-sm" type="button">刷新检测</button>
+              </div>
+              <div id="network-adapter-list" class="network-adapter-list" role="radiogroup" aria-label="认证使用的网卡"></div>
+              <p id="network-adapter-message" role="status" hidden></p>
+            </section>
+
             <div class="settings-group glass-card" style="margin-top: 1rem;">
               <h3>网络与安全</h3>
               <div class="setting-item setting-item-vpn">

@@ -5,14 +5,17 @@ use std::mem::size_of;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
-    GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
-    IP_ADAPTER_ADDRESSES_LH,
+    GetAdaptersAddresses, GetBestRoute2, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+    GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH, MIB_IPFORWARD_ROW2,
 };
 use windows::Win32::Networking::WinSock::{
-    IpDadStatePreferred, AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_IN, SOCKADDR_IN6,
+    IpDadStatePreferred, AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_IN, SOCKADDR_IN6, SOCKADDR_INET,
 };
 
-pub(super) fn source_ipv6(physical_ipv4: Ipv4Addr) -> Result<Ipv6Addr, String> {
+pub(super) fn source_ipv6(
+    physical_ipv4: Ipv4Addr,
+    destination: Ipv6Addr,
+) -> Result<Ipv6Addr, String> {
     let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
     let mut byte_count = 0u32;
     // SAFETY: the first call only requests the required buffer size.
@@ -50,7 +53,7 @@ pub(super) fn source_ipv6(physical_ipv4: Ipv4Addr) -> Result<Ipv6Addr, String> {
             // which remains alive throughout traversal.
             let adapter = unsafe { &*adapter_ptr };
             let mut owns_ipv4 = false;
-            let mut ipv6 = None;
+            let mut ipv6 = Vec::new();
             let mut address_ptr = adapter.FirstUnicastAddress;
             while !address_ptr.is_null() {
                 // SAFETY: address_ptr is a record in the returned linked list.
@@ -81,14 +84,43 @@ pub(super) fn source_ipv6(physical_ipv4: Ipv4Addr) -> Result<Ipv6Addr, String> {
                         let addr = unsafe { &*socket.lpSockaddr.cast::<SOCKADDR_IN6>() };
                         let candidate = Ipv6Addr::from(unsafe { addr.sin6_addr.u.Byte });
                         if super::is_bjut_client_ipv6(&candidate) {
-                            ipv6.get_or_insert(candidate);
+                            ipv6.push(candidate);
                         }
                     }
                 }
                 address_ptr = address.Next;
             }
             if owns_ipv4 {
+                // Ask Windows to choose the source for this destination on
+                // this exact adapter. The first enumerated address may be a
+                // stable address while browsers use a temporary IPv6 address.
+                let destination =
+                    SOCKADDR_INET::from(std::net::SocketAddrV6::new(destination, 0, 0, 0));
+                let mut route = MIB_IPFORWARD_ROW2::default();
+                let mut source = SOCKADDR_INET::default();
+                // SAFETY: adapter LUID belongs to the IPv4-verified adapter;
+                // input/output structures remain valid throughout the call.
+                if unsafe {
+                    GetBestRoute2(
+                        Some(&adapter.Luid),
+                        0,
+                        None,
+                        &destination,
+                        0,
+                        &mut route,
+                        &mut source,
+                    )
+                } == NO_ERROR
+                    && unsafe { source.si_family } == AF_INET6
+                {
+                    let selected = Ipv6Addr::from(unsafe { source.Ipv6.sin6_addr.u.Byte });
+                    if ipv6.contains(&selected) {
+                        return Ok(selected);
+                    }
+                }
                 return ipv6
+                    .into_iter()
+                    .next()
                     .ok_or_else(|| "校园网 IPv4 所在接口没有可用的 BJUT IPv6 地址".to_string());
             }
             adapter_ptr = adapter.Next;

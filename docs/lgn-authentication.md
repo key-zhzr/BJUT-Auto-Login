@@ -8,7 +8,7 @@
 
 旧版 `/V6` 预认证和表单 POST 不属于这份抓包的认证流程，已移除。登录后以 JSONP `result` 判断结果；提交后无法确认响应时，不自动切换协议或再次提交。若登录前无法发现 IPv6，保留单 IPv4 认证，并在结果中明确说明。
 
-IPv6 发现使用独立客户端：reqwest 的 IPv4 源地址绑定会过滤 IPv6 目标，不能直接复用 ePortal 的 IPv4 客户端。macOS/Linux 通过接口绑定保留校园网路由，Windows 从同一 IPv4 所在网卡选择有效的 BJUT IPv6，Android 保留已选择的 Network 绑定。IPv6 发现保留原生 TLS、证书校验、主机名和固定网关解析，禁止代理与重定向。
+IPv6 发现使用独立客户端：reqwest 的 IPv4 源地址绑定会过滤 IPv6 目标，不能直接复用 ePortal 的 IPv4 客户端。macOS/Linux 通过接口绑定保留校园网路由，Windows 对同一 IPv4 所在网卡调用 GetBestRoute2，优先使用系统针对 lgn6 目标推荐的有效 BJUT IPv6，避免枚举顺序选中与浏览器不同的源地址；Android 保留已选择的 Network 绑定。已知 lgn6 网关在同一预算内并发尝试，最低兼容模式保留系统 DNS。Windows 同时尝试原生 TLS 和 rustls 的只读地址发现，两者均保留证书、主机名校验并禁止代理与重定向；认证请求仍只提交一次。
 
 诊断实际获取 IPv6 地址；单纯打开登录页不算地址发现成功。JSONP 不可用时，可只读解析 lgn6 登录页的客户端地址字段。完整地址发现过程有超时限制。
 

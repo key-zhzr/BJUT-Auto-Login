@@ -11,7 +11,7 @@
         "hiddenTitle": true,
         "transparent": false,
         "backgroundColor": "#0f172a",
-        "shadow": false,
+        "shadow": true,
         "backgroundThrottling": "disabled",
         "visible": false
       }

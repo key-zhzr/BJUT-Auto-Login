@@ -1,9 +1,9 @@
 import type { AdapterInventory, DualStackReport, FamilyConnectivity, LoginProgress, NetworkSchedule, NetworkStatePayload } from './models';
 
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const familyLabel = (family: FamilyConnectivity) => ({
-  reachable: '外网可达', unreachable: '外网探测未通过', not_configured: '未取得可用地址', unknown: '尚未确认',
-})[family.status];
+export const compactFamilyLabel = (family: FamilyConnectivity) => family.status === 'reachable'
+  ? `${Math.round(family.durationMs)} ms`
+  : ({ timeout: '超时', checking: '检测中', unreachable: '未通过', not_configured: '无地址', unknown: '未确认' } as Record<string, string>)[family.status] || '未确认';
 
 export class NetworkExperience {
   private inventory: AdapterInventory | null = null;
@@ -11,97 +11,122 @@ export class NetworkExperience {
   private pending = false;
   private identity = '';
   private health: DualStackReport | null = null;
-  private readonly select = element<HTMLSelectElement>('preferred-network-adapter');
+  private readonly list = element('network-adapter-list');
+  private onSelect: (id: string) => Promise<void>;
+  private onRefresh: () => Promise<void>;
 
   constructor(onSelect: (id: string) => Promise<void>, onRefresh: () => Promise<void>) {
-    this.select.addEventListener('change', async () => {
-      this.pending = true; this.updateBusy();
-      element('network-adapter-message').textContent = '正在保存认证网卡选择…';
-      try {
-        await onSelect(this.select.value);
-        this.clearHealth();
-        element('network-adapter-message').textContent = '选择已保存，正在重新检测。指定网卡断开时会等待恢复。';
-        await onRefresh();
-      } catch (error) {
-        this.select.value = this.inventory?.preferredInterface || '';
-        element('network-adapter-message').textContent = String(error);
-      } finally { this.pending = false; this.updateBusy(); }
+    this.onSelect = onSelect; this.onRefresh = onRefresh;
+    this.list.addEventListener('click', event => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-adapter-id]');
+      if (button && !button.disabled) void this.choose(button.dataset.adapterId || '');
+    });
+    this.list.addEventListener('keydown', event => {
+      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      const options = Array.from(this.list.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+      const index = options.indexOf(document.activeElement as HTMLButtonElement);
+      if (!options.length || index < 0) return;
+      event.preventDefault();
+      const direction = event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 1;
+      const next = options[(index + direction + options.length) % options.length];
+      next.focus(); next.click();
     });
     element('btn-refresh-adapters').addEventListener('click', async () => {
       this.pending = true; this.updateBusy();
-      try { await onRefresh(); } catch (error) { element('network-adapter-message').textContent = String(error); }
+      try { await onRefresh(); } catch (error) { this.showMessage(String(error)); }
       finally { this.pending = false; this.updateBusy(); }
     });
   }
 
-  setBusy(busy: boolean) {
-    this.busy = busy;
-    this.updateBusy();
+  private showMessage(message: string) {
+    element('network-adapter-message').textContent = message;
+    element('network-adapter-message').hidden = !message;
   }
 
+  private async choose(id: string) {
+    if (this.busy || this.pending || this.inventory?.selectionSupported === false) return;
+    this.pending = true; this.updateBusy(); this.showMessage('正在保存选择…');
+    try { await this.onSelect(id); await this.onRefresh(); this.showMessage(''); }
+    catch (error) { this.showMessage(String(error)); }
+    finally {
+      this.pending = false; this.updateBusy();
+      if (document.activeElement === document.body || this.list.contains(document.activeElement)) {
+        Array.from(this.list.querySelectorAll<HTMLButtonElement>('button')).find(button => button.dataset.adapterId === id && !button.disabled)?.focus({ preventScroll: true });
+      }
+    }
+  }
+
+  setBusy(busy: boolean) { this.busy = busy; this.updateBusy(); }
+
   private updateBusy() {
-    this.select.disabled = this.busy || this.pending || this.inventory?.selectionSupported === false;
+    this.list.querySelectorAll<HTMLButtonElement>('button').forEach(button => {
+      button.disabled = this.busy || this.pending || button.dataset.unavailable === 'true' || this.inventory?.selectionSupported === false;
+    });
     element<HTMLButtonElement>('btn-refresh-adapters').disabled = this.busy || this.pending;
+    // A saved but disconnected choice must not remove the group from tab order.
+    if (!this.list.querySelector('button[tabindex="0"]:not(:disabled)')) {
+      const firstAvailable = this.list.querySelector<HTMLButtonElement>('button:not(:disabled)');
+      if (firstAvailable) firstAvailable.tabIndex = 0;
+    }
   }
 
   renderInventory(inventory: AdapterInventory) {
     this.inventory = inventory;
-    this.select.replaceChildren(new Option('自动选择（优先校园有线）', ''));
-    const list = element('network-adapter-list'); list.replaceChildren();
-    for (const adapter of inventory.adapters) {
-      if (adapter.selectable) {
-        const option = new Option(`${adapter.name} · ${adapter.interfaceName}${adapter.connected ? '' : ' · 已断开'}`, adapter.id);
-        option.disabled = !adapter.connected || adapter.ipv4.length === 0;
-        this.select.add(option);
-      }
-      const row = document.createElement('div'); row.className = `network-adapter-row${adapter.selected ? ' selected' : ''}`;
-      const title = document.createElement('strong');
+    const focused = (document.activeElement as HTMLElement)?.dataset.adapterId;
+    this.list.replaceChildren();
+    const addRow = (id: string, title: string, detail: string, chosen: boolean, available: boolean, active = false) => {
+      const row = document.createElement('button'); row.type = 'button';
+      row.className = `network-adapter-row${chosen ? ' chosen' : ''}${active ? ' in-use' : ''}`;
+      row.dataset.adapterId = id; row.dataset.unavailable = String(!available);
+      row.setAttribute('role', 'radio'); row.setAttribute('aria-checked', String(chosen)); row.tabIndex = chosen ? 0 : -1;
+      const marker = document.createElement('span'); marker.className = 'adapter-radio-marker'; marker.setAttribute('aria-hidden', 'true');
+      const text = document.createElement('span'); const label = document.createElement('strong'); label.textContent = title;
+      const description = document.createElement('small'); description.textContent = detail;
+      text.append(label, description); row.append(marker, text); this.list.append(row);
+    };
+    if (inventory.selectionSupported) addRow('', '自动选择', '优先校园有线，随当前连接自动识别', !inventory.preferredInterface, true);
+    const adapters = [...inventory.adapters].sort((a, b) => Number(b.selected) - Number(a.selected) || Number(b.connected) - Number(a.connected));
+    for (const adapter of adapters) {
       const kind = ({ wifi: 'Wi-Fi', ethernet: '有线', vpn: '虚拟 / VPN', cellular: '移动数据' } as Record<string, string>)[adapter.transport] || adapter.transport;
-      title.textContent = `${adapter.name} · ${kind}${adapter.selected ? ' · 用于认证' : ''}`;
-      const detail = document.createElement('small');
-      detail.textContent = `${adapter.interfaceName} · ${adapter.connected ? '已启用' : '已断开'} · IPv4 ${adapter.ipv4.join(' / ') || '--'} · IPv6 ${adapter.ipv6.length ? '已取得地址' : '--'}`;
-      row.append(title, detail); list.append(row);
+      const title = adapter.name === kind ? adapter.name : `${adapter.name} · ${kind}`;
+      addRow(adapter.id, `${title}${adapter.selected ? ' · 用于认证' : ''}`,
+        `${adapter.interfaceName} · ${adapter.connected ? '已启用' : '已断开'} · IPv4 ${adapter.ipv4.join(' / ') || '--'} · IPv6 ${adapter.ipv6.length ? '已取得地址' : '--'}`,
+        inventory.preferredInterface === adapter.id, adapter.selectable && adapter.connected && adapter.ipv4.length > 0, adapter.selected);
     }
-    if (inventory.preferredInterface && !inventory.adapters.some(adapter => adapter.id === inventory.preferredInterface && adapter.selectable)) {
-      this.select.add(new Option(`已指定的网卡不可用 · ${inventory.preferredInterface}`, inventory.preferredInterface));
+    if (inventory.preferredInterface && !inventory.adapters.some(adapter => adapter.id === inventory.preferredInterface)) {
+      addRow(inventory.preferredInterface, '指定网卡当前不可用', '等待网卡恢复，或选择其他网卡', true, false);
     }
-    this.select.value = inventory.preferredInterface;
     const selected = inventory.adapters.find(adapter => adapter.selected);
     element('network-selection-caption').textContent = selected ? `当前认证网卡：${selected.name}（${selected.interfaceName}）`
       : inventory.preferredInterface ? '指定网卡不可用，认证已暂停' : '尚未取得可用于认证的网卡';
-    if (!inventory.selectionSupported) element('network-adapter-message').textContent = 'Android 由系统选择校园 Wi-Fi；下方同时展示其他网络。';
-    this.setBusy(this.busy);
+    if (!inventory.selectionSupported) this.showMessage('Android 由系统选择校园 Wi-Fi；下方同时展示其他网络。');
+    this.updateBusy();
+    if (focused !== undefined) Array.from(this.list.querySelectorAll<HTMLButtonElement>('button')).find(button => button.dataset.adapterId === focused && !button.disabled)?.focus({preventScroll:true});
   }
 
   renderState(state: NetworkStatePayload) {
     const identity = `${state.interfaceName || ''}|${state.ip || ''}`;
-    const matches = this.health && this.health.interfaceName === state.interfaceName && this.health.ipv4.addresses.includes(state.ip || '');
-    if (this.identity && identity !== this.identity && !matches) this.clearHealth();
+    if (this.identity && identity !== this.identity && this.health?.scope !== 'system') this.clearHealth();
     this.identity = identity;
-    element('network-authentication-status').textContent = `门户认证：${state.state === 'BjutCampus' ? '需要认证' : state.state === 'Online' && state.loginType && state.loginType !== 'unknown' ? '已建立会话' : '尚未核对'}`;
-    element('network-system-status').textContent = `${this.inventory?.selectionSupported === false ? '应用当前路径' : '系统互联网'}：${typeof state.systemOnline !== 'boolean' ? '待检测' : state.systemOnline ? '可达' : '探测未通过'}`;
-    if (this.health && this.health.interfaceName === state.interfaceName && this.health.ipv4.addresses.includes(state.ip || '')) this.renderHealth(this.health);
   }
 
   clearHealth() {
     this.health = null;
-    element('dual-stack-checked-at').textContent = '认证网卡已变化，等待重新检测 IPv4 与 IPv6。';
     for (const id of ['ipv4-health', 'ipv6-health']) {
-      const node = element(id); node.className = 'family-health';
-      node.querySelector('strong')!.textContent = '等待重新检测'; node.querySelector('small')!.textContent = '';
+      const node = element(id); node.className = 'family-status'; node.title = '等待重新检测';
+      node.querySelector('strong')!.textContent = '检测中'; node.querySelector('.family-marker')!.textContent = '…';
     }
   }
 
   renderHealth(health: DualStackReport) {
     if (this.health && Date.parse(health.checkedAt) < Date.parse(this.health.checkedAt)) return;
     this.health = health;
-    if (this.identity && this.identity !== `${health.interfaceName}|${health.ipv4.addresses[0] || ''}`) return;
     for (const [id, family] of [['ipv4-health', health.ipv4], ['ipv6-health', health.ipv6]] as const) {
-      const node = element(id); node.className = `family-health ${family.status}`;
-      node.querySelector('strong')!.textContent = familyLabel(family);
-      node.querySelector('small')!.textContent = `${family.addresses.length ? '地址已取得' : '地址未取得'} · ${family.durationMs} ms\n${family.detail}`;
+      const node = element(id); node.className = `family-status ${family.status}`;
+      node.querySelector('strong')!.textContent = compactFamilyLabel(family);
+      node.querySelector('.family-marker')!.textContent = family.status === 'reachable' ? '✓' : family.status === 'checking' ? '…' : family.status === 'not_configured' ? '–' : '×';
+      node.title = `${new Date(health.checkedAt).toLocaleTimeString()} · ${family.detail}`;
     }
-    element('dual-stack-checked-at').textContent = `${health.interfaceName || '未选择网卡'} · ${new Date(health.checkedAt).toLocaleTimeString()} · IPv4、IPv6 分别通过此网卡实测`;
   }
 
   renderSchedule(plan: NetworkSchedule) {
@@ -118,10 +143,13 @@ export class LoginProgressView {
   private cancelled = false;
   private canCancel = false;
   private safetyMs: number | null = null;
+  private hideTimer: number | null = null;
+  private finished = false;
+  private onFinished: (summary: string) => void;
   private onCancel: (id: string) => Promise<void>;
 
-  constructor(onCancel: (id: string) => Promise<void>) {
-    this.onCancel = onCancel;
+  constructor(onCancel: (id: string) => Promise<void>, onFinished: (summary: string) => void = () => {}) {
+    this.onCancel = onCancel; this.onFinished = onFinished;
     element('btn-cancel-login').addEventListener('click', async () => {
       if (!this.canCancel) return;
       element<HTMLButtonElement>('btn-cancel-login').disabled = true;
@@ -133,7 +161,9 @@ export class LoginProgressView {
   }
 
   begin() {
-    this.id = crypto.randomUUID(); this.started = performance.now(); this.cancelled = false; this.safetyMs = null;
+    this.id = crypto.randomUUID(); this.started = performance.now(); this.cancelled = false; this.safetyMs = null; this.finished = false;
+    if (this.hideTimer !== null) { window.clearTimeout(this.hideTimer); this.hideTimer = null; }
+    element('btn-cancel-login').hidden = false;
     if (this.timer !== null) window.clearInterval(this.timer);
     this.timer = window.setInterval(() => { element('login-progress-time').textContent = `已用时 ${((performance.now() - this.started) / 1000).toFixed(1)} 秒`; }, 100);
     element('login-progress-panel').hidden = false;
@@ -160,10 +190,15 @@ export class LoginProgressView {
   }
 
   finish(message?: string) {
+    if (this.finished) return;
+    this.finished = true;
     this.canCancel = false;
     if (this.timer !== null) { window.clearInterval(this.timer); this.timer = null; }
     element<HTMLButtonElement>('btn-cancel-login').disabled = true;
     element('login-progress-time').textContent = `总用时 ${((performance.now() - this.started) / 1000).toFixed(1)} 秒`;
     if (message) element('login-progress-message').textContent = message;
+    element('btn-cancel-login').hidden = true;
+    this.onFinished([element('login-progress-message').textContent, element('login-progress-time').textContent, element('login-progress-phases').textContent].filter(Boolean).join('；'));
+    this.hideTimer = window.setTimeout(() => { element('login-progress-panel').hidden = true; this.hideTimer = null; }, 15_000);
   }
 }

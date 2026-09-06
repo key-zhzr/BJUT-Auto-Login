@@ -2190,28 +2190,28 @@ input:checked + .slider:before { transform: translateX(24px); }
   margin-bottom: 1rem;
 }
 
-.network-experience, .login-progress-panel { padding: 1.25rem; margin-bottom: 1rem; }
+.login-progress-panel { padding: 1.25rem; margin-bottom: 1rem; }
 .login-progress-panel[hidden] { display: none !important; }
-.network-experience h3 { margin: 0; }
-.network-experience p, .login-progress-panel p, .login-progress-phases { color: var(--text-muted); font-size: .84rem; line-height: 1.6; }
-.network-adapter-choice { display: flex; align-items: center; gap: 1rem; margin: .8rem 0; flex-wrap: wrap; }
-.network-adapter-choice label { font-size: .85rem; }
-.network-adapter-choice select { flex: 1; min-width: 180px; max-width: 100%; padding: .65rem; border: 1px solid var(--card-border); border-radius: 8px; background: var(--card-bg); color: var(--text-main); font: inherit; }
+.network-adapter-settings p, .login-progress-panel p, .login-progress-phases { color: var(--text-muted); font-size: .84rem; line-height: 1.6; }
 .network-adapter-list { display: grid; gap: .5rem; margin: .75rem 0; }
-.network-adapter-row { padding: .6rem .8rem; border: 1px solid var(--card-border); border-radius: 8px; }
-.network-adapter-row.selected { border-color: var(--primary-color); }
-.network-adapter-row strong, .network-adapter-row small, .family-health strong, .family-health small { display: block; overflow-wrap: anywhere; }
+.network-adapter-row { width: 100%; display: flex; align-items: center; gap: .8rem; text-align: left; color: var(--text-main); font: inherit; background: transparent; padding: .75rem .9rem; border: 1px solid var(--card-border); border-radius: 8px; cursor: pointer; transition: background .15s, transform .12s, border-color .15s; }
+.network-adapter-row.chosen { border-color: var(--primary-color); }
+.network-adapter-row:enabled:hover { background: color-mix(in srgb, var(--primary-color) 7%, transparent); }
+.network-adapter-row:enabled:active { transform: scale(.992); }
+.network-adapter-row:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+.network-adapter-row:disabled { cursor: default; opacity: .6; }
+.adapter-radio-marker { flex: 0 0 16px; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--text-muted); }
+.network-adapter-row.chosen .adapter-radio-marker { border: 5px solid var(--primary-color); }
+.network-adapter-row.in-use strong { color: var(--primary-color); }
+.dual-stack-status { display: flex; align-items: center; flex-wrap: wrap; gap: 1.25rem; margin: -.3rem 0 1rem; padding: 0 .25rem; font-size: .85rem; }
+.family-status { display: inline-flex; align-items: center; gap: .3rem; color: var(--text-muted); }
+.family-status strong { font-weight: 500; }
+.family-status.reachable .family-marker { color: var(--success); }
+.family-status.timeout .family-marker, .family-status.unknown .family-marker { color: var(--warning); }
+#btn-cancel-login[hidden] { display: none !important; }
+.network-adapter-row strong, .network-adapter-row small { display: block; overflow-wrap: anywhere; }
 .network-adapter-row strong { font-size: .82rem; }
 .network-adapter-row small { color: var(--text-muted); font-size: .75rem; margin-top: .25rem; }
-.dual-stack-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
-.family-health { border: 1px solid var(--card-border); border-radius: 10px; padding: .85rem; }
-.family-health h4 { font-size: .8rem; color: var(--text-muted); margin-bottom: .3rem; }
-.family-health strong { font-size: .92rem; }
-.family-health small { color: var(--text-muted); font-size: .75rem; line-height: 1.5; margin-top: .45rem; white-space: pre-line; }
-.family-health.reachable { border-left: 3px solid var(--success); }
-.family-health.unreachable, .family-health.not_configured { border-left: 3px solid var(--warning); }
-.network-result-summary { display: flex; gap: 1rem; flex-wrap: wrap; font-size: .8rem; margin-top: .9rem; }
-@media (max-width: 520px) { .dual-stack-grid { grid-template-columns: 1fr; } .network-adapter-choice select { width: 100%; } }
 
 .health-badge,
 .account-health-badge {

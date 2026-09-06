@@ -270,10 +270,21 @@ pub(crate) async fn portal_client(
     builder.build().map_err(redact_request_error)
 }
 
+#[cfg(test)]
 fn bind_lgn_ipv6_route(
     builder: ClientBuilder,
     route_context: Option<&PortalRouteContext>,
 ) -> Result<ClientBuilder, String> {
+    bind_lgn_ipv6_route_for(builder, route_context, LGN6_GATEWAY_IPV6[0])
+}
+
+fn bind_lgn_ipv6_route_for(
+    builder: ClientBuilder,
+    route_context: Option<&PortalRouteContext>,
+    destination: Ipv6Addr,
+) -> Result<ClientBuilder, String> {
+    #[cfg(not(target_os = "windows"))]
+    let _ = destination;
     // reqwest/hyper filters out every IPv6 destination when local_address is
     // IPv4. Discovery therefore needs its own IPv6-only connector; the
     // credential-bearing ePortal connector remains bound to physical_ipv4.
@@ -286,6 +297,7 @@ fn bind_lgn_ipv6_route(
     #[cfg(target_os = "windows")]
     let builder = builder.local_address(IpAddr::V6(lgn_ipv6_windows::source_ipv6(
         route_context.physical_ipv4(),
+        destination,
     )?));
     // Android has already bound the process to the selected Network. An
     // unspecified IPv6 source preserves that binding without a device override.
@@ -303,15 +315,35 @@ fn lgn_ipv6_client(
     timeout: Duration,
     route_context: Option<&PortalRouteContext>,
 ) -> Result<Client, String> {
+    lgn_ipv6_client_for(compatibility, timeout, route_context, None, true)
+}
+
+fn lgn_ipv6_client_for(
+    compatibility: VpnCompatibility,
+    timeout: Duration,
+    route_context: Option<&PortalRouteContext>,
+    destination: Option<Ipv6Addr>,
+    native_tls: bool,
+) -> Result<Client, String> {
     let builder = Client::builder()
         .timeout(timeout)
         .connect_timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .use_native_tls();
-    let mut builder = bind_lgn_ipv6_route(builder, route_context)?;
+        .no_proxy();
+    let builder = if native_tls {
+        builder.use_native_tls()
+    } else {
+        builder.use_rustls_tls()
+    };
+    let mut builder = bind_lgn_ipv6_route_for(
+        builder,
+        route_context,
+        destination.unwrap_or(LGN6_GATEWAY_IPV6[0]),
+    )?;
 
-    if compatibility != VpnCompatibility::Minimum {
+    if let Some(destination) = destination {
+        builder = builder.resolve(LGN6_HOST, SocketAddr::new(destination.into(), 0));
+    } else if compatibility != VpnCompatibility::Minimum {
         let lgn6_addresses = LGN6_GATEWAY_IPV6.map(|address| SocketAddr::new(address.into(), 0));
         builder = builder.resolve_to_addrs(LGN6_HOST, &lgn6_addresses);
     }
@@ -1070,10 +1102,47 @@ async fn discover_lgn_ipv6(
     timeout: Duration,
     route_context: Option<&PortalRouteContext>,
 ) -> Result<(String, &'static str), String> {
-    let client = lgn_ipv6_client(compatibility, timeout, route_context)?;
-    tokio::time::timeout(timeout, fetch_lgn_observed_ipv6(&client))
-        .await
-        .map_err(|_| "IPv6 地址发现超时".to_string())?
+    let addresses: Vec<_> = if compatibility == VpnCompatibility::Minimum {
+        vec![None]
+    } else {
+        LGN6_GATEWAY_IPV6.into_iter().map(Some).collect()
+    };
+    // Race the two known read-only IPv6 gateways: an unresponsive first AAAA
+    // address must not consume the entire discovery budget. On Windows also
+    // try rustls with normal certificate checks, since Schannel may stall on
+    // certificate-chain retrieval before the campus account is authenticated.
+    let tls_modes: &[bool] = if cfg!(target_os = "windows") {
+        &[true, false]
+    } else {
+        &[true]
+    };
+    tokio::time::timeout(timeout, async {
+        let mut attempts = FuturesUnordered::new();
+        for address in addresses {
+            for native_tls in tls_modes {
+                attempts.push(async move {
+                    let client = lgn_ipv6_client_for(
+                        compatibility,
+                        timeout,
+                        route_context,
+                        address,
+                        *native_tls,
+                    )?;
+                    fetch_lgn_observed_ipv6(&client).await
+                });
+            }
+        }
+        let mut failures = Vec::new();
+        while let Some(result) = attempts.next().await {
+            match result {
+                Ok(value) => return Ok(value),
+                Err(error) => failures.push(error),
+            }
+        }
+        Err(failures.join("；"))
+    })
+    .await
+    .map_err(|_| "IPv6 地址发现超时（同接口选址与网关探测均未及时完成）".to_string())?
 }
 
 async fn fetch_lgn_observed_ipv6(client: &Client) -> Result<(String, &'static str), String> {

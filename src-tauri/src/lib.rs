@@ -19,6 +19,7 @@ use campus_dns::{campus_dns_servers, query_campus_dns_ipv4};
 use network_probe::{run_diagnostic_probes, NETWORK_PROBE_TIMEOUT};
 mod portal_auth;
 mod recharge_state;
+mod update_metadata;
 
 use network_platform::*;
 
@@ -2010,7 +2011,10 @@ struct InternetProbeOutcome {
     detail: String,
 }
 
-async fn probe_internet_targets(source_ip: Option<&str>) -> Vec<InternetProbeOutcome> {
+async fn probe_internet_targets(
+    source_ip: Option<&str>,
+    stop_on_success: bool,
+) -> Vec<InternetProbeOutcome> {
     let builder = reqwest::Client::builder()
         .timeout(NETWORK_PROBE_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
@@ -2105,11 +2109,21 @@ async fn probe_internet_targets(source_ip: Option<&str>) -> Vec<InternetProbeOut
             }
         }
     });
-    futures_util::future::join_all(checks).await
+    use futures_util::StreamExt;
+    let mut checks: futures_util::stream::FuturesUnordered<_> = checks.collect();
+    let mut outcomes = Vec::new();
+    while let Some(outcome) = checks.next().await {
+        let success = outcome.success;
+        outcomes.push(outcome);
+        if stop_on_success && success {
+            break;
+        }
+    }
+    outcomes
 }
 
 pub(crate) async fn check_internet_from_source(source_ip: Option<&str>) -> bool {
-    probe_internet_targets(source_ip)
+    probe_internet_targets(source_ip, true)
         .await
         .into_iter()
         .any(|result| result.success)
@@ -2831,6 +2845,11 @@ async fn fetch_latest_official_release_tag() -> Result<String, String> {
         std::str::from_utf8(&bytes).map_err(|_| "GitHub 官方发布订阅不是有效 UTF-8".to_string())?;
     latest_official_release_tag_from_atom(atom)
         .ok_or_else(|| "GitHub 官方发布订阅未包含有效版本".to_string())
+}
+
+#[tauri::command]
+async fn get_release_asset_size(url: String) -> Result<Option<u64>, String> {
+    update_metadata::asset_size(url).await
 }
 
 #[tauri::command]
@@ -4575,6 +4594,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             dual_stack::probe(&net_info),
         )
         .await;
+        let system_online = system_online || dual_stack.online();
         let adapters = network_inventory::adapters();
         let separate_authentication_link = !preferred_interface_for_app(&app).is_empty()
             || adapters
@@ -4584,8 +4604,16 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 })
                 .count()
                 > 1;
-        let is_online = if separate_authentication_link {
-            dual_stack.online()
+        let needs_lgn_session =
+            separate_authentication_link && net_info["lgnWiredHint"].as_bool().unwrap_or(false);
+        let is_online = if system_online && needs_lgn_session {
+            fetch_portal_user_info(
+                Some(&current_ip),
+                compatibility,
+                portal_route_context.as_ref(),
+            )
+            .await
+            .is_some_and(|info| !info.account.trim().is_empty())
         } else {
             system_online
         };
@@ -5948,14 +5976,15 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         )
     };
     let internet_probe = async {
-        let started = std::time::Instant::now();
-        let (results, dual_stack) = futures_util::future::join(
+        let ((results, duration_ms), dual_stack) = futures_util::future::join(
             async {
-                if wifi_route_failed {
+                let started = std::time::Instant::now();
+                let results = if wifi_route_failed {
                     Vec::new()
                 } else {
-                    probe_internet_targets(Some(&ip)).await
-                }
+                    probe_internet_targets(Some(&ip), false).await
+                };
+                (results, started.elapsed().as_millis())
             },
             dual_stack::probe(&network),
         )
@@ -5978,14 +6007,14 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
                 .join("\n")
         };
         (
-            online,
-            make_diagnostic_step(
-                "internet",
-                "互联网连通性",
-                started,
-                if online { "success" } else { "warning" },
+            online || dual_stack.online(),
+            DiagnosticStep {
+                id: "internet".to_string(),
+                label: "互联网连通性".to_string(),
+                status: if online { "success" } else { "warning" }.to_string(),
                 message,
-            ),
+                duration_ms,
+            },
             dual_stack,
         )
     };
@@ -6027,8 +6056,8 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     steps.push(dns_step);
     steps.push(internet_step);
     for (id, label, family) in [
-        ("ipv4_internet", "认证网卡 IPv4", &dual_stack.ipv4),
-        ("ipv6_internet", "认证网卡 IPv6", &dual_stack.ipv6),
+        ("ipv4_internet", "IPv4 互联网", &dual_stack.ipv4),
+        ("ipv6_internet", "IPv6 互联网", &dual_stack.ipv6),
     ] {
         steps.push(DiagnosticStep {
             id: id.to_string(),
@@ -6176,12 +6205,24 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     } else if online && !dual_stack.online() {
         (
             "partial",
-            "系统互联网可达，但认证网卡的外网探测未通过，请核对认证与路由",
+            "系统互联网可达，但暂未完成 IPv4/IPv6 独立探测，请查看各项结果",
         )
-    } else if online && dual_stack.ipv6.status == "unreachable" {
-        ("partial", "互联网可达，但认证网卡的 IPv6 外网探测未通过")
-    } else if online && dual_stack.ipv4.status == "unreachable" {
-        ("partial", "互联网可达，但认证网卡的 IPv4 外网探测未通过")
+    } else if online
+        && dual_stack.ipv6.status != "reachable"
+        && dual_stack.ipv6.status != "not_configured"
+    {
+        (
+            "partial",
+            "互联网可达，IPv6 独立探测暂未通过（不等于 IPv6 不可用）",
+        )
+    } else if online
+        && dual_stack.ipv4.status != "reachable"
+        && dual_stack.ipv4.status != "not_configured"
+    {
+        (
+            "partial",
+            "互联网可达，IPv4 独立探测暂未通过（不等于 IPv4 不可用）",
+        )
     } else if online {
         ("healthy", "网络工作正常，互联网已连通")
     } else if login_type != LoginType::Unknown {
@@ -6962,23 +7003,52 @@ fn cancel_manual_login(
 
 async fn verify_login_network(
     app: &tauri::AppHandle,
-    state: &AppState,
+    state: &Arc<AppState>,
     network: &serde_json::Value,
 ) -> dual_stack::DualStackReport {
-    let (mut report, system_online) = futures_util::future::join(
-        dual_stack::probe(network),
-        check_internet_from_source(network["ip"].as_str()),
-    )
-    .await;
-    let latest = get_network_info(app.clone(), Some(false));
-    if latest["interfaceName"] != network["interfaceName"] || latest["ip"] != network["ip"] {
-        report.invalidate("探测期间认证网卡发生变化，请重新检测");
-        return report;
-    }
-    state.system_online.store(system_online, Ordering::SeqCst);
-    *state.link_health.lock().unwrap() = Some(report.clone());
-    let _ = app.emit("link-health", &report);
-    report
+    let app = app.clone();
+    let state = state.clone();
+    let network = network.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    tauri::async_runtime::spawn(async move {
+        let mut sender = Some(sender);
+        let report = dual_stack::probe_with_updates(&network, |report| {
+            let latest = get_network_info(app.clone(), Some(false));
+            if latest["interfaceName"] != network["interfaceName"] || latest["ip"] != network["ip"]
+            {
+                return;
+            }
+            *state.link_health.lock().unwrap() = Some(report.clone());
+            if report.online() {
+                state.system_online.store(true, Ordering::SeqCst);
+            }
+            let _ = app.emit("link-health", report);
+            if report.online() {
+                if let Some(sender) = sender.take() {
+                    let _ = sender.send(report.clone());
+                }
+            }
+        })
+        .await;
+        if let Some(sender) = sender.take() {
+            let _ = sender.send(report);
+        }
+    });
+    receiver.await.unwrap_or_else(|_| {
+        let unavailable = dual_stack::FamilyConnectivity {
+            addresses: Vec::new(),
+            status: "unknown".to_string(),
+            detail: "联网复核任务未完成".to_string(),
+            duration_ms: 0,
+        };
+        dual_stack::DualStackReport {
+            interface_name: String::new(),
+            checked_at: chrono::Local::now().to_rfc3339(),
+            scope: "system".to_string(),
+            ipv4: unavailable.clone(),
+            ipv6: unavailable,
+        }
+    })
 }
 
 async fn manual_login_inner(
@@ -7341,10 +7411,8 @@ async fn manual_login_inner(
                         });
                     }
                     if !health.online() {
-                        message.push_str("；认证网卡的外网连通性尚未通过验证");
+                        message.push_str("；公网连通性尚未通过验证");
                     }
-                    *state.link_health.lock().unwrap() = Some(health.clone());
-                    let _ = app.emit("link-health", &health);
                 } else {
                     schedule_network_change_readiness(app.clone(), state.clone());
                     return Ok(ManualLoginResult {
@@ -7377,7 +7445,7 @@ async fn manual_login_inner(
                     );
                 }
                 PortalLoginFailureDisposition::SessionAlreadyOnline => {
-                    progress.phase("verifying", "网关报告已有会话，正在验证此网卡的联网状态")?;
+                    progress.phase("verifying", "网关报告已有会话，正在验证互联网连通性")?;
                     if verify_login_network(&app, &state, &network).await.online() {
                         rust_log(
                             &app,
@@ -7387,6 +7455,13 @@ async fn manual_login_inner(
                             "success",
                         );
                         let net_info = get_network_info(app.clone(), Some(true));
+                        if ensure_same_network_identity(&trusted_identity, &net_info).is_err() {
+                            schedule_network_change_readiness(app.clone(), state.clone());
+                            return Ok(ManualLoginResult {
+                                success: false,
+                                message: "核对已有会话时网卡发生变化，请重新检测".to_string(),
+                            });
+                        }
                         emit_session_network_state(&app, &state, &net_info, "Online", &login_type);
                         let _ = app.emit(
                             "dashboard-user-info-refresh",
@@ -7431,7 +7506,7 @@ async fn manual_login_inner(
                     return Err(error);
                 }
                 progress.phase("verifying", "认证响应未能确认，正在只读核对联网状态")?;
-                let verified = verify_login_network(&app, &state, &network).await;
+                let _verified = verify_login_network(&app, &state, &network).await;
                 if login_result_is_ambiguous(&error) {
                     rust_log(
                         &app,
@@ -7446,18 +7521,6 @@ async fn manual_login_inner(
                     return Ok(ManualLoginResult {
                         success: false,
                         message: error,
-                    });
-                }
-                if verified.online() {
-                    let net_info = get_network_info(app.clone(), Some(true));
-                    emit_session_network_state(&app, &state, &net_info, "Online", &login_type);
-                    let _ = app.emit(
-                        "dashboard-user-info-refresh",
-                        serde_json::json!({"reason": "login-response-lost"}),
-                    );
-                    return Ok(ManualLoginResult {
-                        success: true,
-                        message: "登录响应未能读取，但互联网已连通".to_string(),
                     });
                 }
                 rust_log(
@@ -9883,6 +9946,25 @@ pub fn run() {
             {
                 if let Some(window) = _app.get_webview_window("main") {
                     let _ = window.set_decorations(false);
+                    let _ = window.set_shadow(true);
+                    #[cfg(target_os = "windows")]
+                    {
+                        let (width, height) = window
+                            .current_monitor()
+                            .ok()
+                            .flatten()
+                            .map(|monitor| {
+                                let screen =
+                                    monitor.size().to_logical::<f64>(monitor.scale_factor());
+                                (
+                                    1080.0_f64.min((screen.width - 48.0).max(320.0)),
+                                    780.0_f64.min((screen.height - 80.0).max(400.0)),
+                                )
+                            })
+                            .unwrap_or((1080.0, 780.0));
+                        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+                        let _ = window.center();
+                    }
                 }
             }
 
@@ -10131,6 +10213,7 @@ pub fn run() {
             get_update_target,
             fetch_latest_official_release_tag,
             fetch_official_update_manifest,
+            get_release_asset_size,
             control_update_download,
             download_and_install_update,
             reinstall_current_version,

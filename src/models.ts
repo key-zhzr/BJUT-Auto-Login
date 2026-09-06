@@ -170,6 +170,7 @@ export interface GitHubRelease {
 }
 
 export interface OfficialUpdateManifest {
+  assets?: GitHubReleaseAsset[];
   version: string;
   notes?: string;
   pub_date?: string;
@@ -249,12 +250,13 @@ export interface DiagnosticReport {
 
 export interface FamilyConnectivity {
   addresses: string[];
-  status: 'reachable' | 'unreachable' | 'not_configured' | 'unknown';
+  status: 'reachable' | 'unreachable' | 'not_configured' | 'unknown' | 'timeout' | 'checking';
   detail: string;
   durationMs: number;
 }
 
 export interface DualStackReport {
+  scope?: string;
   interfaceName: string;
   checkedAt: string;
   ipv4: FamilyConnectivity;

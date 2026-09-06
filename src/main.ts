@@ -536,8 +536,9 @@ async function showUpdateDialog(
   const signedInstallerHint = installAvailable && target.platform !== 'android'
     ? ' · 应用内安装将使用签名更新包'
     : '';
-  document.getElementById('update-modal-meta')!.textContent =
-    `当前 v${target.currentVersion} · ${target.platform}/${target.arch} · 浏览器完整包 ${asset.name} · ${formatBytes(asset.size)}${signedInstallerHint}`;
+  const meta = document.getElementById('update-modal-meta')!;
+  const showSize = (size: string) => { meta.textContent = `当前 v${target.currentVersion} · ${target.platform}/${target.arch} · 完整安装包 ${asset.name} · ${size}${signedInstallerHint}`; };
+  showSize(asset.size > 0 ? formatBytes(asset.size) : '正在读取大小…');
   notes.innerHTML = await renderReleaseNotes(release.body || '');
   notes.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => {
     anchor.addEventListener('click', event => {
@@ -560,9 +561,17 @@ async function showUpdateDialog(
   updateDownloadInProgress = false;
   setUpdateDownloadControls(false);
   modal.classList.remove('hidden');
+  let dialogActive = true;
+  if (!(asset.size > 0)) {
+    void invoke<number | null>('get_release_asset_size', { url: asset.browser_download_url }).then(size => {
+      if (dialogActive) showSize(size && size > 0 ? formatBytes(size) : '暂无法获取大小');
+      if (size && size > 0) asset.size = size;
+    }).catch(() => { if (dialogActive) showSize('暂无法获取大小'); });
+  }
 
   return new Promise(resolve => {
     const cleanup = () => {
+      dialogActive = false;
       cancelButton.removeEventListener('click', onCancel);
       browserButton.removeEventListener('click', onBrowser);
       confirmButton.removeEventListener('click', onConfirm);
@@ -1615,7 +1624,7 @@ const loginProgressView = new LoginProgressView(async operationId => {
   await invoke('cancel_manual_login', { operationId });
   const modal = document.getElementById('security-modal');
   if (modal && !modal.classList.contains('hidden')) document.getElementById('btn-sec-cancel')?.click();
-});
+}, summary => log('登录反馈', summary, 'info'));
 const btnRunDiagnostics = document.getElementById('btn-run-diagnostics') as HTMLButtonElement;
 const btnCopyDiagnostics = document.getElementById('btn-copy-diagnostics') as HTMLButtonElement;
 const adapterRepairPanel = document.getElementById('diagnostic-adapter-repair')!;
@@ -7275,6 +7284,7 @@ async function manualLogin(switchingAccount = false) {
         currentAccountUser,
       },
     } });
+    loginProgressView.finish(result.message);
     if (!result.success) {
       log('登录', `${switchingAccount ? '切换账号' : '登录'}失败: ${result.message}`, 'error');
       if (!switchingAccount) updateNetworkStatus(NetworkState.BjutCampus, undefined, result.message);

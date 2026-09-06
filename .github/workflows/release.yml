@@ -481,12 +481,19 @@ jobs:
               platforms[target] = {
                   "url": "{}/{}".format(base, filename),
                   "signature": signature_text,
+                  "size": os.path.getsize(artifact),
               }
           manifest = {
               "version": version,
               "notes": "完整更新说明请查看本 GitHub Release。",
               "pub_date": datetime.now(timezone.utc).isoformat(),
               "platforms": platforms,
+              "assets": [
+                  {"name": filename, "browser_download_url": "{}/{}".format(base, filename),
+                   "size": os.path.getsize(os.path.join(release_dir, filename))}
+                  for filename in sorted(os.listdir(release_dir))
+                  if filename.endswith((".exe", ".dmg", ".AppImage", ".deb", ".apk", ".tar.gz"))
+              ],
           }
           with open(os.path.join(release_dir, "latest.json"), "w", encoding="utf-8") as handle:
               json.dump(manifest, handle, ensure_ascii=False, indent=2)

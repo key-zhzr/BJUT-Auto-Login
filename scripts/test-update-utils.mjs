@@ -121,6 +121,16 @@ const syntheticRelease = releaseFromOfficialManifest({
 assert.equal(syntheticRelease.tag_name, 'v0.1.6');
 assert.equal(syntheticRelease.assets[0].name, 'BJUT-Auto-Login_0.1.6_Android_arm64.apk');
 assert.equal(syntheticRelease.assets[1].name, 'latest.json');
+assert.equal(syntheticRelease.assets[0].size, 0); // Legacy manifests need a header lookup.
+const manifestAsset = syntheticRelease.assets[0];
+const fromSizedManifest = (asset) => releaseFromOfficialManifest({
+  version: '0.1.6', platforms: {}, assets: [asset],
+}, { platform: 'android', arch: 'arm64', format: 'apk', currentVersion: '0.1.5' }, 'https://github.com/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json').assets[0].size;
+assert.equal(fromSizedManifest({ ...manifestAsset, size: 12_345_678 }), 12_345_678);
+assert.equal(fromSizedManifest({ ...manifestAsset, size: -1 }), 0);
+assert.equal(fromSizedManifest({ ...manifestAsset, size: '12345678' }), 0);
+assert.equal(fromSizedManifest({ ...manifestAsset, size: 12_345_678, name: 'different.apk' }), 0);
+assert.equal(fromSizedManifest({ ...manifestAsset, size: 12_345_678, browser_download_url: 'https://example.com/package.apk' }), 0);
 console.log('GitHub release fallback regression cases passed');
 
 const paymentUrl = 'weixin://wap/pay?prepayid%3Dwx1234567890&package=123&noncestr=abc123&timestamp=1784697242&sign=BgAAyf6IiX7aEIMn';

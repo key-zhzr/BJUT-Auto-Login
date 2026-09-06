@@ -154,6 +154,9 @@ export function releaseFromOfficialManifest(
   const assetName = buildExpectedUpdateAssetName(version, target);
   if (!assetName) throw new Error('当前平台没有可用的完整安装包格式');
   const releaseBase = `https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/${encodeURIComponent(tagName)}`;
+  const publishedAsset = manifest.assets?.find(item => item.name === assetName
+    && item.browser_download_url === `${releaseBase}/${encodeURIComponent(assetName)}`
+    && Number.isSafeInteger(item.size) && item.size > 0);
   return {
     tag_name: tagName,
     name: `BJUT-Auto-Login ${tagName}`,
@@ -165,7 +168,7 @@ export function releaseFromOfficialManifest(
       {
         name: assetName,
         browser_download_url: `${releaseBase}/${encodeURIComponent(assetName)}`,
-        size: 0,
+        size: publishedAsset?.size ?? 0,
       },
       {
         name: 'latest.json',
