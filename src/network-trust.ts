@@ -22,6 +22,7 @@ export interface NetworkTrustApproval {
 }
 
 interface NetworkTrustControllerOptions {
+  isCancelled?: () => boolean;
   loginTypeOverride: string | null;
   onLog: (module: string, message: string, type: 'info' | 'error') => void;
   onAlert: (message: string, title: string) => Promise<void>;
@@ -29,6 +30,7 @@ interface NetworkTrustControllerOptions {
 }
 
 export async function requestNetworkTrustApproval({
+  isCancelled,
   loginTypeOverride,
   onLog,
   onAlert,
@@ -40,6 +42,7 @@ export async function requestNetworkTrustApproval({
     const evaluation = await invoke<NetworkTrustEvaluation>('evaluate_manual_network_trust', {
       loginTypeOverride,
     });
+    if (isCancelled?.()) return { allowed: false, trustOnce: false, networkKey: null };
     if (evaluation.decision === 'allowed') {
       return { allowed: true, trustOnce: false, networkKey: null };
     }

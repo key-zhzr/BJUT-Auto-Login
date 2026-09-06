@@ -40,13 +40,30 @@ fn select_identity(
 /// This never reads SSID/BSSID. Both the periodic IP poll and full observation
 /// must use this selector, so simultaneous Wi-Fi cannot alternate the baseline.
 #[cfg(target_os = "macos")]
-pub(crate) fn physical_identity() -> Option<PhysicalIdentity> {
+pub(crate) fn physical_identity_for(preferred: &str) -> Option<PhysicalIdentity> {
     use crate::network_platform::*;
     let wifi_interface = corewlan::WiFiClient::shared()
         .ok()
         .and_then(|client| client.interface())
         .and_then(|interface| interface.interface_name())
         .unwrap_or_default();
+    if !preferred.is_empty() {
+        let wifi = corewlan::WiFiClient::shared().ok().is_some_and(|client| {
+            client
+                .interface_names()
+                .iter()
+                .any(|name| name == preferred)
+        });
+        if !wifi && !macos_is_physical_ethernet_interface(preferred) {
+            return None;
+        }
+        let ip = macos_ipv4_for_interface(preferred);
+        return crate::usable_physical_ipv4(&ip).map(|_| PhysicalIdentity {
+            interface: preferred.to_string(),
+            ipv4: ip,
+            transport: if wifi { "wifi" } else { "ethernet" },
+        });
+    }
     let wifi_ip = macos_ipv4_for_interface(&wifi_interface);
     let route_interface = macos_route_interface("172.30.201.2");
     let routed_wired = if route_interface != wifi_interface

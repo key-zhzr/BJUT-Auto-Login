@@ -23,6 +23,8 @@ export interface NetworkProfile {
 }
 
 export interface BackendConfig {
+  preferred_interface?: string;
+  adaptive_network_checks?: boolean;
   accounts?: Partial<AccountView>[];
   auto_login: boolean;
   check_interval: number;
@@ -236,12 +238,60 @@ export interface DiagnosticStep {
 
 export interface DiagnosticReport {
   createdAt: string;
-  overall: 'healthy' | 'auth_required' | 'no_network' | 'offline';
+  overall: 'healthy' | 'partial' | 'auth_required' | 'no_network' | 'offline';
   summary: string;
   ssid: string;
   ip: string;
   steps: DiagnosticStep[];
   adapterRestart?: { interfaceName: string; ipv4: string; reason: string } | null;
+  dualStack?: DualStackReport;
+}
+
+export interface FamilyConnectivity {
+  addresses: string[];
+  status: 'reachable' | 'unreachable' | 'not_configured' | 'unknown';
+  detail: string;
+  durationMs: number;
+}
+
+export interface DualStackReport {
+  interfaceName: string;
+  checkedAt: string;
+  ipv4: FamilyConnectivity;
+  ipv6: FamilyConnectivity;
+}
+
+export interface NetworkAdapter {
+  id: string;
+  name: string;
+  interfaceName: string;
+  transport: string;
+  ipv4: string[];
+  ipv6: string[];
+  connected: boolean;
+  selectable: boolean;
+  selected: boolean;
+}
+
+export interface AdapterInventory {
+  adapters: NetworkAdapter[];
+  preferredInterface: string;
+  selectionSupported: boolean;
+}
+
+export interface NetworkSchedule {
+  intervalSeconds: number;
+  interfacePollSeconds: number;
+  reason: string;
+}
+
+export interface LoginProgress {
+  operationId: string;
+  phase: string;
+  message: string;
+  elapsedMs: number;
+  canCancel: boolean;
+  timings: { phase: string; durationMs: number }[];
 }
 
 export interface DiagnosticProgress {
@@ -269,6 +319,8 @@ export interface NetworkStatePayload {
   ip?: string;
   timestamp?: string;
   loginMessage?: string;
+  interfaceName?: string;
+  systemOnline?: boolean;
 }
 
 export interface BillingLoginRecord {

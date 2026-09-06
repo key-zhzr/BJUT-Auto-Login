@@ -41,6 +41,10 @@ pub(crate) struct NetworkProfile {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub(crate) struct AppConfig {
     #[serde(default)]
+    pub(crate) preferred_interface: String,
+    #[serde(default = "default_true")]
+    pub(crate) adaptive_network_checks: bool,
+    #[serde(default)]
     pub(crate) accounts: Vec<Account>,
     #[serde(default = "default_auto_login", alias = "autoLogin")]
     pub(crate) auto_login: bool,

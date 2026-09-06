@@ -115,6 +115,43 @@ private object ProcessNetworkBindingCoordinator {
 
 class NetworkHelper {
     companion object {
+        @JvmStatic
+        fun getNetworkAdapters(context: Context): String {
+            val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val entries = org.json.JSONArray()
+            for (network in manager.allNetworks) {
+                val caps = manager.getNetworkCapabilities(network) ?: continue
+                val link = manager.getLinkProperties(network) ?: continue
+                val name = link.interfaceName ?: continue
+                val transport = when {
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                    else -> "other"
+                }
+                val ipv4 = org.json.JSONArray()
+                val ipv6 = org.json.JSONArray()
+                link.linkAddresses.forEach {
+                    val ip = it.address
+                    if (!ip.isAnyLocalAddress && !ip.isLoopbackAddress && !ip.isLinkLocalAddress && !ip.isMulticastAddress) {
+                        if (ip is java.net.Inet4Address) ipv4.put(ip.hostAddress)
+                        if (ip is java.net.Inet6Address) ipv6.put(ip.hostAddress?.substringBefore('%'))
+                    }
+                }
+                entries.put(JSONObject().put("id", network.toString()).put("name", name)
+                    .put("interfaceName", name).put("transport", transport)
+                    .put("ipv4", ipv4).put("ipv6", ipv6).put("connected", true).put("selectable", false))
+            }
+            return entries.toString()
+        }
+
+        @JvmStatic
+        fun isNetworkPowerSaving(context: Context): Boolean {
+            val power = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            return power.isPowerSaveMode || !power.isInteractive
+        }
+
         private const val SECURE_PREFS = "bjut_al_secure_config"
         private const val SECURE_CONFIG_KEY = "config"
         private const val SECURE_PREFS_V2 = "bjut_al_secure_config_v2"
@@ -514,6 +551,7 @@ class NetworkHelper {
                     if (identityFresh) identityObservedAt = SystemClock.elapsedRealtime()
                 }
                 return JSONObject()
+                    .put("powerSaving", isNetworkPowerSaving(context))
                     .put("ssid", ssid)
                     .put("bssid", bssid)
                     .put("ip", ipString)

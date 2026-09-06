@@ -4,11 +4,15 @@ mod campus_dns;
 mod campus_services;
 mod config_model;
 mod cookie_jar;
+mod dual_stack;
+mod login_progress;
 #[cfg(any(target_os = "macos", test))]
 mod macos_network;
+mod network_inventory;
 mod network_platform;
 mod network_probe;
 mod network_repair;
+mod network_schedule;
 use network_repair::AdapterRestartTarget;
 mod network_trust;
 use campus_dns::{campus_dns_servers, query_campus_dns_ipv4};
@@ -390,12 +394,15 @@ fn windows_best_route_interface_index(destination: std::net::Ipv4Addr) -> Option
 }
 
 #[cfg(target_os = "windows")]
-fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentity {
+fn windows_network_identity(include_wifi_details: bool, preferred: &str) -> WindowsNetworkIdentity {
     use windows::Win32::NetworkManagement::IpHelper::{IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211};
 
     let mut identity = WindowsNetworkIdentity::default();
     let observations = windows_wlan_observations(include_wifi_details);
-    let wifi_adapters = windows_physical_adapters(IF_TYPE_IEEE80211);
+    let wifi_adapters: Vec<_> = windows_physical_adapters(IF_TYPE_IEEE80211)
+        .into_iter()
+        .filter(|adapter| preferred.is_empty() || adapter.guid == preferred)
+        .collect();
     let mut selected_wifi_metric = None;
 
     for adapter in &wifi_adapters {
@@ -434,7 +441,10 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
     // gateway/metric (or the sole wired adapter). The read-only protocol probe
     // must still succeed before any credential is sent, so a normal home LAN
     // is observable in diagnostics without becoming automatically trusted.
-    let wired_adapters = windows_physical_adapters(IF_TYPE_ETHERNET_CSMACD);
+    let wired_adapters: Vec<_> = windows_physical_adapters(IF_TYPE_ETHERNET_CSMACD)
+        .into_iter()
+        .filter(|adapter| preferred.is_empty() || adapter.guid == preferred)
+        .collect();
     let routed_wired = [
         std::net::Ipv4Addr::new(10, 21, 251, 3),
         std::net::Ipv4Addr::new(10, 21, 221, 98),
@@ -487,11 +497,60 @@ fn windows_network_identity(include_wifi_details: bool) -> WindowsNetworkIdentit
     identity
 }
 
+fn preferred_interface_for_app(app: &tauri::AppHandle) -> String {
+    app.try_state::<Arc<AppState>>()
+        .map(|state| state.config.read().unwrap().preferred_interface.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_link_health(state: tauri::State<Arc<AppState>>) -> Option<dual_stack::DualStackReport> {
+    state.link_health.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_network_adapters(app: tauri::AppHandle) -> serde_json::Value {
+    let network = get_network_info(app.clone(), Some(false));
+    let mut adapters = network_inventory::adapters();
+    for adapter in &mut adapters {
+        adapter.selected =
+            network["interfaceName"].as_str() == Some(adapter.interface_name.as_str());
+    }
+    serde_json::json!({"adapters": adapters, "preferredInterface": preferred_interface_for_app(&app), "selectionSupported": !cfg!(target_os = "android")})
+}
+
+#[tauri::command]
+fn set_preferred_interface(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    if cfg!(target_os = "android") {
+        return Err("Android 由系统选择校园 Wi-Fi，当前仅展示网络接口".to_string());
+    }
+    if state.manual_login_in_progress.load(Ordering::SeqCst) {
+        return Err("请等待当前登录或恢复操作结束后再选择网卡".to_string());
+    }
+    if !id.is_empty()
+        && network_inventory::preferred_adapter(&network_inventory::adapters(), &id).is_none()
+    {
+        return Err("此网卡当前不可用于认证，请刷新网卡列表".to_string());
+    }
+    let mut config = state.config.read().unwrap().clone();
+    config.preferred_interface = id;
+    save_config(&app, &state, config)?;
+    schedule_network_change_readiness(app, state.inner().clone());
+    Ok(())
+}
+
 #[tauri::command]
 fn get_network_info(
     _app: tauri::AppHandle,
     _include_wifi_details: Option<bool>,
 ) -> serde_json::Value {
+    let preferred_interface = preferred_interface_for_app(&_app);
+    #[cfg(target_os = "android")]
+    let _ = &preferred_interface;
     #[cfg(target_os = "android")]
     {
         let mut result = serde_json::json!({
@@ -592,7 +651,7 @@ fn get_network_info(
         let lgn_link_configuration = serde_json::Value::Null;
 
         #[cfg(target_os = "macos")]
-        if let Some(selected) = macos_network::physical_identity() {
+        if let Some(selected) = macos_network::physical_identity_for(&preferred_interface) {
             interface_name = selected.interface;
             ip = selected.ipv4;
             transport = selected.transport.to_string();
@@ -623,7 +682,10 @@ fn get_network_info(
 
         #[cfg(target_os = "windows")]
         {
-            let identity = windows_network_identity(_include_wifi_details.unwrap_or(true));
+            let identity = windows_network_identity(
+                _include_wifi_details.unwrap_or(true),
+                &preferred_interface,
+            );
             ssid = identity.ssid;
             bssid = identity.bssid;
             ip = identity.ip;
@@ -707,6 +769,54 @@ fn get_network_info(
             }
         }
 
+        #[cfg(target_os = "linux")]
+        if !preferred_interface.is_empty() {
+            let adapters = network_inventory::adapters();
+            if let Some(selected) =
+                network_inventory::preferred_adapter(&adapters, &preferred_interface)
+            {
+                if interface_name != selected.interface_name {
+                    ssid.clear();
+                    bssid.clear();
+                }
+                interface_name.clone_from(&selected.interface_name);
+                ip = selected.ipv4.first().cloned().unwrap_or_default();
+                transport.clone_from(&selected.transport);
+                identity_source = "sameInterface".to_string();
+                if transport == "wifi" && _include_wifi_details.unwrap_or(true) {
+                    if let Ok(output) = std::process::Command::new("nmcli")
+                        .args([
+                            "-t",
+                            "-f",
+                            "active,ssid,bssid",
+                            "dev",
+                            "wifi",
+                            "list",
+                            "ifname",
+                            &interface_name,
+                        ])
+                        .output()
+                    {
+                        for line in String::from_utf8_lossy(&output.stdout).lines() {
+                            let fields = split_nmcli_fields(line);
+                            if fields.len() >= 3 && fields[0] == "yes" {
+                                ssid = fields[1].clone();
+                                bssid = fields[2].clone();
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                ssid.clear();
+                bssid.clear();
+                ip.clear();
+                interface_name.clear();
+                transport = "unknown".to_string();
+                identity_source = "unavailable".to_string();
+            }
+        }
+
         serde_json::json!({
             "ssid": ssid,
             "bssid": bssid,
@@ -718,6 +828,7 @@ fn get_network_info(
             "lgnWiredHint": transport.eq_ignore_ascii_case("ethernet") && is_lgn_wired_client_ipv4(&ip),
             "lgnWiredFeatures": lgn_wired_features,
             "lgnLinkConfiguration": lgn_link_configuration,
+            "preferredInterface": preferred_interface,
             "wifiIdentityError": wifi_identity_error
         })
     }
@@ -1138,10 +1249,13 @@ fn frontend_ready(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) -> 
 }
 
 #[tauri::command]
-fn get_local_ip() -> String {
+fn get_local_ip(app: tauri::AppHandle) -> String {
+    let preferred = preferred_interface_for_app(&app);
+    #[cfg(target_os = "android")]
+    let _ = &preferred;
     #[cfg(target_os = "windows")]
     {
-        return windows_network_identity(false).ip;
+        return windows_network_identity(false, &preferred).ip;
     }
 
     #[cfg(target_os = "android")]
@@ -1151,21 +1265,18 @@ fn get_local_ip() -> String {
 
     #[cfg(target_os = "macos")]
     {
-        macos_network::physical_identity()
+        macos_network::physical_identity_for(&preferred)
             .map(|identity| identity.ipv4)
             .unwrap_or_default()
     }
 
     #[cfg(target_os = "linux")]
     {
-        if let Some((interface, address)) = linux_route_identity("172.30.201.2") {
-            if linux_is_physical_ethernet_interface(&interface) && is_campus_wired_ipv4(&address) {
-                return address;
-            }
-        }
-        linux_campus_wired_identity("")
-            .map(|(_interface, address)| address)
-            .unwrap_or_default()
+        let _ = preferred;
+        get_network_info(app, Some(false))["ip"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
     }
 
     #[cfg(not(any(
@@ -1392,6 +1503,7 @@ struct DiagnosticReport {
     ip: String,
     steps: Vec<DiagnosticStep>,
     adapter_restart: Option<AdapterRestartTarget>,
+    dual_stack: dual_stack::DualStackReport,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -1415,12 +1527,16 @@ struct AppState {
     network_change_generation: AtomicU64,
     login_operation_generation: AtomicU64,
     manual_login_in_progress: AtomicBool,
+    login_progress: login_progress::LoginProgressControl,
     login_request_lock: tokio::sync::Mutex<()>,
     is_suspended: AtomicBool,
     last_known_ip: Mutex<Option<String>>,
     non_campus_count: AtomicU32,
     is_in_background: AtomicBool,
     last_network_state: Mutex<serde_json::Value>,
+    link_health: Mutex<Option<dual_stack::DualStackReport>>,
+    system_online: AtomicBool,
+    network_schedule: Mutex<network_schedule::AdaptiveSchedule>,
     auto_login_paused_until: std::sync::atomic::AtomicI64,
     usage_alert_history: Mutex<HashMap<String, String>>,
     update_download: UpdateDownloadControl,
@@ -2433,12 +2549,30 @@ pub extern "system" fn Java_cn_edu_bjut_al_NativeKeepAlive_runHeadlessCheck(
             .enable_all()
             .build()
             .map_err(|error| format!("创建无界面运行时失败：{error}"))?;
-        let payload = runtime.block_on(run_headless_network_check(
-            config,
-            network,
+        let mut payload = runtime.block_on(run_headless_network_check(
+            config.clone(),
+            network.clone(),
             account_health,
             &reason,
         ));
+        static SCHEDULE: std::sync::OnceLock<Mutex<network_schedule::AdaptiveSchedule>> =
+            std::sync::OnceLock::new();
+        let mut schedule = SCHEDULE
+            .get_or_init(|| Mutex::new(network_schedule::AdaptiveSchedule::default()))
+            .lock()
+            .unwrap();
+        let identity = format!("{}|{}", network["networkId"], network["ip"]);
+        let plan = schedule.observe(network_schedule::ScheduleInput {
+            identity: &identity,
+            online: matches!(payload["status"].as_str(), Some("online" | "login_success")),
+            has_link: !network["ip"].as_str().unwrap_or("").is_empty(),
+            background: true,
+            mobile_data: is_mobile_data_network(&network),
+            power_saving: network["powerSaving"].as_bool().unwrap_or(false),
+            enabled: config.adaptive_network_checks,
+            configured: config.check_interval_bg,
+        });
+        payload["schedule"] = serde_json::to_value(plan).unwrap_or_default();
         serde_json::to_string(&payload).map_err(|error| error.to_string())
     })()
     .unwrap_or_else(|error| {
@@ -4078,6 +4212,77 @@ fn save_config(
     Ok(())
 }
 
+struct NetworkScheduleGuard {
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    login_generation: u64,
+    network_generation: u64,
+}
+
+impl Drop for NetworkScheduleGuard {
+    fn drop(&mut self) {
+        if network_check_login_operation_superseded(&self.state, self.login_generation)
+            || self.state.network_change_generation.load(Ordering::SeqCst)
+                != self.network_generation
+        {
+            return;
+        }
+        let network = self.state.last_network_state.lock().unwrap().clone();
+        let cfg = self.state.config.read().unwrap().clone();
+        let background = self.state.is_in_background.load(Ordering::SeqCst);
+        let profile = matching_network_profile(
+            &cfg,
+            network["ssid"].as_str().unwrap_or(""),
+            network["bssid"].as_str().unwrap_or(""),
+            &login_type_from_profile(network["loginType"].as_str().unwrap_or(""))
+                .unwrap_or(LoginType::Unknown),
+        );
+        let configured = profile
+            .as_ref()
+            .and_then(|profile| {
+                if background {
+                    profile.check_interval_bg
+                } else {
+                    profile.check_interval
+                }
+            })
+            .unwrap_or(if background {
+                cfg.check_interval_bg
+            } else {
+                cfg.check_interval
+            });
+        let identity = format!(
+            "{}|{}",
+            network["interfaceName"].as_str().unwrap_or(""),
+            network["ip"].as_str().unwrap_or("")
+        );
+        let plan =
+            self.state
+                .network_schedule
+                .lock()
+                .unwrap()
+                .observe(network_schedule::ScheduleInput {
+                    identity: &identity,
+                    online: network["state"] == "Online",
+                    has_link: !network["ip"].as_str().unwrap_or("").is_empty(),
+                    background,
+                    mobile_data: is_mobile_data_network(&network),
+                    power_saving: network_schedule::power_saving(),
+                    enabled: cfg.adaptive_network_checks,
+                    configured,
+                });
+        self.state
+            .countdown
+            .store(plan.interval_seconds, Ordering::SeqCst);
+        let _ = self.app.emit("network-schedule", &plan);
+    }
+}
+
+#[tauri::command]
+fn get_network_schedule(state: tauri::State<Arc<AppState>>) -> network_schedule::SchedulePlan {
+    state.network_schedule.lock().unwrap().plan.clone()
+}
+
 async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full_details: bool) {
     if state.is_checking.swap(true, Ordering::SeqCst) {
         if full_details {
@@ -4104,6 +4309,12 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             state.is_checking.store(false, Ordering::SeqCst);
             return;
         }
+        let _schedule_guard = NetworkScheduleGuard {
+            app: app.clone(),
+            state: state.clone(),
+            login_generation: login_operation_generation,
+            network_generation: state.network_change_generation.load(Ordering::SeqCst),
+        };
         let is_bg = app_is_in_background(&app, &state);
         state.is_in_background.store(is_bg, Ordering::SeqCst);
         let (interval_fg, interval_bg, compatibility) = {
@@ -4307,6 +4518,10 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 if let Some(object) = payload.as_object_mut() {
                     object.insert("state".to_string(), serde_json::json!(state_str));
                     object.insert(
+                        "systemOnline".to_string(),
+                        serde_json::json!(state.system_online.load(Ordering::SeqCst)),
+                    );
+                    object.insert(
                         "loginType".to_string(),
                         serde_json::json!(login_type.map(LoginType::as_str)),
                     );
@@ -4355,7 +4570,26 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         // different default network (for example cellular while an unvalidated
         // campus Wi-Fi remains associated). Connectivity decisions therefore
         // always come from our independent multi-target probes.
-        let is_online = check_internet_from_source(Some(&current_ip)).await;
+        let (system_online, dual_stack) = futures_util::future::join(
+            check_internet_from_source(Some(&current_ip)),
+            dual_stack::probe(&net_info),
+        )
+        .await;
+        let adapters = network_inventory::adapters();
+        let separate_authentication_link = !preferred_interface_for_app(&app).is_empty()
+            || adapters
+                .iter()
+                .filter(|adapter| {
+                    adapter.selectable && adapter.connected && !adapter.ipv4.is_empty()
+                })
+                .count()
+                > 1;
+        let is_online = if separate_authentication_link {
+            dual_stack.online()
+        } else {
+            system_online
+        };
+
         rust_log(
             &app,
             &state,
@@ -4383,6 +4617,17 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             return;
         }
 
+        let latest_network = get_network_info(app.clone(), Some(false));
+        if latest_network["interfaceName"] != net_info["interfaceName"]
+            || latest_network["ip"] != net_info["ip"]
+        {
+            state.is_checking.store(false, Ordering::SeqCst);
+            schedule_network_change_readiness(app.clone(), state.clone());
+            return;
+        }
+        state.system_online.store(system_online, Ordering::SeqCst);
+        *state.link_health.lock().unwrap() = Some(dual_stack.clone());
+        let _ = app.emit("link-health", &dual_stack);
         if is_online {
             rust_log(
                 &app,
@@ -5016,7 +5261,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             &format!("[DEBUG] 后台检测为非校园网环境，当前连续次数: {}/5", count),
                             "debug",
                         );
-                        if count >= 5 {
+                        if count >= 5 && !state.config.read().unwrap().adaptive_network_checks {
                             rust_log(&app, &state, "网络", "后台连续5次检测到校园网登录页面（或自动登录失败），进入自动休眠模式以省电。返回前台时将自动恢复。", "info");
                             state.is_suspended.store(true, Ordering::SeqCst);
                         }
@@ -5134,6 +5379,8 @@ fn sync_config(
     state: tauri::State<Arc<AppState>>,
     config: AppConfig,
 ) -> Result<(), String> {
+    let mut config = config;
+    config.preferred_interface = state.config.read().unwrap().preferred_interface.clone();
     if let Err(error) = save_config(&app, &state, config) {
         rust_log(
             &app,
@@ -5492,7 +5739,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         .unwrap_or("")
         .to_string();
     if ip.is_empty() {
-        ip = get_local_ip();
+        ip = get_local_ip(app.clone());
     }
     let identity_status = if ip.is_empty() {
         "error"
@@ -5702,11 +5949,17 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     };
     let internet_probe = async {
         let started = std::time::Instant::now();
-        let results = if wifi_route_failed {
-            Vec::new()
-        } else {
-            probe_internet_targets(Some(&ip)).await
-        };
+        let (results, dual_stack) = futures_util::future::join(
+            async {
+                if wifi_route_failed {
+                    Vec::new()
+                } else {
+                    probe_internet_targets(Some(&ip)).await
+                }
+            },
+            dual_stack::probe(&network),
+        )
+        .await;
         let online = results.iter().any(|result| result.success);
         let message = if results.is_empty() {
             "未执行互联网目标探测".to_string()
@@ -5733,6 +5986,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
                 if online { "success" } else { "warning" },
                 message,
             ),
+            dual_stack,
         )
     };
     let gateway_probe = async {
@@ -5764,7 +6018,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     };
     let (
         dns_step,
-        (online, internet_step),
+        (online, internet_step, dual_stack),
         ((gateway_results, lgn_ipv6_diagnostic), portal_duration_ms),
     ) = run_diagnostic_probes(dns_probe, internet_probe, gateway_probe, |percent| {
         emit_network_diagnostic_progress(&app, percent, "正在并发检查 DNS、互联网和认证网关…")
@@ -5772,6 +6026,27 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     .await;
     steps.push(dns_step);
     steps.push(internet_step);
+    for (id, label, family) in [
+        ("ipv4_internet", "认证网卡 IPv4", &dual_stack.ipv4),
+        ("ipv6_internet", "认证网卡 IPv6", &dual_stack.ipv6),
+    ] {
+        steps.push(DiagnosticStep {
+            id: id.to_string(),
+            label: label.to_string(),
+            status: if family.status == "reachable" {
+                "success"
+            } else {
+                "warning"
+            }
+            .to_string(),
+            message: family.detail.clone(),
+            duration_ms: family.duration_ms,
+        });
+    }
+    if let Some(state) = app.try_state::<Arc<AppState>>() {
+        *state.link_health.lock().unwrap() = Some(dual_stack.clone());
+        let _ = app.emit("link-health", &dual_stack);
+    }
     // diagnose_login_gateways preserves the same physical-link priority used
     // by automatic login. Prefer the first verified portal even if a lower
     // priority gateway becomes reachable only after authentication.
@@ -5896,7 +6171,18 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
     });
     emit_network_diagnostic_progress(&app, 100, "网络链路诊断完成");
 
-    let (overall, summary) = if online {
+    let (overall, summary) = if online && (ip.is_empty() || transport == "none") {
+        ("partial", "系统互联网可达，但认证网卡尚未取得可用地址")
+    } else if online && !dual_stack.online() {
+        (
+            "partial",
+            "系统互联网可达，但认证网卡的外网探测未通过，请核对认证与路由",
+        )
+    } else if online && dual_stack.ipv6.status == "unreachable" {
+        ("partial", "互联网可达，但认证网卡的 IPv6 外网探测未通过")
+    } else if online && dual_stack.ipv4.status == "unreachable" {
+        ("partial", "互联网可达，但认证网卡的 IPv4 外网探测未通过")
+    } else if online {
         ("healthy", "网络工作正常，互联网已连通")
     } else if login_type != LoginType::Unknown {
         ("auth_required", "已连接校园网，但需要完成账号认证")
@@ -5929,6 +6215,7 @@ async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
         ip,
         steps,
         adapter_restart,
+        dual_stack,
     }
 }
 
@@ -6015,6 +6302,10 @@ async fn create_diagnostic_bundle(
             ip,
             bssid,
         );
+    }
+    report.dual_stack.redact_addresses();
+    if let Some(target) = &mut report.adapter_restart {
+        target.ipv4 = "[LOCAL-IP]".to_string();
     }
     let redacted_report = serde_json::to_value(&report).map_err(|error| error.to_string())?;
     let bundle = serde_json::json!({
@@ -6162,6 +6453,7 @@ fn get_countdown_status(state: tauri::State<Arc<AppState>>) -> serde_json::Value
 
 #[tauri::command]
 fn trigger_manual_check(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) {
+    state.network_schedule.lock().unwrap().reset();
     rust_log(
         &app,
         &state,
@@ -6524,6 +6816,9 @@ fn emit_session_network_state(
     let payload = serde_json::json!({
         "state": state_name,
         "loginType": login_type.as_str(),
+        "interfaceName": network["interfaceName"],
+        "transport": network["transport"],
+        "systemOnline": state.system_online.load(Ordering::SeqCst),
         "ssid": network.get("ssid").and_then(|value| value.as_str()).unwrap_or(""),
         "bssid": network.get("bssid").and_then(|value| value.as_str()).unwrap_or(""),
         "ip": network.get("ip").and_then(|value| value.as_str()).unwrap_or(""),
@@ -6622,16 +6917,84 @@ async fn logout_current_campus_session(
     Ok(message)
 }
 
-#[tauri::command]
-async fn manual_login(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManualLoginRequest {
     account_index: Option<usize>,
     login_type_override: Option<String>,
     trust_network_once: Option<bool>,
     expected_network_key: Option<String>,
     switch_context: Option<LoginSwitchContext>,
+    operation_id: Option<String>,
+}
+
+#[tauri::command]
+async fn manual_login(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    request: ManualLoginRequest,
 ) -> Result<ManualLoginResult, String> {
+    let id = request
+        .operation_id
+        .clone()
+        .unwrap_or_else(|| format!("login-{}", chrono::Utc::now().timestamp_millis()));
+    state.login_progress.start(&id)?;
+    let progress = login_progress::Session {
+        id: &id,
+        control: &state.login_progress,
+        app: &app,
+    };
+    let result = manual_login_inner(app.clone(), state.inner().clone(), request, &progress).await;
+    match &result {
+        Ok(value) => progress.finish(value.success, &value.message),
+        Err(error) => progress.finish(false, error),
+    }
+    result
+}
+
+#[tauri::command]
+fn cancel_manual_login(
+    state: tauri::State<Arc<AppState>>,
+    operation_id: String,
+) -> Result<(), String> {
+    state.login_progress.cancel(&operation_id)
+}
+
+async fn verify_login_network(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    network: &serde_json::Value,
+) -> dual_stack::DualStackReport {
+    let (mut report, system_online) = futures_util::future::join(
+        dual_stack::probe(network),
+        check_internet_from_source(network["ip"].as_str()),
+    )
+    .await;
+    let latest = get_network_info(app.clone(), Some(false));
+    if latest["interfaceName"] != network["interfaceName"] || latest["ip"] != network["ip"] {
+        report.invalidate("探测期间认证网卡发生变化，请重新检测");
+        return report;
+    }
+    state.system_online.store(system_online, Ordering::SeqCst);
+    *state.link_health.lock().unwrap() = Some(report.clone());
+    let _ = app.emit("link-health", &report);
+    report
+}
+
+async fn manual_login_inner(
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    request: ManualLoginRequest,
+    progress: &login_progress::Session<'_>,
+) -> Result<ManualLoginResult, String> {
+    let ManualLoginRequest {
+        account_index,
+        login_type_override,
+        trust_network_once,
+        expected_network_key,
+        switch_context,
+        ..
+    } = request;
     // Invalidate any countdown-triggered check that captured the previous
     // portal state. This prevents a check started during the logout/login gap
     // from traversing every configured account after the target login wins.
@@ -6651,6 +7014,7 @@ async fn manual_login(
     // Capture a complete identity before the potentially slow portal probe.
     // The probe result must never be combined with SSID/BSSID/IP collected
     // from an earlier network.
+    progress.phase("checking", "正在核对认证网卡与网络身份")?;
     let network_before_probe = get_network_info(app.clone(), Some(true));
     let identity_before_probe = NetworkIdentitySnapshot::capture(&network_before_probe);
     #[cfg(target_os = "android")]
@@ -6678,6 +7042,7 @@ async fn manual_login(
     let config = state.config.read().unwrap().clone();
     let compatibility = effective_vpn_compatibility(&config);
     let probe_route_context = portal_route_context_from_network(&network_before_probe)?;
+    progress.phase("gateway", "正在确认校园认证网关")?;
     let detection = detect_login_type_details_rust(
         compatibility,
         network_before_probe
@@ -6812,7 +7177,9 @@ async fn manual_login(
 
     // Serialize the credential-bearing/logout portion with automatic login.
     // Read-only identity/protocol probes above remain concurrent and cheap.
+    progress.phase("queued", "等待正在进行的认证操作结束")?;
     let _login_guard = state.login_request_lock.lock().await;
+    progress.control.check(progress.id)?;
 
     if switching_account {
         let target = &accounts[0];
@@ -6838,6 +7205,7 @@ async fn manual_login(
             });
         }
         if login_type != LoginType::Type2 {
+            progress.submitting("logout", "正在注销旧账号，完成后将切换到所选账号")?;
             let logout_message = logout_current_session_by_type(
                 &login_type,
                 current_account.as_ref(),
@@ -6917,12 +7285,23 @@ async fn manual_login(
             &format!("尝试使用账号 {} 登录...", account.user),
             "info",
         );
-        match login_to_campus_network_rust(
+        progress.phase("preparing", "正在准备认证连接与地址")?;
+        let preparation_refused = AtomicBool::new(false);
+        let before_submit = || {
+            let latest = get_network_info(app.clone(), Some(true));
+            if let Err(error) = ensure_same_network_identity(&trusted_identity, &latest) {
+                preparation_refused.store(true, Ordering::SeqCst);
+                return Err(error);
+            }
+            progress.submitting("authenticating", "正在提交认证，随后核对联网结果")
+        };
+        match portal_auth::login_with_submission_guard(
             login_type.clone(),
             &account.user,
             &account.pass,
             compatibility,
             portal_route_context.as_ref(),
+            &before_submit,
         )
         .await
         {
@@ -6937,7 +7316,42 @@ async fn manual_login(
                     &format!("登录成功: {message}"),
                     "success",
                 );
-                let net_info = get_network_info(app.clone(), Some(true));
+                progress.phase("verifying", "认证已接受，正在分别验证 IPv4 与 IPv6 联网")?;
+                let mut message = message;
+                let net_info = get_network_info(app.clone(), Some(false));
+                if ensure_same_network_identity(
+                    &trusted_identity,
+                    &get_network_info(app.clone(), Some(true)),
+                )
+                .is_ok()
+                {
+                    let mut health = verify_login_network(&app, &state, &net_info).await;
+                    if ensure_same_network_identity(
+                        &trusted_identity,
+                        &get_network_info(app.clone(), Some(true)),
+                    )
+                    .is_err()
+                    {
+                        health.invalidate("认证后检测到网络切换，请重新检测");
+                        let _ = app.emit("link-health", &health);
+                        schedule_network_change_readiness(app.clone(), state.clone());
+                        return Ok(ManualLoginResult {
+                            success: true,
+                            message: format!("{message}；认证已接受，但网络已切换，请重新检测"),
+                        });
+                    }
+                    if !health.online() {
+                        message.push_str("；认证网卡的外网连通性尚未通过验证");
+                    }
+                    *state.link_health.lock().unwrap() = Some(health.clone());
+                    let _ = app.emit("link-health", &health);
+                } else {
+                    schedule_network_change_readiness(app.clone(), state.clone());
+                    return Ok(ManualLoginResult {
+                        success: true,
+                        message: format!("{message}；认证后网卡发生变化，请重新检测"),
+                    });
+                }
                 emit_session_network_state(&app, &state, &net_info, "Online", &login_type);
                 let _ = app.emit(
                     "dashboard-user-info-refresh",
@@ -6963,7 +7377,8 @@ async fn manual_login(
                     );
                 }
                 PortalLoginFailureDisposition::SessionAlreadyOnline => {
-                    if check_internet_from_source(Some(ip)).await {
+                    progress.phase("verifying", "网关报告已有会话，正在验证此网卡的联网状态")?;
+                    if verify_login_network(&app, &state, &network).await.online() {
                         rust_log(
                             &app,
                             &state,
@@ -7009,6 +7424,14 @@ async fn manual_login(
                 }
             },
             Err(error) => {
+                if preparation_refused.load(Ordering::SeqCst)
+                    || !progress.control.submitted(progress.id)
+                    || progress.control.check(progress.id).is_err()
+                {
+                    return Err(error);
+                }
+                progress.phase("verifying", "认证响应未能确认，正在只读核对联网状态")?;
+                let verified = verify_login_network(&app, &state, &network).await;
                 if login_result_is_ambiguous(&error) {
                     rust_log(
                         &app,
@@ -7025,7 +7448,7 @@ async fn manual_login(
                         message: error,
                     });
                 }
-                if check_internet_from_source(Some(ip)).await {
+                if verified.online() {
                     let net_info = get_network_info(app.clone(), Some(true));
                     emit_session_network_state(&app, &state, &net_info, "Online", &login_type);
                     let _ = app.emit(
@@ -8670,6 +9093,8 @@ async fn set_billing_mauth(
 }
 
 fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>) {
+    state.network_schedule.lock().unwrap().reset();
+    *state.link_health.lock().unwrap() = None;
     let generation = state
         .network_change_generation
         .fetch_add(1, Ordering::SeqCst)
@@ -8684,6 +9109,7 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
             serde_json::json!(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
         );
     }
+    *state.last_network_state.lock().unwrap() = checking_payload.clone();
     let _ = app.emit("network-state-change", checking_payload);
 
     tauri::async_runtime::spawn(async move {
@@ -9174,6 +9600,8 @@ pub fn run() {
     let builder = tauri::Builder::default().setup(|_app| {
         let app_state = std::sync::Arc::new(AppState {
             config: RwLock::new(AppConfig {
+                preferred_interface: String::new(),
+                adaptive_network_checks: true,
                 accounts: Vec::new(),
                 auto_login: false,
                 check_interval: 15,
@@ -9209,11 +9637,15 @@ pub fn run() {
             network_change_generation: AtomicU64::new(0),
             login_operation_generation: AtomicU64::new(0),
             manual_login_in_progress: AtomicBool::new(false),
+            login_progress: login_progress::LoginProgressControl::default(),
             login_request_lock: tokio::sync::Mutex::new(()),
             is_suspended: AtomicBool::new(false),
             last_known_ip: Mutex::new(None),
             non_campus_count: AtomicU32::new(0),
             is_in_background: AtomicBool::new(false),
+            link_health: Mutex::new(None),
+            system_online: AtomicBool::new(false),
+            network_schedule: Mutex::new(network_schedule::AdaptiveSchedule::default()),
             last_network_state: Mutex::new(serde_json::json!({
                 "state": "Checking",
                 "ssid": "",
@@ -9267,8 +9699,28 @@ pub fn run() {
         let loop_state = state_clone.clone();
         tauri::async_runtime::spawn(async move {
             let mut wifi_check_counter = 0;
+            let mut previous_tick = std::time::SystemTime::now();
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let relaxed = loop_state.is_in_background.load(Ordering::SeqCst)
+                    && loop_state
+                        .network_schedule
+                        .lock()
+                        .unwrap()
+                        .plan
+                        .interface_poll_seconds
+                        >= 15;
+                let tick_seconds = if relaxed { 5 } else { 1 };
+                tokio::time::sleep(std::time::Duration::from_secs(tick_seconds)).await;
+                let elapsed = previous_tick.elapsed().unwrap_or_default();
+                previous_tick = std::time::SystemTime::now();
+                if elapsed.as_secs() > 20 {
+                    loop_state.is_suspended.store(false, Ordering::SeqCst);
+                    schedule_network_change_readiness(loop_handle.clone(), loop_state.clone());
+                    continue;
+                }
+                if loop_state.manual_login_in_progress.load(Ordering::SeqCst) {
+                    continue;
+                }
                 let is_bg = loop_state.is_in_background.load(Ordering::SeqCst);
                 let is_susp = loop_state.is_suspended.load(Ordering::SeqCst);
                 let is_chk = loop_state.is_checking.load(Ordering::SeqCst);
@@ -9293,10 +9745,19 @@ pub fn run() {
 
                 // 1. Local interface change check. Android NetworkCallback is the
                 // primary signal on mobile data, so polling can be much slower there.
-                wifi_check_counter += 1;
+                wifi_check_counter += tick_seconds as i32;
                 let mobile_data_active =
                     is_mobile_data_network(&loop_state.last_network_state.lock().unwrap());
-                let interface_poll_interval = if mobile_data_active { 15 } else { 3 };
+                let interface_poll_interval = if mobile_data_active {
+                    30
+                } else {
+                    loop_state
+                        .network_schedule
+                        .lock()
+                        .unwrap()
+                        .plan
+                        .interface_poll_seconds
+                };
                 if wifi_check_counter >= interface_poll_interval {
                     wifi_check_counter = 0;
                     let wifi_change_detect = {
@@ -9305,7 +9766,7 @@ pub fn run() {
                     };
                     if wifi_change_detect {
                         let (ip_changed, current_ip, last_ip) = {
-                            let current_ip = get_local_ip();
+                            let current_ip = get_local_ip(loop_handle.clone());
                             let mut last_ip_lock = loop_state.last_known_ip.lock().unwrap();
                             let last_ip = last_ip_lock.clone();
                             let changed =
@@ -9375,8 +9836,10 @@ pub fn run() {
                             .emit("countdown-tick", serde_json::json!({"status": "suspended"}));
                         continue;
                     }
-                    let val = loop_state.countdown.fetch_sub(1, Ordering::SeqCst);
-                    let current_countdown = val - 1;
+                    let val = loop_state
+                        .countdown
+                        .fetch_sub(tick_seconds as i32, Ordering::SeqCst);
+                    let current_countdown = val - tick_seconds as i32;
                     if current_countdown <= 0 {
                         rust_log(
                             &loop_handle,
@@ -9597,6 +10060,10 @@ pub fn run() {
     let app = builder
         .invoke_handler(tauri::generate_handler![
             get_network_info,
+            get_network_adapters,
+            get_link_health,
+            get_network_schedule,
+            set_preferred_interface,
             request_battery_optimizations,
             request_foreground_permissions,
             request_background_permissions,
@@ -9634,6 +10101,7 @@ pub fn run() {
             set_named_network_trust,
             remove_saved_network_trust,
             manual_login,
+            cancel_manual_login,
             logout_current_campus_session,
             get_user_info,
             get_remaining_flow,
@@ -10007,6 +10475,8 @@ mod tests {
             }))
             .unwrap();
         let config = AppConfig {
+            preferred_interface: String::new(),
+            adaptive_network_checks: true,
             accounts: vec![Account {
                 user: "20260001".to_string(),
                 pass: "secret".to_string(),

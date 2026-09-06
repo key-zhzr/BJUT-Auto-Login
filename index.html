@@ -160,6 +160,34 @@
             </div>
           </div>
 
+          <section id="login-progress-panel" class="glass-card login-progress-panel" hidden aria-live="polite">
+            <div class="diagnostic-panel-header">
+              <strong id="login-progress-message">准备登录</strong>
+              <button id="btn-cancel-login" class="btn btn-secondary btn-sm" type="button">取消登录</button>
+            </div>
+            <p id="login-progress-time">已用时 0.0 秒</p>
+            <div id="login-progress-phases" class="login-progress-phases"></div>
+          </section>
+
+          <section class="glass-card network-experience">
+            <div class="diagnostic-panel-header">
+              <div><h3>认证网卡与双栈状态</h3><p id="network-selection-caption">正在读取网卡…</p></div>
+              <button id="btn-refresh-adapters" class="btn btn-secondary btn-sm" type="button">刷新检测</button>
+            </div>
+            <div class="network-adapter-choice">
+              <label for="preferred-network-adapter">认证使用的网卡</label>
+              <select id="preferred-network-adapter" aria-describedby="network-adapter-message"><option value="">自动选择</option></select>
+            </div>
+            <p id="network-adapter-message" role="status">自动优先选择校园有线。指定网卡断开时，将等待该网卡恢复。</p>
+            <div id="network-adapter-list" class="network-adapter-list"></div>
+            <div class="dual-stack-grid">
+              <article id="ipv4-health" class="family-health"><h4>IPv4</h4><strong>等待检测</strong><small></small></article>
+              <article id="ipv6-health" class="family-health"><h4>IPv6</h4><strong>等待检测</strong><small></small></article>
+            </div>
+            <div class="network-result-summary"><span id="network-authentication-status">门户认证：待核对</span><span id="network-system-status">系统互联网：待检测</span></div>
+            <p id="dual-stack-checked-at">双栈检测通过当前认证网卡直接连接外网，分别验证 IPv4 与 IPv6。</p>
+          </section>
+
           <!-- Network Data Update Status Bar -->
           <div class="glass-card" style="display: flex; justify-content: space-between; align-items: center; padding: 0.8rem 1.5rem; margin-bottom: 2rem; border-radius: 12px; font-size: 0.85rem; color: var(--text-muted);">
             <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
@@ -985,7 +1013,7 @@
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>Wi-Fi 变更检测</h4>
-                  <p>系统网络事件触发即时检测，并以每 3 秒局域网 IP 检测作为后台兜底</p>
+                  <p>系统网络事件触发即时检测，接口轮询作为兜底；实际频率随下方自适应设置调整</p>
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="setting-wifi-change-detect">
@@ -1005,17 +1033,22 @@
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>前台自动检测间隔</h4>
-                  <p>应用在屏幕显示时的检测频率 (秒)</p>
+                  <p>应用在屏幕显示时的基础间隔（秒），自适应模式会按网络状态调整</p>
                 </div>
                 <input type="number" id="setting-check-interval" class="input-inline" min="5" value="15">
               </div>
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>后台自动检测间隔</h4>
-                  <p>应用在后台静默运行时的检测频率 (秒)</p>
+                  <p>应用在后台运行时的基础间隔（秒），稳定联网后可自动延长</p>
                 </div>
                 <input type="number" id="setting-check-interval-bg" class="input-inline" min="5" value="60">
               </div>
+              <div class="setting-item">
+                <div class="setting-info"><h4>自适应网络检测</h4><p>稳定时降低后台频率，断网后短暂加快；省电或息屏时减少探测</p></div>
+                <label class="switch"><input type="checkbox" id="setting-adaptive-network" aria-label="自适应网络检测" checked><span class="slider round"></span></label>
+              </div>
+              <p id="network-schedule-summary" class="diagnostic-panel-message" role="status">等待首次检测后显示实际检测频率</p>
             </div>
             
             <div class="settings-group glass-card" style="margin-top: 1rem;">

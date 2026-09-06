@@ -2190,6 +2190,29 @@ input:checked + .slider:before { transform: translateX(24px); }
   margin-bottom: 1rem;
 }
 
+.network-experience, .login-progress-panel { padding: 1.25rem; margin-bottom: 1rem; }
+.login-progress-panel[hidden] { display: none !important; }
+.network-experience h3 { margin: 0; }
+.network-experience p, .login-progress-panel p, .login-progress-phases { color: var(--text-muted); font-size: .84rem; line-height: 1.6; }
+.network-adapter-choice { display: flex; align-items: center; gap: 1rem; margin: .8rem 0; flex-wrap: wrap; }
+.network-adapter-choice label { font-size: .85rem; }
+.network-adapter-choice select { flex: 1; min-width: 180px; max-width: 100%; padding: .65rem; border: 1px solid var(--card-border); border-radius: 8px; background: var(--card-bg); color: var(--text-main); font: inherit; }
+.network-adapter-list { display: grid; gap: .5rem; margin: .75rem 0; }
+.network-adapter-row { padding: .6rem .8rem; border: 1px solid var(--card-border); border-radius: 8px; }
+.network-adapter-row.selected { border-color: var(--primary-color); }
+.network-adapter-row strong, .network-adapter-row small, .family-health strong, .family-health small { display: block; overflow-wrap: anywhere; }
+.network-adapter-row strong { font-size: .82rem; }
+.network-adapter-row small { color: var(--text-muted); font-size: .75rem; margin-top: .25rem; }
+.dual-stack-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.family-health { border: 1px solid var(--card-border); border-radius: 10px; padding: .85rem; }
+.family-health h4 { font-size: .8rem; color: var(--text-muted); margin-bottom: .3rem; }
+.family-health strong { font-size: .92rem; }
+.family-health small { color: var(--text-muted); font-size: .75rem; line-height: 1.5; margin-top: .45rem; white-space: pre-line; }
+.family-health.reachable { border-left: 3px solid var(--success); }
+.family-health.unreachable, .family-health.not_configured { border-left: 3px solid var(--warning); }
+.network-result-summary { display: flex; gap: 1rem; flex-wrap: wrap; font-size: .8rem; margin-top: .9rem; }
+@media (max-width: 520px) { .dual-stack-grid { grid-template-columns: 1fr; } .network-adapter-choice select { width: 100%; } }
+
 .health-badge,
 .account-health-badge {
   display: inline-flex;

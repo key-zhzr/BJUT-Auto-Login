@@ -1031,6 +1031,7 @@ async fn login_lgn_once(
     pass: &str,
     compatibility: VpnCompatibility,
     route_context: Option<&PortalRouteContext>,
+    before_submit: &(dyn Fn() -> Result<(), String> + Sync),
 ) -> Result<(bool, String), String> {
     let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn 有线")?;
     // The captured browser performs a read-only getipv6 request, then exactly
@@ -1044,6 +1045,7 @@ async fn login_lgn_once(
                 format!("IPv6 地址发现失败，已提交单 IPv4 认证：{error}"),
             ),
         };
+    before_submit()?;
     let login_url = lgn_login_url(user, pass, &local_ipv4, &observed_ipv6)?;
     match get_jsonp_login(
         eportal_client,
@@ -1370,6 +1372,25 @@ pub(crate) async fn login_to_campus_network_rust(
     compatibility: VpnCompatibility,
     route_context: Option<&PortalRouteContext>,
 ) -> Result<(bool, String), String> {
+    login_with_submission_guard(
+        login_type,
+        user,
+        pass,
+        compatibility,
+        route_context,
+        &|| Ok(()),
+    )
+    .await
+}
+
+pub(crate) async fn login_with_submission_guard(
+    login_type: LoginType,
+    user: &str,
+    pass: &str,
+    compatibility: VpnCompatibility,
+    route_context: Option<&PortalRouteContext>,
+    before_submit: &(dyn Fn() -> Result<(), String> + Sync),
+) -> Result<(bool, String), String> {
     // LGN submits both addresses to HTTPS ePortal, including in Maximum
     // mode. IPv6 discovery uses a separate connector on the same campus link.
     let client_compatibility =
@@ -1415,6 +1436,7 @@ pub(crate) async fn login_to_campus_network_rust(
                         Some(DORM_HTTPS_AUTHORITY),
                     )
                 };
+            before_submit()?;
             get_jsonp_login(
                 &client,
                 type1_login_url(&login_base, user, pass, &local_ip)?,
@@ -1431,6 +1453,7 @@ pub(crate) async fn login_to_campus_network_rust(
             } else {
                 WIFI_HTTPS_REFERER
             };
+            before_submit()?;
             get_jsonp_login(
                 &client,
                 type2_login_url(compatibility, user, pass)?,
@@ -1441,7 +1464,17 @@ pub(crate) async fn login_to_campus_network_rust(
             )
             .await
         }
-        LoginType::Type3 => login_lgn_once(&client, user, pass, compatibility, route_context).await,
+        LoginType::Type3 => {
+            login_lgn_once(
+                &client,
+                user,
+                pass,
+                compatibility,
+                route_context,
+                before_submit,
+            )
+            .await
+        }
         LoginType::Unknown => Err("未设定的登录类型".to_string()),
     }
 }

@@ -112,7 +112,7 @@ class KeepAliveService : Service() {
                     scheduleNetworkReadyCheck("IPv4变化")
                 }
             }
-            handler.postDelayed(this, IP_POLL_INTERVAL)
+            handler.postDelayed(this, max(IP_POLL_INTERVAL, preferences.getInt("adaptive_poll_seconds", 3) * 1000L))
         }
     }
 
@@ -524,6 +524,9 @@ class KeepAliveService : Service() {
             val network = JSONObject(NetworkHelper.getNetworkInfo(this, false))
             val seconds = if (network.optString("transport") == "cellular") {
                 max(configured, CELLULAR_CHECK_INTERVAL_SECONDS)
+            } else if (config.optBoolean("adaptive_network_checks", true)) {
+                val saved = preferences.getInt("adaptive_check_seconds", configured.toInt()).toLong()
+                if (NetworkHelper.isNetworkPowerSaving(this)) max(saved, 120L) else saved
             } else configured
             seconds * 1000L
         } catch (_: Exception) {
@@ -664,6 +667,10 @@ class KeepAliveService : Service() {
                                 }
                             }
                         }
+                    }
+                    result.optJSONObject("schedule")?.let {
+                        preferences.edit().putInt("adaptive_check_seconds", it.optInt("intervalSeconds", 60))
+                            .putInt("adaptive_poll_seconds", it.optInt("interfacePollSeconds", 15)).apply()
                     }
                     result.optJSONObject("accountHealth")?.let {
                         NetworkHelper.setAccountHealth(this, it.toString())

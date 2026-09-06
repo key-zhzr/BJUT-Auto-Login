@@ -1,3 +1,4 @@
+import { NetworkExperience, LoginProgressView } from './network-experience';
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
@@ -40,7 +41,7 @@ import type {
   BillingRecordKind, BillingRecordQuery, BillingRecordQueryState, BillingRecordResult,
   BillingServiceState, BillingTable, ConfigBackupExport, ConfigBackupImport, CountdownPayload, CredentialStorageHealth,
   DiagnosticProgress, DiagnosticReport, DiscoveredCampusAccount, GitHubRelease, GitHubReleaseAsset,
-  NetworkStatePayload,
+  NetworkStatePayload, AdapterInventory, DualStackReport, LoginProgress, NetworkSchedule,
   OfficialUpdateManifest,
   NetworkProfile, RechargeBalanceSnapshot, RechargePreview, RechargeResult,
   RecoverableRecharge, UpdateProgress, UpdateTarget, UserInfo, WechatPaymentStatus,
@@ -714,6 +715,8 @@ function syncConfigToRust(): Promise<void> {
   // slower IPC call from overwriting a newer account edit.
   const config = {
     accounts: getAccounts().map(account => ({ ...account })),
+    preferred_interface: localStorage.getItem('bjut_preferred_interface') || '',
+    adaptive_network_checks: localStorage.getItem('bjut_adaptive_network_checks') !== 'false',
     auto_login: localStorage.getItem('bjut_auto_login') === 'true',
     check_interval: parseInt(localStorage.getItem('bjut_check_interval') || '15', 10),
     check_interval_bg: parseInt(localStorage.getItem('bjut_check_interval_bg') || '60', 10),
@@ -820,6 +823,9 @@ async function loadConfigFromRust(): Promise<boolean> {
       isDefault: account.isDefault === true,
       isDisabled: account.isDisabled === true,
     }));
+    localStorage.setItem('bjut_preferred_interface', config.preferred_interface || '');
+    localStorage.setItem('bjut_adaptive_network_checks', String(config.adaptive_network_checks !== false));
+    (document.getElementById('setting-adaptive-network') as HTMLInputElement).checked = config.adaptive_network_checks !== false;
     localStorage.setItem('bjut_auto_login', config.auto_login.toString());
     localStorage.setItem('bjut_check_interval', config.check_interval.toString());
     localStorage.setItem('bjut_check_interval_bg', config.check_interval_bg.toString());
@@ -956,6 +962,8 @@ async function loadConfigFromRust(): Promise<boolean> {
 }
 
 function applyNetworkStatePayload(data: NetworkStatePayload) {
+  networkExperience.renderState(data);
+  if (!document.hidden) void refreshNetworkAdapters().catch(error => console.error('读取网卡失败', error));
   const networkChanged = Boolean(data.ip && lastKnownIp && data.ip !== lastKnownIp);
   if (networkChanged && portalUserInfoCache) {
     infoAccountLabel.textContent = '上次读取账号';
@@ -972,6 +980,9 @@ function applyNetworkStatePayload(data: NetworkStatePayload) {
   currentNetworkState = state;
   currentLoginType = loginType;
   updateNetworkStatus(state, loginType, data.loginMessage);
+  if (data.systemOnline && state !== NetworkState.Online && state !== NetworkState.Checking) {
+    networkDetail.textContent += '；系统路径可以上网，认证网卡需要单独核对';
+  }
   isChecking = false;
   if (state !== NetworkState.Checking) {
     // Dashboard session data is a separate read-only signal. Try it on VPN,
@@ -1036,6 +1047,9 @@ async function initializeRustEvents() {
     settle('控制台账号刷新事件', listen('dashboard-user-info-refresh', () => {
       void updateUserInfo(true);
     })),
+    settle('双栈状态事件', listen<DualStackReport>('link-health', event => networkExperience.renderHealth(event.payload))),
+    settle('登录阶段事件', listen<LoginProgress>('login-progress', event => loginProgressView.render(event.payload))),
+    settle('检测调度事件', listen<NetworkSchedule>('network-schedule', event => networkExperience.renderSchedule(event.payload))),
     settle('网络诊断进度事件', listen<DiagnosticProgress>('network-diagnostic-progress', event => {
       if (!diagnosticRunActive) return;
       updateDiagnosticProgress(event.payload.percent, event.payload.label, true);
@@ -1114,6 +1128,9 @@ async function initializeRustEvents() {
       logsDirty = true;
       logFilterCount.textContent = `${logEntriesCache.length} 条`;
     })),
+    settle('初始网卡', refreshNetworkAdapters()),
+    settle('初始双栈状态', invoke<DualStackReport | null>('get_link_health').then(health => { if (health) networkExperience.renderHealth(health); })),
+    settle('初始调度', invoke<NetworkSchedule>('get_network_schedule').then(plan => networkExperience.renderSchedule(plan))),
     settle('初始网络状态', invoke<NetworkStatePayload>('get_current_network_state').then(currentState => {
       if (currentState) applyNetworkStatePayload(currentState);
     })),
@@ -1576,6 +1593,29 @@ const logsContent = document.getElementById('logs-content')!;
 const btnClearLogs = document.getElementById('btn-clear-logs')!;
 const btnExportLogs = document.getElementById('btn-export-logs')!;
 const btnScrollLogs = document.getElementById('btn-scroll-logs')!;
+let adapterRefreshPending: Promise<void> | null = null;
+async function refreshNetworkAdapters() {
+  if (!window.__TAURI__) return;
+  if (adapterRefreshPending) return adapterRefreshPending;
+  adapterRefreshPending = invoke<AdapterInventory>('get_network_adapters').then(inventory => networkExperience.renderInventory(inventory)).finally(() => { adapterRefreshPending = null; });
+  return adapterRefreshPending;
+}
+const networkExperience = new NetworkExperience(async id => {
+  const operation = configSyncQueue.catch(() => {}).then(async () => {
+    await invoke('set_preferred_interface', { id });
+    localStorage.setItem('bjut_preferred_interface', id);
+  });
+  configSyncQueue = operation;
+  await operation;
+}, async () => {
+  await refreshNetworkAdapters();
+  await invoke('trigger_manual_check');
+});
+const loginProgressView = new LoginProgressView(async operationId => {
+  await invoke('cancel_manual_login', { operationId });
+  const modal = document.getElementById('security-modal');
+  if (modal && !modal.classList.contains('hidden')) document.getElementById('btn-sec-cancel')?.click();
+});
 const btnRunDiagnostics = document.getElementById('btn-run-diagnostics') as HTMLButtonElement;
 const btnCopyDiagnostics = document.getElementById('btn-copy-diagnostics') as HTMLButtonElement;
 const adapterRepairPanel = document.getElementById('diagnostic-adapter-repair')!;
@@ -2149,6 +2189,7 @@ async function refreshCredentialStorageHealth() {
 }
 
 function renderDiagnosticReport(report: DiagnosticReport) {
+  if (report.dualStack) networkExperience.renderHealth(report.dualStack);
   adapterRepairPanel.hidden = !report.adapterRestart;
   btnRestartLgnAdapter.disabled = diagnosticRunActive || adapterRestartActive;
   if (report.adapterRestart) {
@@ -2159,9 +2200,9 @@ function renderDiagnosticReport(report: DiagnosticReport) {
   const title = document.getElementById('diagnostic-summary-title')!;
   const meta = document.getElementById('diagnostic-summary-meta')!;
   const overallClass = report.overall === 'healthy' ? 'success'
-    : report.overall === 'auth_required' ? 'warning' : 'error';
+    : report.overall === 'auth_required' || report.overall === 'partial' ? 'warning' : 'error';
   const overallLabel = report.overall === 'healthy' ? '网络正常'
-    : report.overall === 'auth_required' ? '需要认证'
+    : report.overall === 'partial' ? '部分可用' : report.overall === 'auth_required' ? '需要认证'
       : report.overall === 'no_network' ? '无网络接口' : '无法联网';
   summary.className = `diagnostic-summary glass-card diagnostic-${overallClass}`;
   badge.className = `health-badge ${overallClass}`;
@@ -2652,6 +2693,19 @@ function setupNavigation() {
 
 // Event Listeners
 function setupEventListeners() {
+  document.getElementById('setting-adaptive-network')!.addEventListener('change', async event => {
+    const input = event.target as HTMLInputElement;
+    const previous = localStorage.getItem('bjut_adaptive_network_checks');
+    input.disabled = true;
+    try {
+      localStorage.setItem('bjut_adaptive_network_checks', String(input.checked));
+      await syncConfigToRust();
+      await invoke('trigger_manual_check');
+    } catch (error) {
+      localStorage.setItem('bjut_adaptive_network_checks', previous || 'true'); input.checked = previous !== 'false';
+      log('网络', `保存自适应检测设置失败：${String(error)}`, 'error');
+    } finally { input.disabled = false; }
+  });
   document.getElementById('btn-discovered-account-accept')!
     .addEventListener('click', () => void acceptDiscoveredCampusAccount());
   document.getElementById('btn-discovered-account-dismiss')!
@@ -4685,7 +4739,7 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType, loginMessage
     btnLogin.disabled = true;
   } else if (state === NetworkState.Online) {
     networkStatus.textContent = UI_TEXT.networkStatus.onlineTitle;
-    networkDetail.textContent = UI_TEXT.networkStatus.onlineDetail;
+    networkDetail.textContent = loginMessage || UI_TEXT.networkStatus.onlineDetail;
     networkIcon.classList.add('success');
     networkIcon.innerHTML = '<i data-lucide="check-circle"></i>';
     btnLogin.disabled = true;
@@ -4720,6 +4774,7 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType, loginMessage
     window.AndroidBridge.updateKeepAliveStatus(notification);
   }
   renderIcons(networkIcon);
+  if (isLoggingIn) btnLogin.disabled = true;
   renderIcons(btnLogin.parentElement || document);
 }
 
@@ -7132,6 +7187,7 @@ async function updateRemainingFlow(requestId: number, account: string) {
 }
 
 async function manualLogin(switchingAccount = false) {
+  if (isLoggingIn) return;
   const requiredState = switchingAccount ? NetworkState.Online : NetworkState.BjutCampus;
   if (currentNetworkState !== requiredState) {
     customAlert(switchingAccount ? '当前没有可切换的校园网登录会话' : '当前无需登录或未连接校园网');
@@ -7175,11 +7231,14 @@ async function manualLogin(switchingAccount = false) {
 
   const actionButton = switchingAccount ? btnSwitchAccount : btnLogin;
   isLoggingIn = true;
+  networkExperience.setBusy(true);
+  const operationId = loginProgressView.begin();
   actionButton.disabled = true;
   actionButton.innerHTML = '<i data-lucide="loader"></i> 安全检查中...';
   renderIcons(actionButton);
 
   const trustApproval = await requestNetworkTrustApproval({
+    isCancelled: () => loginProgressView.isCancelled(),
     loginTypeOverride: overrideMethod === 'auto' ? null : overrideMethod,
     onLog: log,
     onAlert: customAlert,
@@ -7188,7 +7247,9 @@ async function manualLogin(switchingAccount = false) {
       blacklistCache = lists.blacklist;
     },
   });
-  if (!trustApproval.allowed) {
+  if (!trustApproval.allowed || loginProgressView.isCancelled()) {
+    loginProgressView.finish(loginProgressView.isCancelled() ? '已取消登录，未提交认证' : '安全检查未通过，已停止登录');
+    networkExperience.setBusy(false);
     log('安全', '已取消登录：安全检查未通过', 'error');
     isLoggingIn = false;
     actionButton.disabled = false;
@@ -7203,7 +7264,8 @@ async function manualLogin(switchingAccount = false) {
   renderIcons(actionButton);
 
   try {
-    const result: { success: boolean, message: string } = await invoke('manual_login', {
+    const result: { success: boolean, message: string } = await invoke('manual_login', { request: {
+      operationId,
       accountIndex: Number.isNaN(accountIndex) ? null : accountIndex,
       loginTypeOverride: overrideMethod === 'auto' ? null : overrideMethod,
       trustNetworkOnce: trustApproval.trustOnce,
@@ -7212,14 +7274,16 @@ async function manualLogin(switchingAccount = false) {
         enabled: switchingAccount,
         currentAccountUser,
       },
-    });
+    } });
     if (!result.success) {
       log('登录', `${switchingAccount ? '切换账号' : '登录'}失败: ${result.message}`, 'error');
       if (!switchingAccount) updateNetworkStatus(NetworkState.BjutCampus, undefined, result.message);
       return;
     }
-    actionButton.innerHTML = '<i data-lucide="check"></i> 已连接';
-    updateNetworkStatus(NetworkState.Online, currentLoginType);
+    actionButton.innerHTML = '<i data-lucide="check"></i> 认证已接受';
+    const latestNetwork = await invoke<NetworkStatePayload>('get_current_network_state');
+    applyNetworkStatePayload(latestNetwork);
+    if (latestNetwork.state === 'Online') networkDetail.textContent = result.message;
     if (switchingAccount) {
       infoAccount.textContent = targetAccount?.user || '--';
       infoBalance.textContent = '读取中…';
@@ -7228,6 +7292,7 @@ async function manualLogin(switchingAccount = false) {
     }
     setTimeout(() => void updateUserInfo(true), switchingAccount ? 900 : 2000);
   } catch (error) {
+    loginProgressView.finish(String(error));
     log('登录', `${switchingAccount ? '切换账号' : '登录'}请求失败: ${String(error)}`, 'error');
     if (!switchingAccount) {
       updateNetworkStatus(NetworkState.BjutCampus, undefined, `登录请求失败：${String(error)}`);
@@ -7235,6 +7300,8 @@ async function manualLogin(switchingAccount = false) {
       await customAlert(`切换账号失败：${String(error)}`, '切换失败');
     }
   } finally {
+    loginProgressView.finish();
+    networkExperience.setBusy(false);
     actionButton.disabled = false;
     actionButton.innerHTML = switchingAccount
       ? '<i data-lucide="users"></i> 切换登录账号'
