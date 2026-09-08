@@ -1,9 +1,9 @@
-import type { AdapterInventory, DualStackReport, FamilyConnectivity, LoginProgress, NetworkSchedule, NetworkStatePayload } from './models';
+import type { AdapterInventory, DualStackReport, FamilyConnectivity, NetworkSchedule, NetworkStatePayload } from './models';
 
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 export const compactFamilyLabel = (family: FamilyConnectivity) => family.status === 'reachable'
   ? `${Math.round(family.durationMs)} ms`
-  : ({ timeout: '超时', checking: '检测中', unreachable: '未通过', not_configured: '无地址', unknown: '未确认' } as Record<string, string>)[family.status] || '未确认';
+  : ({ timeout: '超时', checking: '检测中', unreachable: '未通过', not_configured: '未配置', dns_error: 'DNS 失败', tls_error: 'TLS 失败', connection_error: '连接失败', response_error: '响应异常', unknown: '未确认' } as Record<string, string>)[family.status] || '未确认';
 
 export class NetworkExperience {
   private inventory: AdapterInventory | null = null;
@@ -11,6 +11,9 @@ export class NetworkExperience {
   private pending = false;
   private identity = '';
   private health: DualStackReport | null = null;
+  private generation = 0;
+  private probeId = 0;
+  private showDisconnected = false;
   private readonly list = element('network-adapter-list');
   private onSelect: (id: string) => Promise<void>;
   private onRefresh: () => Promise<void>;
@@ -73,7 +76,15 @@ export class NetworkExperience {
   renderInventory(inventory: AdapterInventory) {
     this.inventory = inventory;
     const focused = (document.activeElement as HTMLElement)?.dataset.adapterId;
+    this.showDisconnected = this.list.querySelector<HTMLDetailsElement>('details')?.open ?? this.showDisconnected;
     this.list.replaceChildren();
+    const disconnected = document.createElement('details'); disconnected.className = 'disconnected-adapters'; disconnected.open = this.showDisconnected;
+    const summary = document.createElement('summary');
+    summary.textContent = `已断开的网卡（${inventory.adapters.filter(adapter => !adapter.connected && adapter.id !== inventory.preferredInterface).length}）`;
+    disconnected.append(summary);
+    disconnected.addEventListener('toggle', () => { this.showDisconnected = disconnected.open; });
+    const disconnectedList = document.createElement('div'); disconnectedList.className = 'network-adapter-list'; disconnected.append(disconnectedList);
+    let rowParent: HTMLElement = this.list;
     const addRow = (id: string, title: string, detail: string, chosen: boolean, available: boolean, active = false) => {
       const row = document.createElement('button'); row.type = 'button';
       row.className = `network-adapter-row${chosen ? ' chosen' : ''}${active ? ' in-use' : ''}`;
@@ -82,17 +93,20 @@ export class NetworkExperience {
       const marker = document.createElement('span'); marker.className = 'adapter-radio-marker'; marker.setAttribute('aria-hidden', 'true');
       const text = document.createElement('span'); const label = document.createElement('strong'); label.textContent = title;
       const description = document.createElement('small'); description.textContent = detail;
-      text.append(label, description); row.append(marker, text); this.list.append(row);
+      text.append(label, description); row.append(marker, text); rowParent.append(row);
     };
     if (inventory.selectionSupported) addRow('', '自动选择', '优先校园有线，随当前连接自动识别', !inventory.preferredInterface, true);
     const adapters = [...inventory.adapters].sort((a, b) => Number(b.selected) - Number(a.selected) || Number(b.connected) - Number(a.connected));
     for (const adapter of adapters) {
+      rowParent = !adapter.connected && adapter.id !== inventory.preferredInterface ? disconnectedList : this.list;
       const kind = ({ wifi: 'Wi-Fi', ethernet: '有线', vpn: '虚拟 / VPN', cellular: '移动数据' } as Record<string, string>)[adapter.transport] || adapter.transport;
       const title = adapter.name === kind ? adapter.name : `${adapter.name} · ${kind}`;
       addRow(adapter.id, `${title}${adapter.selected ? ' · 用于认证' : ''}`,
         `${adapter.interfaceName} · ${adapter.connected ? '已启用' : '已断开'} · IPv4 ${adapter.ipv4.join(' / ') || '--'} · IPv6 ${adapter.ipv6.length ? '已取得地址' : '--'}`,
         inventory.preferredInterface === adapter.id, adapter.selectable && adapter.connected && adapter.ipv4.length > 0, adapter.selected);
     }
+    if (disconnectedList.childElementCount) this.list.append(disconnected);
+    rowParent = this.list;
     if (inventory.preferredInterface && !inventory.adapters.some(adapter => adapter.id === inventory.preferredInterface)) {
       addRow(inventory.preferredInterface, '指定网卡当前不可用', '等待网卡恢复，或选择其他网卡', true, false);
     }
@@ -106,8 +120,14 @@ export class NetworkExperience {
 
   renderState(state: NetworkStatePayload) {
     const identity = `${state.interfaceName || ''}|${state.ip || ''}`;
-    if (this.identity && identity !== this.identity && this.health?.scope !== 'system') this.clearHealth();
+    const matchesIdentity = this.health?.interfaceName === state.interfaceName && this.health?.ipv4.addresses.includes(state.ip || '');
+    if (this.identity && identity !== this.identity && !matchesIdentity) this.clearHealth();
     this.identity = identity;
+  }
+
+  resetGeneration(generation: number, probeId = 0) {
+    if (generation < this.generation || (generation === this.generation && probeId < this.probeId)) return;
+    this.generation = generation; this.probeId = probeId; this.clearHealth();
   }
 
   clearHealth() {
@@ -119,7 +139,10 @@ export class NetworkExperience {
   }
 
   renderHealth(health: DualStackReport) {
-    if (this.health && Date.parse(health.checkedAt) < Date.parse(this.health.checkedAt)) return;
+    const generation = health.generation || 0; const probeId = health.probeId || 0;
+    if (generation < this.generation || (generation === this.generation && probeId < this.probeId)) return;
+    if (this.health && generation === this.health.generation && probeId === this.health.probeId && Date.parse(health.checkedAt) < Date.parse(this.health.checkedAt)) return;
+    this.generation = generation; this.probeId = probeId;
     this.health = health;
     for (const [id, family] of [['ipv4-health', health.ipv4], ['ipv6-health', health.ipv6]] as const) {
       const node = element(id); node.className = `family-status ${family.status}`;
@@ -131,74 +154,5 @@ export class NetworkExperience {
 
   renderSchedule(plan: NetworkSchedule) {
     element('network-schedule-summary').textContent = `${plan.reason}。当前每 ${plan.intervalSeconds} 秒检测连通性，每 ${plan.interfacePollSeconds} 秒核对接口；网络变化事件仍会立即响应。`;
-  }
-}
-
-const phases: Record<string, string> = { safety: '安全检查', checking: '核对网卡', gateway: '确认网关', queued: '等待操作', logout: '注销旧账号', preparing: '准备认证', authenticating: '提交认证', verifying: '验证联网', complete: '完成', stopped: '已停止' };
-
-export class LoginProgressView {
-  private id = '';
-  private started = 0;
-  private timer: number | null = null;
-  private cancelled = false;
-  private canCancel = false;
-  private safetyMs: number | null = null;
-  private hideTimer: number | null = null;
-  private finished = false;
-  private onFinished: (summary: string) => void;
-  private onCancel: (id: string) => Promise<void>;
-
-  constructor(onCancel: (id: string) => Promise<void>, onFinished: (summary: string) => void = () => {}) {
-    this.onCancel = onCancel; this.onFinished = onFinished;
-    element('btn-cancel-login').addEventListener('click', async () => {
-      if (!this.canCancel) return;
-      element<HTMLButtonElement>('btn-cancel-login').disabled = true;
-      try {
-        await this.onCancel(this.id); this.cancelled = true;
-        element('login-progress-message').textContent = '已请求取消，正在停止提交前的准备工作…';
-      } catch (error) { element('login-progress-message').textContent = String(error); }
-    });
-  }
-
-  begin() {
-    this.id = crypto.randomUUID(); this.started = performance.now(); this.cancelled = false; this.safetyMs = null; this.finished = false;
-    if (this.hideTimer !== null) { window.clearTimeout(this.hideTimer); this.hideTimer = null; }
-    element('btn-cancel-login').hidden = false;
-    if (this.timer !== null) window.clearInterval(this.timer);
-    this.timer = window.setInterval(() => { element('login-progress-time').textContent = `已用时 ${((performance.now() - this.started) / 1000).toFixed(1)} 秒`; }, 100);
-    element('login-progress-panel').hidden = false;
-    element('login-progress-phases').replaceChildren();
-    this.local('安全检查中，可在提交认证前取消');
-    return this.id;
-  }
-
-  isCancelled() { return this.cancelled; }
-  local(message: string) {
-    this.canCancel = true;
-    element('login-progress-message').textContent = message;
-    element<HTMLButtonElement>('btn-cancel-login').disabled = false;
-  }
-
-  render(progress: LoginProgress) {
-    if (progress.operationId !== this.id) return;
-    this.safetyMs ??= Math.max(0, performance.now() - this.started - progress.elapsedMs);
-    this.canCancel = progress.canCancel && !this.cancelled;
-    element<HTMLButtonElement>('btn-cancel-login').disabled = !this.canCancel;
-    element('login-progress-message').textContent = progress.message;
-    element('login-progress-phases').textContent = [`安全检查 ${(this.safetyMs / 1000).toFixed(1)} 秒`, ...progress.timings.map(timing => `${phases[timing.phase] || timing.phase} ${(timing.durationMs / 1000).toFixed(1)} 秒`)].join(' · ');
-    if (progress.phase === 'complete' || progress.phase === 'stopped') this.finish(progress.message);
-  }
-
-  finish(message?: string) {
-    if (this.finished) return;
-    this.finished = true;
-    this.canCancel = false;
-    if (this.timer !== null) { window.clearInterval(this.timer); this.timer = null; }
-    element<HTMLButtonElement>('btn-cancel-login').disabled = true;
-    element('login-progress-time').textContent = `总用时 ${((performance.now() - this.started) / 1000).toFixed(1)} 秒`;
-    if (message) element('login-progress-message').textContent = message;
-    element('btn-cancel-login').hidden = true;
-    this.onFinished([element('login-progress-message').textContent, element('login-progress-time').textContent, element('login-progress-phases').textContent].filter(Boolean).join('；'));
-    this.hideTimer = window.setTimeout(() => { element('login-progress-panel').hidden = true; this.hideTimer = null; }, 15_000);
   }
 }

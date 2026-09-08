@@ -220,3 +220,10 @@ assert.equal(typeof partialWebViewListener, 'function');
 partialWebViewListener();
 assert.equal(partialWebViewResult, 'light');
 console.log('Appearance normalization regression cases passed');
+
+const { compactFamilyLabel } = await import('../src/network-experience.ts');
+for (const [status, label] of [['not_configured', '未配置'], ['dns_error', 'DNS 失败'], ['tls_error', 'TLS 失败'], ['timeout', '超时']]) {
+  assert.equal(compactFamilyLabel({ status, durationMs: 0, addresses: [], detail: '' }), label);
+}
+assert.equal(compactFamilyLabel({ status: 'reachable', durationMs: 38.4, addresses: [], detail: '' }), '38 ms');
+console.log('Network diagnostic label regression cases passed');

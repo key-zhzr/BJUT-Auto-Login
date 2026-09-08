@@ -4181,3 +4181,16 @@ body.is-android .settings-group:not(:has(.custom-select.open)) {
     width: 100%;
   }
 }
+
+.disconnected-adapters > summary, .network-events-panel > summary { cursor: pointer; color: var(--text-muted); padding: .65rem .15rem; }
+.network-events-list { list-style: none; padding: 0; margin: .5rem 0 0; display: grid; gap: .65rem; }
+.network-events-list li { display: grid; gap: .25rem; border-left: 2px solid var(--card-border); padding-left: .85rem; font-size: .85rem; line-height: 1.5; }
+.network-events-list time { font-size: .75rem; color: var(--text-muted); }
+html:root[data-theme] body :is(button, [role="button"], summary, input, .custom-select-trigger):focus-visible { outline: 2px solid var(--primary-color); outline-offset: 3px; }
+:root[data-theme] .custom-option.keyboard-active { background: color-mix(in srgb, var(--primary-color) 14%, var(--card-bg)); outline: 2px solid var(--primary-color); outline-offset: -2px; }
+:root[data-theme] .keyboard-pressed:not(:disabled):not([aria-disabled="true"]) { filter: brightness(.92); transform: translateY(1px); }
+:root[data-theme] .switch input:focus-visible + .slider { outline: 2px solid var(--primary-color); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { :root[data-theme] .keyboard-pressed { transform: none !important; } }
+
+.network-events-panel { margin-bottom: 1rem; }
+.network-events-panel > summary { color: var(--text-main); font-weight: 600; }

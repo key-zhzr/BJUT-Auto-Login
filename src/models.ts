@@ -238,8 +238,9 @@ export interface DiagnosticStep {
 }
 
 export interface DiagnosticReport {
+  stale?: boolean;
   createdAt: string;
-  overall: 'healthy' | 'partial' | 'auth_required' | 'no_network' | 'offline';
+  overall: 'healthy' | 'partial' | 'auth_required' | 'no_network' | 'offline' | 'changed';
   summary: string;
   ssid: string;
   ip: string;
@@ -250,12 +251,16 @@ export interface DiagnosticReport {
 
 export interface FamilyConnectivity {
   addresses: string[];
-  status: 'reachable' | 'unreachable' | 'not_configured' | 'unknown' | 'timeout' | 'checking';
+  status: 'reachable' | 'unreachable' | 'not_configured' | 'unknown' | 'timeout' | 'checking' | 'dns_error' | 'tls_error' | 'connection_error' | 'response_error';
   detail: string;
   durationMs: number;
 }
 
+export interface NetworkEvent { time: string; kind: string; message: string; }
+
 export interface DualStackReport {
+  generation?: number;
+  probeId?: number;
   scope?: string;
   interfaceName: string;
   checkedAt: string;

@@ -18,6 +18,10 @@ pub(crate) struct DualStackReport {
     pub(crate) checked_at: String,
     #[serde(default)]
     pub(crate) scope: String,
+    #[serde(default)]
+    pub(crate) generation: u64,
+    #[serde(default)]
+    pub(crate) probe_id: u64,
     pub(crate) ipv4: FamilyConnectivity,
     pub(crate) ipv6: FamilyConnectivity,
 }
@@ -72,45 +76,98 @@ enum ResponseCheck {
     Microsoft,
 }
 
+#[derive(Debug)]
+struct ProbeFailure {
+    kind: &'static str,
+    detail: String,
+}
+impl ProbeFailure {
+    fn response(detail: impl Into<String>) -> Self {
+        Self {
+            kind: "response_error",
+            detail: detail.into(),
+        }
+    }
+    fn timeout() -> Self {
+        Self {
+            kind: "timeout",
+            detail: "3 秒内未完成响应".into(),
+        }
+    }
+}
+fn request_failure(error: reqwest::Error) -> ProbeFailure {
+    use std::error::Error;
+    if error.is_timeout() {
+        return ProbeFailure::timeout();
+    }
+    let mut causes = String::new();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        causes.push_str(&cause.to_string().to_ascii_lowercase());
+        source = cause.source();
+    }
+    let (kind, detail) = if ["dns", "resolve", "lookup", "getaddrinfo", "no such host"]
+        .iter()
+        .any(|word| causes.contains(word))
+    {
+        (
+            "dns_error",
+            "DNS 未能解析探测目标；请核对系统或 VPN 的 DNS 配置",
+        )
+    } else if ["tls", "ssl", "certificate", "cert verify"]
+        .iter()
+        .any(|word| causes.contains(word))
+    {
+        (
+            "tls_error",
+            "TLS 校验或握手未通过；请核对系统时间、证书或网络拦截",
+        )
+    } else {
+        (
+            "connection_error",
+            "连接未建立或中断；请核对路由、VPN 与认证状态",
+        )
+    };
+    // Only classification leaves this function; raw source errors may contain URLs.
+    ProbeFailure {
+        kind,
+        detail: detail.into(),
+    }
+}
+
 async fn check_target(
     client: &reqwest::Client,
     family: Family,
     url: &str,
     check: ResponseCheck,
-) -> Result<(), String> {
+) -> Result<(), ProbeFailure> {
     let response = client
         .get(url)
         .header("Cache-Control", "no-cache, no-store")
         .send()
         .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                "连接超时".to_string()
-            } else {
-                let mut reason = error.without_url().to_string();
-                // These failures alone do not establish that an IP family
-                // is unavailable; provide an actionable probe-level message.
-                if reason == "error sending request" {
-                    reason = "连接失败（DNS、路由或 TLS）".to_string();
-                }
-                reason
-            }
-        })?;
+        .map_err(request_failure)?;
     if matches!(check, ResponseCheck::NoContent) {
         return if response.status() == reqwest::StatusCode::NO_CONTENT {
             Ok(())
         } else {
-            Err(format!("HTTP {}，响应不是 204", response.status().as_u16()))
+            Err(ProbeFailure::response(format!(
+                "HTTP {}，响应不是 204（可能被认证页拦截）",
+                response.status().as_u16()
+            )))
         };
     }
     if response.status() != reqwest::StatusCode::OK {
-        return Err(format!("HTTP {}", response.status().as_u16()));
+        return Err(ProbeFailure::response(format!(
+            "HTTP {}",
+            response.status().as_u16()
+        )));
     }
     let mut response = response;
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| "读取探测响应失败")? {
+    while let Some(chunk) = response.chunk().await.map_err(request_failure)? {
         if body.len() + chunk.len() > 4096 {
-            return Err("探测响应过大".to_string());
+            return Err(ProbeFailure::response("探测响应过大"));
         }
         body.extend_from_slice(&chunk);
     }
@@ -126,7 +183,9 @@ async fn check_target(
     if valid {
         Ok(())
     } else {
-        Err("响应内容或地址族不符合预期".to_string())
+        Err(ProbeFailure::response(
+            "响应内容或地址族不符合预期（可能被认证页拦截）",
+        ))
     }
 }
 
@@ -155,7 +214,7 @@ async fn probe_family(
                     check_target(&client, family, url, *check),
                 )
                 .await
-                .unwrap_or_else(|_| Err("3 秒内无响应".to_string()))
+                .unwrap_or_else(|_| Err(ProbeFailure::timeout()))
             })
             .collect();
         while let Some(result) = probes.next().await {
@@ -172,25 +231,65 @@ async fn probe_family(
             }
         }
     } else {
-        errors.push("无法创建探测连接".to_string());
+        errors.push(ProbeFailure {
+            kind: "connection_error",
+            detail: "无法创建探测连接".into(),
+        });
     }
-    let timed_out = errors
-        .iter()
-        .any(|error| error.contains("超时") || error.contains("无响应"));
+    let status = if errors.iter().any(|error| error.kind == "timeout") {
+        "timeout"
+    } else if errors.iter().all(|error| error.kind == errors[0].kind) {
+        errors.first().map(|error| error.kind).unwrap_or("unknown")
+    } else {
+        "unknown"
+    };
     FamilyConnectivity {
         addresses,
-        status: if timed_out { "timeout" } else { "unknown" }.to_string(),
+        status: status.into(),
         detail: format!(
-            "外网探测{}，尚不能据此判定该地址族不可用。{}",
-            if timed_out { "超时" } else { "未完成" },
-            errors.join("；")
+            "{}。探测未通过不等于该地址族不可用。",
+            errors
+                .iter()
+                .map(|error| error.detail.as_str())
+                .collect::<Vec<_>>()
+                .join("；")
         ),
         duration_ms: started.elapsed().as_millis(),
     }
 }
 
-pub(crate) async fn probe(network: &serde_json::Value) -> DualStackReport {
-    probe_with_updates(network, |_| {}).await
+fn family_unconfigured(adapters: &[crate::network_inventory::NetworkAdapter], ipv6: bool) -> bool {
+    // An empty/failed inventory is unknown, not proof of absent configuration.
+    let connected: Vec<_> = adapters
+        .iter()
+        .filter(|adapter| adapter.connected)
+        .collect();
+    !connected.is_empty()
+        && connected.iter().all(|adapter| {
+            if ipv6 {
+                adapter.ipv6.is_empty()
+            } else {
+                adapter.ipv4.is_empty()
+            }
+        })
+}
+
+pub(crate) fn unavailable(reason: &str) -> DualStackReport {
+    let family = FamilyConnectivity {
+        addresses: Vec::new(),
+        status: "unknown".into(),
+        detail: reason.into(),
+        duration_ms: 0,
+    };
+    DualStackReport {
+        interface_name: String::new(),
+        checked_at: chrono::Local::now().to_rfc3339(),
+        scope: "system".into(),
+        generation: 0,
+        probe_id: 0,
+        ipv4: family.clone(),
+        ipv6: family,
+    }
 }
 
 pub(crate) async fn probe_with_updates(
@@ -217,6 +316,8 @@ pub(crate) async fn probe_with_updates(
         interface_name: interface.to_string(),
         checked_at: chrono::Local::now().to_rfc3339(),
         scope: "system".to_string(),
+        generation: 0,
+        probe_id: 0,
         ipv4: pending(ipv4.clone()),
         ipv6: pending(ipv6.clone()),
     };
@@ -234,9 +335,26 @@ pub(crate) async fn probe_with_updates(
             ResponseCheck::Microsoft,
         ),
     ];
+    let missing_v4 = family_unconfigured(&adapters, false);
+    let missing_v6 = family_unconfigured(&adapters, true);
+    let absent = |addresses| FamilyConnectivity {
+        addresses,
+        status: "not_configured".into(),
+        detail: "已读取网络接口，当前连接未配置此地址族的可用地址；无需据此重新认证".into(),
+        duration_ms: 0,
+    };
     let mut probes = FuturesUnordered::new();
-    probes.push(async { (false, probe_family(Family::V4, ipv4, &v4_targets).await) }.boxed());
-    probes.push(async { (true, probe_family(Family::V6, ipv6, &v6_targets).await) }.boxed());
+    if missing_v4 {
+        report.ipv4 = absent(ipv4);
+    } else {
+        probes.push(async { (false, probe_family(Family::V4, ipv4, &v4_targets).await) }.boxed());
+    }
+    if missing_v6 {
+        report.ipv6 = absent(ipv6);
+    } else {
+        probes.push(async { (true, probe_family(Family::V6, ipv6, &v6_targets).await) }.boxed());
+    }
+    update(&report);
     while let Some((is_v6, result)) = probes.next().await {
         if is_v6 {
             report.ipv6 = result;
@@ -253,6 +371,23 @@ pub(crate) async fn probe_with_updates(
 mod tests {
     use super::*;
     #[test]
+    fn absent_family_requires_inventory_and_includes_other_interfaces() {
+        use crate::network_inventory::NetworkAdapter;
+        assert!(!family_unconfigured(&[], true));
+        let v4 = NetworkAdapter {
+            connected: true,
+            ipv4: vec!["192.0.2.42".into()],
+            ..Default::default()
+        };
+        assert!(family_unconfigured(std::slice::from_ref(&v4), true));
+        let v6 = NetworkAdapter {
+            connected: true,
+            ipv6: vec!["2001:db8::42".into()],
+            ..Default::default()
+        };
+        assert!(!family_unconfigured(&[v4, v6], true));
+    }
+    #[test]
     fn diagnostic_bundle_redacts_both_address_families() {
         let family = |ip: &str| FamilyConnectivity {
             addresses: vec![ip.to_string()],
@@ -264,6 +399,8 @@ mod tests {
             interface_name: "en7".to_string(),
             checked_at: String::new(),
             scope: "system".to_string(),
+            generation: 0,
+            probe_id: 0,
             ipv4: family("172.26.99.10"),
             ipv6: family("2001:db8::10"),
         };
@@ -336,7 +473,7 @@ mod tests {
         });
         let target = format!("http://{address}/ip");
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            for expected in ["reachable", "unknown"] {
+            for expected in ["reachable", "response_error"] {
                 let result = probe_family(
                     Family::V6,
                     vec!["2001:db8::99".to_string()],

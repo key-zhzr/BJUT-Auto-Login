@@ -1,4 +1,8 @@
-import { NetworkExperience, LoginProgressView } from './network-experience';
+import { renderDiagnosticReportView, formatDiagnosticReport } from './diagnostics-view';
+import { NetworkExperience } from './network-experience';
+import { LoginProgressView } from './login-progress-view';
+import { renderNetworkEvents } from './network-events-view';
+import { setupKeyboardNavigation } from './keyboard-navigation';
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
@@ -41,7 +45,7 @@ import type {
   BillingRecordKind, BillingRecordQuery, BillingRecordQueryState, BillingRecordResult,
   BillingServiceState, BillingTable, ConfigBackupExport, ConfigBackupImport, CountdownPayload, CredentialStorageHealth,
   DiagnosticProgress, DiagnosticReport, DiscoveredCampusAccount, GitHubRelease, GitHubReleaseAsset,
-  NetworkStatePayload, AdapterInventory, DualStackReport, LoginProgress, NetworkSchedule,
+  NetworkStatePayload, NetworkEvent, AdapterInventory, DualStackReport, LoginProgress, NetworkSchedule,
   OfficialUpdateManifest,
   NetworkProfile, RechargeBalanceSnapshot, RechargePreview, RechargeResult,
   RecoverableRecharge, UpdateProgress, UpdateTarget, UserInfo, WechatPaymentStatus,
@@ -1057,6 +1061,8 @@ async function initializeRustEvents() {
       void updateUserInfo(true);
     })),
     settle('双栈状态事件', listen<DualStackReport>('link-health', event => networkExperience.renderHealth(event.payload))),
+    settle('双栈状态重置', listen<{ generation: number; probeId?: number }>('link-health-reset', event => networkExperience.resetGeneration(event.payload.generation, event.payload.probeId))),
+    settle('网络事件记录', listen<NetworkEvent[]>('network-events', event => renderNetworkEvents(event.payload))),
     settle('登录阶段事件', listen<LoginProgress>('login-progress', event => loginProgressView.render(event.payload))),
     settle('检测调度事件', listen<NetworkSchedule>('network-schedule', event => networkExperience.renderSchedule(event.payload))),
     settle('网络诊断进度事件', listen<DiagnosticProgress>('network-diagnostic-progress', event => {
@@ -1137,6 +1143,7 @@ async function initializeRustEvents() {
       logsDirty = true;
       logFilterCount.textContent = `${logEntriesCache.length} 条`;
     })),
+    settle('初始网络事件', invoke<NetworkEvent[]>('get_network_events').then(renderNetworkEvents)),
     settle('初始网卡', refreshNetworkAdapters()),
     settle('初始双栈状态', invoke<DualStackReport | null>('get_link_health').then(health => { if (health) networkExperience.renderHealth(health); })),
     settle('初始调度', invoke<NetworkSchedule>('get_network_schedule').then(plan => networkExperience.renderSchedule(plan))),
@@ -1624,7 +1631,7 @@ const loginProgressView = new LoginProgressView(async operationId => {
   await invoke('cancel_manual_login', { operationId });
   const modal = document.getElementById('security-modal');
   if (modal && !modal.classList.contains('hidden')) document.getElementById('btn-sec-cancel')?.click();
-}, summary => log('登录反馈', summary, 'info'));
+}, (summary, success) => log('登录反馈', summary, success === true ? 'success' : success === false ? 'error' : 'info'));
 const btnRunDiagnostics = document.getElementById('btn-run-diagnostics') as HTMLButtonElement;
 const btnCopyDiagnostics = document.getElementById('btn-copy-diagnostics') as HTMLButtonElement;
 const adapterRepairPanel = document.getElementById('diagnostic-adapter-repair')!;
@@ -1632,7 +1639,6 @@ const adapterRepairMessage = document.getElementById('diagnostic-adapter-repair-
 const btnRestartLgnAdapter = document.getElementById('btn-restart-lgn-adapter') as HTMLButtonElement;
 const btnResetAllHealth = document.getElementById('btn-reset-all-health') as HTMLButtonElement;
 const accountHealthList = document.getElementById('account-health-list')!;
-const diagnosticSteps = document.getElementById('diagnostic-steps')!;
 const diagnosticProgress = document.getElementById('diagnostic-progress')!;
 const diagnosticProgressText = document.getElementById('diagnostic-progress-text')!;
 const diagnosticProgressPercent = document.getElementById('diagnostic-progress-percent')!;
@@ -2198,47 +2204,7 @@ async function refreshCredentialStorageHealth() {
 }
 
 function renderDiagnosticReport(report: DiagnosticReport) {
-  if (report.dualStack) networkExperience.renderHealth(report.dualStack);
-  adapterRepairPanel.hidden = !report.adapterRestart;
-  btnRestartLgnAdapter.disabled = diagnosticRunActive || adapterRestartActive;
-  if (report.adapterRestart) {
-    adapterRepairMessage.textContent = `${report.adapterRestart.interfaceName}：${report.adapterRestart.reason}。重启会短暂中断此有线连接并重新获取网络配置，macOS 可能要求管理员授权。`;
-  }
-  const summary = document.getElementById('diagnostic-summary')!;
-  const badge = document.getElementById('diagnostic-summary-badge')!;
-  const title = document.getElementById('diagnostic-summary-title')!;
-  const meta = document.getElementById('diagnostic-summary-meta')!;
-  const overallClass = report.overall === 'healthy' ? 'success'
-    : report.overall === 'auth_required' || report.overall === 'partial' ? 'warning' : 'error';
-  const overallLabel = report.overall === 'healthy' ? '网络正常'
-    : report.overall === 'partial' ? '部分可用' : report.overall === 'auth_required' ? '需要认证'
-      : report.overall === 'no_network' ? '无网络接口' : '无法联网';
-  summary.className = `diagnostic-summary glass-card diagnostic-${overallClass}`;
-  badge.className = `health-badge ${overallClass}`;
-  badge.textContent = overallLabel;
-  title.textContent = report.summary;
-  meta.textContent = `${formatHealthTime(report.createdAt)} · SSID ${report.ssid || '--'} · IP ${report.ip || '--'}`;
-  diagnosticSteps.innerHTML = '';
-  report.steps.forEach(step => {
-    const row = document.createElement('div');
-    row.className = `diagnostic-step ${step.status}`;
-    const marker = document.createElement('span');
-    marker.className = 'diagnostic-step-marker';
-    marker.textContent = step.status === 'success' ? '✓' : step.status === 'warning' ? '!' : step.status === 'skipped' ? '–' : '×';
-    const content = document.createElement('div');
-    content.className = 'diagnostic-step-info';
-    const label = document.createElement('strong');
-    label.textContent = step.label;
-    const detail = document.createElement('small');
-    detail.textContent = step.message;
-    content.append(label, detail);
-    const duration = document.createElement('span');
-    duration.className = 'diagnostic-step-duration';
-    duration.textContent = `${step.durationMs} ms`;
-    row.append(marker, content, duration);
-    diagnosticSteps.appendChild(row);
-  });
-  btnCopyDiagnostics.disabled = false;
+  renderDiagnosticReportView(report, { busy: diagnosticRunActive || adapterRestartActive, renderHealth: health => networkExperience.renderHealth(health), formatTime: formatHealthTime });
 }
 
 let diagnosticRunActive = false;
@@ -2272,26 +2238,7 @@ function finishDiagnosticProgress() {
   }, 700);
 }
 
-function diagnosticReportText(report: DiagnosticReport): string {
-  const maskedIp = report.ip
-    ? report.ip.split('.').map((part, index) => index < 2 ? part : '*').join('.')
-    : '--';
-  const lines = [
-    'BJUT-AL 网络诊断报告',
-    `时间：${formatHealthTime(report.createdAt)}`,
-    `结论：${report.summary}`,
-    `SSID：${report.ssid || '--'}`,
-    `IP：${maskedIp}`,
-    '',
-  ];
-  report.steps.forEach(step => {
-    const details = step.message.split('\n').filter(Boolean);
-    lines.push(`[${step.status}] ${step.label}（${step.durationMs} ms）：${details.shift() || '--'}`);
-    details.forEach(detail => lines.push(`  ${detail}`));
-  });
-  lines.push('', '报告不包含账号密码。');
-  return lines.join('\n');
-}
+function diagnosticReportText(report: DiagnosticReport): string { return formatDiagnosticReport(report, formatHealthTime); }
 
 async function runDiagnostics() {
   if (!window.__TAURI__) {
@@ -7257,7 +7204,7 @@ async function manualLogin(switchingAccount = false) {
     },
   });
   if (!trustApproval.allowed || loginProgressView.isCancelled()) {
-    loginProgressView.finish(loginProgressView.isCancelled() ? '已取消登录，未提交认证' : '安全检查未通过，已停止登录');
+    loginProgressView.finish(loginProgressView.isCancelled() ? '已取消登录，未提交认证' : '安全检查未通过，已停止登录', false);
     networkExperience.setBusy(false);
     log('安全', '已取消登录：安全检查未通过', 'error');
     isLoggingIn = false;
@@ -7284,7 +7231,7 @@ async function manualLogin(switchingAccount = false) {
         currentAccountUser,
       },
     } });
-    loginProgressView.finish(result.message);
+    loginProgressView.finish(result.message, result.success);
     if (!result.success) {
       log('登录', `${switchingAccount ? '切换账号' : '登录'}失败: ${result.message}`, 'error');
       if (!switchingAccount) updateNetworkStatus(NetworkState.BjutCampus, undefined, result.message);
@@ -7302,7 +7249,7 @@ async function manualLogin(switchingAccount = false) {
     }
     setTimeout(() => void updateUserInfo(true), switchingAccount ? 900 : 2000);
   } catch (error) {
-    loginProgressView.finish(String(error));
+    loginProgressView.finish(String(error), false);
     log('登录', `${switchingAccount ? '切换账号' : '登录'}请求失败: ${String(error)}`, 'error');
     if (!switchingAccount) {
       updateNetworkStatus(NetworkState.BjutCampus, undefined, `登录请求失败：${String(error)}`);
@@ -7367,3 +7314,5 @@ void init().catch(async error => {
   await finishAppLaunch();
   await customAlert(`应用初始化失败：${String(error)}`);
 });
+
+setupKeyboardNavigation();
