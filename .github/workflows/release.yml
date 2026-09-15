@@ -101,21 +101,21 @@ jobs:
           import os
           import shutil
           import sys
-          
+
           platform = os.environ.get("MATRIX_PLATFORM", "")
           args = os.environ.get("MATRIX_ARGS", "")
           version = os.environ.get("VERSION", "")
-          
+
           os.makedirs("release-artifacts", exist_ok=True)
           print("Searching for artifacts on platform={}, args={}, version={}...".format(platform, args, version))
-          
+
           copied = False
           for root, dirs, files in os.walk("src-tauri/target"):
               if "debug" in root.split(os.sep):
                   continue
               for file in files:
                   file_path = os.path.join(root, file)
-                  
+
                   # macOS
                   if platform == "macos-latest" and file.endswith(".dmg"):
                       if "aarch64" in args:
@@ -136,7 +136,7 @@ jobs:
                       dest = "release-artifacts/BJUT-Auto-Login_{}_macOS_{}.tar.gz.sig".format(version, arch)
                       shutil.copy2(file_path, dest)
                       copied = True
-                      
+
                   # Windows
                   elif platform == "windows-latest" and file.endswith(".exe") and "bundle" in file_path:
                       arch = "arm64" if "aarch64" in args else "x64"
@@ -150,7 +150,7 @@ jobs:
                       dest = "release-artifacts/BJUT-Auto-Login_{}_Windows_{}.exe.sig".format(version, arch)
                       shutil.copy2(file_path, dest)
                       copied = True
-                      
+
                   # Linux
                   elif platform == "ubuntu-22.04" and "bundle" in file_path:
                       if file.endswith(".deb"):
@@ -167,7 +167,7 @@ jobs:
                           dest = "release-artifacts/BJUT-Auto-Login_{}_Linux_x64.AppImage.sig".format(version)
                           shutil.copy2(file_path, dest)
                           copied = True
-          
+
           if not copied:
               print("Error: No artifacts were found!")
               sys.exit(1)
@@ -211,9 +211,11 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
-        
-      - name: Setup NDK
-        run: sdkmanager "build-tools;36.0.0" "ndk;27.0.12077973"
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK packages and NDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
 
       - name: Install NPM dependencies
         run: npm ci
@@ -266,10 +268,10 @@ jobs:
           import os
           import shutil
           import sys
-          
+
           version = os.environ.get("VERSION", "")
           os.makedirs("android-release", exist_ok=True)
-          
+
           found = False
           for file in os.listdir("apk-to-sign"):
               if file.endswith("-signed.apk") or (file.endswith(".apk") and "unsigned" not in file):
@@ -279,7 +281,7 @@ jobs:
                   shutil.copy2(src, dest)
                   found = True
                   break
-          
+
           if not found:
               print("Error: No signed APK found!")
               sys.exit(1)
@@ -321,9 +323,11 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
-        
-      - name: Setup NDK
-        run: sdkmanager "build-tools;36.0.0" "ndk;27.0.12077973"
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK packages and NDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
 
       - name: Install NPM dependencies
         run: npm ci
@@ -376,10 +380,10 @@ jobs:
           import os
           import shutil
           import sys
-          
+
           version = os.environ.get("VERSION", "")
           os.makedirs("android-release", exist_ok=True)
-          
+
           found = False
           for file in os.listdir("apk-to-sign"):
               if file.endswith("-signed.apk") or (file.endswith(".apk") and "unsigned" not in file):
@@ -389,7 +393,7 @@ jobs:
                   shutil.copy2(src, dest)
                   found = True
                   break
-          
+
           if not found:
               print("Error: No signed APK found!")
               sys.exit(1)
@@ -430,11 +434,11 @@ jobs:
         run: |
           import os
           import shutil
-          
+
           src_dir = "all-release-artifacts"
           dest_dir = "release-files"
           os.makedirs(dest_dir, exist_ok=True)
-          
+
           print("Flattening files from {} to {}...".format(src_dir, dest_dir))
           file_count = 0
           for root, dirs, files in os.walk(src_dir):
@@ -444,7 +448,7 @@ jobs:
                   print("Copying {} -> {}".format(src_path, dest_path))
                   shutil.copy2(src_path, dest_path)
                   file_count += 1
-          
+
           print("Successfully flattened {} files.".format(file_count))
           if file_count == 0:
               raise Exception("No release files were found to upload!")
