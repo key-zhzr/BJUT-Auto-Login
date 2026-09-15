@@ -10,6 +10,12 @@ pub(crate) fn campus_dns_servers(
     host: &str,
     source_ipv4: Option<Ipv4Addr>,
 ) -> &'static [&'static str] {
+    // Billing is shared by wired and Wi-Fi networks. A manual billing request
+    // may have no physical route context (including VPN access); race both
+    // campus resolver sets within the same timeout instead of assuming Wi-Fi.
+    if source_ipv4.is_none() && host == "jfself.bjut.edu.cn" {
+        return &["172.21.0.21:53", "172.21.201.22:53", "10.21.200.28:53"];
+    }
     let wired = source_ipv4
         .map(|address| matches!(address.octets(), [172, 26, _, _]))
         .unwrap_or(host == super::LGN_HOST || host == super::LGN6_HOST);
@@ -181,6 +187,14 @@ async fn query_dns_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn billing_without_a_physical_route_covers_both_campus_dns_sets() {
+        assert_eq!(
+            campus_dns_servers("jfself.bjut.edu.cn", None),
+            &["172.21.0.21:53", "172.21.201.22:53", "10.21.200.28:53"]
+        );
+    }
 
     #[test]
     fn lgn_uses_the_wired_resolvers_without_changing_wifi_dns() {

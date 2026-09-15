@@ -11,6 +11,7 @@ mod macos_network;
 mod network_inventory;
 mod network_platform;
 mod network_probe;
+mod network_progress;
 mod network_repair;
 mod network_schedule;
 use network_repair::AdapterRestartTarget;
@@ -1560,6 +1561,7 @@ struct AppState {
     network_events: Mutex<network_events::Timeline>,
     system_online: AtomicBool,
     network_schedule: Mutex<network_schedule::AdaptiveSchedule>,
+    network_progress: network_progress::Control,
     auto_login_paused_until: std::sync::atomic::AtomicI64,
     usage_alert_history: Mutex<HashMap<String, String>>,
     update_download: UpdateDownloadControl,
@@ -4203,6 +4205,13 @@ fn get_network_schedule(state: tauri::State<Arc<AppState>>) -> network_schedule:
     state.network_schedule.lock().unwrap().plan.clone()
 }
 
+#[tauri::command]
+fn get_network_check_progress(
+    state: tauri::State<Arc<AppState>>,
+) -> Option<network_progress::Progress> {
+    state.network_progress.snapshot()
+}
+
 async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full_details: bool) {
     if state.is_checking.swap(true, Ordering::SeqCst) {
         if full_details {
@@ -4235,6 +4244,12 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             login_generation: login_operation_generation,
             network_generation: state.network_change_generation.load(Ordering::SeqCst),
         };
+        let progress = network_progress::Run::begin(
+            &app,
+            &state,
+            _schedule_guard.network_generation,
+            "正在核对认证网卡与 IP 地址",
+        );
         let is_bg = app_is_in_background(&app, &state);
         state.is_in_background.store(is_bg, Ordering::SeqCst);
         let (interval_fg, interval_bg, compatibility) = {
@@ -4490,6 +4505,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         // different default network (for example cellular while an unvalidated
         // campus Wi-Fi remains associated). Connectivity decisions therefore
         // always come from our independent multi-target probes.
+        progress.phase("正在验证互联网连通性与校园认证状态", 30);
         let observation = connectivity::observe(&app, &state, &net_info);
         let connection = observation.wait(false).await;
         if connection.cancelled
@@ -4591,6 +4607,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             ),
             "debug",
         );
+        progress.phase("正在探测校园认证网关，确认登录类型", 65);
         let detection = detect_login_type_details_rust(
             compatibility,
             &current_ssid,
@@ -4609,6 +4626,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             state.is_checking.store(false, Ordering::SeqCst);
             return;
         }
+        progress.phase("正在核对网关响应与当前网络身份", 82);
         let type1_requires_maximum = type1_portal_requires_maximum(&detection, compatibility);
         let detected_login_type = if detection.login_ready {
             detection.login_type.clone()
@@ -4871,6 +4889,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             }
                         };
                         if proceed {
+                            progress.phase("已确认校园网登录类型，正在执行自动登录", 92);
                             let accounts = {
                                 let cfg = state.config.read().unwrap();
                                 cfg.accounts.clone()
@@ -6144,7 +6163,7 @@ async fn logout_current_campus_session(
             config
                 .accounts
                 .iter()
-                .find(|account| account.user == user && !account.is_disabled.unwrap_or(false))
+                .find(|account| account.user == user)
                 .cloned()
         })
         .or_else(|| preferred_billing_account(&config));
@@ -6403,7 +6422,7 @@ async fn manual_login_inner(
             config
                 .accounts
                 .iter()
-                .find(|account| account.user == user && !account.is_disabled.unwrap_or(false))
+                .find(|account| account.user == user)
                 .cloned()
         })
         .or_else(|| preferred_billing_account(&config));
@@ -6417,7 +6436,7 @@ async fn manual_login_inner(
         None => configured_accounts,
     }
     .into_iter()
-    .filter(|account| !account.is_disabled.unwrap_or(false))
+    .filter(|account| account_index.is_some() || !account.is_disabled.unwrap_or(false))
     .collect();
     if accounts.is_empty() {
         return Ok(ManualLoginResult {
@@ -6797,12 +6816,13 @@ fn preferred_billing_account(config: &AppConfig) -> Option<Account> {
     config
         .accounts
         .iter()
-        .filter(|account| !account.is_disabled.unwrap_or(false) && !account.user.trim().is_empty())
+        .filter(|account| !account.user.trim().is_empty())
         .find(|account| account.is_default)
         .or_else(|| {
-            config.accounts.iter().find(|account| {
-                !account.is_disabled.unwrap_or(false) && !account.user.trim().is_empty()
-            })
+            config
+                .accounts
+                .iter()
+                .find(|account| !account.user.trim().is_empty())
         })
         .cloned()
 }
@@ -6815,11 +6835,7 @@ fn selected_billing_account(config: &AppConfig, account_user: Option<&str>) -> O
         Some(user) => config
             .accounts
             .iter()
-            .find(|account| {
-                account.user == user
-                    && !account.is_disabled.unwrap_or(false)
-                    && !account.user.trim().is_empty()
-            })
+            .find(|account| account.user == user && !account.user.trim().is_empty())
             .cloned(),
         None => preferred_billing_account(config),
     }
@@ -7079,8 +7095,8 @@ async fn get_billing_center(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     account_user: Option<String>,
+    current_session: Option<bool>,
 ) -> Result<billing::BillingCenterData, String> {
-    let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     emit_billing_center_progress(&app, &state, "准备读取计费中心完整数据", 2);
     let _fetch_guard = match state.billing_fetch_lock.try_lock() {
         Ok(guard) => guard,
@@ -7101,13 +7117,25 @@ async fn get_billing_center(
             }
         }
     };
+    let (access, compatibility) = resolve_billing_access(
+        &app,
+        &state,
+        account_user.as_deref(),
+        current_session.unwrap_or(false),
+        true,
+    )
+    .await?;
     let progress_app = app.clone();
     let progress_state = state.inner().clone();
     let emit_progress = move |message: &str, percent: u8| {
         emit_billing_center_progress(&progress_app, &progress_state, message, percent);
     };
     let module_app = app.clone();
-    let module_account = account.user.clone();
+    let module_account = if current_session.unwrap_or(false) {
+        "__current_session__".to_string()
+    } else {
+        access.account.clone()
+    };
     let publish_module = move |update: billing::BillingCenterModuleUpdate| {
         let mut payload = serde_json::to_value(update).unwrap_or_default();
         if let Some(object) = payload.as_object_mut() {
@@ -7123,8 +7151,7 @@ async fn get_billing_center(
         match tokio::time::timeout(
             std::time::Duration::from_secs(75),
             billing::fetch_center(
-                &account.user,
-                &account.pass,
+                &access,
                 compatibility,
                 &state.billing_sessions,
                 emit_progress,
@@ -7162,23 +7189,25 @@ async fn query_billing_records(
     state: tauri::State<'_, Arc<AppState>>,
     query: billing::BillingRecordQuery,
     account_user: Option<String>,
+    current_session: Option<bool>,
 ) -> Result<billing::BillingRecordResult, String> {
-    let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     let kind = query.kind.clone();
     let page = query.page;
     let all = query.all;
     let _fetch_guard = state.billing_fetch_lock.lock().await;
+    let (access, compatibility) = resolve_billing_access(
+        &app,
+        &state,
+        account_user.as_deref(),
+        current_session.unwrap_or(false),
+        false,
+    )
+    .await?;
     ensure_billing_foreground(&state)?;
     let result = run_billing_read_while_foreground(&state, async {
-        billing::query_records(
-            &account.user,
-            &account.pass,
-            compatibility,
-            &state.billing_sessions,
-            &query,
-        )
-        .await
-        .map_err(|error| error.user_message())
+        billing::query_records(&access, compatibility, &state.billing_sessions, &query)
+            .await
+            .map_err(|error| error.user_message())
     })
     .await;
     match &result {
@@ -7205,16 +7234,36 @@ async fn perform_billing_action(
     state: tauri::State<'_, Arc<AppState>>,
     request: billing::BillingActionRequest,
     account_user: Option<String>,
+    current_session: Option<bool>,
 ) -> Result<billing::BillingActionResult, String> {
     let action = request.action.clone();
-    let (account, compatibility) = if action == "changePassword" {
+    let _billing_guard = if action == "changePassword" {
+        None
+    } else {
+        Some(state.billing_fetch_lock.lock().await)
+    };
+    let (account, access, compatibility) = if action == "changePassword" {
         (
             campus_service_target(&state, account_user.as_deref())?,
             None,
+            None,
         )
     } else {
-        let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
-        (account, Some(compatibility))
+        let (access, compatibility) = resolve_billing_access(
+            &app,
+            &state,
+            account_user.as_deref(),
+            current_session.unwrap_or(false),
+            false,
+        )
+        .await?;
+        let account = Account {
+            user: access.account.clone(),
+            pass: String::new(),
+            is_default: false,
+            is_disabled: None,
+        };
+        (account, Some(access), Some(compatibility))
     };
     // A write may succeed even when its response is lost. Never retain a
     // pre-write dashboard session across any mutation attempt.
@@ -7250,13 +7299,16 @@ async fn perform_billing_action(
             password_changed: true,
         }
     } else {
-        let _fetch_guard = state.billing_fetch_lock.lock().await;
         let compatibility = compatibility.ok_or_else(|| "计费操作缺少 VPN 兼容配置".to_string())?;
         ensure_billing_foreground(&state)?;
         run_billing_mutation_to_completion(&state, async {
-            billing::perform_action(&account.user, &account.pass, compatibility, &request)
-                .await
-                .map_err(|error| error.user_message())
+            billing::perform_action(
+                access.as_ref().ok_or("缺少计费会话")?,
+                compatibility,
+                &request,
+            )
+            .await
+            .map_err(|error| error.user_message())
         })
         .await?
     };
@@ -7309,9 +7361,9 @@ fn campus_service_target(state: &AppState, account_user: Option<&str>) -> Result
     let config = state.config.read().unwrap();
     let account = selected_billing_account(&config, account_user).ok_or_else(|| {
         if account_user.is_some() {
-            "所选统一认证账号不存在、已停用或缺少有效配置".to_string()
+            "所选统一认证账号不存在或缺少有效配置".to_string()
         } else {
-            "没有可用于统一认证的已启用账号".to_string()
+            "没有可用于统一认证的已保存账号".to_string()
         }
     })?;
     if account.pass.is_empty() {
@@ -8245,6 +8297,55 @@ async fn cancel_wechat_card_recharge(
     Ok(())
 }
 
+async fn resolve_billing_access(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    account_user: Option<&str>,
+    current_session: bool,
+    allow_discovery: bool,
+) -> Result<(billing::BillingAccess, VpnCompatibility), String> {
+    if !current_session {
+        let (account, compatibility) = billing_action_target(state, account_user)?;
+        return Ok((
+            billing::BillingAccess::saved(account.user, account.pass),
+            compatibility,
+        ));
+    }
+    ensure_billing_foreground(state)?;
+    let expected_account = account_user
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !allow_discovery && expected_account.is_none() {
+        return Err("请先刷新当前登录账号的计费数据，再执行操作".to_string());
+    }
+    let compatibility = effective_vpn_compatibility(&state.config.read().unwrap());
+    let generation = state.network_change_generation.load(Ordering::SeqCst);
+    let network = get_network_info(app.clone(), Some(false));
+    let route = portal_route_context_from_network(&network)?;
+    let access = run_billing_read_while_foreground(state, async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(25),
+            billing::current_session_access(
+                compatibility,
+                route.as_ref(),
+                if allow_discovery {
+                    None
+                } else {
+                    expected_account
+                },
+            ),
+        )
+        .await
+        .map_err(|_| "当前登录账号的计费跳转超过 25 秒".to_string())?
+        .map_err(|error| error.user_message())
+    })
+    .await?;
+    if state.network_change_generation.load(Ordering::SeqCst) != generation {
+        return Err("网络已变化，请重新打开当前登录账号的计费系统".to_string());
+    }
+    Ok((access, compatibility))
+}
+
 fn billing_action_target(
     state: &AppState,
     account_user: Option<&str>,
@@ -8258,9 +8359,9 @@ fn billing_action_target(
     let config = state.config.read().unwrap();
     let account = selected_billing_account(&config, account_user).ok_or_else(|| {
         if account_user.is_some() {
-            "所选计费账号不存在、已停用或缺少有效配置".to_string()
+            "所选计费账号不存在或缺少有效配置".to_string()
         } else {
-            "没有可用于计费系统的已启用账号".to_string()
+            "没有可用于计费系统的已保存账号".to_string()
         }
     })?;
     if account.pass.is_empty() {
@@ -8277,24 +8378,29 @@ async fn disconnect_billing_session(
     ip: String,
     mac: String,
     account_user: Option<String>,
+    current_session: Option<bool>,
 ) -> Result<String, String> {
-    let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     let _fetch_guard = state.billing_fetch_lock.lock().await;
+    let (access, compatibility) = resolve_billing_access(
+        &app,
+        &state,
+        account_user.as_deref(),
+        current_session.unwrap_or(false),
+        false,
+    )
+    .await?;
     ensure_billing_foreground(&state)?;
     let result = run_billing_mutation_to_completion(&state, async {
-        billing::disconnect_session(
-            &account.user,
-            &account.pass,
-            compatibility,
-            &session_id,
-            &ip,
-            &mac,
-        )
-        .await
-        .map_err(|error| error.user_message())
+        billing::disconnect_session(&access, compatibility, &session_id, &ip, &mac)
+            .await
+            .map_err(|error| error.user_message())
     })
     .await;
-    state.billing_sessions.lock().unwrap().remove(&account.user);
+    state
+        .billing_sessions
+        .lock()
+        .unwrap()
+        .remove(&access.account);
     match &result {
         Ok(_) => rust_log(
             &app,
@@ -8314,17 +8420,29 @@ async fn set_billing_mauth(
     state: tauri::State<'_, Arc<AppState>>,
     enabled: bool,
     account_user: Option<String>,
+    current_session: Option<bool>,
 ) -> Result<String, String> {
-    let (account, compatibility) = billing_action_target(&state, account_user.as_deref())?;
     let _fetch_guard = state.billing_fetch_lock.lock().await;
+    let (access, compatibility) = resolve_billing_access(
+        &app,
+        &state,
+        account_user.as_deref(),
+        current_session.unwrap_or(false),
+        false,
+    )
+    .await?;
     ensure_billing_foreground(&state)?;
     let result = run_billing_mutation_to_completion(&state, async {
-        billing::set_mauth_enabled(&account.user, &account.pass, compatibility, enabled)
+        billing::set_mauth_enabled(&access, compatibility, enabled)
             .await
             .map_err(|error| error.user_message())
     })
     .await;
-    state.billing_sessions.lock().unwrap().remove(&account.user);
+    state
+        .billing_sessions
+        .lock()
+        .unwrap()
+        .remove(&access.account);
     match &result {
         Ok(_) => rust_log(
             &app,
@@ -8356,6 +8474,12 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
         "link-health-reset",
         serde_json::json!({"generation": generation}),
     );
+    let progress = network_progress::Run::begin(
+        &app,
+        &state,
+        generation,
+        "检测到 IP 或网络变化，正在等待新的 IP 分配",
+    );
     state.network_change_waiting.store(true, Ordering::SeqCst);
     let mut checking_payload = state.last_network_state.lock().unwrap().clone();
     if let Some(object) = checking_payload.as_object_mut() {
@@ -8384,6 +8508,7 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
                 .trim();
             if usable_physical_ipv4(current_ip).is_some() {
                 ready_ip = current_ip.to_string();
+                progress.phase("已取得物理网卡 IP，准备完整检测", 20);
                 rust_log(
                     &app,
                     &state,
@@ -8395,6 +8520,10 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
                 );
                 break;
             }
+            progress.phase(
+                &format!("正在等待新的 IP 分配（第 {attempt}/10 次检查）"),
+                5 + attempt,
+            );
             rust_log(
                 &app,
                 &state,
@@ -8417,6 +8546,7 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
             );
         }
         *state.last_known_ip.lock().unwrap() = Some(ready_ip);
+        progress.handoff();
         trigger_network_check(app, state, true).await;
     });
 }
@@ -8855,6 +8985,39 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().setup(|_app| {
+        #[cfg(desktop)]
+        {
+            // Set frameless for non-macOS desktop windows
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Some(window) = _app.get_webview_window("main") {
+                    let _ = window.set_decorations(false);
+                    let _ = window.set_shadow(true);
+                    #[cfg(target_os = "windows")]
+                    {
+                        let (width, height) = window
+                            .current_monitor()
+                            .ok()
+                            .flatten()
+                            .map(|monitor| {
+                                let screen =
+                                    monitor.size().to_logical::<f64>(monitor.scale_factor());
+                                (
+                                    1080.0_f64.min((screen.width - 48.0).max(320.0)),
+                                    780.0_f64.min((screen.height - 80.0).max(400.0)),
+                                )
+                            })
+                            .unwrap_or((1080.0, 780.0));
+                        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+                        let _ = window.center();
+                    }
+                }
+            }
+
+            if let Some(window) = _app.get_webview_window("main") {
+                window_geometry::install(&window);
+            }
+        }
         let app_state = std::sync::Arc::new(AppState {
             config: RwLock::new(AppConfig {
                 preferred_interface: String::new(),
@@ -8905,6 +9068,7 @@ pub fn run() {
             network_events: Mutex::new(network_events::load(_app.handle())),
             system_online: AtomicBool::new(false),
             network_schedule: Mutex::new(network_schedule::AdaptiveSchedule::default()),
+            network_progress: network_progress::Control::default(),
             last_network_state: Mutex::new(serde_json::json!({
                 "state": "Checking",
                 "ssid": "",
@@ -9137,37 +9301,6 @@ pub fn run() {
         {
             use tauri::Manager;
 
-            // Set frameless for non-macOS desktop windows
-            #[cfg(not(target_os = "macos"))]
-            {
-                if let Some(window) = _app.get_webview_window("main") {
-                    let _ = window.set_decorations(false);
-                    let _ = window.set_shadow(true);
-                    #[cfg(target_os = "windows")]
-                    {
-                        let (width, height) = window
-                            .current_monitor()
-                            .ok()
-                            .flatten()
-                            .map(|monitor| {
-                                let screen =
-                                    monitor.size().to_logical::<f64>(monitor.scale_factor());
-                                (
-                                    1080.0_f64.min((screen.width - 48.0).max(320.0)),
-                                    780.0_f64.min((screen.height - 80.0).max(400.0)),
-                                )
-                            })
-                            .unwrap_or((1080.0, 780.0));
-                        let _ = window.set_size(tauri::LogicalSize::new(width, height));
-                        let _ = window.center();
-                    }
-                }
-            }
-
-            if let Some(window) = _app.get_webview_window("main") {
-                window_geometry::install(&window);
-            }
-
             // Prevent window close, hide instead to keep in system tray
             if let Some(window) = _app.get_webview_window("main") {
                 let window_clone = window.clone();
@@ -9346,6 +9479,7 @@ pub fn run() {
             get_link_health,
             network_events::get_network_events,
             get_network_schedule,
+            get_network_check_progress,
             set_preferred_interface,
             request_battery_optimizations,
             request_foreground_permissions,
@@ -9692,7 +9826,13 @@ mod tests {
             selected_billing_account(&config, None).map(|account| account.user),
             Some("20260001".to_string())
         );
-        assert!(selected_billing_account(&config, Some("20260003")).is_none());
+        assert_eq!(
+            selected_billing_account(&config, Some("20260003")).map(|account| account.user),
+            Some("20260003".to_string())
+        );
+        assert!(!accounts_for_profile(config.accounts.clone(), None)
+            .iter()
+            .any(|account| account.user == "20260003"));
         assert!(selected_billing_account(&config, Some("missing")).is_none());
     }
 

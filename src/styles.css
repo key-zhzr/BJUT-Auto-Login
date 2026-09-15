@@ -2192,6 +2192,13 @@ input:checked + .slider:before { transform: translateX(24px); }
 
 .login-progress-panel { padding: 1.25rem; margin-bottom: 1rem; }
 .login-progress-panel[hidden] { display: none !important; }
+.network-check-progress { margin: 0 0 1rem; color: var(--text-muted); font-size: .82rem; }
+.network-check-progress[hidden] { display: none !important; }
+.network-check-progress > div:first-child { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+#network-check-elapsed { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.network-check-track { height: 3px; margin-top: .5rem; background: var(--card-border); border-radius: 3px; overflow: hidden; }
+#network-check-bar { display: block; height: 100%; width: 0; background: var(--primary-color); transition: width 150ms linear; }
+@media (prefers-reduced-motion: reduce) { #network-check-bar { transition: none; } }
 .network-adapter-settings p, .login-progress-panel p, .login-progress-phases { color: var(--text-muted); font-size: .84rem; line-height: 1.6; }
 .network-adapter-list { display: grid; gap: .5rem; margin: .75rem 0; }
 .network-adapter-row { width: 100%; display: flex; align-items: center; gap: .8rem; text-align: left; color: var(--text-main); font: inherit; background: transparent; padding: .75rem .9rem; border: 1px solid var(--card-border); border-radius: 8px; cursor: pointer; transition: background .15s, transform .12s, border-color .15s; }
@@ -3377,9 +3384,11 @@ body.is-android .log-entry {
   contain-intrinsic-size: auto 48px;
   contain: layout paint style;
 }
-body.is-android .settings-group:not(:has(.custom-select.open)) {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 280px;
+/* Settings contain interactive controls; never toggle display locking when
+   a menu opens. The small form benefits more from stable WebView layout. */
+body.is-android .settings-group {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
 }
 
 .log-history-sentinel {

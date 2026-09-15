@@ -1,5 +1,9 @@
+let navigationInstalled = false;
+
 /** Shared keyboard behavior, independent of the current visual theme. */
 export function setupKeyboardNavigation() {
+  if (navigationInstalled) return;
+  navigationInstalled = true;
   const labels: Record<string, string> = { 'titlebar-minimize': '最小化窗口', 'titlebar-maximize': '最大化或还原窗口', 'titlebar-close': '关闭窗口' };
   document.querySelectorAll<HTMLElement>('.nav-item[data-target], .titlebar-button').forEach(node => {
     node.tabIndex = 0; node.setAttribute('role', 'button'); node.dataset.keyboardActivate = 'true';
@@ -22,18 +26,52 @@ export function setupKeyboardNavigation() {
   let modal: HTMLElement | null = null;
   let returnFocus: HTMLElement | null = null;
   const focusable = (root: HTMLElement) => Array.from(root.querySelectorAll<HTMLElement>('button,a[href],input,select,textarea,[tabindex="0"]')).filter(node => !node.matches(':disabled,[aria-disabled="true"]') && node.getClientRects().length > 0);
+  const dialogs = new Set<HTMLElement>();
+  let refreshFrame: number | null = null;
   const refreshModal = () => {
-    const visible = Array.from(document.querySelectorAll<HTMLElement>('.modal-overlay:not(.hidden):not([hidden])')).filter(node => node.getClientRects().length > 0);
+    if (refreshFrame !== null) { cancelAnimationFrame(refreshFrame); refreshFrame = null; }
+    const visible = Array.from(dialogs).filter(node => node.isConnected && !node.hidden && !node.classList.contains('hidden') && node.getClientRects().length > 0);
     const next = visible[visible.length - 1] || null;
     if (next === modal) return;
     if (next) {
       if (!modal) returnFocus = document.activeElement as HTMLElement;
       modal = next; modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true');
-      if (!modal.contains(document.activeElement)) (focusable(modal)[0] || modal).focus();
-    } else { modal = null; if (returnFocus?.isConnected) returnFocus.focus(); returnFocus = null; }
+      if (!modal.contains(document.activeElement)) (focusable(modal)[0] || modal).focus({ preventScroll: true });
+    } else { modal = null; if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true }); returnFocus = null; }
   };
-  new MutationObserver(refreshModal).observe(document.body, { attributes: true, attributeFilter: ['class', 'hidden'], childList: true, subtree: true });
+  // Only dialog roots change modal visibility. Watching every class/child in
+  // the WebView made each dropdown/log update trigger synchronous layout reads.
+  const scheduleRefresh = () => {
+    if (refreshFrame === null) refreshFrame = requestAnimationFrame(refreshModal);
+  };
+  const dialogObserver = new MutationObserver(scheduleRefresh);
+  const registerDialogs = (root: ParentNode) => {
+    if (root instanceof HTMLElement && root.matches('.modal-overlay')) dialogs.add(root);
+    root.querySelectorAll<HTMLElement>('.modal-overlay').forEach(dialog => dialogs.add(dialog));
+  };
+  const observeDialogs = () => {
+    dialogObserver.disconnect();
+    for (const dialog of dialogs) {
+      if (!dialog.isConnected) dialogs.delete(dialog);
+      else dialogObserver.observe(dialog, { attributes: true, attributeFilter: ['class', 'hidden'] });
+    }
+  };
+  registerDialogs(document); observeDialogs();
+  // Runtime dialogs are appended to body. Their contents need no observation.
+  new MutationObserver(records => {
+    let changed = false;
+    for (const record of records) {
+      for (const node of Array.from(record.addedNodes)) {
+        if (!(node instanceof HTMLElement)) continue;
+        const before = dialogs.size; registerDialogs(node); changed ||= dialogs.size !== before;
+      }
+    }
+    if (changed || Array.from(dialogs).some(dialog => !dialog.isConnected)) {
+      observeDialogs(); scheduleRefresh();
+    }
+  }).observe(document.body, { childList: true });
   document.addEventListener('keydown', event => {
+    if (refreshFrame !== null) refreshModal();
     if (!modal) return;
     if (event.key === 'Escape' && !event.defaultPrevented) {
       const cancel = modal.querySelector<HTMLButtonElement>('#btn-confirm-cancel,#btn-cancel-add,#btn-cancel-edit,#btn-cancel-delete,#btn-sec-cancel,#btn-switch-account-cancel,#btn-cancel-network-profile,#btn-password-prompt-cancel,#btn-update-cancel,#btn-list-manage-close');

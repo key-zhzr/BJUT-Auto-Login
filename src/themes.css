@@ -1480,8 +1480,7 @@ html:root[data-theme] {
   }
 }
 
-/* Basic controls share a short press/release motion. Keep card transforms
-   owned by the account sorting animation, and never animate disabled controls. */
+/* Basic uses motion for action buttons and color for menus/navigation. */
 :root[data-theme="basic"] :is(
   button, [role="button"], .nav-item, .nav-tree-link,
   .custom-select-trigger, .custom-option, .billing-section-nav-button,
@@ -1497,14 +1496,23 @@ html:root[data-theme] {
   .custom-select-trigger, .custom-option, .billing-section-nav-button,
   .billing-package-option, .billing-payment-method, summary
 ):not(:disabled):not([aria-disabled="true"]):active {
-  transform: translateY(1px) scale(0.97);
-  filter: brightness(0.94);
+  transform: none;
+  filter: brightness(0.90);
   transition-duration: 70ms;
 }
 
-:root[data-theme="basic"] .switch:active input:not(:disabled) + .slider {
-  transform: scale(0.96);
+:root[data-theme="basic"] .btn:not(:disabled):not([aria-disabled="true"]):active {
+  transform: translateY(1px);
   filter: brightness(0.94);
+}
+
+:root[data-theme="basic"] .custom-option:not([aria-disabled="true"]):active {
+  background-color: color-mix(in srgb, var(--primary-color) 18%, var(--theme-raised-bg));
+  transform: none;
+}
+
+:root[data-theme="basic"] .switch:active input:not(:disabled) + .slider {
+  filter: brightness(0.90);
   transition-duration: 70ms;
 }
 

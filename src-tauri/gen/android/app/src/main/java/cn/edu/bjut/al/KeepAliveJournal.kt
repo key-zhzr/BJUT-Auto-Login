@@ -131,6 +131,7 @@ object KeepAliveJournal {
                 append("检测到上次进程退出：$reason")
                 append("，时间=")
                 append(SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(latest.timestamp)))
+                append("，进程=${latest.processName}，信号/退出码=${latest.status}")
                 append("，重要性=${latest.importance}，PSS=${latest.pss / 1024}MB，RSS=${latest.rss / 1024}MB")
                 if (description.isNotEmpty()) append("，说明=$description")
             }

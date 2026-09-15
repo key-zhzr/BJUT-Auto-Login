@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="/src/themes.css" />
     <link rel="stylesheet" href="/src/theme-apple.css" />
     <link rel="stylesheet" href="/src/theme-winui.css" />
+    <link rel="stylesheet" href="/src/android-controls.css" />
   </head>
   <body>
     <div id="app-loading-mask" class="app-loading-mask is-visible" role="status" aria-live="polite">
@@ -160,6 +161,10 @@
             </div>
           </div>
 
+          <section id="network-check-progress" class="network-check-progress" hidden aria-live="polite">
+            <div><span id="network-check-message">正在检测网络</span><span id="network-check-elapsed"></span></div>
+            <div class="network-check-track" aria-hidden="true"><span id="network-check-bar"></span></div>
+          </section>
           <section id="login-progress-panel" class="glass-card login-progress-panel" hidden aria-live="polite">
             <div class="diagnostic-panel-header">
               <strong id="login-progress-message">准备登录</strong>

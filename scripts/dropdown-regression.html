@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>下拉菜单回归检查</title>
+  <link rel="stylesheet" href="/src/styles.css">
+  <link rel="stylesheet" href="/src/themes.css">
+  <link rel="stylesheet" href="/src/theme-apple.css">
+  <link rel="stylesheet" href="/src/theme-winui.css">
+  <link rel="stylesheet" href="/src/android-controls.css">
+  <style>
+    body { display: block !important; overflow: auto !important; padding: 24px; }
+    main { max-width: 780px; margin: auto; padding: 0 !important; overflow: visible !important; }
+    .settings-group { padding: 20px; margin: 16px 0; }
+    .setting-item { gap: 16px; }
+    #result { display: block; white-space: pre-wrap; margin: 16px 0; line-height: 1.7; }
+    #extra-controls { display: none; }
+  </style>
+</head>
+<body class="is-android">
+  <main>
+    <h1>下拉菜单回归检查</h1>
+    <p>使用项目真实控件与样式，不连接校园网或修改应用配置。</p>
+    <button id="run" class="btn btn-primary">运行重复操作检查</button>
+    <output id="result">等待运行</output>
+    <section id="native-controls" class="settings-group glass-card"><h3>Android 系统选项控件</h3></section>
+    <section id="desktop-controls" class="settings-group glass-card"><h3>桌面菜单控件</h3></section>
+    <section id="extra-controls"></section>
+    <section id="background-updates"></section>
+  </main>
+  <div id="test-modal" class="modal-overlay hidden">
+    <div class="modal-content"><h3>焦点检查</h3><button id="modal-first">第一项</button><button id="modal-last">最后一项</button></div>
+  </div>
+  <script type="module" src="/scripts/dropdown-regression.ts"></script>
+</body>
+</html>

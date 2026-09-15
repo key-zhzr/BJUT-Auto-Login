@@ -120,6 +120,19 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
     appWebView = webView
     webView.setBackgroundColor(android.graphics.Color.rgb(15, 23, 42))
+    // Log the provider after WebView creation; never initialize it from the
+    // background service just to collect diagnostics.
+    try {
+      val provider = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WebView.getCurrentWebViewPackage() else null
+      KeepAliveJournal.append(
+        this,
+        "当前界面环境：Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})，设备=${Build.MANUFACTURER} ${Build.MODEL}，WebView=${provider?.packageName ?: "未知"} ${provider?.versionName ?: "未知"}",
+        "info",
+        "Android界面"
+      )
+    } catch (_: Exception) {
+      // Diagnostic collection must not prevent the interface from starting.
+    }
     // Register JavaScript interface so frontend can call Android native methods directly
     webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
   }

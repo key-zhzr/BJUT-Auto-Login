@@ -2,7 +2,14 @@
   "app": {
     "windows": [
       {
-        "decorations": false
+        "title": "BJUT-Auto-Login",
+        "width": 1080,
+        "height": 780,
+        "visible": false,
+        "decorations": false,
+        "shadow": true,
+        "backgroundColor": "#0f172a",
+        "backgroundThrottling": "disabled"
       }
     ]
   },

@@ -15,7 +15,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::cookie_jar::CookieJar;
 use crate::portal_auth::PortalRouteContext;
 
+mod transport;
 mod types;
+use transport::BillingClient;
 pub(crate) use types::*;
 
 const BILLING_HOST: &str = "jfself.bjut.edu.cn";
@@ -61,11 +63,96 @@ struct DashboardService {
 
 #[derive(Clone)]
 struct BillingSession {
-    client: Client,
+    client: BillingClient,
     cookies: SessionCookies,
     dashboard_url: Url,
     dashboard_html: String,
     ajax_csrf_token: Option<String>,
+}
+
+pub(crate) struct BillingAccess {
+    pub account: String,
+    password: Option<String>,
+    current_session: Option<BillingSession>,
+}
+
+impl BillingAccess {
+    pub(crate) fn saved(account: String, password: String) -> Self {
+        Self {
+            account,
+            password: Some(password),
+            current_session: None,
+        }
+    }
+
+    async fn authenticate(
+        &self,
+        compatibility: VpnCompatibility,
+    ) -> Result<BillingSession, BillingError> {
+        if let Some(session) = &self.current_session {
+            return Ok(session.clone());
+        }
+        authenticate(
+            &self.account,
+            self.password.as_deref().unwrap_or_default(),
+            compatibility,
+        )
+        .await
+    }
+}
+
+pub(crate) async fn current_session_access(
+    compatibility: VpnCompatibility,
+    route: Option<&PortalRouteContext>,
+    expected_account: Option<&str>,
+) -> Result<BillingAccess, BillingError> {
+    let discovered = open_current_billing_dashboard_via_lgn(compatibility, route)
+        .await?
+        .ok_or_else(|| {
+            BillingError::ActionRejected(
+                "当前网络没有已认证的校园网账号，请先登录校园网".to_string(),
+            )
+        })?;
+    // Deserialize only the account name. SSO does not need userPassword.
+    #[derive(Deserialize)]
+    struct CurrentUser {
+        #[serde(rename = "userName")]
+        user: String,
+    }
+    let account = embedded_user_json(&discovered.dashboard_html)
+        .and_then(|json| serde_json::from_str::<CurrentUser>(json).ok())
+        .map(|user| user.user.trim().to_string())
+        .filter(|user| !user.is_empty() && user.len() <= 128 && !user.chars().any(char::is_control))
+        .ok_or_else(|| BillingError::Protocol("计费会话缺少有效账号".to_string()))?;
+    validate_current_account(&account, expected_account)?;
+    let mut session = BillingSession {
+        client: discovered.client,
+        cookies: discovered.cookies,
+        dashboard_url: discovered.dashboard_url,
+        dashboard_html: discovered.dashboard_html,
+        ajax_csrf_token: None,
+    };
+    session.ajax_csrf_token = fetch_page_csrf_token(
+        &session.client,
+        &mut session.cookies,
+        &session.dashboard_html,
+        &session.dashboard_url,
+    )
+    .await;
+    Ok(BillingAccess {
+        account,
+        password: None,
+        current_session: Some(session),
+    })
+}
+
+fn validate_current_account(account: &str, expected: Option<&str>) -> Result<(), BillingError> {
+    if expected.is_some_and(|expected| expected != account) {
+        return Err(BillingError::ActionRejected(
+            "当前认证账号已经变化，请刷新计费系统后重新操作".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 struct CachedBillingSession {
@@ -125,7 +212,7 @@ impl BillingSessionPool {
 }
 
 struct AccountDiscoverySession {
-    client: Client,
+    client: BillingClient,
     cookies: HostCookies,
     dashboard_url: Url,
     dashboard_html: String,
@@ -200,10 +287,17 @@ struct ValidatedBillingRecordQuery {
 
 async fn acquire_billing_session(
     pool: &std::sync::Mutex<BillingSessionPool>,
-    account: &str,
-    password: &str,
+    access: &BillingAccess,
     compatibility: VpnCompatibility,
 ) -> Result<(BillingSession, bool), BillingError> {
+    if access.current_session.is_some() {
+        return access
+            .authenticate(compatibility)
+            .await
+            .map(|session| (session, true));
+    }
+    let account = &access.account;
+    let password = access.password.as_deref().unwrap_or_default();
     let cached = pool.lock().unwrap().take(account, password, compatibility);
     if let Some(mut session) = cached {
         if let Ok(dashboard_html) = get_page_text(&mut session, BILLING_DASHBOARD_PATH).await {
@@ -219,8 +313,7 @@ async fn acquire_billing_session(
 }
 
 pub(crate) async fn fetch_center<F, U>(
-    account: &str,
-    password: &str,
+    access: &BillingAccess,
     compatibility: VpnCompatibility,
     pool: &std::sync::Mutex<BillingSessionPool>,
     progress: F,
@@ -230,9 +323,10 @@ where
     F: Fn(&str, u8) + Send + Sync + 'static,
     U: Fn(BillingCenterModuleUpdate) + Send + Sync + 'static,
 {
+    let account = access.account.as_str();
+    let password = access.password.as_deref().unwrap_or_default();
     progress("正在恢复或登录计费系统会话", 5);
-    let (mut session, reused) =
-        acquire_billing_session(pool, account, password, compatibility).await?;
+    let (mut session, reused) = acquire_billing_session(pool, access, compatibility).await?;
     let result = async {
         progress(
             if reused {
@@ -366,27 +460,32 @@ where
         Ok(data)
     }
     .await;
+    if access.password.is_some() {
+        if result.is_ok() {
+            pool.lock()
+                .unwrap()
+                .put(account, password, compatibility, session);
+        } else {
+            pool.lock().unwrap().remove(account);
+        }
+    }
     if result.is_ok() {
-        pool.lock()
-            .unwrap()
-            .put(account, password, compatibility, session);
         progress("计费中心数据读取完成", 100);
-    } else {
-        pool.lock().unwrap().remove(account);
     }
     result
 }
 
 pub(crate) async fn query_records(
-    account: &str,
-    password: &str,
+    access: &BillingAccess,
     compatibility: VpnCompatibility,
     pool: &std::sync::Mutex<BillingSessionPool>,
     request: &BillingRecordQuery,
 ) -> Result<BillingRecordResult, BillingError> {
+    let account = access.account.as_str();
+    let password = access.password.as_deref().unwrap_or_default();
     let query = validate_record_query(request)?;
     let spec = record_spec(query.kind);
-    let (mut session, _) = acquire_billing_session(pool, account, password, compatibility).await?;
+    let (mut session, _) = acquire_billing_session(pool, access, compatibility).await?;
     let result = async {
         // Load the corresponding module before its AJAX endpoint so the
         // session has the page-local CSRF state expected by jfself.
@@ -408,12 +507,14 @@ pub(crate) async fn query_records(
         })
     }
     .await;
-    if result.is_ok() {
-        pool.lock()
-            .unwrap()
-            .put(account, password, compatibility, session);
-    } else {
-        pool.lock().unwrap().remove(account);
+    if access.password.is_some() {
+        if result.is_ok() {
+            pool.lock()
+                .unwrap()
+                .put(account, password, compatibility, session);
+        } else {
+            pool.lock().unwrap().remove(account);
+        }
     }
     result
 }
@@ -651,8 +752,7 @@ async fn fetch_all_record_pages(
 }
 
 pub(crate) async fn perform_action(
-    account: &str,
-    password: &str,
+    access: &BillingAccess,
     compatibility: VpnCompatibility,
     request: &BillingActionRequest,
 ) -> Result<BillingActionResult, BillingError> {
@@ -671,7 +771,8 @@ pub(crate) async fn perform_action(
         return Err(BillingError::InvalidRequest("不支持的计费操作".to_string()));
     }
 
-    let mut session = authenticate(account, password, compatibility).await?;
+    let password = access.password.as_deref().unwrap_or_default();
+    let mut session = access.authenticate(compatibility).await?;
     let result = async {
         match request.action.as_str() {
             "stopNow" => stop_account(&mut session).await,
@@ -1090,7 +1191,7 @@ async fn update_security_questions(
     let supplied_password = supplied_password
         .filter(|value| !value.is_empty())
         .ok_or_else(|| BillingError::InvalidRequest("请输入当前密码".to_string()))?;
-    if supplied_password != saved_password {
+    if !saved_password.is_empty() && supplied_password != saved_password {
         return Err(BillingError::InvalidRequest(
             "当前密码与 App 中已保存的计费密码不一致".to_string(),
         ));
@@ -1125,15 +1226,14 @@ async fn update_security_questions(
 }
 
 pub(crate) async fn disconnect_session(
-    account: &str,
-    password: &str,
+    access: &BillingAccess,
     compatibility: VpnCompatibility,
     session_id: &str,
     ip: &str,
     mac: &str,
 ) -> Result<String, BillingError> {
     validate_session_action(session_id, ip, mac)?;
-    let mut session = authenticate(account, password, compatibility).await?;
+    let mut session = access.authenticate(compatibility).await?;
     let result = async {
         let online_sessions = online_sessions_for_action(&mut session).await?;
         let requested_mac = normalize_mac_for_action(mac);
@@ -1248,12 +1348,11 @@ async fn disconnect_online_session_authenticated(
 }
 
 pub(crate) async fn set_mauth_enabled(
-    account: &str,
-    password: &str,
+    access: &BillingAccess,
     compatibility: VpnCompatibility,
     enabled: bool,
 ) -> Result<String, BillingError> {
-    let mut session = authenticate(account, password, compatibility).await?;
+    let mut session = access.authenticate(compatibility).await?;
     let result = async {
         let current = fetch_mauth_state(&mut session).await?;
         if current == enabled {
@@ -1338,7 +1437,7 @@ async fn authenticate(
     if captcha_required(&login_html)? {
         return Err(BillingError::CaptchaRequired);
     }
-    let verify_url = login_action(&login_html, &login_effective_url)?;
+    let verify_url = login_action_for(&login_html, &login_effective_url, compatibility)?;
 
     // The service enables its normal login path only after the browser has
     // loaded the page resources and requested randomCode. These requests are
@@ -1390,14 +1489,8 @@ async fn authenticate(
     )
     .await?;
 
-    if login_form_present(&dashboard_html, &dashboard_url) {
-        return if dashboard_html.contains("验证码")
-            || dashboard_html.contains("randomDiv\" class=\"form-group\"")
-        {
-            Err(BillingError::CaptchaRequired)
-        } else {
-            Err(BillingError::AuthenticationRejected)
-        };
+    if login_action_for(&dashboard_html, &dashboard_url, compatibility).is_ok() {
+        return Err(login_rejection(&dashboard_html));
     }
     if !dashboard_url.path().starts_with("/Self/dashboard") && !dashboard_html.contains("账户余额")
     {
@@ -1417,13 +1510,13 @@ async fn authenticate(
 }
 
 async fn replay_login_assets(
-    client: &Client,
+    client: &BillingClient,
     cookies: &mut SessionCookies,
     login_html: &str,
     login_url: &Url,
 ) {
     let base_cookies = cookies.clone();
-    let assets = login_assets(login_html, login_url);
+    let assets = login_assets(login_html, login_url, client.compatibility);
     for batch in assets.chunks(6) {
         let mut pending = FuturesUnordered::new();
         for (asset_url, destination) in batch.iter().cloned() {
@@ -1775,8 +1868,8 @@ async fn post_form_action(
         .client
         .post(url.clone())
         .header(ACCEPT, "application/json,text/plain,*/*;q=0.8")
-        .header(ORIGIN, BILLING_ORIGIN)
-        .header(REFERER, referer.as_str())
+        .header(ORIGIN, session.client.origin())
+        .header(REFERER, session.client.referer(&referer))
         .header("X-Requested-With", "XMLHttpRequest")
         .header("Sec-Fetch-Dest", "empty")
         .header("Sec-Fetch-Mode", "cors")
@@ -1793,7 +1886,7 @@ async fn post_form_action(
                 "操作端点要求重复提交敏感表单，已安全中止".to_string(),
             ));
         }
-        let next = redirect_target(&url, &response)?;
+        let next = redirect_target(&session.client, &url, &response)?;
         let (_, response) = get_follow(
             &session.client,
             next,
@@ -2153,13 +2246,14 @@ fn normalize_mac_for_action(value: &str) -> String {
         .collect()
 }
 
-async fn build_client(compatibility: VpnCompatibility) -> Result<Client, BillingError> {
+async fn build_client(compatibility: VpnCompatibility) -> Result<BillingClient, BillingError> {
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.6".parse().unwrap());
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(15))
         .connect_timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .use_rustls_tls()
         .user_agent(BILLING_USER_AGENT)
         .default_headers(headers);
@@ -2179,19 +2273,26 @@ async fn build_client(compatibility: VpnCompatibility) -> Result<Client, Billing
         builder = builder.resolve_to_addrs(BILLING_HOST, &socket_addresses);
     }
 
-    builder.build().map_err(network_error)
+    builder
+        .build()
+        .map(|client| BillingClient {
+            client,
+            compatibility,
+        })
+        .map_err(network_error)
 }
 
 async fn build_account_discovery_client(
     compatibility: VpnCompatibility,
     route_context: Option<&PortalRouteContext>,
-) -> Result<Client, BillingError> {
+) -> Result<BillingClient, BillingError> {
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.6".parse().unwrap());
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .use_rustls_tls()
         .user_agent(BILLING_USER_AGENT)
         .default_headers(headers);
@@ -2243,7 +2344,13 @@ async fn build_account_discovery_client(
             .resolve_to_addrs(BILLING_HOST, &billing_sockets);
     }
 
-    builder.build().map_err(network_error)
+    builder
+        .build()
+        .map(|client| BillingClient {
+            client,
+            compatibility,
+        })
+        .map_err(network_error)
 }
 
 fn account_discovery_url() -> Result<Url, BillingError> {
@@ -2306,7 +2413,15 @@ fn is_billing_dashboard_path(path: &str) -> bool {
         })
 }
 
+#[cfg(test)]
 fn parse_self_auth_url(source: &str) -> Result<Option<Url>, BillingError> {
+    parse_self_auth_url_for(source, VpnCompatibility::High)
+}
+
+fn parse_self_auth_url_for(
+    source: &str,
+    compatibility: VpnCompatibility,
+) -> Result<Option<Url>, BillingError> {
     let trimmed = source.trim().trim_start_matches('\u{feff}');
     let Some(open) = trimmed.find('(') else {
         return Err(BillingError::Protocol(
@@ -2332,6 +2447,7 @@ fn parse_self_auth_url(source: &str) -> Result<Option<Url>, BillingError> {
         .ok_or_else(|| BillingError::Protocol("自服务响应缺少登录地址".to_string()))?;
     let url =
         Url::parse(raw).map_err(|_| BillingError::Protocol("自服务登录地址无效".to_string()))?;
+    let url = transport::canonical_url(url, compatibility);
     validate_account_discovery_url(&url)?;
     if url.path() != BILLING_EPORTAL_LOGIN_PATH
         || !["account", "timestamp", "sign"].iter().all(|name| {
@@ -2359,12 +2475,12 @@ async fn limited_response_text(
 }
 
 async fn account_discovery_get_follow(
-    client: &Client,
+    client: &BillingClient,
     mut url: Url,
     cookies: &mut HostCookies,
     referer: Option<&Url>,
 ) -> Result<(Url, String), BillingError> {
-    let mut current_referer = referer.map(Url::to_string);
+    let mut current_referer = referer.cloned();
     for _ in 0..=MAX_REDIRECTS {
         validate_account_discovery_url(&url)?;
         let mut request = client
@@ -2386,8 +2502,8 @@ async fn account_discovery_get_follow(
         if let Some(value) = cookies.header(&url) {
             request = request.header(COOKIE, value);
         }
-        if let Some(value) = current_referer.as_deref() {
-            request = request.header(REFERER, value);
+        if let Some(value) = current_referer.as_ref() {
+            request = request.header(REFERER, client.referer(value));
         }
         let response = request.send().await.map_err(network_error)?;
         cookies.absorb(&url, response.headers());
@@ -2400,8 +2516,9 @@ async fn account_discovery_get_follow(
             let next = url
                 .join(location)
                 .map_err(|_| BillingError::Protocol("账号发现重定向地址无效".to_string()))?;
+            let next = client.canonical(next);
             validate_account_discovery_url(&next)?;
-            current_referer = Some(url.to_string());
+            current_referer = Some(url.clone());
             url = next;
             continue;
         }
@@ -2469,7 +2586,7 @@ async fn open_current_billing_dashboard_via_lgn(
         )));
     }
     let source = limited_response_text(response, "自服务响应", 256 * 1024).await?;
-    let Some(auth_url) = parse_self_auth_url(&source)? else {
+    let Some(auth_url) = parse_self_auth_url_for(&source, compatibility)? else {
         return Ok(None);
     };
 
@@ -2540,14 +2657,14 @@ pub(crate) async fn discover_current_campus_account(
 }
 
 async fn get_follow(
-    client: &Client,
+    client: &BillingClient,
     mut url: Url,
     cookies: &mut SessionCookies,
     referer: Option<&Url>,
     accept: &str,
     destination: &str,
 ) -> Result<(Url, Response), BillingError> {
-    let mut current_referer = referer.map(Url::to_string);
+    let mut current_referer = referer.cloned();
     for _ in 0..=MAX_REDIRECTS {
         validate_same_origin(&url)?;
         let mut request = client
@@ -2578,14 +2695,14 @@ async fn get_follow(
         if let Some(value) = cookies.header(&url) {
             request = request.header(COOKIE, value);
         }
-        if let Some(value) = current_referer.as_deref() {
-            request = request.header(REFERER, value);
+        if let Some(value) = current_referer.as_ref() {
+            request = request.header(REFERER, client.referer(value));
         }
         let response = request.send().await.map_err(network_error)?;
         cookies.absorb(&url, response.headers());
         if response.status().is_redirection() {
-            let next = redirect_target(&url, &response)?;
-            current_referer = Some(url.to_string());
+            let next = redirect_target(client, &url, &response)?;
+            current_referer = Some(url.clone());
             url = next;
             continue;
         }
@@ -2601,7 +2718,7 @@ async fn get_follow(
 }
 
 async fn post_login(
-    client: &Client,
+    client: &BillingClient,
     verify_url: Url,
     referer: &Url,
     cookies: &mut SessionCookies,
@@ -2622,8 +2739,8 @@ async fn post_login(
             ACCEPT,
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         )
-        .header(ORIGIN, BILLING_ORIGIN)
-        .header(REFERER, referer.as_str())
+        .header(ORIGIN, client.origin())
+        .header(REFERER, client.referer(referer))
         .header("Sec-Fetch-Dest", "document")
         .header("Sec-Fetch-Mode", "navigate")
         .header("Sec-Fetch-Site", "same-origin")
@@ -2639,7 +2756,7 @@ async fn post_login(
                 "登录端点要求重复提交密码，已安全中止".to_string(),
             ));
         }
-        let next = redirect_target(&verify_url, &response)?;
+        let next = redirect_target(client, &verify_url, &response)?;
         let (final_url, response) = get_follow(
             client,
             next,
@@ -2666,7 +2783,11 @@ fn network_error(error: reqwest::Error) -> BillingError {
     BillingError::Network(redact_request_error(error))
 }
 
-fn redirect_target(current: &Url, response: &Response) -> Result<Url, BillingError> {
+fn redirect_target(
+    client: &BillingClient,
+    current: &Url,
+    response: &Response,
+) -> Result<Url, BillingError> {
     let location = response
         .headers()
         .get(LOCATION)
@@ -2675,6 +2796,7 @@ fn redirect_target(current: &Url, response: &Response) -> Result<Url, BillingErr
     let next = current
         .join(location)
         .map_err(|_| BillingError::Protocol("重定向地址无效".to_string()))?;
+    let next = client.canonical(next);
     validate_same_origin(&next)?;
     Ok(next)
 }
@@ -2727,6 +2849,14 @@ fn validate_login_action(url: &Url) -> Result<(), BillingError> {
 }
 
 fn login_action(html: &str, base_url: &Url) -> Result<Url, BillingError> {
+    login_action_for(html, base_url, VpnCompatibility::High)
+}
+
+fn login_action_for(
+    html: &str,
+    base_url: &Url,
+    compatibility: VpnCompatibility,
+) -> Result<Url, BillingError> {
     let lower = html.to_ascii_lowercase();
     let mut cursor = 0usize;
     while let Some(relative) = lower[cursor..].find("<form") {
@@ -2753,6 +2883,7 @@ fn login_action(html: &str, base_url: &Url) -> Result<Url, BillingError> {
                 let url = base_url
                     .join(&action)
                     .map_err(|_| BillingError::Protocol("登录表单提交地址无效".to_string()))?;
+                let url = transport::canonical_url(url, compatibility);
                 validate_login_action(&url)?;
                 return Ok(url);
             }
@@ -2794,8 +2925,20 @@ fn captcha_required(html: &str) -> Result<bool, BillingError> {
     ))
 }
 
+fn login_rejection(html: &str) -> BillingError {
+    // The login template always contains captcha text, even while randomDiv
+    // is hidden. The server's injected error tip takes precedence after POST.
+    if html.contains("账号或密码出现错误") || html.contains("账号或密码错误") {
+        BillingError::AuthenticationRejected
+    } else if captcha_required(html).unwrap_or(false) {
+        BillingError::CaptchaRequired
+    } else {
+        BillingError::AuthenticationRejected
+    }
+}
+
 async fn fetch_page_csrf_token(
-    client: &Client,
+    client: &BillingClient,
     cookies: &mut SessionCookies,
     html: &str,
     dashboard_url: &Url,
@@ -2810,6 +2953,7 @@ async fn fetch_page_csrf_token(
         let Ok(url) = dashboard_url.join(&source) else {
             continue;
         };
+        let url = client.canonical(url);
         if validate_same_origin(&url).is_err()
             || !url.path().to_ascii_lowercase().ends_with("/sharejs.js")
         {
@@ -2898,7 +3042,11 @@ fn extract_literal_token(source: &str, needle: &str) -> Option<String> {
     None
 }
 
-fn login_assets(html: &str, base_url: &Url) -> Vec<(Url, &'static str)> {
+fn login_assets(
+    html: &str,
+    base_url: &Url,
+    compatibility: VpnCompatibility,
+) -> Vec<(Url, &'static str)> {
     let mut result = Vec::new();
     for (tag_name, attribute_name, destination) in
         [("script", "src", "script"), ("link", "href", "style")]
@@ -2910,6 +3058,7 @@ fn login_assets(html: &str, base_url: &Url) -> Vec<(Url, &'static str)> {
             let Ok(url) = base_url.join(&value) else {
                 continue;
             };
+            let url = transport::canonical_url(url, compatibility);
             if validate_same_origin(&url).is_err() {
                 continue;
             }
@@ -3099,13 +3248,8 @@ fn parse_dashboard(html: &str, account: &str) -> BillingSnapshot {
             "--".to_string()
         });
     let status_reason = user.stop_reason.filter(|value| !value.trim().is_empty());
-    let status = if status_reason.is_some() || user.use_flag == Some(0) {
-        Some("停机".to_string())
-    } else if user.use_flag == Some(1) {
-        Some("正常".to_string())
-    } else {
-        None
-    };
+    let status = dashboard_account_status(html);
+    let status_reason = status_reason.filter(|_| status.as_deref() != Some("正常"));
     let service = user.service_default.unwrap_or_default();
 
     BillingSnapshot {
@@ -3127,6 +3271,33 @@ fn parse_dashboard(html: &str, account: &str) -> BillingSnapshot {
         mauth_enabled: None,
         warnings,
     }
+}
+
+fn dashboard_account_status(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    for (tag, contents) in tag_blocks(html, "label") {
+        let label: String = html_text(contents)
+            .chars()
+            .filter(|c| !c.is_whitespace() && !matches!(c, ':' | '：'))
+            .collect();
+        if label != "状态" {
+            continue;
+        }
+        let offset = tag.as_ptr() as usize - html.as_ptr() as usize;
+        let label_end = offset + lower[offset..].find("</label>")? + "</label>".len();
+        // Only the adjacent value column belongs to this label. Never pick a
+        // similarly styled success badge elsewhere in the dashboard.
+        let value_column = html[label_end..].trim_start();
+        if !value_column.to_ascii_lowercase().starts_with("<div") {
+            continue;
+        }
+        let (_, contents) = tag_blocks(value_column, "div").into_iter().next()?;
+        let value = html_text(contents);
+        if !value.is_empty() && value.chars().count() <= 40 {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn parse_json_payload(text: &str, label: &str) -> Result<serde_json::Value, BillingError> {
@@ -4007,7 +4178,10 @@ mod tests {
 
     fn synthetic_billing_session() -> BillingSession {
         BillingSession {
-            client: Client::builder().build().unwrap(),
+            client: BillingClient {
+                client: Client::builder().build().unwrap(),
+                compatibility: VpnCompatibility::High,
+            },
             cookies: SessionCookies::default(),
             dashboard_url: Url::parse("https://jfself.bjut.edu.cn/Self/dashboard").unwrap(),
             dashboard_html: String::new(),
@@ -4152,6 +4326,78 @@ mod tests {
     }
 
     #[test]
+    fn rejected_credentials_are_not_misreported_as_hidden_captcha() {
+        let template = r#"<div id="randomDiv" class="form-group hide"><label>验证码</label></div>"#;
+        let returned_login = format!("{template}<script>(function(tip) {{ if(tip) show(tip); }})('账号或密码出现错误！');</script>");
+        assert!(matches!(
+            login_rejection(&returned_login),
+            BillingError::AuthenticationRejected
+        ));
+        assert!(matches!(
+            login_rejection(template),
+            BillingError::AuthenticationRejected
+        ));
+        assert!(matches!(
+            login_rejection(&returned_login.replace("form-group hide", "form-group")),
+            BillingError::AuthenticationRejected
+        ));
+        assert!(matches!(
+            login_rejection(&template.replace("form-group hide", "form-group")),
+            BillingError::CaptchaRequired
+        ));
+    }
+
+    #[test]
+    fn current_session_actions_require_the_account_shown_to_the_user() {
+        assert!(validate_current_account("25000001", None).is_ok());
+        assert!(validate_current_account("25000001", Some("25000001")).is_ok());
+        assert!(validate_current_account("25000002", Some("25000001")).is_err());
+        assert!(validate_current_account("25000001", Some("")).is_err());
+    }
+
+    #[test]
+    fn direct_billing_forms_and_assets_stay_on_the_trusted_origin() {
+        let base = Url::parse(BILLING_LOGIN_URL).unwrap();
+        let html = r#"<form action="http://172.21.0.16/Self/login/verify" method="post">
+          <input name="checkcode"><input name="account"><input name="password"><input name="code"></form>
+          <script src="http://jfself.bjut.edu.cn/Self/js/sharejs.js"></script>
+          <script src="http://evil.example/other.js"></script>"#;
+        assert!(login_action_for(html, &base, VpnCompatibility::High).is_err());
+        assert_eq!(
+            login_action_for(html, &base, VpnCompatibility::Maximum)
+                .unwrap()
+                .as_str(),
+            "https://jfself.bjut.edu.cn/Self/login/verify"
+        );
+        assert!(login_assets(html, &base, VpnCompatibility::High).is_empty());
+        let assets = login_assets(html, &base, VpnCompatibility::Maximum);
+        assert_eq!(assets.len(), 1);
+        assert_eq!(
+            assets[0].0.as_str(),
+            "https://jfself.bjut.edu.cn/Self/js/sharejs.js"
+        );
+    }
+
+    #[test]
+    fn dashboard_status_uses_only_the_rendered_status_column() {
+        let html = r#"<script>(function(user) {})({"useFlag":0,"stopReason":"旧原因"});</script>
+            <div class="row"><label>其他项目：</label><div><span class="label label-success">其他</span></div></div>
+            <div class="row"><label class="col-md-6">状　　态：</label>
+                <div class="col-md-6"><span class="label label-success">正常</span></div></div>"#;
+        let snapshot = parse_dashboard(html, "25000001");
+        assert_eq!(snapshot.status.as_deref(), Some("正常"));
+        assert_eq!(snapshot.status_reason, None);
+        assert_eq!(
+            dashboard_account_status(&html.replace("正常", "欠费停机")).as_deref(),
+            Some("欠费停机")
+        );
+        assert_eq!(
+            dashboard_account_status(&html.replace("状　　态", "其他状态")),
+            None
+        );
+    }
+
+    #[test]
     fn parses_dashboard_without_deserializing_private_fields() {
         let html = r#"
             <script>(function (user) { window.user = user || {}; })({
@@ -4163,6 +4409,7 @@ mod tests {
             <dl><dt>3122 <small>MB</small></dt><dd>可用流量</dd></dl>
             <dl><dt>12.3456 <small>元</small></dt><dd>账户余额</dd></dl>
             <label>计费周期：</label><span>2026-07-01</span> 至 <span>2026-07-31</span>
+            <div class="row"><label>状　态：</label><div><span class="label label-success">正常</span></div></div>
         "#;
         let snapshot = parse_dashboard(html, "synthetic-account");
         assert_eq!(snapshot.account, "synthetic-account");
@@ -4228,7 +4475,7 @@ mod tests {
         assert_eq!(snapshot.account, "synthetic-account");
         assert_eq!(snapshot.balance, "3.5 元");
         assert_eq!(snapshot.remaining_flow, "--");
-        assert_eq!(snapshot.status.as_deref(), Some("正常"));
+        assert_eq!(snapshot.status, None); // No rendered status row; do not infer it from useFlag.
         assert_eq!(snapshot.warnings.len(), 1);
     }
 

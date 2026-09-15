@@ -1,3 +1,4 @@
+import { NetworkProgressView, type NetworkCheckProgress } from './network-progress-view';
 import { renderDiagnosticReportView, formatDiagnosticReport } from './diagnostics-view';
 import { NetworkExperience } from './network-experience';
 import { LoginProgressView } from './login-progress-view';
@@ -51,6 +52,8 @@ import type {
   RecoverableRecharge, UpdateProgress, UpdateTarget, UserInfo, WechatPaymentStatus,
   WechatRechargePreview, WechatRechargeResult, AccountHealth,
 } from './models';
+
+const networkProgressView = new NetworkProgressView();
 
 const icons = {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
@@ -155,13 +158,15 @@ function clearTransientWebviewPasswords() {
 async function revealAppWindow() {
   if (appWindowRevealed) return;
   await macosDockPolicyReady;
-  await new Promise(resolve => window.setTimeout(resolve, 40));
   if (window.__TAURI__) {
     try {
       await invoke('frontend_ready');
     } catch (error) {
-      console.error('Backend window reveal failed, using the window API fallback:', error);
-      await getCurrentWindow().show();
+      // The native setup must restore bounds before showing the window. A raw
+      // show() fallback can race that setup and expose the default position.
+      console.error('Window reveal is waiting for native setup:', error);
+      await new Promise(resolve => window.setTimeout(resolve, 100));
+      await invoke('frontend_ready');
     }
   }
   appWindowRevealed = true;
@@ -1063,6 +1068,7 @@ async function initializeRustEvents() {
     settle('双栈状态事件', listen<DualStackReport>('link-health', event => networkExperience.renderHealth(event.payload))),
     settle('双栈状态重置', listen<{ generation: number; probeId?: number }>('link-health-reset', event => networkExperience.resetGeneration(event.payload.generation, event.payload.probeId))),
     settle('网络事件记录', listen<NetworkEvent[]>('network-events', event => renderNetworkEvents(event.payload))),
+    settle('网络检测过程', listen<NetworkCheckProgress>('network-check-progress', event => networkProgressView.render(event.payload))),
     settle('登录阶段事件', listen<LoginProgress>('login-progress', event => loginProgressView.render(event.payload))),
     settle('检测调度事件', listen<NetworkSchedule>('network-schedule', event => networkExperience.renderSchedule(event.payload))),
     settle('网络诊断进度事件', listen<DiagnosticProgress>('network-diagnostic-progress', event => {
@@ -1090,9 +1096,17 @@ async function initializeRustEvents() {
     settle('计费模块事件', listen<BillingCenterModuleUpdate>(
       'billing-center-module',
       event => {
-        if (!billingCenterLoading || event.payload.account !== selectedBillingAccountUser()) return;
+        if (!billingCenterLoading || event.payload.account !== billingSelectionKey()) return;
         const update = event.payload;
         if (update.module === 'overview') {
+          if (billingSelectionKey() === CURRENT_BILLING_SESSION) {
+            currentBillingSessionUser = update.data.account;
+            if (billingCenterData && billingCenterData.account !== update.data.account) {
+              billingCenterData = null;
+              billingRecordQueryStates = {};
+              resetBillingCenterForSelectedAccount();
+            }
+          }
           renderBillingCenter(billingOverviewToUserInfo(update.data));
         } else if (update.module === 'service') {
           renderBillingService({ service: update.data } as BillingCenterData);
@@ -1143,6 +1157,7 @@ async function initializeRustEvents() {
       logsDirty = true;
       logFilterCount.textContent = `${logEntriesCache.length} 条`;
     })),
+    settle('初始检测过程', invoke<NetworkCheckProgress | null>('get_network_check_progress').then(progress => { if (progress) networkProgressView.render(progress); })),
     settle('初始网络事件', invoke<NetworkEvent[]>('get_network_events').then(renderNetworkEvents)),
     settle('初始网卡', refreshNetworkAdapters()),
     settle('初始双栈状态', invoke<DualStackReport | null>('get_link_health').then(health => { if (health) networkExperience.renderHealth(health); })),
@@ -1406,7 +1421,7 @@ function chooseSwitchAccount(currentUser: string | null): Promise<number | null>
     }
     const candidates = getAccounts()
       .map((account, index) => ({ account, index }))
-      .filter(({ account }) => !account.isDisabled && account.hasPassword && account.user !== currentUser);
+      .filter(({ account }) => account.hasPassword && account.user !== currentUser);
     options.replaceChildren();
     candidates.forEach(({ account, index }) => {
       const button = document.createElement('button');
@@ -1416,14 +1431,14 @@ function chooseSwitchAccount(currentUser: string | null): Promise<number | null>
       const user = document.createElement('span');
       user.textContent = account.user;
       const detail = document.createElement('small');
-      detail.textContent = account.isDefault ? '默认账号' : '已启用';
+      detail.textContent = account.isDisabled ? '已关闭自动登录' : account.isDefault ? '默认账号' : '已保存';
       button.append(user, detail);
       options.appendChild(button);
     });
     if (candidates.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'diagnostic-empty';
-      empty.textContent = '没有其他已启用且已保存密码的账号';
+      empty.textContent = '没有其他已保存密码的账号';
       options.appendChild(empty);
     }
     const cleanup = () => {
@@ -1822,12 +1837,12 @@ async function restoreRecoverableRecharges() {
 }
 
 function restoreRechargeForm(transaction: RecoverableRecharge, method: RechargeMethod) {
-  const payerExists = enabledBillingAccounts().some(account => account.user === transaction.payerAccount);
+  const payerExists = availableBillingAccounts().some(account => account.user === transaction.payerAccount);
   if (payerExists) {
     billingRechargeCardAccountSelect.setValue(transaction.payerAccount);
   }
   rechargePayerFollowsBilling = transaction.payerAccount === selectedBillingAccountUser();
-  const targetExists = enabledBillingAccounts().some(account => account.user === transaction.targetAccount);
+  const targetExists = availableBillingAccounts().some(account => account.user === transaction.targetAccount);
   billingRechargeTargetAccountSelect.setValue(targetExists ? transaction.targetAccount : '__custom__');
   rechargeTargetFollowsPayer = transaction.targetAccount === transaction.payerAccount;
   syncRechargeTargetAccountInput();
@@ -1880,11 +1895,13 @@ async function init() {
     else renderBillingRecords();
   });
   billingAccountSelect.addEventListener('change', () => {
-    billingAccountFollowsDefault = selectedBillingAccountUser() === defaultBillingAccountUser();
+    billingAccountFollowsDefault = billingSelectionKey() === defaultBillingAccountUser();
+    currentBillingSessionUser = '';
     billingCenterData = null;
     billingRecordQueryStates = {};
     if (rechargePayerFollowsBilling) {
-      const account = selectedBillingAccountUser();
+      const user = selectedBillingAccountUser();
+      const account = availableBillingAccounts().some(account => account.user === user) ? user : defaultBillingAccountUser();
       billingRechargeCardAccountSelect.setValue(account);
       if (rechargeTargetFollowsPayer) {
         billingRechargeTargetAccountSelect.setValue(account || '__custom__');
@@ -1993,6 +2010,7 @@ async function init() {
     );
   };
 
+  await revealAppWindow();
   const tosAccepted = localStorage.getItem('bjut_tos_accepted') === 'true';
   if (!tosAccepted) {
     const tosModal = document.getElementById('tos-modal')!;
@@ -2518,7 +2536,8 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
   activeBillingWorkbenchSection = section as BillingWorkbenchSection;
   billingCenterSubtitle.textContent = billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
   if (activeBillingWorkbenchSection === 'recharge' && rechargePayerFollowsBilling) {
-    const account = selectedBillingAccountUser();
+    const user = selectedBillingAccountUser();
+    const account = availableBillingAccounts().some(account => account.user === user) ? user : defaultBillingAccountUser();
     billingRechargeCardAccountSelect.setValue(account);
     if (rechargeTargetFollowsPayer) {
       billingRechargeTargetAccountSelect.setValue(account || '__custom__');
@@ -3043,7 +3062,7 @@ function setupEventListeners() {
     const previous = localStorage.getItem('bjut_vpn_compatibility') || 'high';
     if (value === 'maximum') {
       const confirmed = await customConfirm(
-        '最高兼容模式会通过 HTTP + IP 发送校园网账号和密码，链路不具备 TLS 加密。\n\n该模式仅临时启用 15 分钟，随后自动回退到 HTTPS 高兼容模式。是否继续？',
+        '最高兼容模式会通过 HTTP + IP 访问校园认证与计费系统，账号、密码和会话不受 TLS 加密保护。\n\n该模式仅临时启用 15 分钟，随后自动回退到 HTTPS 高兼容模式。是否继续？',
         '确认启用明文传输',
       );
       if (!confirmed) {
@@ -3967,7 +3986,7 @@ function setupEventListeners() {
             const currentBillingAccount = selectedBillingAccountUser();
             log(
               '账号管理',
-              `${updatedAccount.isDisabled ? '已禁用' : '已启用'}账号: ${updatedAccount.user}`,
+              `账号 ${updatedAccount.user}：${updatedAccount.isDisabled ? '已关闭自动登录，仍可手动使用' : '已启用自动登录'}`,
             );
             if (document.getElementById('billing-center')?.classList.contains('active')
               && currentBillingAccount
@@ -4400,6 +4419,7 @@ function renderAccounts() {
       </div>
     `;
     item.querySelector('.account-avatar')!.textContent = avatarText;
+    item.querySelector<HTMLElement>('.account-avatar')!.title = acc.isDisabled ? '自动登录已关闭（仍可手动选择），点击启用' : '点击关闭此账号的自动登录';
     item.querySelector('.account-user h4')!.textContent = acc.user;
     const passwordText = item.querySelector('.password-text') as HTMLElement;
     passwordText.textContent = acc.hasPassword ? '*************' : '未保存密码';
@@ -4427,25 +4447,35 @@ function updateOverrideOptions() {
   if (!overrideAccountSelect) return;
   const opts = [{ value: 'auto', text: '自动' }];
   accounts.forEach((acc, i) => {
-    if (!acc.isDisabled) {
-      opts.push({ value: i.toString(), text: `账号${i + 1} (${acc.user})` });
-    }
+    opts.push({ value: i.toString(), text: `账号${i + 1} (${acc.user})${acc.isDisabled ? ' · 自动登录已关闭' : ''}` });
   });
   opts.push({ value: 'add', text: '添加账号...' });
   overrideAccountSelect.setOptions(opts);
 }
 
-function enabledBillingAccounts() {
-  return getAccounts().filter(account => !account.isDisabled && account.user && account.hasPassword);
+const CURRENT_BILLING_SESSION = '__current_session__';
+let currentBillingSessionUser = '';
+
+function availableBillingAccounts() {
+  return getAccounts().filter(account => account.user && account.hasPassword);
 }
 
 function defaultBillingAccountUser(): string {
-  const accounts = enabledBillingAccounts();
+  const accounts = availableBillingAccounts();
   return accounts.find(account => account.isDefault)?.user || accounts[0]?.user || '';
 }
 
+function billingSelectionKey(): string {
+  return billingAccountSelect?.value || defaultBillingAccountUser() || CURRENT_BILLING_SESSION;
+}
+
 function selectedBillingAccountUser(): string {
-  return billingAccountSelect?.value || defaultBillingAccountUser();
+  const selection = billingSelectionKey();
+  return selection === CURRENT_BILLING_SESSION ? currentBillingSessionUser : selection;
+}
+
+function billingRequestAccount() {
+  return { accountUser: selectedBillingAccountUser() || null, currentSession: billingSelectionKey() === CURRENT_BILLING_SESSION };
 }
 
 function selectedRechargePayerAccount(): string {
@@ -4458,7 +4488,7 @@ function syncRechargeTargetAccountInput() {
   const custom = selected === '__custom__' || !selected;
   billingRechargeCustomTarget.hidden = !custom;
   if (!custom) billingRechargeAccount.value = selected;
-  else if (enabledBillingAccounts().some(account => account.user === billingRechargeAccount.value)) {
+  else if (availableBillingAccounts().some(account => account.user === billingRechargeAccount.value)) {
     billingRechargeAccount.value = '';
   }
   billingRechargeAccount.required = custom;
@@ -4468,7 +4498,8 @@ function syncRechargeTargetAccountInput() {
 function resetRechargeAccountSelectionToBilling() {
   rechargePayerFollowsBilling = true;
   rechargeTargetFollowsPayer = true;
-  const account = selectedBillingAccountUser();
+  const user = selectedBillingAccountUser();
+  const account = availableBillingAccounts().some(account => account.user === user) ? user : defaultBillingAccountUser();
   billingRechargeCardAccountSelect.setValue(account);
   billingRechargeTargetAccountSelect.setValue(account || '__custom__');
   syncRechargeTargetAccountInput();
@@ -4477,57 +4508,43 @@ function resetRechargeAccountSelectionToBilling() {
 
 function updateBillingAccountOptions() {
   if (!billingAccountSelect || !billingRechargeCardAccountSelect || !billingRechargeTargetAccountSelect) return;
-  const accounts = enabledBillingAccounts();
+  const accounts = availableBillingAccounts();
   const previousBilling = billingAccountSelect.value;
   const options = accounts.map(account => ({
     value: account.user,
-    text: `${account.user}${account.isDefault ? '（默认）' : ''}`,
+    text: `${account.user}${account.isDefault ? '（默认）' : ''}${account.isDisabled ? ' · 自动登录已关闭' : ''}`,
   }));
-  const fallback = accounts.find(account => account.isDefault)?.user || accounts[0]?.user || '';
-
-  const currentBilling = billingAccountFollowsDefault
-    ? fallback
-    : accounts.some(account => account.user === billingAccountSelect.value)
-      ? billingAccountSelect.value
-      : fallback;
-  if (!accounts.some(account => account.user === billingAccountSelect.value)
-    && billingAccountSelect.value) {
-    billingAccountFollowsDefault = true;
-  }
-  billingAccountSelect.setOptions(options.length > 0 ? options : [{ value: '', text: '暂无可用账号' }]);
+  const billingOptions = [{ value: CURRENT_BILLING_SESSION, text: '当前登录账号（校园网会话）' }, ...options];
+  const fallback = defaultBillingAccountUser() || CURRENT_BILLING_SESSION;
+  const currentBilling = billingAccountFollowsDefault ? fallback
+    : billingOptions.some(option => option.value === previousBilling) ? previousBilling : fallback;
+  billingAccountSelect.setOptions(billingOptions);
   billingAccountSelect.setValue(currentBilling);
-
+  const currentUser = selectedBillingAccountUser();
+  // Recharge uses unified authentication, which requires a saved credential.
+  // The billing SSO choice is never passed to it as an account number.
+  const payerFallback = accounts.some(account => account.user === currentUser) ? currentUser : defaultBillingAccountUser();
   const previousPayer = billingRechargeCardAccountSelect.value;
-  const currentPayer = rechargePayerFollowsBilling
-    ? currentBilling
-    : accounts.some(account => account.user === previousPayer)
-      ? previousPayer
-      : currentBilling;
-  if (!accounts.some(account => account.user === previousPayer) && previousPayer) {
-    rechargePayerFollowsBilling = true;
-  }
-  billingRechargeCardAccountSelect.setOptions(options.length > 0 ? options : [{ value: '', text: '暂无可用账号' }]);
+  const currentPayer = rechargePayerFollowsBilling ? payerFallback
+    : accounts.some(account => account.user === previousPayer) ? previousPayer : payerFallback;
+  billingRechargeCardAccountSelect.setOptions(options.length ? options : [{ value: '', text: '请选择已保存密码的账号' }]);
   billingRechargeCardAccountSelect.setValue(currentPayer);
-
   const previousTarget = billingRechargeTargetAccountSelect.value;
   const targetOptions = [
     ...options.map(option => ({ ...option, text: `已保存 · ${option.value}` })),
+    ...(currentUser && !accounts.some(account => account.user === currentUser)
+      ? [{ value: currentUser, text: `当前登录 · ${currentUser}` }] : []),
     { value: '__custom__', text: '自定义其他学工号' },
   ];
   billingRechargeTargetAccountSelect.setOptions(targetOptions);
-  const targetStillValid = targetOptions.some(option => option.value === previousTarget);
-  if (!targetStillValid && previousTarget) rechargeTargetFollowsPayer = true;
-  const nextTarget = rechargeTargetFollowsPayer
-    ? (currentPayer || '__custom__')
-    : targetStillValid
-      ? previousTarget
-      : (currentPayer || '__custom__');
-  billingRechargeTargetAccountSelect.setValue(nextTarget);
+  billingRechargeTargetAccountSelect.setValue(rechargeTargetFollowsPayer ? (currentPayer || currentUser || '__custom__')
+    : targetOptions.some(option => option.value === previousTarget) ? previousTarget : '__custom__');
   syncRechargeTargetAccountInput();
   updateTopUpPackageAction();
   syncStandaloneBillingSecurity();
-  if (billingCenterData && (billingCenterData.account !== currentBilling || previousBilling !== currentBilling)) {
+  if (billingCenterData && previousBilling !== currentBilling) {
     billingCenterData = null;
+    currentBillingSessionUser = '';
     billingRecordQueryStates = {};
     resetBillingCenterForSelectedAccount();
   }
@@ -4744,7 +4761,7 @@ function syncDashboardAccountActions() {
   btnSwitchAccount.hidden = !onlineCampusSession;
   btnLogoutCurrent.hidden = !onlineCampusSession;
   btnSwitchAccount.disabled = !getAccounts().some(
-    account => !account.isDisabled && account.hasPassword,
+    account => account.hasPassword,
   );
   btnLogoutCurrent.disabled = false;
 }
@@ -5079,7 +5096,7 @@ async function queryBillingRecords(page: number) {
   try {
     const result = await invoke<BillingRecordResult>('query_billing_records', {
       query,
-      accountUser: selectedBillingAccountUser(),
+      ...billingRequestAccount(),
     });
     if (!billingCenterData || result.kind !== queriedKind) {
       throw new Error('计费记录类型与请求不一致');
@@ -5379,12 +5396,12 @@ function applyBillingPasswordPolicy(policy: BillingPasswordPolicy) {
 
 function syncStandaloneBillingSecurity() {
   applyBillingPasswordPolicy(UNIFIED_AUTH_PASSWORD_POLICY);
-  btnBillingPassword.disabled = !selectedBillingAccountUser();
+  btnBillingPassword.disabled = !availableBillingAccounts().some(account => account.user === selectedBillingAccountUser());
 }
 
 function renderBillingSecurity(data: BillingCenterData) {
   applyBillingPasswordPolicy(data.passwordPolicy || UNIFIED_AUTH_PASSWORD_POLICY);
-  btnBillingPassword.disabled = !selectedBillingAccountUser();
+  btnBillingPassword.disabled = !availableBillingAccounts().some(account => account.user === selectedBillingAccountUser());
   const questionOptions = data.securityQuestions.map(question => ({ value: question.id, text: question.text }));
   billingQuestionSelects.forEach((select, index) => {
     select.setOptions(questionOptions.map(option => ({ ...option })));
@@ -5431,14 +5448,16 @@ function resetBillingCenterForSelectedAccount() {
   billingDeviceCount.textContent = '0';
   btnBillingBindMac.disabled = true;
   billingDeviceList.replaceChildren(createBillingEmpty('正在读取设备列表…'));
-  billingCenterMessage.textContent = account ? `正在读取账号 ${account} 的计费数据` : '请先添加并启用一个已保存密码的账号';
+  billingCenterMessage.textContent = billingSelectionKey() === CURRENT_BILLING_SESSION ? '正在通过校园网会话进入当前账号的计费系统' : account ? `正在读取账号 ${account} 的计费数据` : '请选择当前登录账号或添加已保存密码的账号';
   syncBillingCenterMessageVisibility();
   syncStandaloneBillingSecurity();
   renderIcons(document.getElementById('billing-center')!);
 }
 
 function renderBillingCenterData(data: BillingCenterData) {
+  if (billingSelectionKey() === CURRENT_BILLING_SESSION) currentBillingSessionUser = data.account;
   billingCenterData = data;
+  updateBillingAccountOptions();
   const info = billingOverviewToUserInfo(data.overview);
   renderBillingCenter(info);
   initializeBillingRecordQueryStates(data);
@@ -5530,22 +5549,19 @@ function finishBillingRefreshProgress() {
 async function refreshBillingCenterData() {
   if (billingRecordQueryBusy || billingCenterLoading) return;
   if (!await ensureBillingRequestForeground()) return;
-  const accountUser = selectedBillingAccountUser();
-  if (!accountUser) {
-    resetBillingCenterForSelectedAccount();
-    return;
-  }
+  const selection = billingSelectionKey();
+  const requestAccount = billingRequestAccount();
   billingCenterLoading = true;
   btnRefreshBillingCenter.disabled = true;
   billingAccountSelect.setDisabled(true);
   setBillingRecordQueryBusy(true);
   updateBillingRefreshProgress(2, true);
-  billingCenterMessage.textContent = '正在连接计费系统';
+  billingCenterMessage.textContent = requestAccount.currentSession ? '正在通过校园网会话进入当前账号的计费系统' : '正在连接计费系统';
   syncBillingCenterMessageVisibility();
   let completed = false;
   try {
-    const data = await invoke<BillingCenterData>('get_billing_center', { accountUser });
-    if (selectedBillingAccountUser() !== accountUser) return;
+    const data = await invoke<BillingCenterData>('get_billing_center', requestAccount);
+    if (billingSelectionKey() !== selection) return;
     renderBillingCenterData(data);
     completed = true;
   } catch (error) {
@@ -5618,7 +5634,7 @@ async function exportBillingRecords(all: boolean) {
       if (!query) return;
       const result = await invoke<BillingRecordResult>('query_billing_records', {
         query,
-        accountUser: selectedBillingAccountUser(),
+        ...billingRequestAccount(),
       });
       if (result.kind !== selection.kind) throw new Error('计费记录类型与请求不一致');
       table = result.table;
@@ -6904,6 +6920,7 @@ async function performConfirmedBillingAction(
   confirmation: string,
   button: HTMLButtonElement,
 ) {
+  const requestedAccount = billingRequestAccount();
   if (!await customConfirm(confirmation, title)) {
     request.oldPassword = undefined;
     request.newPassword = undefined;
@@ -6918,7 +6935,7 @@ async function performConfirmedBillingAction(
   try {
     const result = await invoke<BillingActionResult>('perform_billing_action', {
       request,
-      accountUser: selectedBillingAccountUser(),
+      ...requestedAccount,
     });
     clearBillingSecretInputs();
     if (result.passwordChanged) {
@@ -7014,7 +7031,7 @@ async function disconnectBillingSession(button: HTMLButtonElement) {
       sessionId,
       ip,
       mac,
-      accountUser: selectedBillingAccountUser(),
+      ...billingRequestAccount(),
     });
     await refreshBillingCenterData();
     await customAlert(message, '操作完成');
@@ -7042,7 +7059,7 @@ async function toggleBillingMauth() {
   try {
     const message = await invoke<string>('set_billing_mauth', {
       enabled,
-      accountUser: selectedBillingAccountUser(),
+      ...billingRequestAccount(),
     });
     await refreshBillingCenterData();
     await customAlert(message, '操作完成');
