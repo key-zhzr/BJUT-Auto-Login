@@ -93,9 +93,12 @@ button.addEventListener('click',async()=>{
     assert(document.getElementById('billing-center-status')!.textContent==='正常','概览未采用 dashboard 状态');
     assert(calls.some(c=>c.cmd==='get_billing_center'&&c.payload.currentSession),'当前账号未请求 SSO');
     assert(!document.querySelector('#billing-recharge-card-account [data-value="__current_session__"]'),'SSO 标记不应成为充值账号');note('通过：当前会话显示真实账号及 dashboard 状态');
-    click('[data-billing-section-target="records"]');click('#btn-query-billing-records');
+    click('[data-billing-section-target="records"]');
+    (document.getElementById('billing-record-start-date') as HTMLInputElement).value = '2024-01-01';
+    (document.getElementById('billing-record-end-date') as HTMLInputElement).value = '2025-12-31';
+    click('#btn-query-billing-records');
     await wait(()=>calls.some(c=>c.cmd==='query_billing_records'));
-    assert(calls.some(c=>c.cmd==='query_billing_records'&&c.payload.currentSession&&c.payload.accountUser==='25000999'),'账单查询未绑定当前真实账号');note('通过：账单查询复用当前会话并携带真实账号');
+    assert(calls.some(c=>c.cmd==='query_billing_records'&&c.payload.currentSession&&c.payload.accountUser==='25000999'),'账单查询未绑定当前真实账号');assert(calls.some(c=>c.cmd==='query_billing_records'&&c.payload.query.startDate==='2024-01-01'&&c.payload.query.endDate==='2025-12-31'),'跨年查询仍被日期限制拦截');note('通过：跨年账单查询复用当前会话并携带真实账号');
     click('[data-target="dashboard"]');
     const progress={id:99,generation:1,revision:0,message:'正在等待新的 IP 分配',percent:5,elapsedMs:0,complete:false};
     const networkPanel = document.getElementById('network-check-progress')!;

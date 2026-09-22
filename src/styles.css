@@ -2206,8 +2206,8 @@ input:checked + .slider:before { transform: translateX(24px); }
   #network-check-bar, .diagnostic-progress-track span { transition: none; }
 }
 .network-adapter-settings p, .login-progress-panel p, .login-progress-phases { color: var(--text-muted); font-size: .84rem; line-height: 1.6; }
-.network-adapter-list { display: grid; gap: .5rem; margin: .75rem 0; }
-.network-adapter-row { width: 100%; display: flex; align-items: center; gap: .8rem; text-align: left; color: var(--text-main); font: inherit; background: transparent; padding: .75rem .9rem; border: 1px solid var(--card-border); border-radius: 8px; cursor: pointer; transition: background .15s, transform .12s, border-color .15s; }
+.network-adapter-list { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: .5rem; margin: .75rem 0; }
+.network-adapter-row { width: 100%; min-width: 0; white-space: normal; display: flex; align-items: center; gap: .8rem; text-align: left; color: var(--text-main); font: inherit; background: transparent; padding: .75rem .9rem; border: 1px solid var(--card-border); border-radius: 8px; cursor: pointer; transition: background .15s, transform .12s, border-color .15s; }
 .network-adapter-row.chosen { border-color: var(--primary-color); }
 .network-adapter-row:enabled:hover { background: color-mix(in srgb, var(--primary-color) 7%, transparent); }
 .network-adapter-row:enabled:active { transform: scale(.992); }
@@ -4241,3 +4241,8 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 .config-qr-body canvas { width:min(100%,440px,max(160px,calc(100dvh - 260px))); height:auto; border-radius:12px; }
 .config-qr-actions { justify-content:center; margin:1rem 0; }
 .config-qr-status { margin:0.8rem 0; color:var(--text-muted); }
+
+.network-adapter-text { flex: 1 1 0; min-width: 0; }
+.network-adapter-settings .diagnostic-panel-header { flex-wrap: wrap; }
+.network-adapter-settings .diagnostic-panel-header > div { min-width: 0; flex: 1 1 12rem; overflow-wrap: anywhere; }
+.network-adapter-settings .diagnostic-panel-header > button { flex-shrink: 0; }

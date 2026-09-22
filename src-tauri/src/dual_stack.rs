@@ -1,6 +1,7 @@
 use crate::network_probe::NETWORK_PROBE_TIMEOUT;
 use futures_util::{stream::FuturesUnordered, FutureExt, StreamExt};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+#[cfg(test)]
+use std::net::IpAddr;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,12 +56,7 @@ enum Family {
     V6,
 }
 impl Family {
-    fn source(self) -> IpAddr {
-        match self {
-            Self::V4 => Ipv4Addr::UNSPECIFIED.into(),
-            Self::V6 => Ipv6Addr::UNSPECIFIED.into(),
-        }
-    }
+    #[cfg(test)]
     fn matches(self, address: IpAddr) -> bool {
         matches!(
             (self, address),
@@ -72,14 +68,16 @@ impl Family {
 #[derive(Clone, Copy)]
 enum ResponseCheck {
     NoContent,
+    #[cfg(test)]
     Address,
+    Apple,
     Microsoft,
 }
 
 #[derive(Debug)]
-struct ProbeFailure {
-    kind: &'static str,
-    detail: String,
+pub(crate) struct ProbeFailure {
+    pub(crate) kind: &'static str,
+    pub(crate) detail: String,
 }
 impl ProbeFailure {
     fn response(detail: impl Into<String>) -> Self {
@@ -95,85 +93,34 @@ impl ProbeFailure {
         }
     }
 }
-fn request_failure(error: reqwest::Error) -> ProbeFailure {
-    use std::error::Error;
-    if error.is_timeout() {
-        return ProbeFailure::timeout();
-    }
-    let mut causes = String::new();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        causes.push_str(&cause.to_string().to_ascii_lowercase());
-        source = cause.source();
-    }
-    let (kind, detail) = if ["dns", "resolve", "lookup", "getaddrinfo", "no such host"]
-        .iter()
-        .any(|word| causes.contains(word))
-    {
-        (
-            "dns_error",
-            "DNS 未能解析探测目标；请核对系统或 VPN 的 DNS 配置",
-        )
-    } else if ["tls", "ssl", "certificate", "cert verify"]
-        .iter()
-        .any(|word| causes.contains(word))
-    {
-        (
-            "tls_error",
-            "TLS 校验或握手未通过；请核对系统时间、证书或网络拦截",
-        )
-    } else {
-        (
-            "connection_error",
-            "连接未建立或中断；请核对路由、VPN 与认证状态",
-        )
-    };
-    // Only classification leaves this function; raw source errors may contain URLs.
-    ProbeFailure {
-        kind,
-        detail: detail.into(),
-    }
-}
-
 async fn check_target(
-    client: &reqwest::Client,
+    network: &serde_json::Value,
+    direct: bool,
     family: Family,
     url: &str,
     check: ResponseCheck,
 ) -> Result<(), ProbeFailure> {
-    let response = client
-        .get(url)
-        .header("Cache-Control", "no-cache, no-store")
-        .send()
-        .await
-        .map_err(request_failure)?;
+    let (status, body) =
+        crate::probe_transport::request(network, direct, matches!(family, Family::V6), url).await?;
     if matches!(check, ResponseCheck::NoContent) {
-        return if response.status() == reqwest::StatusCode::NO_CONTENT {
+        return if status == 204 {
             Ok(())
         } else {
             Err(ProbeFailure::response(format!(
-                "HTTP {}，响应不是 204（可能被认证页拦截）",
-                response.status().as_u16()
+                "HTTP {status}，响应不是 204（可能被认证页拦截）"
             )))
         };
     }
-    if response.status() != reqwest::StatusCode::OK {
-        return Err(ProbeFailure::response(format!(
-            "HTTP {}",
-            response.status().as_u16()
-        )));
-    }
-    let mut response = response;
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(request_failure)? {
-        if body.len() + chunk.len() > 4096 {
-            return Err(ProbeFailure::response("探测响应过大"));
-        }
-        body.extend_from_slice(&chunk);
+    if status != 200 {
+        return Err(ProbeFailure::response(format!("HTTP {status}")));
     }
     let body = String::from_utf8_lossy(&body);
     let valid = match check {
         ResponseCheck::Microsoft => body.trim() == "Microsoft Connect Test",
+        ResponseCheck::Apple => {
+            body.contains("<TITLE>Success</TITLE>") && body.contains("<BODY>Success</BODY>")
+        }
+        #[cfg(test)]
         ResponseCheck::Address => body
             .trim()
             .parse::<IpAddr>()
@@ -190,55 +137,64 @@ async fn check_target(
 }
 
 async fn probe_family(
+    network: &serde_json::Value,
+    direct: bool,
     family: Family,
     addresses: Vec<String>,
     targets: &[(&str, ResponseCheck)],
 ) -> FamilyConnectivity {
     let started = std::time::Instant::now();
-    // Public reachability follows the system/TUN route. Only constrain the
-    // family, leaving source selection to the OS (including temporary IPv6).
-    // HTTP proxies are excluded because they can conceal the real IP family.
-    let builder = reqwest::Client::builder()
-        .no_proxy()
-        .local_address(family.source())
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(NETWORK_PROBE_TIMEOUT)
-        .use_rustls_tls();
     let mut errors = Vec::new();
-    if let Ok(client) = builder.build() {
+    {
         let mut probes: FuturesUnordered<_> = targets
             .iter()
-            .map(|(url, check)| async {
-                tokio::time::timeout(
+            .map(|(url, check)| async move {
+                let result = tokio::time::timeout(
                     NETWORK_PROBE_TIMEOUT,
-                    check_target(&client, family, url, *check),
+                    check_target(network, direct, family, url, *check),
                 )
                 .await
-                .unwrap_or_else(|_| Err(ProbeFailure::timeout()))
+                .unwrap_or_else(|_| Err(ProbeFailure::timeout()));
+                (url, result)
             })
             .collect();
-        while let Some(result) = probes.next().await {
+        while let Some((url, result)) = probes.next().await {
             match result {
                 Ok(()) => {
                     return FamilyConnectivity {
                         addresses,
                         status: "reachable".to_string(),
-                        detail: "经系统路由完成对应地址族的外网响应校验".to_string(),
+                        detail: format!(
+                            "{}外网响应校验通过（{}）",
+                            if direct {
+                                "网卡直连"
+                            } else {
+                                "系统路由"
+                            },
+                            reqwest::Url::parse(url)
+                                .ok()
+                                .and_then(|url| url.host_str().map(str::to_string))
+                                .unwrap_or_default()
+                        ),
                         duration_ms: started.elapsed().as_millis(),
                     }
                 }
-                Err(error) => errors.push(error),
+                Err(mut error) => {
+                    if let Ok(url) = reqwest::Url::parse(url) {
+                        error.detail =
+                            format!("{}：{}", url.host_str().unwrap_or("目标"), error.detail);
+                    }
+                    errors.push(error);
+                }
             }
         }
-    } else {
-        errors.push(ProbeFailure {
-            kind: "connection_error",
-            detail: "无法创建探测连接".into(),
-        });
     }
     let status = if errors.iter().any(|error| error.kind == "timeout") {
         "timeout"
-    } else if errors.iter().all(|error| error.kind == errors[0].kind) {
+    } else if errors
+        .first()
+        .is_some_and(|first| errors.iter().all(|error| error.kind == first.kind))
+    {
         errors.first().map(|error| error.kind).unwrap_or("unknown")
     } else {
         "unknown"
@@ -292,17 +248,43 @@ pub(crate) fn unavailable(reason: &str) -> DualStackReport {
     }
 }
 
+fn physical_identity_matches(
+    adapter: &crate::network_inventory::NetworkAdapter,
+    network: &serde_json::Value,
+    android: bool,
+) -> bool {
+    let ip = network["ip"].as_str().unwrap_or("");
+    // UI selection support is independent of the ability to use a physical Network.
+    adapter.connected
+        && matches!(adapter.transport.as_str(), "wifi" | "ethernet")
+        && adapter.interface_name == network["interfaceName"].as_str().unwrap_or("")
+        && (ip.is_empty() || adapter.ipv4.iter().any(|candidate| candidate == ip))
+        && (!android
+            || network["networkId"]
+                .as_str()
+                .is_some_and(|id| id == adapter.id))
+}
+
 pub(crate) async fn probe_with_updates(
     network: &serde_json::Value,
+    update: impl FnMut(&DualStackReport),
+) -> DualStackReport {
+    probe_route_with_updates(network, false, update).await
+}
+
+pub(crate) async fn probe_route_with_updates(
+    network: &serde_json::Value,
+    direct: bool,
     mut update: impl FnMut(&DualStackReport),
 ) -> DualStackReport {
     let interface = network["interfaceName"].as_str().unwrap_or("");
-    let ip = network["ip"].as_str().unwrap_or("");
     let adapters = crate::network_inventory::adapters();
-    let adapter = adapters.iter().find(|adapter| {
-        adapter.interface_name == interface && adapter.ipv4.iter().any(|candidate| candidate == ip)
-    });
-    let ipv4 = adapter.map(|_| vec![ip.to_string()]).unwrap_or_default();
+    let adapter = adapters
+        .iter()
+        .find(|adapter| physical_identity_matches(adapter, network, cfg!(target_os = "android")));
+    let ipv4 = adapter
+        .map(|adapter| adapter.ipv4.clone())
+        .unwrap_or_default();
     let ipv6 = adapter
         .map(|adapter| adapter.ipv6.clone())
         .unwrap_or_default();
@@ -315,7 +297,7 @@ pub(crate) async fn probe_with_updates(
     let mut report = DualStackReport {
         interface_name: interface.to_string(),
         checked_at: chrono::Local::now().to_rfc3339(),
-        scope: "system".to_string(),
+        scope: if direct { "physical" } else { "system" }.to_string(),
         generation: 0,
         probe_id: 0,
         ipv4: pending(ipv4.clone()),
@@ -323,20 +305,50 @@ pub(crate) async fn probe_with_updates(
     };
     let v4_targets = [
         (
+            "http://www.msftconnecttest.com/connecttest.txt",
+            ResponseCheck::Microsoft,
+        ),
+        (
+            "http://captive.apple.com/hotspot-detect.html",
+            ResponseCheck::Apple,
+        ),
+        (
             "https://cp.cloudflare.com/generate_204",
             ResponseCheck::NoContent,
         ),
-        ("https://api.ipify.org", ResponseCheck::Address),
     ];
     let v6_targets = [
-        ("https://api6.ipify.org", ResponseCheck::Address),
         (
             "http://ipv6.msftconnecttest.com/connecttest.txt",
             ResponseCheck::Microsoft,
         ),
+        (
+            "http://captive.apple.com/hotspot-detect.html",
+            ResponseCheck::Apple,
+        ),
+        (
+            "https://cp.cloudflare.com/generate_204",
+            ResponseCheck::NoContent,
+        ),
     ];
-    let missing_v4 = family_unconfigured(&adapters, false);
-    let missing_v6 = family_unconfigured(&adapters, true);
+    if direct && adapter.is_none() {
+        report.ipv4.status = "unavailable".into();
+        report.ipv6.status = "unavailable".into();
+        report.ipv4.detail = "未取得认证网卡，请刷新后重试".into();
+        report.ipv6.detail = report.ipv4.detail.clone();
+        update(&report);
+        return report;
+    }
+    let missing_v4 = if direct {
+        ipv4.is_empty()
+    } else {
+        family_unconfigured(&adapters, false)
+    };
+    let missing_v6 = if direct {
+        ipv6.is_empty()
+    } else {
+        family_unconfigured(&adapters, true)
+    };
     let absent = |addresses| FamilyConnectivity {
         addresses,
         status: "not_configured".into(),
@@ -347,12 +359,28 @@ pub(crate) async fn probe_with_updates(
     if missing_v4 {
         report.ipv4 = absent(ipv4);
     } else {
-        probes.push(async { (false, probe_family(Family::V4, ipv4, &v4_targets).await) }.boxed());
+        probes.push(
+            async {
+                (
+                    false,
+                    probe_family(network, direct, Family::V4, ipv4, &v4_targets).await,
+                )
+            }
+            .boxed(),
+        );
     }
     if missing_v6 {
         report.ipv6 = absent(ipv6);
     } else {
-        probes.push(async { (true, probe_family(Family::V6, ipv6, &v6_targets).await) }.boxed());
+        probes.push(
+            async {
+                (
+                    true,
+                    probe_family(network, direct, Family::V6, ipv6, &v6_targets).await,
+                )
+            }
+            .boxed(),
+        );
     }
     update(&report);
     while let Some((is_v6, result)) = probes.next().await {
@@ -370,6 +398,84 @@ pub(crate) async fn probe_with_updates(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "requires a configured, online physical network; sends no credentials"]
+    fn live_system_and_physical_probes() {
+        let interface = std::env::var("BJUT_PROBE_INTERFACE")
+            .expect("set BJUT_PROBE_INTERFACE to the physical interface to test");
+        let adapter = crate::network_inventory::adapters()
+            .into_iter()
+            .find(|adapter| adapter.interface_name == interface && adapter.connected)
+            .expect("connected physical interface");
+        let network = serde_json::json!({"interfaceName":interface, "ip":adapter.ipv4.first().cloned().unwrap_or_default()});
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let (system, physical) = futures_util::future::join(
+                probe_with_updates(&network, |_| {}),
+                probe_route_with_updates(&network, true, |_| {}),
+            )
+            .await;
+            for report in [system, physical] {
+                for (family, result) in [("IPv4", report.ipv4), ("IPv6", report.ipv6)] {
+                    eprintln!(
+                        "{} {family}: {} ({} ms) {}",
+                        report.scope, result.status, result.duration_ms, result.detail
+                    );
+                    if family == "IPv4" || std::env::var_os("BJUT_PROBE_EXPECT_IPV6").is_some() {
+                        assert_eq!(result.status, "reachable");
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn response_validation_rejects_captive_redirects_and_accepts_chunked_expected_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", server.local_addr().unwrap());
+            let worker = tokio::spawn(async move {
+                for response in [
+                    "HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: /login\r\n\r\n",
+                    "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nlogin",
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n16\r\nMicrosoft Connect Test\r\n0\r\n\r\n",
+                ] {
+                    let (mut socket, _) = server.accept().await.unwrap();
+                    let mut request = [0; 2048]; assert!(socket.read(&mut request).await.unwrap() > 0);
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+            for expected in [false, false, true] {
+                let result = tokio::time::timeout(NETWORK_PROBE_TIMEOUT, check_target(&serde_json::Value::Null, false, Family::V4, &url, ResponseCheck::Microsoft)).await.unwrap();
+                assert_eq!(result.is_ok(), expected, "{result:?}");
+            }
+            worker.await.unwrap();
+        });
+    }
+    #[test]
+    fn android_physical_network_does_not_require_manual_selection_support() {
+        let mut adapter = crate::network_inventory::NetworkAdapter {
+            id: "101".into(),
+            interface_name: "wlan0".into(),
+            transport: "wifi".into(),
+            connected: true,
+            selectable: false,
+            ipv4: vec!["192.168.1.216".into()],
+            ..Default::default()
+        };
+        let network =
+            serde_json::json!({"interfaceName":"wlan0", "ip":"192.168.1.216", "networkId":"101"});
+        assert!(physical_identity_matches(&adapter, &network, true));
+        adapter.id = "102".into();
+        assert!(!physical_identity_matches(&adapter, &network, true));
+        adapter.id = "101".into();
+        adapter.transport = "vpn".into();
+        assert!(!physical_identity_matches(&adapter, &network, true));
+        adapter.transport = "wifi".into();
+        adapter.connected = false;
+        assert!(!physical_identity_matches(&adapter, &network, true));
+    }
     #[test]
     fn absent_family_requires_inventory_and_includes_other_interfaces() {
         use crate::network_inventory::NetworkAdapter;
@@ -433,11 +539,15 @@ mod tests {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let (ipv4, ipv6) = futures_util::future::join(
                 probe_family(
+                    &serde_json::Value::Null,
+                    false,
                     Family::V4,
                     vec!["192.0.2.99".to_string()],
                     &[(&target, ResponseCheck::NoContent)],
                 ),
                 probe_family(
+                    &serde_json::Value::Null,
+                    false,
                     Family::V6,
                     vec!["2001:db8::99".to_string()],
                     &[(&target, ResponseCheck::NoContent)],
@@ -475,6 +585,8 @@ mod tests {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             for expected in ["reachable", "response_error"] {
                 let result = probe_family(
+                    &serde_json::Value::Null,
+                    false,
                     Family::V6,
                     vec!["2001:db8::99".to_string()],
                     &[(&target, ResponseCheck::Address)],
@@ -507,7 +619,7 @@ mod tests {
                 std::future::pending::<()>().await;
                 drop(connection);
             });
-            let result = tokio::time::timeout(std::time::Duration::from_secs(2), probe_family(Family::V4, Vec::new(), &[(&slow_url, ResponseCheck::NoContent), (&fast_url, ResponseCheck::NoContent)])).await;
+            let result = tokio::time::timeout(std::time::Duration::from_secs(2), probe_family(&serde_json::Value::Null, false, Family::V4, Vec::new(), &[(&slow_url, ResponseCheck::NoContent), (&fast_url, ResponseCheck::NoContent)])).await;
             slow_worker.abort();
             fast_worker.await.unwrap();
             assert_eq!(result.expect("a stalled target must not delay a valid response").status, "reachable");

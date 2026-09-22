@@ -24,6 +24,7 @@ mod internet_probe;
 mod network_diagnostics;
 mod network_events;
 mod portal_auth;
+mod probe_transport;
 mod recharge_state;
 mod trusted_time;
 mod update_metadata;

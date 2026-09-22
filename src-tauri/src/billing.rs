@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::cookie_jar::CookieJar;
 use crate::portal_auth::PortalRouteContext;
 
+mod records;
 mod transport;
 mod types;
 use transport::BillingClient;
@@ -490,7 +491,9 @@ pub(crate) async fn query_records(
         // Load the corresponding module before its AJAX endpoint so the
         // session has the page-local CSRF state expected by jfself.
         let _ = get_page_text(&mut session, spec.referer_path).await?;
-        let table = if query.all {
+        let table = if spec.date_filter {
+            records::query(&mut session, &query, &spec).await?
+        } else if query.all {
             fetch_all_record_pages(&mut session, &query, &spec).await?
         } else {
             fetch_record_page(&mut session, &query, &spec, query.page, query.page_size).await?
@@ -562,9 +565,9 @@ fn validate_record_query(
             .map_err(|_| BillingError::InvalidRequest("查询开始日期格式无效".to_string()))?;
         let end = chrono::NaiveDate::parse_from_str(end_raw, "%Y-%m-%d")
             .map_err(|_| BillingError::InvalidRequest("查询结束日期格式无效".to_string()))?;
-        if start > end || end > today || (end - start).num_days() > 60 {
+        if start > end || end > today {
             return Err(BillingError::InvalidRequest(
-                "查询日期必须截至今天，且范围不能超过 60 天".to_string(),
+                "请检查起止日期，结束日期不能晚于今天".to_string(),
             ));
         }
         (Some(start_raw.to_string()), Some(end_raw.to_string()))
@@ -4730,7 +4733,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_record_queries_without_accepting_urls_or_unbounded_dates() {
+    fn validates_record_queries_without_accepting_urls_or_future_dates() {
         let today = chrono::Local::now().date_naive();
         let mut query = BillingRecordQuery {
             kind: "usage".to_string(),
@@ -4745,7 +4748,9 @@ mod tests {
         assert_eq!(validated.kind, BillingRecordKind::Usage);
         assert_eq!(validated.page_size, 10);
 
-        query.start_date = Some((today - chrono::Duration::days(61)).to_string());
+        query.start_date = Some((today - chrono::Duration::days(366)).to_string());
+        assert!(validate_record_query(&query).is_ok());
+        query.end_date = Some((today + chrono::Duration::days(1)).to_string());
         assert!(validate_record_query(&query).is_err());
         query.kind = "https://example.com/collect".to_string();
         assert!(validate_record_query(&query).is_err());

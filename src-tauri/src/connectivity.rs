@@ -114,6 +114,22 @@ pub(crate) struct Observation {
     receiver: watch::Receiver<Snapshot>,
 }
 impl Observation {
+    pub(crate) async fn wait_with_updates(mut self, mut update: impl FnMut(&Snapshot)) -> Snapshot {
+        loop {
+            let value = self.receiver.borrow_and_update().clone();
+            update(&value);
+            if value.complete || value.cancelled {
+                return value;
+            }
+            if self.receiver.changed().await.is_err() {
+                return Snapshot {
+                    cancelled: true,
+                    complete: true,
+                    ..value
+                };
+            }
+        }
+    }
     pub(crate) async fn wait(self, full: bool) -> Snapshot {
         self.wait_inner(full || cfg!(target_os = "android"), true)
             .await
@@ -315,6 +331,39 @@ pub(crate) fn for_app(app: &tauri::AppHandle, network: &serde_json::Value) -> Ob
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostics_receive_the_exact_console_snapshot_before_completion() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let pool = ProbePool::default();
+            let (id, receiver, _) = pool.subscribe("same-network".into());
+            let mut health = dual_stack::unavailable("fixture");
+            health.generation = 7;
+            health.probe_id = id;
+            health.ipv4.status = "reachable".into();
+            health.ipv6.status = "checking".into();
+            pool.update(id, |value| value.health = Some(health.clone()));
+            let mut seen = Vec::new();
+            let result = Observation { receiver }
+                .wait_with_updates(|snapshot| {
+                    seen.push(serde_json::to_value(snapshot.health.as_ref().unwrap()).unwrap());
+                    if !snapshot.complete {
+                        pool.update(id, |value| {
+                            value.health.as_mut().unwrap().ipv6.status = "timeout".into();
+                            value.complete = true;
+                        });
+                    }
+                })
+                .await;
+            assert_eq!(seen.len(), 2);
+            assert_eq!(seen[0]["ipv6"]["status"], "checking");
+            assert_eq!(
+                seen[1],
+                serde_json::to_value(result.health.unwrap()).unwrap()
+            );
+            assert_eq!(seen[1]["generation"], 7);
+            assert_eq!(seen[1]["probeId"], id);
+        });
+    }
     #[test]
     fn foreground_can_finish_while_diagnostics_remain_subscribed() {
         tokio::runtime::Runtime::new().unwrap().block_on(async {

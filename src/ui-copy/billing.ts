@@ -31,7 +31,7 @@ export const BILLING_COPY = {
     },
     records: {
       title: '账单与办理记录',
-      description: '选择记录类型、日期或年份后查询；日期范围最多 60 天。',
+      description: '选择记录类型、日期或年份后查询。',
     },
     services: {
       title: '账号服务',

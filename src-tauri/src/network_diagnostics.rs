@@ -285,20 +285,22 @@ pub(super) async fn run_network_diagnostics(
         step
     };
     let internet_probe = async {
-        let connection_probe = async {
-            if wifi_route_failed {
-                connectivity::Snapshot {
-                    cancelled: true,
-                    complete: true,
-                    ..Default::default()
+        let paths = std::sync::Mutex::new(diagnostic_paths::Paths::pending());
+        let connection_probe =
+            connectivity::for_app(&app, &network).wait_with_updates(|snapshot| {
+                if let Some(health) = &snapshot.health {
+                    let mut paths = paths.lock().unwrap();
+                    paths.system = health.clone();
+                    emit_step(&app, &run_id, &paths.step());
                 }
-            } else {
-                connectivity::for_app(&app, &network).wait(true).await
-            }
-        };
-        let paths_probe =
-            diagnostic_paths::probe(&network, |paths| emit_step(&app, &run_id, &paths.step()));
-        let (connection, paths) = futures_util::future::join(connection_probe, paths_probe).await;
+            });
+        let direct_probe = dual_stack::probe_route_with_updates(&network, true, |health| {
+            let mut paths = paths.lock().unwrap();
+            paths.direct = health.clone();
+            emit_step(&app, &run_id, &paths.step());
+        });
+        let (connection, _) = futures_util::future::join(connection_probe, direct_probe).await;
+        let paths = paths.into_inner().unwrap();
         let session_step = connection.require_session.then(|| DiagnosticStep {
             id: "authentication_session".into(),
             label: "认证网卡的校园会话".into(),
@@ -331,14 +333,11 @@ pub(super) async fn run_network_diagnostics(
                 internet_step.status = "success".into();
             }
         }
-        let mut dual_stack = paths.system;
-        // Both read-only runs describe the same captured network. Carry the
-        // current pool's ordering metadata when updating the console view.
-        if let Some(health) = connection.health.as_ref() {
-            dual_stack.generation = health.generation;
-            dual_stack.probe_id = health.probe_id;
-        }
-        dual_stack.checked_at = chrono::Local::now().to_rfc3339();
+        // Preserve the exact system result and ordering emitted to the console.
+        let dual_stack = connection
+            .health
+            .clone()
+            .unwrap_or_else(|| dual_stack::unavailable("检测已取消，请重试"));
         if let Some(step) = &session_step {
             emit_step(&app, &run_id, step);
         }

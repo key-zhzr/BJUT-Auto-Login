@@ -5066,7 +5066,7 @@ function syncBillingRecordControls() {
   billingRecordYearSelect.setValue(state.year);
   billingRecordPageSizeSelect.setValue(String(state.pageSize));
   if (usesDate) {
-    billingRecordRange.textContent = `${state.startDate} 至 ${state.endDate}；日期范围最多 60 天。`;
+    billingRecordRange.textContent = `${state.startDate} 至 ${state.endDate}。`;
   } else if (usesYear) {
     billingRecordRange.textContent = `${state.year} 年历史账单。`;
   } else {
@@ -5091,8 +5091,8 @@ function readBillingRecordQuery(page: number, all = false): BillingRecordQuery |
     const today = new Date();
     today.setHours(23, 59, 59, 999);
     if (!startDate || !endDate || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())
-      || start > end || end > today || end.getTime() - start.getTime() > 60 * 86_400_000) {
-      void customAlert('查询日期必须截至今天，且范围不能超过 60 天。');
+      || start > end || end > today) {
+      void customAlert('请检查起止日期，结束日期不能晚于今天。');
       return null;
     }
     query.startDate = startDate;

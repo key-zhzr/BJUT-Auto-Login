@@ -91,7 +91,7 @@ export class NetworkExperience {
       row.dataset.adapterId = id; row.dataset.unavailable = String(!available);
       row.setAttribute('role', 'radio'); row.setAttribute('aria-checked', String(chosen)); row.tabIndex = chosen ? 0 : -1;
       const marker = document.createElement('span'); marker.className = 'adapter-radio-marker'; marker.setAttribute('aria-hidden', 'true');
-      const text = document.createElement('span'); const label = document.createElement('strong'); label.textContent = title;
+      const text = document.createElement('span'); text.className = 'network-adapter-text'; const label = document.createElement('strong'); label.textContent = title;
       const description = document.createElement('small'); description.textContent = detail;
       text.append(label, description); row.append(marker, text); rowParent.append(row);
     };
@@ -111,7 +111,7 @@ export class NetworkExperience {
       addRow(inventory.preferredInterface, '指定网卡当前不可用', '等待网卡恢复，或选择其他网卡', true, false);
     }
     const selected = inventory.adapters.find(adapter => adapter.selected);
-    element('network-selection-caption').textContent = selected ? `当前认证网卡：${selected.name}（${selected.interfaceName}）`
+    element('network-selection-caption').textContent = selected ? `当前认证网卡：${selected.name}${selected.name === selected.interfaceName ? '' : `（${selected.interfaceName}）`}`
       : inventory.preferredInterface ? '指定网卡不可用，认证已暂停' : '尚未取得可用于认证的网卡';
     if (!inventory.selectionSupported) this.showMessage('Android 由系统选择校园 Wi-Fi；下方同时展示其他网络。');
     this.updateBusy();
