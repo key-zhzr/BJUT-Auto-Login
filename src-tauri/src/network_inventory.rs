@@ -11,6 +11,9 @@ pub(crate) struct NetworkAdapter {
     pub(crate) transport: String,
     pub(crate) ipv4: Vec<String>,
     pub(crate) ipv6: Vec<String>,
+    // Used internally by direct probes, not displayed/exported with inventory.
+    #[serde(default, skip_serializing)]
+    pub(crate) dns_servers: Vec<String>,
     pub(crate) connected: bool,
     pub(crate) selectable: bool,
     #[serde(default)]
@@ -219,6 +222,21 @@ pub(crate) fn adapters() -> Vec<NetworkAdapter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn android_inventory_without_dns_still_deserializes_and_resolvers_stay_internal() {
+        let mut adapter: NetworkAdapter = serde_json::from_value(serde_json::json!({
+            "id":"101", "name":"wlan0", "interfaceName":"wlan0", "transport":"wifi",
+            "ipv4":["192.168.1.216"], "ipv6":[], "connected":true, "selectable":false
+        }))
+        .unwrap();
+        assert!(adapter.dns_servers.is_empty());
+        adapter.dns_servers.push("192.168.1.1".into());
+        assert!(serde_json::to_value(adapter)
+            .unwrap()
+            .get("dnsServers")
+            .is_none());
+    }
+
     #[test]
     fn inventory_keeps_interfaces_and_address_families_separate() {
         let adapters = parse_ifconfig("en0: flags=UP,RUNNING\n inet 192.168.1.10\n status: active\nen7: flags=UP,RUNNING\n inet 172.26.99.10\n inet6 2001:db8::10\n inet6 2001:db8::11 tentative\n status: active\nutun4: flags=UP,RUNNING\n inet 198.18.0.1\n inet6 fd00::1\n", &["en0".to_string()]);

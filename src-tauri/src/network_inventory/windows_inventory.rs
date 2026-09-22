@@ -2,8 +2,8 @@ use super::NetworkAdapter;
 use std::mem::size_of;
 use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
-    GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
-    IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_SOFTWARE_LOOPBACK, IP_ADAPTER_ADDRESSES_LH,
+    GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_MULTICAST, IF_TYPE_ETHERNET_CSMACD,
+    IF_TYPE_IEEE80211, IF_TYPE_SOFTWARE_LOOPBACK, IP_ADAPTER_ADDRESSES_LH,
 };
 use windows::Win32::NetworkManagement::Ndis::{IfOperStatusUnknown, IfOperStatusUp};
 use windows::Win32::Networking::WinSock::{
@@ -11,7 +11,7 @@ use windows::Win32::Networking::WinSock::{
 };
 
 pub(super) fn adapters() -> Vec<NetworkAdapter> {
-    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST;
     let mut bytes = 0;
     // SAFETY: size query does not dereference an adapter buffer.
     if unsafe { GetAdaptersAddresses(AF_UNSPEC.0 as u32, flags, None, None, &mut bytes) }
@@ -75,6 +75,41 @@ pub(super) fn adapters() -> Vec<NetworkAdapter> {
                 ..Default::default()
             };
             let mut address_ptr = record.FirstUnicastAddress;
+            let mut dns_ptr = record.FirstDnsServerAddress;
+            while !dns_ptr.is_null() {
+                // SAFETY: DNS records and socket addresses belong to storage;
+                // the family and size are checked before each address cast.
+                let dns = unsafe { &*dns_ptr };
+                dns_ptr = dns.Next;
+                let socket = dns.Address;
+                if socket.lpSockaddr.is_null()
+                    || (socket.iSockaddrLength as usize) < size_of::<u16>()
+                {
+                    continue;
+                }
+                let family = unsafe { (*socket.lpSockaddr).sa_family };
+                let ip = if family == AF_INET
+                    && socket.iSockaddrLength as usize >= size_of::<SOCKADDR_IN>()
+                {
+                    let address = unsafe { &*socket.lpSockaddr.cast::<SOCKADDR_IN>() };
+                    let bytes = unsafe { address.sin_addr.S_un.S_un_b };
+                    Some(std::net::IpAddr::from([
+                        bytes.s_b1, bytes.s_b2, bytes.s_b3, bytes.s_b4,
+                    ]))
+                } else if family == AF_INET6
+                    && socket.iSockaddrLength as usize >= size_of::<SOCKADDR_IN6>()
+                {
+                    let address = unsafe { &*socket.lpSockaddr.cast::<SOCKADDR_IN6>() };
+                    Some(std::net::IpAddr::from(unsafe { address.sin6_addr.u.Byte }))
+                } else {
+                    None
+                };
+                if let Some(ip) =
+                    ip.filter(|ip| !ip.is_unspecified() && !ip.is_loopback() && !ip.is_multicast())
+                {
+                    adapter.dns_servers.push(ip.to_string());
+                }
+            }
             while !address_ptr.is_null() {
                 let address = unsafe { &*address_ptr };
                 address_ptr = address.Next;

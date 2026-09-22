@@ -288,6 +288,31 @@ pub(crate) async fn probe_route_with_updates(
     let ipv6 = adapter
         .map(|adapter| adapter.ipv6.clone())
         .unwrap_or_default();
+    let mut route = network.clone();
+    if direct {
+        let mut servers = adapter
+            .map(|adapter| adapter.dns_servers.clone())
+            .unwrap_or_default();
+        #[cfg(target_os = "macos")]
+        if adapter.is_some()
+            && network["lgnLinkConfiguration"]["dnsServers"]
+                .as_array()
+                .is_none_or(Vec::is_empty)
+        {
+            // Wired snapshots already include scoped DNS. Read Wi-Fi DHCP and
+            // scoped resolver data once per manual diagnostic, not every poll.
+            servers.extend(crate::macos_network::lgn_link_configuration(interface).dns_servers);
+        }
+        servers.extend(
+            network["dnsServers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str().map(str::to_string)),
+        );
+        route["dnsServers"] = serde_json::json!(servers);
+    }
+    let network = &route;
     let pending = |addresses| FamilyConnectivity {
         addresses,
         status: "checking".to_string(),
