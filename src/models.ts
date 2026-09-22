@@ -232,7 +232,7 @@ export interface ConfigBackupImport {
 export interface DiagnosticStep {
   id: string;
   label: string;
-  status: 'success' | 'warning' | 'error' | 'skipped';
+  status: 'success' | 'warning' | 'error' | 'skipped' | 'checking';
   message: string;
   durationMs: number;
 }
@@ -302,6 +302,7 @@ export interface LoginProgress {
 }
 
 export interface DiagnosticProgress {
+  runId?: string;
   percent: number;
   label: string;
 }

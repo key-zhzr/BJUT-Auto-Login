@@ -1,118 +1,29 @@
-# BJUT-Auto-Login (BJUT-AL)
+# BJUT Auto Login
 
-**BJUT-Auto-Login (BJUT-AL)** 是一款专为北京工业大学（BJUT）校园网（`bjut_wifi` / `bjut-sushe` / 有线 `lgn`）设计的现代化、跨平台自动登录客户端。基于 **Tauri V2、Rust 和 TypeScript** 构建，支持 Windows、macOS、Linux 和 Android，提供自动认证、网络诊断与校园网计费服务。
+北京工业大学校园网连接助手，支持 **bjut_wifi、bjut-sushe 和有线 lgn**。提供 Windows、macOS、Linux 与 Android 客户端。
 
----
+[项目网站](https://al.bjutdown.work) · [下载安装](https://github.com/key-zhzr/BJUT-Auto-Login/releases) · [使用指南 / Wiki](https://github.com/key-zhzr/BJUT-Auto-Login/wiki) · [反馈问题](https://github.com/key-zhzr/BJUT-Auto-Login/issues)
 
-## ✨ 核心特性
+## 能做什么
 
-- 平台支持：提供 Windows、macOS、Linux 桌面应用和 Android 应用；Basic、Apple OS 27、WinUI 三种主题支持明暗模式与强调色。
-- 无感自动登录：系统网络变化事件会立即触发检测，并以低成本局域网 IP 检测兜底；Android 界面进程退出后可由前台服务直接调用 Rust 核心继续检测，并通过开机广播与低频看门狗进行恢复。
-- 网络环境识别：结合物理网卡、校园网段、Wi-Fi 身份和认证网关响应判断校园网环境；识别结果与账号发送权限分别校验。
-- 网络安全提示：结合 SSID、BSSID、本地网段与黑白名单降低在错误网络发送凭据的风险；无法取得网络身份时，手动登录会默认阻止发送。
-- 多账号管理：支持保存多个校园网账号，可通过直观的拖拽交互调整登录优先级顺序，点击头像只控制此账号是否参与自动登录；关闭自动登录的账号仍可手动选择或用于计费。
-- 认证网卡选择：在设置页直接点选网卡；自动模式优先校园有线，指定网卡断开后等待恢复，其他断开网卡默认折叠。Windows、macOS、Linux 支持手动选择，Android 由系统选择校园 Wi-Fi。
-- 双栈状态：控制台以紧凑状态显示 IPv4 / IPv6 探测结果和耗时；公网探测跟随系统路由并分别限制地址族，认证请求仍使用选定的物理网卡。区分未配置地址、DNS / TLS 失败与超时；探测失败不直接等同于整个 IPv6 网络不可用。
-- 登录反馈：显示安全检查、网关确认、认证提交与联网复核的阶段耗时；提交前可取消，完成反馈保留 15 秒并写入日志。认证已接受后，剩余地址族的只读探测可在后台完成。
-- 检测过程反馈：控制台显示网络/IP 变化、等待地址分配、互联网验证与登录类型确认等阶段，等待时持续显示耗时和进度。
-- 检测协同：常规检查、网络诊断和登录验证复用同一网络下的只读探测；网络切换或认证提交会使旧结果失效，前台取得有效结果后可先完成反馈。
-- 网络事件：诊断页展示最近的网卡选择、状态变化与认证决策，重复轮询结果自动合并，事件记录随诊断包一同导出。
-- 桌面使用：记忆窗口大小、位置和最大化状态，显示器变化后自动调整到可见区域；先恢复窗口再显示，启动界面不等待网络初始化；三种主题共用键盘选择与焦点反馈，下拉菜单只在实际键盘导航后显示指示框。
-- 自适应检测：稳定联网时降低后台频率，短期断网时加快检测，省电或息屏时减少探测；设置页显示当前有效间隔和原因，也可关闭自适应模式。
-- 网络配置档案：不同 SSID 或校园有线环境可分别绑定账号、认证协议、自动登录与前后台检测间隔。
-- 账号保护与诊断：提供并发网络诊断、账号失败冷却、安全存储健康检查和脱敏诊断包。macOS 有线 IPv6 出现已知异常配置或 lgn6 发现失败时，可手动重启对应适配器，操作由系统请求管理员授权。
-- 校园网计费中心：可选择已保存账号，或通过“当前登录账号”复用校园网的 `lgn2jfself` 跳转会话；直接查看余额、流量、dashboard 账号状态、在线会话和各类账单，支持完整 CSV 导出，并可在二次确认后办理停复机、套餐预约、消费保护、设备绑定、统一认证密码修改及校园卡网费充值。
-- 用量提醒：余额或套餐流量低于自定义提醒线时发送系统通知。
-- 快捷操作：托盘显示联网状态，可立即检测、登录、切换首选账号或暂停自动登录一小时。
-- 权限健康中心：集中检查通知、Wi-Fi、位置、后台运行、安全存储与安装更新权限，并提供修复入口。
-- VPN 共存：提供“系统 DNS / 校园网 DNS / 固定地址 / HTTP + IP”四档策略，校园认证与计费系统统一使用所选策略，默认保留 HTTPS 并固定已知校园地址（计费系统 `172.21.0.16`），不继承系统 HTTP 代理。
-- 自动更新与完整包下载：读取 GitHub Releases，并在 API 不可用时回退到官方发布清单；显示更新说明和安装包大小，旧清单缺少大小时查询官方文件响应头。桌面应用内更新使用 minisign 签名验证，Android 安装由系统校验 APK 签名。
-- Android 下拉菜单：使用系统选项列表，保留主题触发器外观，避免频繁展开 WebView 模糊弹层；原生退出日志附带设备与 WebView 环境信息，便于排查。
-- 可追溯日志：保留最近 5 次启动的完整日志，界面最多展示 5000 条并支持搜索、筛选；导出不受界面条数限制。
+- 自动识别校园网、登录与重连，支持多账号排序和独立网络档案。
+- 选择认证网卡，查看 IPv4 / IPv6 状态，诊断网络与 VPN 兼容问题。
+- 查询校园网余额、流量、账单和在线设备，办理计费服务与网费充值。
+- 账号在本机安全保存，支持加密备份与跨设备迁移。
+- 三种主题、托盘操作、后台检测、用量提醒与应用更新。
 
----
+## 开始使用
 
-## 🚀 快速使用
+1. 从 [Releases](https://github.com/key-zhzr/BJUT-Auto-Login/releases) 安装对应平台的客户端。
+2. 连接校园网，在“账号管理”添加账号。
+3. 手动登录确认可用后，根据需要开启自动登录。
 
-### 📥 下载安装
+详细安装、VPN 设置、Android 后台运行、计费和备份说明已迁至 [Wiki](https://github.com/key-zhzr/BJUT-Auto-Login/wiki)。网站也提供[使用指南](https://al.bjutdown.work/guide/Getting-Started/)。功能以当前发行版本为准。
 
-前往本仓库的 [Releases 页面](https://github.com/key-zhzr/BJUT-Auto-Login/releases) 下载适合您对应平台的安装包：
+## 开发与贡献
 
-- **Windows**: `.exe`（NSIS）
-- **macOS**: `.dmg` (支持 Apple Silicon 与 Intel)
-- **Linux**: `.deb` / `.AppImage`
-- **Android**: `.apk` (提供 `arm64-v8a`、`x86_64` 架构)
+基于 Tauri 2、Rust 和 TypeScript。参见 [开发指南](https://github.com/key-zhzr/BJUT-Auto-Login/wiki/Development) 和 [发布说明](RELEASING.md)。欢迎提交 Issue 或 Pull Request。OpenWrt 路由端正在整理为独立项目，详见 [路由端说明](https://github.com/key-zhzr/BJUT-Auto-Login/wiki/OpenWrt)。
 
-### ⚙️ 核心配置
+本项目是**开源第三方工具，非学校官方应用**。使用明文 HTTP 兼容模式前，请确认网络可信；详见[隐私与安全](https://github.com/key-zhzr/BJUT-Auto-Login/wiki/Privacy)。
 
-1. **添加账号**：在主界面点击“账号管理”添加你的校园网学号与密码，添加多账号时支持拖拽排序。
-2. **连接检测**：点击界面上的登录按钮，或由应用在后台自动进行登录。
-3. **设置项**：
-   - **开机自启动**：建议开启，开机后自动在后台保活网络。
-   - **检测间隔**：可设置前台与后台的基础间隔，并启用自适应检测；网络诊断中的 DNS、互联网与网关探测使用 3 秒预算。
-   - **认证网卡**：在设置页直接点击网卡条目，或选择“自动选择”；虚拟/VPN 网卡仅展示，不用于发送校园网账号。
-   - **VPN 共存兼容等级**：推荐“高兼容（HTTPS + 固定地址）”；仅在其他模式均不可用时选择会明文传输账密的“最高兼容（HTTP + IP）”。
-
----
-
-## 🛠️ 技术栈与开发指南
-
-本项目采用 **Tauri V2** 框架，使用 Vanilla HTML + CSS + TypeScript 构建，兼顾轻量与美观。
-
-### 开发环境要求
-- [Node.js](https://nodejs.org/) (建议最新 LTS)
-- [Rust](https://www.rust-lang.org/) (用于 Tauri 后端)
-- [Android Studio](https://developer.android.com/studio) (如果需要编译或调试 Android 端)
-
-### 本地运行与编译
-
-1. **克隆项目**
-   ```bash
-   git clone https://github.com/key-zhzr/BJUT-Auto-Login.git
-   cd BJUT-Auto-Login
-   ```
-
-2. **安装依赖**
-   ```bash
-   npm install
-   ```
-
-3. **桌面端本地调试**
-   ```bash
-   npm run tauri dev
-   ```
-
-4. **Android 移动端本地调试**
-   ```bash
-   npm run tauri android dev
-   ```
-
-5. **编译发布版本**
-   ```bash
-   npm run tauri build           # 编译桌面端
-   npm run tauri android build   # 编译安卓端
-   ```
-
-正式发布前请按 [RELEASING.md](RELEASING.md) 配置 Tauri 更新私钥和 Android 签名 Secret。
-
----
-
-## 🔐 隐私与安全说明
-
-本应用的账号密码仅保存在设备的安全凭据存储中：macOS 使用应用私有目录内、权限限制为当前用户的 AES-GCM 加密文件，Windows 使用 Credential Manager，Linux 使用 Secret Service，Android 使用 Android Keystore；常规 `config.json` 不包含密码。“配置导出”是可用于跨设备恢复的完整加密备份：账号密码在 Rust 中使用 PBKDF2-HMAC-SHA256 派生密钥并以 AES-256-GCM 加密，明文密码不进入 WebView；备份不包含校园服务 Cookie 或充值恢复记录。由于加密备份可恢复真实凭据，请为导出文本设置独立强密码并妥善保管。应用不会向第三方服务器上传校园网密码，认证请求仅发送至北京工业大学校园网认证网关、计费系统 `jfself.bjut.edu.cn`、统一认证 `cas.bjut.edu.cn` / `uc.bjut.edu.cn`，以及经 `itsapp.bjut.edu.cn` 进入的移动门户 `ydapp.bjut.edu.cn`。桌面微信支付会额外使用项目维护的接力页 `red.bjutdown.work`：App 会把已严格校验的微信支付启动地址交换为 5 分钟有效的 192 位随机 Token，二维码只携带 `/p/<token>`，以便从微信内置浏览器切换到外部浏览器时继续支付。接力服务不记录请求正文或支付地址，并使用 `no-store`、严格 CSP、有限解析次数和到期删除；部署时还应在 Cloudflare 侧启用创建接口限流。可审计的 Worker 参考实现位于 `deploy/wechat-relay-worker.js`。若短期会话接口不可用，App 才会降级为不向服务器提交支付参数的 Fragment 链接，并明确提示该链接不能可靠跨浏览器接力。
-
-计费系统 `jfself` 默认使用 HTTPS。已保存账号的只读查询会在内存中短期复用会话，密码或兼容策略变化、后台会话过期时清除；写操作完成后主动注销。选择“当前登录账号”时按请求取得临时跳转会话，不提取或保存密码，后续操作核对实际账号是否仍与界面一致。为了减少反复统一认证，移动门户签发的长期登录 Cookie 会随账号保存在设备的加密安全存储中，并按服务端有效期复用；充值恢复记录也会加密保存完成或核对流程所需的最少订单状态、目标账号和支付标识，以便应用被系统终止后继续核对，二者均不会写入常规 `config.json`。密码、密码保护答案、Cookie、`openid`、安全令牌、完整支付链接和充值订单号不会写入运行日志。校园卡充值必须先核对付款卡、目标账户和金额，再由用户二次确认；若订单或扣费结果不明确，App 不会自动重试。账单 CSV 可能包含 IP、MAC 和使用记录等个人网络信息，请妥善保管导出文件。
-
-公网连通性探测会访问 Cloudflare、Microsoft、ipify 等公开测试服务，不携带校园网账号密码。双栈探测分别限定 IPv4 / IPv6，使用系统路由（包括 TUN），不通过 HTTP 代理掩盖地址族；校园网认证与 lgn6 地址发现仍绑定已核对的物理接口。
-
-默认与前三档 VPN 兼容策略均使用 HTTPS；“最高兼容（HTTP + IP）”会通过明文 HTTP 向固定校园认证网关及计费系统发送账号与会话信息，只应在其他模式均不可用且确认处于可信校园网络时启用。网络身份判断只能降低误发风险，无法替代 TLS 的密码学保护，请同时使用黑白名单限制未知网络。
-
----
-
-## 🤝 贡献与反馈
-
-如果您在使用过程中遇到了任何 Bug，或者有新的功能需求，欢迎提交 [Issue](https://github.com/key-zhzr/BJUT-Auto-Login/issues) 或直接发起 Pull Request。
-
-## 📄 许可证
-
-本项目基于 [MIT License](LICENSE) 开源。
+[MIT License](LICENSE)

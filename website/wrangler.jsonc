@@ -1,0 +1,7 @@
+{
+  "name": "bjut-auto-login-site",
+  "compatibility_date": "2026-09-21",
+  "assets": { "directory": "./dist", "html_handling": "auto-trailing-slash", "not_found_handling": "404-page" },
+  "workers_dev": false,
+  "routes": [{ "pattern": "al.bjutdown.work", "custom_domain": true }]
+}

@@ -10,15 +10,18 @@
     "test:frontend": "node --experimental-strip-types scripts/test-update-utils.mjs",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "site:build": "node website/build.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "~2",
+    "@tauri-apps/plugin-barcode-scanner": "^2.4.6",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "dompurify": "^3.4.11",
+    "jsqr": "^1.4.0",
     "lucide": "^1.22.0",
     "marked": "^18.0.6",
     "qrcode": "^1.5.4",

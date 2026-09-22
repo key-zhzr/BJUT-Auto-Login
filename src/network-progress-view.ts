@@ -1,3 +1,5 @@
+import { AnimatedVisibility } from './animated-visibility';
+
 export interface NetworkCheckProgress {
   id: number;
   generation: number;
@@ -15,6 +17,7 @@ export class NetworkProgressView {
   private timer: number | null = null;
   private hideTimer: number | null = null;
   private readonly panel = document.getElementById('network-check-progress')!;
+  private readonly visibility = new AnimatedVisibility(this.panel);
   private readonly label = document.getElementById('network-check-message')!;
   private readonly elapsed = document.getElementById('network-check-elapsed')!;
   private readonly bar = document.getElementById('network-check-bar')!;
@@ -25,14 +28,14 @@ export class NetworkProgressView {
     if (this.current?.id !== progress.id) this.displayed = 0;
     this.current = progress;
     this.updated = performance.now();
-    this.panel.hidden = false;
     this.label.textContent = progress.message;
     if (this.timer !== null) window.clearInterval(this.timer);
     if (this.hideTimer !== null) window.clearTimeout(this.hideTimer);
     this.timer = null; this.hideTimer = null;
     this.paint();
+    this.visibility.setVisible(true);
     if (progress.complete) {
-      this.hideTimer = window.setTimeout(() => { this.panel.hidden = true; this.hideTimer = null; }, 4000);
+      this.hideTimer = window.setTimeout(() => { this.visibility.setVisible(false); this.hideTimer = null; }, 4000);
     } else {
       this.timer = window.setInterval(() => this.paint(), 150);
     }

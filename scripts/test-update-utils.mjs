@@ -227,3 +227,41 @@ for (const [status, label] of [['not_configured', '未配置'], ['dns_error', 'D
 }
 assert.equal(compactFamilyLabel({ status: 'reachable', durationMs: 38.4, addresses: [], detail: '' }), '38 ms');
 console.log('Network diagnostic label regression cases passed');
+
+const { encodeConfigQr, ConfigQrCollector } = await import('../src/config-qr.ts');
+const payload = JSON.stringify({version:3,ciphertext:'encrypted-fixture'.repeat(600)});
+const frames = await encodeConfigQr(payload);
+const collector = new ConfigQrCollector();
+await collector.add(frames[0]);
+assert.equal((await collector.add(frames[0])).received, 1);
+let assembled;
+for (const frame of frames.slice(1).reverse()) assembled = await collector.add(frame);
+assert.equal(assembled.payload, payload);
+const other = await encodeConfigQr(JSON.stringify({version:3,ciphertext:'different'}));
+await assert.rejects(()=>collector.add(other[0]), /同一份/);
+await assert.rejects(()=>new ConfigQrCollector().add('https:\/\/example.com'), /不是配置二维码/);
+await assert.rejects(()=>encodeConfigQr('x'.repeat(128001)), /太大/);
+const damaged = [...other]; damaged[0] = damaged[0].slice(0,-1)+'x';
+await assert.rejects(()=>new ConfigQrCollector().add(damaged[0]), /校验失败/);
+let time = 1000; const expired = new ConfigQrCollector(()=>time); await expired.add(frames[0]); time += 600001;
+await assert.rejects(()=>expired.add(frames[1]), /超时/);
+console.log('Encrypted QR framing, duplicate, mixed and expiry cases passed');
+const { rechargeServiceIsOpen } = await import('../src/recharge-hours.ts');
+for (const [hour, minute, open] of [[5,59,false],[6,0,true],[22,59,true],[23,0,false],[0,0,false]]) {
+  assert.equal(rechargeServiceIsOpen(Date.UTC(2026,8,21,hour-8,minute)),open);
+}
+console.log('Beijing recharge-hours boundaries passed');
+
+const {default:QR} = await import('qrcode');
+const {default:jsQR} = await import('jsqr');
+for (const text of frames) {
+  const code=QR.create(text,{errorCorrectionLevel:'L'});
+  const n=code.modules.size,scale=4,margin=4,size=(n+margin*2)*scale;
+  const pixels=new Uint8ClampedArray(size*size*4).fill(255);
+  for(let y=0;y<n;y++)for(let x=0;x<n;x++)if(code.modules.get(y,x))for(let dy=0;dy<scale;dy++)for(let dx=0;dx<scale;dx++) {
+    const at=(((y+margin)*scale+dy)*size+(x+margin)*scale+dx)*4;
+    pixels[at]=pixels[at+1]=pixels[at+2]=0;
+  }
+  assert.equal(jsQR(pixels,size,size)?.data,text);
+}
+console.log('Every generated QR frame decodes back to its encrypted content');

@@ -43,17 +43,17 @@ export const BILLING_COPY = {
     },
     recharge: {
       title: '充值',
-      description: '按支付方式、校园卡、网费账户和金额依次确认，App 会串联并核对完整充值流程。',
+      description: '选择支付方式，为自己或他人充值网费。',
     },
     security: {
       title: '安全设置',
-      description: '通过统一认证修改密码；成功后同步更新本 App 中该账号的安全凭据。',
+      description: '修改统一认证密码，并更新已保存的密码。',
     },
   } satisfies Record<string, BillingPanelCopy>,
   serviceActions: {
     stopReopen: {
       title: '停复机',
-      description: '写操作仅在确认后发送；立即操作可能中断或恢复校园网计费。',
+      description: '暂停或恢复校园网服务，提交前请确认。',
     },
     consumeLimit: {
       title: '消费保护',
@@ -66,7 +66,7 @@ export const BILLING_COPY = {
   },
   recharge: {
     hoursTitle: '充值服务开放时间：每日 06:00–23:00',
-    hoursDescription: '开放时间以北京时间为准；其他时段可查看余额，但不能创建或确认充值订单。',
+    hoursDescription: '按北京时间显示开放时段，其他时段仍可尝试充值。',
     initialState: '填写目标学工号和金额后，先核对账户再确认扣费。',
     initialMethodDescription: '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。',
     safetyNote: '到账状态可自动查询，但任何扣费或网费转入订单只提交一次，结果不明确时不会自动重复扣费。支付宝与微信均由学校支付平台发起，App 不读取支付密码。',

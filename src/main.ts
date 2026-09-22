@@ -1,5 +1,8 @@
 import { NetworkProgressView, type NetworkCheckProgress } from './network-progress-view';
-import { renderDiagnosticReportView, formatDiagnosticReport } from './diagnostics-view';
+import { AnimatedVisibility } from './animated-visibility';
+import { setupAndroidKeyboard } from './android-keyboard';
+import { RechargeHours } from './recharge-hours';
+import { renderDiagnosticReportView, formatDiagnosticReport, renderDiagnosticStep } from './diagnostics-view';
 import { NetworkExperience } from './network-experience';
 import { LoginProgressView } from './login-progress-view';
 import { renderNetworkEvents } from './network-events-view';
@@ -21,6 +24,7 @@ import {
   LEGACY_MIGRATION_PENDING_KEY, mergeLegacyAccounts, readLegacyAccounts,
 } from './account-migration';
 import { missingImportedCredentialUsers } from './config-backup';
+import { scanConfigQr, showConfigQr } from './config-qr-view';
 import { decryptExport } from './config-crypto';
 import { CustomSelect } from './custom-select';
 import {
@@ -45,7 +49,7 @@ import type {
   BillingLoginRecord, BillingOnlineSession, BillingOverview, BillingPackageOption,
   BillingRecordKind, BillingRecordQuery, BillingRecordQueryState, BillingRecordResult,
   BillingServiceState, BillingTable, ConfigBackupExport, ConfigBackupImport, CountdownPayload, CredentialStorageHealth,
-  DiagnosticProgress, DiagnosticReport, DiscoveredCampusAccount, GitHubRelease, GitHubReleaseAsset,
+  DiagnosticProgress, DiagnosticReport, DiagnosticStep, DiscoveredCampusAccount, GitHubRelease, GitHubReleaseAsset,
   NetworkStatePayload, NetworkEvent, AdapterInventory, DualStackReport, LoginProgress, NetworkSchedule,
   OfficialUpdateManifest,
   NetworkProfile, RechargeBalanceSnapshot, RechargePreview, RechargeResult,
@@ -54,6 +58,7 @@ import type {
 } from './models';
 
 const networkProgressView = new NetworkProgressView();
+const rechargeHours = new RechargeHours(() => invoke('get_network_time'));
 
 const icons = {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
@@ -84,6 +89,7 @@ observeSystemColorScheme(() => {
 
 if (IS_ANDROID) {
   document.body.classList.add('is-android');
+  setupAndroidKeyboard();
 } else {
   document.body.classList.add('is-desktop');
 }
@@ -1071,8 +1077,11 @@ async function initializeRustEvents() {
     settle('网络检测过程', listen<NetworkCheckProgress>('network-check-progress', event => networkProgressView.render(event.payload))),
     settle('登录阶段事件', listen<LoginProgress>('login-progress', event => loginProgressView.render(event.payload))),
     settle('检测调度事件', listen<NetworkSchedule>('network-schedule', event => networkExperience.renderSchedule(event.payload))),
+    settle('网络诊断逐项结果', listen<{runId: string; step: DiagnosticStep}>('network-diagnostic-step', event => {
+      if (diagnosticRunActive && event.payload.runId === diagnosticRunId) renderDiagnosticStep(event.payload.step);
+    })),
     settle('网络诊断进度事件', listen<DiagnosticProgress>('network-diagnostic-progress', event => {
-      if (!diagnosticRunActive) return;
+      if (!diagnosticRunActive || event.payload.runId !== diagnosticRunId) return;
       updateDiagnosticProgress(event.payload.percent, event.payload.label, true);
     })),
     settle('运行日志事件', listen<AppLogEntry>('log-event', event => {
@@ -1655,6 +1664,7 @@ const btnRestartLgnAdapter = document.getElementById('btn-restart-lgn-adapter') 
 const btnResetAllHealth = document.getElementById('btn-reset-all-health') as HTMLButtonElement;
 const accountHealthList = document.getElementById('account-health-list')!;
 const diagnosticProgress = document.getElementById('diagnostic-progress')!;
+const diagnosticProgressVisibility = new AnimatedVisibility(diagnosticProgress);
 const diagnosticProgressText = document.getElementById('diagnostic-progress-text')!;
 const diagnosticProgressPercent = document.getElementById('diagnostic-progress-percent')!;
 const diagnosticProgressBar = document.getElementById('diagnostic-progress-bar')!;
@@ -2146,9 +2156,18 @@ function updateAccountHealthBadges() {
   });
 }
 
+let previousUnhealthyAccounts: string | null = null;
+
 function renderAccountHealthPanel() {
   accountHealthList.innerHTML = '';
   const items = Array.from(accountHealthCache.values());
+  const unhealthy = items.filter(item => item.status !== 'healthy');
+  const signature = unhealthy.map(item => `${item.user}:${item.status}`).sort().join('|');
+  const panel = document.getElementById('account-health-panel') as HTMLDetailsElement;
+  if (signature !== previousUnhealthyAccounts) panel.open = unhealthy.length > 0;
+  previousUnhealthyAccounts = signature;
+  document.getElementById('account-health-summary')!.textContent = unhealthy.length
+    ? `${unhealthy.length} 个账号需关注` : items.length ? `${items.length} 个账号正常` : '暂无账号';
   if (items.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'diagnostic-empty';
@@ -2226,6 +2245,7 @@ function renderDiagnosticReport(report: DiagnosticReport) {
 }
 
 let diagnosticRunActive = false;
+let diagnosticRunId = '';
 let adapterRestartActive = false;
 let diagnosticProgressHideTimer: number | null = null;
 let diagnosticProgressValue = 0;
@@ -2237,12 +2257,12 @@ function updateDiagnosticProgress(percent: number, label: string, visible: boole
   }
   const normalized = Math.max(diagnosticProgressValue, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
   diagnosticProgressValue = normalized;
-  diagnosticProgress.hidden = !visible;
   diagnosticProgress.style.setProperty('--diagnostic-progress', `${normalized}%`);
   diagnosticProgressBar.style.width = `${normalized}%`;
   diagnosticProgressText.textContent = label;
   diagnosticProgressPercent.textContent = `${normalized}%`;
   diagnosticProgress.setAttribute('aria-valuenow', String(normalized));
+  diagnosticProgressVisibility.setVisible(visible);
   if (visible) {
     document.getElementById('diagnostic-summary-title')!.textContent = label;
   }
@@ -2252,7 +2272,7 @@ function finishDiagnosticProgress() {
   updateDiagnosticProgress(100, '网络链路诊断完成', true);
   diagnosticProgressHideTimer = window.setTimeout(() => {
     diagnosticProgressHideTimer = null;
-    diagnosticProgress.hidden = true;
+    diagnosticProgressVisibility.setVisible(false);
   }, 700);
 }
 
@@ -2267,18 +2287,21 @@ async function runDiagnostics() {
   btnCopyDiagnostics.disabled = true;
   btnRunDiagnostics.textContent = '诊断中…';
   diagnosticRunActive = true;
+  diagnosticRunId = crypto.randomUUID();
+  document.getElementById('diagnostic-steps')!.replaceChildren();
+  document.getElementById('diagnostic-summary-badge')!.textContent = '诊断中';
   adapterRepairPanel.hidden = true;
   btnRestartLgnAdapter.disabled = true;
   diagnosticProgressValue = 0;
   updateDiagnosticProgress(0, '正在检查网络链路…', true);
   try {
-    lastDiagnosticReport = await invoke<DiagnosticReport>('run_network_diagnostics');
+    lastDiagnosticReport = await invoke<DiagnosticReport>('run_network_diagnostics', { runId: diagnosticRunId });
     finishDiagnosticProgress();
     renderDiagnosticReport(lastDiagnosticReport);
     await Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
   } catch (error) {
     document.getElementById('diagnostic-summary-title')!.textContent = `诊断失败：${String(error)}`;
-    diagnosticProgress.hidden = true;
+    diagnosticProgressVisibility.setVisible(false);
   } finally {
     diagnosticRunActive = false;
     btnRestartLgnAdapter.disabled = adapterRestartActive;
@@ -2560,6 +2583,8 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
     button.setAttribute('aria-selected', String(active));
   });
   syncBillingCenterMessageVisibility();
+  rechargeHours.setActive(document.getElementById('billing-center')!.classList.contains('active')
+    && activeBillingWorkbenchSection === 'recharge');
   if (billingSectionAnimationTimer !== null) window.clearTimeout(billingSectionAnimationTimer);
   if (changed) {
     billingSectionAnimationTimer = window.setTimeout(() => {
@@ -2598,6 +2623,7 @@ function activatePage(target: string, navTarget = target) {
   nav?.querySelector<HTMLElement>('.nav-billing-tree')
     ?.setAttribute('aria-hidden', String(!billingExpanded));
   pages.forEach(page => page.classList.toggle('active', page.id === target));
+  rechargeHours.setActive(target === 'billing-center' && activeBillingWorkbenchSection === 'recharge');
   if (pageChanged) {
     document.getElementById('main-content')?.scrollTo({ top: 0, behavior: 'auto' });
   }
@@ -2616,6 +2642,7 @@ function handleAndroidBack() {
   const visibleModal = document.querySelector<HTMLElement>('.modal-overlay:not(.hidden)');
   if (visibleModal) {
     const dismiss = visibleModal.querySelector<HTMLElement>([
+      '.config-qr-close',
       '#btn-confirm-cancel',
       '#btn-alert-ok',
       '#btn-alipay-payment-close-icon',
@@ -3740,12 +3767,17 @@ function setupEventListeners() {
   const btnExportConfig = document.getElementById('btn-export-config');
   const btnImportConfig = document.getElementById('btn-import-config');
   
-  if (btnExportConfig) {
-    btnExportConfig.addEventListener('click', async () => {
+  const backupScope = () => {
+    const scope = { settings: (document.getElementById('config-scope-settings') as HTMLInputElement).checked, accounts: (document.getElementById('config-scope-accounts') as HTMLInputElement).checked };
+    if (!scope.settings && !scope.accounts) throw new Error('请至少选择设置或账号密码。');
+    return scope;
+  };
+  const exportBackup = async (qr: boolean) => {
       try {
+        const scope = backupScope();
         const passphrase = await customPasswordPrompt(
-          '完整加密备份包含可恢复的账号密码。请设置独立强密码并妥善保管。',
-          '导出完整配置',
+          '请设置至少 8 位的备份密码，导入时需要使用。',
+          '导出备份',
         );
         if (!passphrase) return;
         const confirmedPassphrase = await customPasswordPrompt('请再输入一次备份密码。', '确认备份密码');
@@ -3758,32 +3790,37 @@ function setupEventListeners() {
         const backup = await invoke<ConfigBackupExport>('export_config_backup', {
           passphrase,
           uiPreferences: configBackupUiPreferences(),
+          scope,
         });
+        if (qr) { await showConfigQr(backup.payload); return; }
         await writeTextToClipboard(backup.payload);
         const missing = backup.missingPasswordAccounts.length
           ? `\n\n未包含密码的账号：${backup.missingPasswordAccounts.join('、')}`
           : '';
         await customAlert(
-          `完整配置已在 Rust 中加密并复制到剪贴板。\n\n账号 ${backup.accountCount} 个，其中 ${backup.passwordCount} 个密码已写入加密备份；明文密码未进入 WebView。${missing}`,
+          `加密备份已复制。\n\n包含 ${backup.accountCount} 个账号、${backup.passwordCount} 个密码。${missing}`,
           '导出完成',
         );
       } catch (e) {
         console.error('Export config failed:', e);
         customAlert('导出失败：' + String(e));
       }
-    });
-  }
+  };
+  btnExportConfig?.addEventListener('click', () => void exportBackup(false));
+  document.getElementById('btn-export-config-qr')?.addEventListener('click', () => void exportBackup(true));
 
-  if (btnImportConfig) {
-    btnImportConfig.addEventListener('click', async () => {
+  const importBackup = async (qr: boolean) => {
       try {
-        const text = await readTextFromClipboard();
+        const scope = backupScope();
+        const text = qr ? await scanConfigQr() : await readTextFromClipboard();
+        if (qr && !text) return;
 
         if (!text) {
           customAlert('剪贴板为空');
           return;
         }
-        const confirmResult = await customConfirm('导入配置将覆盖当前设置和账号，是否继续？');
+        const selected = [scope.settings ? '设置' : '', scope.accounts ? '账号密码' : ''].filter(Boolean).join('和');
+        const confirmResult = await customConfirm(`导入将覆盖当前${selected}，是否继续？`);
         if (!confirmResult) return;
         
         const passphrase = await customPasswordPrompt('输入导出该配置时设置的密码。', '导入配置');
@@ -3793,20 +3830,21 @@ function setupEventListeners() {
           const imported = await invoke<ConfigBackupImport>('import_config_backup', {
             payload: text.trim(),
             passphrase,
+            scope,
           });
           applyConfigBackupUiPreferences(imported.uiPreferences);
           const missing = imported.missingPasswordAccounts.length
             ? `\n\n仍需补录密码：${imported.missingPasswordAccounts.join('、')}`
             : '';
           await customAlert(
-            `完整配置已通过安全存储回读校验。\n\n导入账号 ${imported.accountCount} 个，已恢复密码 ${imported.passwordCount} 个。${missing}`,
+            `${selected}已导入。${missing}`,
             '导入完成',
           );
           location.reload();
           return;
         }
         const config = await decryptExport(text.trim(), passphrase);
-        if (Array.isArray(config.accounts)) {
+        if (scope.accounts && Array.isArray(config.accounts)) {
           const importedAccounts = config.accounts.flatMap((value): AccountView[] => {
             if (!value || typeof value !== 'object') return [];
             const account = value as Partial<AccountView>;
@@ -3836,6 +3874,7 @@ function setupEventListeners() {
           const value = config[source];
           if (typeof value === 'string') localStorage.setItem(destination, value);
         };
+        if (scope.settings) {
         restoreString('autoLogin', 'bjut_auto_login');
         restoreString('checkInterval', 'bjut_check_interval');
         restoreString('checkIntervalBg', 'bjut_check_interval_bg');
@@ -3869,6 +3908,7 @@ function setupEventListeners() {
           });
         }
         
+        }
         const expectedPasswords = accountsCache
           .filter(account => account.hasPassword || Boolean(account.pass))
           .map(account => account.user);
@@ -3881,15 +3921,16 @@ function setupEventListeners() {
         );
         const missingAfterSave = expectedPasswords.filter(user => !persistedPasswords.has(user));
         if (missingAfterSave.length > 0) {
-          throw new Error(`安全存储回读校验失败，这些账号的密码未保存：${missingAfterSave.join('、')}`);
+          throw new Error(`这些账号的密码未能保存，请重试：${missingAfterSave.join('、')}`);
         }
-        await customAlert('旧版配置已导入并通过安全存储回读校验。', '导入成功');
+        await customAlert('旧版备份已导入。', '导入成功');
         location.reload();
       } catch (e) {
         await customAlert('导入失败：' + String(e));
       }
-    });
-  }
+  };
+  btnImportConfig?.addEventListener('click', () => void importBackup(false));
+  document.getElementById('btn-import-config-qr')?.addEventListener('click', () => void importBackup(true));
 
   // Password visibility toggle
   document.querySelectorAll('.toggle-password').forEach(btn => {
@@ -5871,20 +5912,6 @@ function formatBillingCents(cents: number) {
   return `${(cents / 100).toFixed(2)} 元`;
 }
 
-function rechargeServiceIsOpen(now = Date.now()) {
-  const beijingHour = Math.floor((now / 3_600_000 + 8) % 24);
-  return beijingHour >= 6 && beijingHour < 23;
-}
-
-async function ensureRechargeServiceOpen(title: string) {
-  if (rechargeServiceIsOpen()) return true;
-  await customAlert(
-    '充值系统仅在北京时间每日 06:00–23:00 开放。当前可查看账户与余额，但不能创建或确认充值订单。',
-    title,
-  );
-  return false;
-}
-
 function renderRechargePreview(preview: RechargePreview) {
   billingRechargePayer.textContent = preview.payerAccount;
   billingRechargeCardBalance.textContent = formatBillingCurrency(preview.cardBalance);
@@ -5932,7 +5959,6 @@ async function refreshRechargeBalancesOnce(
 
 async function prepareAndConfirmNetworkRecharge() {
   if (btnBillingRecharge.disabled) return;
-  if (!await ensureRechargeServiceOpen('充值网费')) return;
   const targetAccount = billingRechargeAccount.value.trim();
   const accountUser = selectedRechargePayerAccount();
   if (!accountUser) {
@@ -6094,8 +6120,7 @@ function scheduleAlipayAutomaticCompletionCheck(delay = 650) {
     || !alipayExternalHandoffAt
     || alipayCompletionBusy
     || (!alipayArrivalReady && alipayAutomaticCheckCount >= 180)
-    || (alipayArrivalReady && alipayTransferPreparationRetryCount >= 5)
-    || !rechargeServiceIsOpen()) return;
+    || (alipayArrivalReady && alipayTransferPreparationRetryCount >= 5)) return;
   if (alipayAutomaticCheckTimer !== null) window.clearTimeout(alipayAutomaticCheckTimer);
   alipayAutomaticCheckTimer = window.setTimeout(async () => {
     alipayAutomaticCheckTimer = null;
@@ -6200,10 +6225,6 @@ async function completeAlipayNetworkRecharge(
   transferApproved = false,
 ) {
   if (alipayCompletionBusy) return;
-  if (!rechargeServiceIsOpen()) {
-    if (!automatic) await ensureRechargeServiceOpen('支付宝充值');
-    return;
-  }
   if (await isAppInBackground()) return;
   if (alipayCompletionBusy) return;
   const payment = activeAlipayPayment;
@@ -6363,7 +6384,6 @@ async function completeAlipayNetworkRecharge(
 
 async function prepareAndOpenAlipayRecharge() {
   if (btnBillingRecharge.disabled) return;
-  if (!await ensureRechargeServiceOpen('支付宝充值')) return;
   const targetAccount = billingRechargeAccount.value.trim();
   const amount = billingRechargeAmount.value.trim();
   const accountUser = selectedRechargePayerAccount();
@@ -6693,10 +6713,6 @@ async function openActiveWechatPayment() {
 
 async function completeWechatNetworkRecharge(automatic = false) {
   if (wechatCompletionBusy) return;
-  if (!rechargeServiceIsOpen()) {
-    if (!automatic) await ensureRechargeServiceOpen('微信充值');
-    return;
-  }
   const payment = activeWechatPayment;
   if (!payment) {
     if (!automatic) await customAlert('当前没有等待处理的微信订单，请重新发起充值。', '微信充值');
@@ -6799,7 +6815,6 @@ async function completeWechatNetworkRecharge(automatic = false) {
 
 async function prepareAndOpenWechatRecharge() {
   if (btnBillingRecharge.disabled) return;
-  if (!await ensureRechargeServiceOpen('微信充值')) return;
   const targetAccount = billingRechargeAccount.value.trim();
   const amount = billingRechargeAmount.value.trim();
   const accountUser = selectedRechargePayerAccount();

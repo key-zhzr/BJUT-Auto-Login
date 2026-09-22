@@ -8,42 +8,69 @@ export class CustomSelect {
   private _value = '';
   private activeIndex = 0;
   private disabled = false;
-  private nativeSelect: HTMLSelectElement | null = null;
+  private allOptions: HTMLElement[] = [];
+  private optionsByValue = new Map<string, HTMLElement[]>();
+  private selectedOptions: HTMLElement[] = [];
+  private highlightedOption: HTMLElement | null = null;
+  private scrollFrame: number | null = null;
   onChangeCallbacks: ((value: string) => void)[] = [];
 
-  private options() { return Array.from(this.optionsContainer.querySelectorAll<HTMLElement>('.custom-option:not([aria-disabled="true"])')); }
+  private options() { return this.allOptions.filter(option => option.getAttribute('aria-disabled') !== 'true'); }
   private close() {
     if (CustomSelect.openInstance === this) CustomSelect.openInstance = null;
+    if (this.scrollFrame !== null) { cancelAnimationFrame(this.scrollFrame); this.scrollFrame = null; }
     if (!this.element.classList.contains('open')) return;
     this.element.classList.remove('open'); this.trigger.setAttribute('aria-expanded', 'false');
     this.trigger.removeAttribute('aria-activedescendant');
-    this.options().filter(option => option.classList.contains('keyboard-active')).forEach(option => option.classList.remove('keyboard-active'));
+    this.highlightedOption?.classList.remove('keyboard-active');
+    this.highlightedOption = null;
   }
   private highlight(index: number, keyboard = true) {
     const options = this.options(); if (!options.length) return;
     this.activeIndex = (index + options.length) % options.length;
-    options.forEach((option, i) => option.classList.toggle('keyboard-active', keyboard && i === this.activeIndex));
-    this.trigger.setAttribute('aria-activedescendant', options[this.activeIndex].id);
-    // Scroll only the list. scrollIntoView can unlock/reposition every ancestor
-    // (including content-visibility sections) while the popup is being painted.
     const option = options[this.activeIndex];
-    const top = option.offsetTop;
-    const bottom = top + option.offsetHeight;
-    const viewport = this.optionsContainer;
-    if (top < viewport.scrollTop) viewport.scrollTop = top;
-    else if (bottom > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = bottom - viewport.clientHeight;
+    const highlighted = keyboard ? option : null;
+    if (this.highlightedOption !== highlighted) {
+      this.highlightedOption?.classList.remove('keyboard-active');
+      highlighted?.classList.add('keyboard-active');
+      this.highlightedOption = highlighted;
+    }
+    this.trigger.setAttribute('aria-activedescendant', option.id);
+    // Coalesce rapid opens/arrow presses into one list-only scroll per frame.
+    // Closing/replacing the menu cancels the pending read; ancestors never move.
+    if (this.scrollFrame !== null) cancelAnimationFrame(this.scrollFrame);
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = null;
+      if (!this.element.isConnected || !this.element.classList.contains('open')) return;
+      const top = option.offsetTop;
+      const bottom = top + option.offsetHeight;
+      const viewport = this.optionsContainer;
+      const scrollTop = viewport.scrollTop;
+      const height = viewport.clientHeight;
+      if (top < scrollTop) viewport.scrollTop = top;
+      else if (bottom > scrollTop + height) viewport.scrollTop = bottom - height;
+    });
   }
   private open(keyboard = false) {
-    if (this.disabled || this.nativeSelect) return;
+    if (this.disabled) return;
     CustomSelect.openInstance?.close();
     CustomSelect.openInstance = this;
     this.element.classList.add('open'); this.trigger.setAttribute('aria-expanded', 'true');
     this.highlight(Math.max(0, this.options().findIndex(option => option.dataset.value === this._value)), keyboard);
   }
   private prepareOptions() {
-    this.optionsContainer.querySelectorAll<HTMLElement>('.custom-option').forEach((option, index) => {
+    this.allOptions = Array.from(this.optionsContainer.querySelectorAll<HTMLElement>('.custom-option'));
+    this.optionsByValue.clear();
+    this.selectedOptions = [];
+    this.allOptions.forEach((option, index) => {
       option.id = `${this.element.id}-option-${index}`; option.setAttribute('role', 'option');
-      option.setAttribute('aria-selected', String(option.dataset.value === this._value));
+      const value = option.dataset.value || '';
+      const group = this.optionsByValue.get(value) || [];
+      group.push(option); this.optionsByValue.set(value, group);
+      const selected = value === this._value;
+      option.classList.toggle('selected', selected);
+      option.setAttribute('aria-selected', String(selected));
+      if (selected) this.selectedOptions.push(option);
     });
   }
   constructor(elementId: string) {
@@ -60,10 +87,6 @@ export class CustomSelect {
     const selected = this.optionsContainer.querySelector<HTMLElement>('.custom-option.selected');
     if (selected) { this._value = selected.dataset.value || ''; this.triggerSpan.textContent = selected.textContent; }
     this.prepareOptions();
-    if (document.body.classList.contains('is-android')) {
-      this.installNativeSelect(accessibleLabel || this.triggerSpan.textContent || '选择选项');
-      return;
-    }
     this.trigger.addEventListener('click', event => {
       event.stopPropagation(); if (this.disabled) return;
       if (this.element.classList.contains('open')) this.close(); else this.open();
@@ -101,67 +124,46 @@ export class CustomSelect {
       CustomSelect.outsideHandlerInstalled = true;
     }
   }
-  private installNativeSelect(label: string) {
-    // Android opens its native option picker instead of animating a WebView
-    // popup. Keep the themed trigger as presentation, with one accessible input.
-    const select = document.createElement('select');
-    this.nativeSelect = select;
-    select.className = 'native-select-input';
-    select.id = `${this.element.id}-native`;
-    select.setAttribute('aria-label', label);
-    this.element.classList.add('native-select');
-    this.trigger.tabIndex = -1;
-    this.trigger.setAttribute('aria-hidden', 'true');
-    this.optionsContainer.hidden = true;
-    this.element.append(select);
-    this.syncNativeOptions();
-    select.addEventListener('change', () => {
-      if (this.disabled) return;
-      this.setValue(select.value);
-      this.onChangeCallbacks.forEach(callback => callback(this._value));
-    });
-  }
-  private syncNativeOptions() {
-    if (!this.nativeSelect) return;
-    const options = Array.from(this.optionsContainer.querySelectorAll<HTMLElement>('.custom-option')).map(source => {
-      const option = document.createElement('option');
-      option.value = source.dataset.value || '';
-      option.textContent = source.textContent;
-      option.disabled = source.getAttribute('aria-disabled') === 'true';
-      return option;
-    });
-    this.nativeSelect.replaceChildren(...options);
-    this.nativeSelect.value = this._value;
-  }
   get value(): string { return this._value; }
   set value(value: string) { this.setValue(value); }
   setValue(value: string) {
-    this._value = value; let selectedText = '';
-    this.optionsContainer.querySelectorAll<HTMLElement>('.custom-option').forEach(option => {
-      const selected = option.dataset.value === value;
-      option.classList.toggle('selected', selected); option.setAttribute('aria-selected', String(selected));
-      if (selected) selectedText = option.textContent || '';
-    });
-    this.triggerSpan.textContent = selectedText || value;
-    if (this.nativeSelect) this.nativeSelect.value = value;
+    const selected = this.optionsByValue.get(value) || [];
+    for (const option of this.selectedOptions) {
+      if (!selected.includes(option)) { option.classList.remove('selected'); option.setAttribute('aria-selected', 'false'); }
+    }
+    for (const option of selected) {
+      if (!this.selectedOptions.includes(option)) { option.classList.add('selected'); option.setAttribute('aria-selected', 'true'); }
+    }
+    this._value = value;
+    this.selectedOptions = selected;
+    const text = selected[selected.length - 1]?.textContent || value;
+    if (this.triggerSpan.textContent !== text) this.triggerSpan.textContent = text;
   }
   setDisabled(disabled: boolean) {
     this.disabled = disabled; this.element.classList.toggle('is-disabled', disabled);
-    this.trigger.setAttribute('aria-disabled', String(disabled)); this.trigger.tabIndex = disabled || this.nativeSelect ? -1 : 0;
-    if (this.nativeSelect) this.nativeSelect.disabled = disabled;
+    this.trigger.setAttribute('aria-disabled', String(disabled)); this.trigger.tabIndex = disabled ? -1 : 0;
     if (disabled) this.close();
   }
   addEventListener(event: 'change', callback: (event: { target: { value: string } }) => void) {
     if (event === 'change') this.onChangeCallbacks.push(value => callback({ target: { value } }));
   }
   setOptions(options: { value: string, text: string }[]) {
-    this.close(); this.optionsContainer.replaceChildren();
+    const value = options.some(option => option.value === this._value) ? this._value : options[0]?.value || '';
+    // Configuration refreshes often resend an unchanged list. Preserve its DOM,
+    // scroll position and open state instead of rebuilding every option.
+    if (options.length === this.allOptions.length && options.every((option, i) =>
+      option.value === this.allOptions[i].dataset.value && option.text === this.allOptions[i].textContent)) {
+      this.setValue(value);
+      return;
+    }
+    this.close();
+    const fragment = document.createDocumentFragment();
     options.forEach(option => {
       const element = document.createElement('div'); element.className = 'custom-option';
-      element.dataset.value = option.value; element.textContent = option.text; this.optionsContainer.append(element);
+      element.dataset.value = option.value; element.textContent = option.text; fragment.append(element);
     });
-    this.setValue(options.some(option => option.value === this._value) ? this._value : options[0]?.value || '');
+    this.optionsContainer.replaceChildren(fragment);
     this.prepareOptions();
-    this.syncNativeOptions();
+    this.setValue(value);
   }
 }

@@ -1,13 +1,25 @@
 //! Compose read-only diagnostics and export a redacted support bundle.
 use super::*;
 
+fn emit_step(app: &tauri::AppHandle, run_id: &Option<String>, step: &DiagnosticStep) {
+    if let Some(run_id) = run_id {
+        let _ = app.emit(
+            "network-diagnostic-step",
+            serde_json::json!({ "runId": run_id, "step": step }),
+        );
+    }
+}
+
 #[tauri::command]
-pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> DiagnosticReport {
+pub(super) async fn run_network_diagnostics(
+    app: tauri::AppHandle,
+    run_id: Option<String>,
+) -> DiagnosticReport {
     let generation = app
         .state::<Arc<AppState>>()
         .network_change_generation
         .load(Ordering::SeqCst);
-    emit_network_diagnostic_progress(&app, 2, "正在读取当前网络接口…");
+    emit_network_diagnostic_progress(&app, &run_id, 2, "正在读取当前网络接口…");
     let compatibility = app
         .try_state::<Arc<AppState>>()
         .map(|state| {
@@ -16,6 +28,10 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
         })
         .unwrap_or(VpnCompatibility::High);
     let mut steps = Vec::new();
+    let mut push_step = |step: DiagnosticStep| {
+        emit_step(&app, &run_id, &step);
+        steps.push(step);
+    };
     let identity_started = std::time::Instant::now();
     let network = get_network_info(app.clone(), Some(true));
     #[cfg(target_os = "android")]
@@ -112,19 +128,19 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
             }
         )
     };
-    steps.push(make_diagnostic_step(
+    push_step(make_diagnostic_step(
         "network_identity",
         "网络接口",
         identity_started,
         identity_status,
         identity_message,
     ));
-    emit_network_diagnostic_progress(&app, 16, "网络接口信息读取完成");
+    emit_network_diagnostic_progress(&app, &run_id, 16, "网络接口信息读取完成");
 
     let route_started = std::time::Instant::now();
-    emit_network_diagnostic_progress(&app, 20, "正在核对校园认证目标路由…");
+    emit_network_diagnostic_progress(&app, &run_id, 20, "正在核对校园认证目标路由…");
     let route_uses_physical_ipv4 = usable_physical_ipv4(route_ip).is_some();
-    steps.push(make_diagnostic_step(
+    push_step(make_diagnostic_step(
         "campus_route",
         "校园目标路由",
         route_started,
@@ -155,10 +171,10 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
             )
         },
     ));
-    emit_network_diagnostic_progress(&app, 30, "校园认证目标路由核对完成");
+    emit_network_diagnostic_progress(&app, &run_id, 30, "校园认证目标路由核对完成");
 
     let campus_started = std::time::Instant::now();
-    emit_network_diagnostic_progress(&app, 34, "正在检查校园网环境特征…");
+    emit_network_diagnostic_progress(&app, &run_id, 34, "正在检查校园网环境特征…");
     let campus_ip = is_campus_local_ip(&ip);
     let campus_ssid = is_known_campus_ssid(&ssid);
     let lgn_wired_hint = network
@@ -207,14 +223,14 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
         if identity_fresh { "是" } else { "否" },
         if wifi_route_failed { "失败" } else if route_ip == ip { "同源" } else if route_ip.is_empty() { "未知" } else { "独立路由" },
     );
-    steps.push(make_diagnostic_step(
+    push_step(make_diagnostic_step(
         "campus_environment",
         "校园网环境",
         campus_started,
         campus_status,
         campus_message,
     ));
-    emit_network_diagnostic_progress(&app, 42, "校园网环境特征检查完成");
+    emit_network_diagnostic_progress(&app, &run_id, 42, "校园网环境特征检查完成");
 
     let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
     let dns_probe = async {
@@ -258,24 +274,31 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
             message.push('\n');
             message.push_str(&detail);
         }
-        make_diagnostic_step(
+        let step = make_diagnostic_step(
             "dns",
             "DNS 解析",
             started,
             if ok { "success" } else { "warning" },
             message,
-        )
+        );
+        emit_step(&app, &run_id, &step);
+        step
     };
     let internet_probe = async {
-        let connection = if wifi_route_failed {
-            connectivity::Snapshot {
-                cancelled: true,
-                complete: true,
-                ..Default::default()
+        let connection_probe = async {
+            if wifi_route_failed {
+                connectivity::Snapshot {
+                    cancelled: true,
+                    complete: true,
+                    ..Default::default()
+                }
+            } else {
+                connectivity::for_app(&app, &network).wait(true).await
             }
-        } else {
-            connectivity::for_app(&app, &network).wait(true).await
         };
+        let paths_probe =
+            diagnostic_paths::probe(&network, |paths| emit_step(&app, &run_id, &paths.step()));
+        let (connection, paths) = futures_util::future::join(connection_probe, paths_probe).await;
         let session_step = connection.require_session.then(|| DiagnosticStep {
             id: "authentication_session".into(),
             label: "认证网卡的校园会话".into(),
@@ -295,41 +318,33 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
             .into(),
             duration_ms: connection.session_duration_ms,
         });
-        let results = connection.internet;
-        let duration_ms = connection.internet_duration_ms;
-        let dual_stack = if connection.cancelled {
-            dual_stack::unavailable("检测期间网络或认证状态改变，请重新诊断")
-        } else {
-            connection
-                .health
-                .unwrap_or_else(|| dual_stack::unavailable("独立探测尚未完成"))
-        };
-        let online = !connection.cancelled && results.iter().any(|result| result.success);
-        let message = if results.is_empty() {
-            "未执行互联网目标探测".to_string()
-        } else {
-            results
-                .iter()
-                .map(|result| {
-                    format!(
-                        "{}：{}（{}）",
-                        result.label,
-                        if result.success { "成功" } else { "失败" },
-                        result.detail
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
+        let mut internet_step = paths.step();
+        let mut online = paths.system.online() || paths.direct.online();
+        if !online && !connection.cancelled {
+            online = connection.internet.iter().any(|result| result.success);
+            for result in &connection.internet {
+                internet_step
+                    .message
+                    .push_str(&format!("\n补充目标 {}：{}", result.label, result.detail));
+            }
+            if online {
+                internet_step.status = "success".into();
+            }
+        }
+        let mut dual_stack = paths.system;
+        // Both read-only runs describe the same captured network. Carry the
+        // current pool's ordering metadata when updating the console view.
+        if let Some(health) = connection.health.as_ref() {
+            dual_stack.generation = health.generation;
+            dual_stack.probe_id = health.probe_id;
+        }
+        dual_stack.checked_at = chrono::Local::now().to_rfc3339();
+        if let Some(step) = &session_step {
+            emit_step(&app, &run_id, step);
+        }
         (
-            online || dual_stack.online(),
-            DiagnosticStep {
-                id: "internet".to_string(),
-                label: "互联网连通性".to_string(),
-                status: if online { "success" } else { "warning" }.to_string(),
-                message,
-                duration_ms,
-            },
+            online,
+            internet_step,
             dual_stack,
             session_step,
             connection.cancelled && !wifi_route_failed,
@@ -360,6 +375,40 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
             )
             .await
         };
+        let details = result
+            .0
+            .iter()
+            .map(|gateway| {
+                format!(
+                    "{}：{}",
+                    gateway.login_type.display_name(),
+                    if gateway.login_ready {
+                        "可用"
+                    } else if gateway.portal_detected {
+                        "已发现"
+                    } else {
+                        "未探测到"
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        emit_step(
+            &app,
+            &run_id,
+            &DiagnosticStep {
+                id: "portal".into(),
+                label: "认证网关".into(),
+                status: if result.0.iter().any(|gateway| gateway.login_ready) {
+                    "success"
+                } else {
+                    "warning"
+                }
+                .into(),
+                message: details,
+                duration_ms: started.elapsed().as_millis(),
+            },
+        );
         (result, started.elapsed().as_millis())
     };
     let (
@@ -367,35 +416,21 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
         (online, internet_step, mut dual_stack, session_step, probe_cancelled),
         ((gateway_results, lgn_ipv6_diagnostic), portal_duration_ms),
     ) = run_diagnostic_probes(dns_probe, internet_probe, gateway_probe, |percent| {
-        emit_network_diagnostic_progress(&app, percent, "正在并发检查 DNS、互联网和认证网关…")
+        emit_network_diagnostic_progress(
+            &app,
+            &run_id,
+            percent,
+            "正在并发检查 DNS、互联网和认证网关…",
+        )
     })
     .await;
-    steps.push(dns_step);
-    steps.push(internet_step);
+    push_step(dns_step);
+    push_step(internet_step);
     let session_unconfirmed = session_step
         .as_ref()
         .is_some_and(|step| step.status != "success");
     if let Some(step) = session_step {
-        steps.push(step);
-    }
-    for (id, label, family) in [
-        ("ipv4_internet", "IPv4 互联网", &dual_stack.ipv4),
-        ("ipv6_internet", "IPv6 互联网", &dual_stack.ipv6),
-    ] {
-        steps.push(DiagnosticStep {
-            id: id.to_string(),
-            label: label.to_string(),
-            status: if family.status == "reachable" {
-                "success"
-            } else if family.status == "not_configured" {
-                "skipped"
-            } else {
-                "warning"
-            }
-            .to_string(),
-            message: family.detail.clone(),
-            duration_ms: family.duration_ms,
-        });
+        push_step(step);
     }
     // diagnose_login_gateways preserves the same physical-link priority used
     // by automatic login. Prefer the first verified portal even if a lower
@@ -437,7 +472,7 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
                     .unwrap_or_default(),
             ) {
                 configuration_issue = configuration.resembles_reported_ipv6_failure();
-                steps.push(DiagnosticStep {
+                push_step(DiagnosticStep {
                     id: "wired_ipv6_configuration".to_string(),
                     label: "有线 IPv6 配置".to_string(),
                     status: if result.is_ok() && !configuration_issue {
@@ -512,14 +547,14 @@ pub(super) async fn run_network_diagnostics(app: tauri::AppHandle) -> Diagnostic
             ),
         )
     };
-    steps.push(DiagnosticStep {
+    push_step(DiagnosticStep {
         id: "portal".to_string(),
         label: "认证网关".to_string(),
         status: portal_status.to_string(),
         message: portal_message,
         duration_ms: portal_duration_ms,
     });
-    emit_network_diagnostic_progress(&app, 100, "网络链路诊断完成");
+    emit_network_diagnostic_progress(&app, &run_id, 100, "网络链路诊断完成");
 
     let latest = get_network_info(app.clone(), Some(false));
     let stale = probe_cancelled
@@ -646,7 +681,7 @@ pub(super) async fn create_diagnostic_bundle(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
-    let mut report = run_network_diagnostics(app.clone()).await;
+    let mut report = run_network_diagnostics(app.clone(), None).await;
     let config = state.config.read().unwrap().clone();
     let network_state = state.last_network_state.lock().unwrap().clone();
     let ip = network_state

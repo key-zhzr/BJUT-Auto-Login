@@ -1,4 +1,4 @@
-import type { DiagnosticReport, DualStackReport } from './models';
+import type { DiagnosticReport, DiagnosticStep, DualStackReport } from './models';
 
 export function renderDiagnosticReportView(report: DiagnosticReport, options: { busy: boolean; renderHealth: (health: DualStackReport) => void; formatTime: (time: string) => string }) {
   const adapterRepairPanel = document.getElementById('diagnostic-adapter-repair')!;
@@ -27,25 +27,7 @@ export function renderDiagnosticReportView(report: DiagnosticReport, options: { 
   title.textContent = report.summary;
   meta.textContent = `${options.formatTime(report.createdAt)} · SSID ${report.ssid || '--'} · IP ${report.ip || '--'}`;
   diagnosticSteps.innerHTML = '';
-  report.steps.forEach(step => {
-    const row = document.createElement('div');
-    row.className = `diagnostic-step ${step.status}`;
-    const marker = document.createElement('span');
-    marker.className = 'diagnostic-step-marker';
-    marker.textContent = step.status === 'success' ? '✓' : step.status === 'warning' ? '!' : step.status === 'skipped' ? '–' : '×';
-    const content = document.createElement('div');
-    content.className = 'diagnostic-step-info';
-    const label = document.createElement('strong');
-    label.textContent = step.label;
-    const detail = document.createElement('small');
-    detail.textContent = step.message;
-    content.append(label, detail);
-    const duration = document.createElement('span');
-    duration.className = 'diagnostic-step-duration';
-    duration.textContent = `${step.durationMs} ms`;
-    row.append(marker, content, duration);
-    diagnosticSteps.appendChild(row);
-  });
+  report.steps.forEach(step => renderDiagnosticStep(step));
   btnCopyDiagnostics.disabled = false;
 }
 
@@ -68,4 +50,34 @@ export function formatDiagnosticReport(report: DiagnosticReport, formatTime: (ti
   });
   lines.push('', '报告不包含账号密码。');
   return lines.join('\n');
+}
+
+const diagnosticOrder = ['network_identity', 'campus_route', 'campus_environment', 'dns', 'internet', 'authentication_session', 'wired_ipv6_configuration', 'portal'];
+export function renderDiagnosticStep(step: DiagnosticStep) {
+  const diagnosticSteps = document.getElementById('diagnostic-steps')!;
+  const row = document.createElement('div');
+  row.className = `diagnostic-step ${step.status}`;
+  const marker = document.createElement('span');
+  marker.className = 'diagnostic-step-marker';
+  marker.textContent = step.status === 'checking' ? '…' : step.status === 'success' ? '✓' : step.status === 'warning' ? '!' : step.status === 'skipped' ? '–' : '×';
+  const content = document.createElement('div');
+  content.className = 'diagnostic-step-info';
+  const label = document.createElement('strong');
+  label.textContent = step.label;
+  const detail = document.createElement('small');
+  detail.textContent = step.message;
+  content.append(label, detail);
+  const duration = document.createElement('span');
+  duration.className = 'diagnostic-step-duration';
+  duration.textContent = `${step.durationMs} ms`;
+  row.append(marker, content, duration);
+
+  row.dataset.stepId = step.id;
+  const previous = Array.from(diagnosticSteps.children).find(child => (child as HTMLElement).dataset.stepId === step.id);
+  if (previous) previous.replaceWith(row);
+  else {
+    const order = diagnosticOrder.indexOf(step.id);
+    const next = Array.from(diagnosticSteps.children).find(child => diagnosticOrder.indexOf((child as HTMLElement).dataset.stepId || '') > order);
+    diagnosticSteps.insertBefore(row, next || null);
+  }
 }

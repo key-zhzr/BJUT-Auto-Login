@@ -19,11 +19,13 @@ mod network_trust;
 use campus_dns::{campus_dns_servers, query_campus_dns_ipv4};
 use network_probe::{run_diagnostic_probes, NETWORK_PROBE_TIMEOUT};
 mod connectivity;
+mod diagnostic_paths;
 mod internet_probe;
 mod network_diagnostics;
 mod network_events;
 mod portal_auth;
 mod recharge_state;
+mod trusted_time;
 mod update_metadata;
 #[cfg(desktop)]
 mod window_geometry;
@@ -1483,7 +1485,55 @@ struct ConfigBackupPlaintext {
     version: u8,
     config: AppConfig,
     #[serde(default)]
+    scope: BackupScope,
+    #[serde(default)]
     ui_preferences: serde_json::Value,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+struct BackupScope {
+    settings: bool,
+    accounts: bool,
+}
+impl Default for BackupScope {
+    fn default() -> Self {
+        Self {
+            settings: true,
+            accounts: true,
+        }
+    }
+}
+impl BackupScope {
+    fn validate(self) -> Result<Self, String> {
+        if self.settings || self.accounts {
+            Ok(self)
+        } else {
+            Err("请至少选择设置或账号密码".into())
+        }
+    }
+}
+
+// Preserve current payment recovery records in every import. A backup cannot
+// resurrect a historical payment or discard an outstanding current payment.
+fn merge_backup_config(current: &AppConfig, imported: AppConfig, scope: BackupScope) -> AppConfig {
+    let accounts = if scope.accounts {
+        imported.accounts.clone()
+    } else {
+        current.accounts.clone()
+    };
+    let mut merged = if scope.settings {
+        imported
+    } else {
+        current.clone()
+    };
+    merged.accounts = accounts;
+    merged.campus_service_sessions = if scope.accounts {
+        Default::default()
+    } else {
+        current.campus_service_sessions.clone()
+    };
+    merged.recharge_transactions = current.recharge_transactions.clone();
+    merged
 }
 
 #[derive(serde::Serialize)]
@@ -5225,7 +5275,9 @@ fn export_config_backup(
     state: tauri::State<Arc<AppState>>,
     passphrase: String,
     ui_preferences: serde_json::Value,
+    scope: Option<BackupScope>,
 ) -> Result<ConfigBackupExport, String> {
+    let scope = scope.unwrap_or_default().validate()?;
     if !ui_preferences.is_object() && !ui_preferences.is_null() {
         return Err("界面偏好设置格式无效".to_string());
     }
@@ -5236,7 +5288,12 @@ fn export_config_backup(
     {
         return Err("界面偏好设置超过安全大小限制".to_string());
     }
-    let mut config = state.config.read().unwrap().clone();
+    let current = state.config.read().unwrap().clone();
+    let mut config = merge_backup_config(
+        &serde_json::from_value(serde_json::json!({})).expect("default configuration"),
+        current,
+        scope,
+    );
     // Sessions and payment recovery records have their own lifecycles and can
     // expire while a backup is stored. Export only durable configuration and
     // credentials; importing must never resurrect an old authenticated or
@@ -5249,7 +5306,12 @@ fn export_config_backup(
         format: "BJUT-AL-CONFIG".to_string(),
         version: CONFIG_BACKUP_VERSION,
         config,
-        ui_preferences,
+        scope,
+        ui_preferences: if scope.settings {
+            ui_preferences
+        } else {
+            serde_json::Value::Null
+        },
     };
     let mut passphrase = passphrase.into_bytes();
     let payload = encrypt_config_backup_payload(&plaintext, &passphrase);
@@ -5268,19 +5330,30 @@ fn import_config_backup(
     state: tauri::State<Arc<AppState>>,
     payload: String,
     passphrase: String,
+    scope: Option<BackupScope>,
 ) -> Result<ConfigBackupImport, String> {
+    let scope = scope.unwrap_or_default().validate()?;
     let mut passphrase = passphrase.into_bytes();
     let plaintext = decrypt_config_backup_payload(payload.trim(), &passphrase);
     passphrase.fill(0);
-    let mut plaintext = plaintext?;
+    let plaintext = plaintext?;
+    if (scope.settings && !plaintext.scope.settings)
+        || (scope.accounts && !plaintext.scope.accounts)
+    {
+        return Err("备份不包含所选内容，请调整导入选项".into());
+    }
     validate_imported_config(&plaintext.config)?;
-    plaintext.config.campus_service_sessions.clear();
-    plaintext.config.recharge_transactions = recharge_state::RechargeJournal::default();
-    save_config(&app, &state, plaintext.config)?;
+    let current = state.config.read().unwrap().clone();
+    let merged = merge_backup_config(&current, plaintext.config, scope);
+    save_config(&app, &state, merged)?;
     let saved = state.config.read().unwrap();
     let (account_count, password_count, missing_password_accounts) = config_backup_counts(&saved);
     Ok(ConfigBackupImport {
-        ui_preferences: plaintext.ui_preferences,
+        ui_preferences: if scope.settings {
+            plaintext.ui_preferences
+        } else {
+            serde_json::Value::Null
+        },
         account_count,
         password_count,
         missing_password_accounts,
@@ -5505,12 +5578,18 @@ fn make_diagnostic_step(
     }
 }
 
-fn emit_network_diagnostic_progress(app: &tauri::AppHandle, percent: u8, label: &str) {
+fn emit_network_diagnostic_progress(
+    app: &tauri::AppHandle,
+    run_id: &Option<String>,
+    percent: u8,
+    label: &str,
+) {
     let _ = app.emit(
         "network-diagnostic-progress",
         serde_json::json!({
             "percent": percent.min(100),
             "label": label,
+            "runId": run_id,
         }),
     );
 }
@@ -8985,6 +9064,8 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().setup(|_app| {
+        #[cfg(target_os = "android")]
+        _app.handle().plugin(tauri_plugin_barcode_scanner::init())?;
         #[cfg(desktop)]
         {
             // Set frameless for non-macOS desktop windows
@@ -9504,6 +9585,7 @@ pub fn run() {
             get_account_health,
             reset_account_health,
             network_diagnostics::run_network_diagnostics,
+            trusted_time::get_network_time,
             restart_lgn_adapter,
             network_diagnostics::create_diagnostic_bundle,
             get_logs,
@@ -9943,6 +10025,69 @@ mod tests {
     }
 
     #[test]
+    fn backup_scope_preserves_unselected_fields_and_current_payment_state() {
+        let mut current: AppConfig = serde_json::from_value(serde_json::json!({
+            "theme": "apple27", "auto_login": true,
+            "accounts": [{ "user": "old", "pass": "old-secret", "isDefault": true }]
+        }))
+        .unwrap();
+        current
+            .recharge_transactions
+            .upsert(recharge_state::RechargeTransaction::prepared(
+                "current-payment".into(),
+                "wechat",
+                "old".into(),
+                "old".into(),
+                "1.00".into(),
+                "0.00".into(),
+                123,
+            ));
+        let imported: AppConfig = serde_json::from_value(serde_json::json!({
+            "theme": "winui", "auto_login": false,
+            "accounts": [{ "user": "new", "pass": "new-secret", "isDefault": true }]
+        }))
+        .unwrap();
+        let settings = merge_backup_config(
+            &current,
+            imported.clone(),
+            BackupScope {
+                settings: true,
+                accounts: false,
+            },
+        );
+        assert_eq!(settings.accounts, current.accounts);
+        assert_eq!(settings.theme, "winui");
+        let accounts = merge_backup_config(
+            &current,
+            imported.clone(),
+            BackupScope {
+                settings: false,
+                accounts: true,
+            },
+        );
+        assert_eq!(accounts.accounts, imported.accounts);
+        assert_eq!(accounts.theme, current.theme);
+        assert!(accounts.auto_login);
+        assert_eq!(
+            accounts.recharge_transactions,
+            current.recharge_transactions
+        );
+        assert!(accounts.campus_service_sessions.is_empty());
+        assert!(BackupScope {
+            settings: false,
+            accounts: false
+        }
+        .validate()
+        .is_err());
+        // Older version-3 backups had no scope and must still import both parts.
+        let legacy: ConfigBackupPlaintext = serde_json::from_value(serde_json::json!({
+            "format":"BJUT-AL-CONFIG", "version":3, "config":imported
+        }))
+        .unwrap();
+        assert!(legacy.scope.settings && legacy.scope.accounts);
+    }
+
+    #[test]
     fn encrypted_config_backup_round_trip_preserves_every_password() {
         let config: AppConfig = serde_json::from_value(serde_json::json!({
             "accounts": [
@@ -9953,6 +10098,7 @@ mod tests {
         }))
         .unwrap();
         let plaintext = ConfigBackupPlaintext {
+            scope: BackupScope::default(),
             format: "BJUT-AL-CONFIG".to_string(),
             version: CONFIG_BACKUP_VERSION,
             config,

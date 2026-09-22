@@ -40,3 +40,5 @@ src-tauri/.keys/
 # Local Cloudflare deployment state
 /deploy/wrangler.toml
 /deploy/.wrangler/
+
+/website/.wrangler/

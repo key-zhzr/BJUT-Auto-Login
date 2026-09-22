@@ -36,5 +36,6 @@ interface Window {
   __nativeNotificationAction?: (action: 'check' | 'pause' | 'resume') => Promise<void>;
   __handleAndroidBack?: () => boolean;
   __nativeKeepAlive?: () => void;
+  __nativeKeyboardChanged?: (visible: boolean, availableHeight: number) => void;
   triggerAutoLogin?: () => void;
 }

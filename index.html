@@ -9,7 +9,6 @@
     <link rel="stylesheet" href="/src/themes.css" />
     <link rel="stylesheet" href="/src/theme-apple.css" />
     <link rel="stylesheet" href="/src/theme-winui.css" />
-    <link rel="stylesheet" href="/src/android-controls.css" />
   </head>
   <body>
     <div id="app-loading-mask" class="app-loading-mask is-visible" role="status" aria-live="polite">
@@ -449,7 +448,7 @@
             <div class="billing-action-group">
               <div class="billing-action-copy">
                 <h3>停复机</h3>
-                <p>写操作仅在你确认后发送；立即操作可能中断或恢复校园网计费。</p>
+                <p>暂停或恢复校园网服务，提交前请确认。</p>
               </div>
               <div class="billing-action-controls">
                 <button id="btn-billing-stop-now" class="btn btn-danger btn-sm" type="button" disabled>立即停机</button>
@@ -508,13 +507,13 @@
                   <i data-lucide="wallet-cards"></i>
                   <h2>充值</h2>
                 </div>
-                <p>按支付方式、校园卡、网费账户和金额依次确认，App 会串联并核对完整充值流程。</p>
+                <p>选择支付方式，为自己或他人充值网费。</p>
               </div>
             </div>
             <div class="billing-payment-panel">
               <div class="billing-recharge-hours" role="note">
                 <i data-lucide="clock"></i>
-                <div><strong>充值服务开放时间：每日 06:00–23:00</strong><span>开放时间以北京时间为准；其他时段可查看余额，但不能创建或确认充值订单。</span></div>
+                <div><strong>充值服务开放时间：每日 06:00–23:00</strong><span>按北京时间显示开放时段，其他时段仍可尝试充值。</span></div>
               </div>
               <p id="billing-recharge-state" class="billing-inline-note" aria-live="polite">填写目标学工号和金额后，先核对账户再确认扣费。</p>
               <form id="billing-recharge-form" class="billing-recharge-form" autocomplete="off">
@@ -624,7 +623,7 @@
                   <i data-lucide="shield-check"></i>
                   <h2>安全设置</h2>
                 </div>
-                <p>通过统一认证修改密码；成功后同步更新本 App 中该账号的安全凭据。</p>
+                <p>修改统一认证密码，并更新已保存的密码。</p>
               </div>
             </div>
             <form id="billing-password-form" class="billing-security-form" autocomplete="off">
@@ -861,18 +860,16 @@
           </details>
 
           <div class="diagnostics-grid">
-            <section class="diagnostic-panel glass-card">
+            <details id="account-health-panel" class="diagnostic-panel glass-card">
+              <summary class="account-health-summary"><strong>账号状态</strong><span id="account-health-summary">暂无账号</span></summary>
               <div class="diagnostic-panel-header">
-                <div>
-                  <h3>账号健康与熔断</h3>
-                  <p>连续失败账号将在冷却期内暂停自动尝试</p>
-                </div>
+                <p>连续失败的账号会暂停一段时间后重试。</p>
                 <button id="btn-reset-all-health" class="btn btn-secondary btn-sm">全部解除</button>
               </div>
               <div id="account-health-list" class="account-health-list">
-                <div class="diagnostic-empty">暂无账号健康记录</div>
+                <div class="diagnostic-empty">暂无账号记录</div>
               </div>
-            </section>
+            </details>
           </div>
 
           <section class="diagnostic-panel glass-card diagnostic-steps-panel">
@@ -1264,11 +1261,19 @@
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>配置导入/导出</h4>
-                  <p>在 Rust 中加密完整配置与账号密码，并在导入后回读校验安全存储</p>
+                  <p>通过剪贴板或二维码备份、迁移设置和账号。</p>
                 </div>
-                <div style="display:flex; gap: 0.5rem;">
-                  <button class="btn btn-secondary btn-sm" id="btn-export-config"><i data-lucide="clipboard-copy"></i> 导出</button>
-                  <button class="btn btn-secondary btn-sm" id="btn-import-config"><i data-lucide="clipboard-paste"></i> 导入</button>
+                <div>
+                  <div class="config-transfer-options" role="group" aria-label="导入导出内容">
+                    <label><input type="checkbox" id="config-scope-settings" checked> 设置</label>
+                    <label><input type="checkbox" id="config-scope-accounts" checked> 账号密码</label>
+                  </div>
+                  <div class="config-transfer-actions">
+                    <button class="btn btn-secondary btn-sm" id="btn-export-config">复制备份</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-import-config">粘贴导入</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-export-config-qr">生成二维码</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-import-config-qr">扫描二维码</button>
+                  </div>
                 </div>
               </div>
               <div class="setting-item" id="setting-quit-item">

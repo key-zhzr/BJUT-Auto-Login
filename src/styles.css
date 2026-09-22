@@ -2096,6 +2096,10 @@ input:checked + .slider:before { transform: translateX(24px); }
   display: none;
 }
 
+/* Height/spacing are animated only while these small progress panels enter or
+   leave. Keep their normal layout and existing theme styles at rest. */
+.progress-animating { overflow: hidden; }
+
 .diagnostic-progress-label {
   display: flex;
   align-items: center;
@@ -2198,7 +2202,9 @@ input:checked + .slider:before { transform: translateX(24px); }
 #network-check-elapsed { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .network-check-track { height: 3px; margin-top: .5rem; background: var(--card-border); border-radius: 3px; overflow: hidden; }
 #network-check-bar { display: block; height: 100%; width: 0; background: var(--primary-color); transition: width 150ms linear; }
-@media (prefers-reduced-motion: reduce) { #network-check-bar { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  #network-check-bar, .diagnostic-progress-track span { transition: none; }
+}
 .network-adapter-settings p, .login-progress-panel p, .login-progress-phases { color: var(--text-muted); font-size: .84rem; line-height: 1.6; }
 .network-adapter-list { display: grid; gap: .5rem; margin: .75rem 0; }
 .network-adapter-row { width: 100%; display: flex; align-items: center; gap: .8rem; text-align: left; color: var(--text-main); font: inherit; background: transparent; padding: .75rem .9rem; border: 1px solid var(--card-border); border-radius: 8px; cursor: pointer; transition: background .15s, transform .12s, border-color .15s; }
@@ -4203,3 +4209,35 @@ html:root[data-theme] body :is(button, [role="button"], summary, input, .custom-
 
 .network-events-panel { margin-bottom: 1rem; }
 .network-events-panel > summary { color: var(--text-main); font-weight: 600; }
+
+/* The keyboard owns the bottom of an Android screen. Do not keep the normal
+   navigation spacer inside the shortened scroll area. Theme geometry at rest
+   is unchanged. */
+html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
+:root body.is-android.keyboard-open {
+  height: var(--app-viewport-height); min-height: 0; max-height: var(--app-viewport-height);
+  padding-bottom: 0; overflow: hidden;
+}
+:root body.is-android.keyboard-open #nav { display: none !important; }
+:root body.is-android.keyboard-open .app-container { height: 100%; min-height: 0; }
+:root body.is-android.keyboard-open main {
+  min-height: 0; max-height: 100%; padding-bottom: 1rem !important;
+  overflow-y: auto; overscroll-behavior-y: contain;
+}
+:root body.is-android.keyboard-open .logs-container { min-height: 0; }
+:root body.is-android.keyboard-open .modal-overlay { height: var(--app-viewport-height); }
+:root body.is-android.keyboard-open .modal-content { max-height: calc(var(--app-viewport-height) - 2rem); }
+.account-health-summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer; }
+.account-health-summary span { color: var(--text-muted); font-size: .82rem; }
+#account-health-panel[open] .account-health-summary { margin-bottom: 1rem; }
+
+.billing-recharge-hours.is-open { color: var(--success); background: rgba(34, 197, 94, 0.14); border-color: color-mix(in srgb, #22c55e 48%, transparent); }
+.billing-recharge-hours.is-closed { background: rgba(234, 179, 8, 0.18); border-color: color-mix(in srgb, #eab308 52%, transparent); }
+
+.config-transfer-options, .config-transfer-actions, .config-qr-actions { display:flex; flex-wrap:wrap; align-items:center; gap:0.6rem; }
+.config-transfer-options { margin:0.6rem 0; font-size:0.85rem; }
+.config-transfer-options label { display:flex; gap:0.4rem; align-items:center; }
+.config-qr-dialog { text-align:center; max-width:560px; max-height:calc(100dvh - 3rem); overflow-y:auto; }
+.config-qr-body canvas { width:min(100%,440px,max(160px,calc(100dvh - 260px))); height:auto; border-radius:12px; }
+.config-qr-actions { justify-content:center; margin:1rem 0; }
+.config-qr-status { margin:0.8rem 0; color:var(--text-muted); }

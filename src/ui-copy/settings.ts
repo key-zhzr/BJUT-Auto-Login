@@ -118,7 +118,7 @@ export const SETTINGS_COPY = {
     },
     'btn-export-config': {
       title: '配置导入/导出',
-      description: '在 Rust 中加密完整配置与账号密码，并在导入后回读校验安全存储',
+      description: '通过剪贴板或二维码备份、迁移设置和账号。',
     },
     'btn-quit-app': {
       title: '退出应用',

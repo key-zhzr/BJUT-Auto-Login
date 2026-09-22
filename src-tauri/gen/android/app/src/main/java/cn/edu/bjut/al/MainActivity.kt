@@ -17,6 +17,9 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import android.view.ViewTreeObserver
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -26,6 +29,7 @@ import java.util.Locale
 
 class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
+  private var keyboardLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
   private var resumedFromBackground = false
   private val engineHeartbeatHandler = Handler(Looper.getMainLooper())
   private val engineHeartbeatRunnable = object : Runnable {
@@ -81,6 +85,10 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onDestroy() {
+    keyboardLayoutListener?.let { listener ->
+      appWebView?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnGlobalLayoutListener(listener)
+    }
+    keyboardLayoutListener = null
     engineHeartbeatHandler.removeCallbacks(engineHeartbeatRunnable)
     getSharedPreferences("service_state", Context.MODE_PRIVATE)
       .edit()
@@ -135,6 +143,38 @@ class MainActivity : TauriActivity() {
     }
     // Register JavaScript interface so frontend can call Android native methods directly
     webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
+    var lastKeyboardState = ""
+    val listener = ViewTreeObserver.OnGlobalLayoutListener {
+      val insets = ViewCompat.getRootWindowInsets(webView)
+      if (insets != null) {
+        val visible = insets.isVisible(WindowInsetsCompat.Type.ime())
+        val frame = android.graphics.Rect()
+        webView.getWindowVisibleDisplayFrame(frame)
+        val position = IntArray(2)
+        webView.getLocationOnScreen(position)
+        // The resized root may already exclude the IME. Use window bounds so
+        // adjustResize does not subtract the keyboard height twice.
+        val windowBottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          windowManager.currentWindowMetrics.bounds.bottom
+        } else {
+          val size = android.graphics.Point()
+          @Suppress("DEPRECATION")
+          windowManager.defaultDisplay.getRealSize(size)
+          size.y
+        }
+        val bottom = if (visible) minOf(frame.bottom,
+          windowBottom - insets.getInsets(WindowInsetsCompat.Type.ime()).bottom)
+          else frame.bottom
+        val available = (bottom - position[1]).coerceIn(0, webView.height) / resources.displayMetrics.density
+        val state = "$visible,${available.toInt()}"
+        if (state != lastKeyboardState) {
+          lastKeyboardState = state
+          webView.post { webView.evaluateJavascript("window.__nativeKeyboardChanged?.($state)", null) }
+        }
+      }
+    }
+    keyboardLayoutListener = listener
+    webView.viewTreeObserver.addOnGlobalLayoutListener(listener)
   }
 
   private fun requestForegroundPermissionsInternal() {

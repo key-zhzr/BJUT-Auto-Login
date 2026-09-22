@@ -560,6 +560,8 @@ class NetworkHelper {
                     .put("routeIp", ipString)
                     .put("transport", transport)
                     .put("networkId", physicalNetwork?.toString() ?: "")
+                    .put("physicalNetworkHandle", physicalNetwork?.networkHandle?.toString() ?: "")
+                    .put("defaultNetworkHandle", activeNetwork?.networkHandle?.toString() ?: "")
                     .put("identityNetworkId", physicalNetwork?.toString() ?: "")
                     .put("defaultNetworkId", activeNetwork?.toString() ?: "")
                     .put("wifiNetworkId", wifiNetwork?.toString() ?: "")
