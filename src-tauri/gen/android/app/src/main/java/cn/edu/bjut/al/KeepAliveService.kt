@@ -668,6 +668,17 @@ class KeepAliveService : Service() {
                             }
                         }
                     }
+                    val checkedNetwork = JSONObject(networkInfo)
+                    val latestNetwork = JSONObject(networkInfoForCheck(false))
+                    if (listOf("networkId", "physicalNetworkHandle", "defaultNetworkId", "defaultNetworkHandle", "ip", "transport")
+                        .any { checkedNetwork.optString(it) != latestNetwork.optString(it) }) {
+                        result = JSONObject()
+                            .put("status", "network_changed")
+                            .put("notification_category", "network")
+                            .put("notification", "网络已切换，等待重新检测")
+                            .put("accountHealth", result.optJSONObject("accountHealth"))
+                            .put("logs", result.optJSONArray("logs"))
+                    }
                     result.optJSONObject("schedule")?.let {
                         preferences.edit().putInt("adaptive_check_seconds", it.optInt("intervalSeconds", 60))
                             .putInt("adaptive_poll_seconds", it.optInt("interfacePollSeconds", 15)).apply()

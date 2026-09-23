@@ -29,6 +29,8 @@ Android 保活服务和界面核心共用 Rust 调度策略；服务保存本轮
 
 ## 系统出口与网卡直连
 
+Android 的常规检查、诊断和登录验证现在同时订阅系统出口与认证物理 Network 的结果。系统出口成功只说明 VPN/移动数据等默认路径可用；Wi-Fi/有线的 Online 判定和登录后的外网验证必须由该物理 Network 的探测通过。网关明确返回认证成功仍单独保留。无界面保活同样使用具体 Network 的 DNS 与 socket；物理地址列表直接来自该次 LinkProperties 快照，不依赖已销毁的 Activity。Wi-Fi 或默认出口 Network ID/handle 改变时废弃旧结果，不能仅按接口名和相同局域网 IP 复用。Android 系统探测不再采纳会受临时进程绑定影响的补充请求，三组双栈目标继续并发、共享 3 秒超时。
+
 控制台和诊断页的系统出口行直接订阅同一份 `connectivity` 结果，保留原探测编号与时间；诊断不能以另一组目标的结果覆盖控制台。网卡直连调用同一探测实现，并额外绑定认证网卡。Windows/macOS 使用对应接口索引，Linux 使用设备绑定，绑定失败不回退至默认路由。桌面直连 DNS 也绑定该网卡；Windows 从 IP Helper 读取每张网卡的 DNS，macOS 在诊断时读取所选 Wi-Fi 或有线的 DHCP / scoped resolver。使用接口提供的 DNS 与 AliDNS 公共回退，不把 TUN Fake-IP 用于物理连接。Android 的 DNS 和 socket 使用同一个 `Network`；系统出口取默认 Network，直连取认证物理 Network，不依赖临时的进程网络绑定。网卡能否在界面手动选择不影响直连资格。
 
 TUN 仅接管 IPv4 时，系统出口的 IPv6 仍可能走物理网络；这里测试系统实际路由，不代表强制所有流量经过 VPN。每个地址族只使用该族的 TCP 目标，HTTP 代理不参与。3 秒预算包括 DNS、连接、TLS 与正文校验；返回成功会取消其他目标，超时表示这些探测目标尚未通过，不等于整个地址族不可用。

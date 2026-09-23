@@ -520,6 +520,19 @@ class NetworkHelper {
                 // These LinkProperties belong to physicalNetwork, never the VPN.
                 // This keeps TUN/Fake-IP addresses out of the campus login context.
                 val ipString = usableIpv4(physicalLinkProperties)
+                // Include this Network's addresses in the snapshot so the Rust
+                // foreground and headless probes never need an Activity/global
+                // interface lookup after Wi-Fi has switched.
+                val ipv4 = org.json.JSONArray()
+                val ipv6 = org.json.JSONArray()
+                physicalLinkProperties?.linkAddresses?.forEach {
+                    val address = it.address
+                    if (!address.isAnyLocalAddress && !address.isLoopbackAddress
+                        && !address.isLinkLocalAddress && !address.isMulticastAddress) {
+                        if (address is java.net.Inet4Address) ipv4.put(address.hostAddress)
+                        if (address is java.net.Inet6Address) ipv6.put(address.hostAddress?.substringBefore('%'))
+                    }
+                }
 
                 if (includeWifiDetails && transport == "wifi") {
                     // transportInfo and LinkProperties are read from the exact same
@@ -555,6 +568,8 @@ class NetworkHelper {
                     .put("ssid", ssid)
                     .put("bssid", bssid)
                     .put("ip", ipString)
+                    .put("ipv4", ipv4)
+                    .put("ipv6", ipv6)
                     .put("interfaceName", physicalLinkProperties?.interfaceName ?: "")
                     .put("identitySource", if (ipString.isEmpty()) "unknown" else "sameInterface")
                     .put("routeIp", ipString)

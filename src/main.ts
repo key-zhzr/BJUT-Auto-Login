@@ -2591,7 +2591,6 @@ function activatePage(target: string, navTarget = target) {
   rechargeHours.setActive(target === 'billing-center' && activeBillingWorkbenchSection === 'recharge');
   if (pageChanged) {
     document.getElementById('main-content')?.scrollTo({ top: 0, behavior: 'auto' });
-    document.querySelector<HTMLElement>(`#${target} > .page-content`)?.scrollTo({ top: 0, behavior: 'auto' });
   }
   if (target === 'diagnostics') {
     void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);

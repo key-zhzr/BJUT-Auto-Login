@@ -2178,7 +2178,14 @@ async fn run_headless_network_check(
         });
     }
 
-    if check_internet_from_source(Some(&ip)).await {
+    let authentication_online = if connectivity::requires_physical_probe(&network) {
+        dual_stack::probe_route_with_updates(&network, true, |_| {})
+            .await
+            .online()
+    } else {
+        check_internet_from_source(Some(&ip)).await
+    };
+    if authentication_online {
         headless_log(&mut logs, "网络", "无界面检测完成：互联网已连通", "info");
         return serde_json::json!({
             "status": "online",
@@ -4508,8 +4515,16 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             return;
         }
         let system_online = connection.online();
-        let is_online = system_online
-            && (!connection.require_session || connection.session_online == Some(true));
+        let is_online = connection.authenticated_online();
+        if connection.require_physical && system_online && !connection.access_online() {
+            rust_log(
+                &app,
+                &state,
+                "网络",
+                "系统路由可联网，但当前认证网卡直连尚未通过；继续确认校园网认证状态",
+                "info",
+            );
+        }
 
         rust_log(
             &app,
@@ -4539,9 +4554,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
         }
 
         let latest_network = get_network_info(app.clone(), Some(false));
-        if latest_network["interfaceName"] != net_info["interfaceName"]
-            || latest_network["ip"] != net_info["ip"]
-        {
+        if !connectivity::same_network(&latest_network, &net_info) {
             state.is_checking.store(false, Ordering::SeqCst);
             schedule_network_change_readiness(app.clone(), state.clone());
             return;
@@ -5034,7 +5047,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                                     );
                                                 }
                                                 PortalLoginFailureDisposition::SessionAlreadyOnline => {
-                                                    let online = connectivity::observe(&app, &state, &net_info).wait(false).await.online();
+                                                    let online = connectivity::observe(&app, &state, &net_info).wait(false).await.access_online();
                                                     if online {
                                                         success = true;
                                                         login_succeeded = true;
@@ -6260,7 +6273,7 @@ async fn verify_login_network(
     let connection = connectivity::observe(app, state, network)
         .wait_for_login()
         .await;
-    let online = connection.online();
+    let online = connection.access_online();
     let health = if connection.cancelled {
         dual_stack::unavailable("探测期间网络或认证状态改变，请重新检测")
     } else {

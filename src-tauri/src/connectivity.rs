@@ -9,6 +9,8 @@ use tokio::sync::watch;
 #[derive(Clone, Default)]
 pub(crate) struct Snapshot {
     pub(crate) health: Option<dual_stack::DualStackReport>,
+    pub(crate) physical: Option<dual_stack::DualStackReport>,
+    pub(crate) require_physical: bool,
     pub(crate) internet: Vec<internet_probe::InternetProbeOutcome>,
     pub(crate) internet_duration_ms: u128,
     pub(crate) complete: bool,
@@ -19,11 +21,44 @@ pub(crate) struct Snapshot {
     pub(crate) session_duration_ms: u128,
 }
 impl Snapshot {
+    /// Internet availability on the default route, including VPN/cellular.
     pub(crate) fn online(&self) -> bool {
         !self.cancelled
             && (self.internet.iter().any(|probe| probe.success)
                 || self.health.as_ref().is_some_and(|health| health.online()))
     }
+    /// Availability on the network being authenticated. A working VPN default
+    /// must never substitute for an unverified Android Wi-Fi/Ethernet Network.
+    pub(crate) fn access_online(&self) -> bool {
+        !self.cancelled
+            && if self.require_physical {
+                self.physical.as_ref().is_some_and(|health| health.online())
+            } else {
+                self.online()
+            }
+    }
+    pub(crate) fn authenticated_online(&self) -> bool {
+        self.access_online() && (!self.require_session || self.session_online == Some(true))
+    }
+}
+
+pub(crate) fn requires_physical_probe(network: &serde_json::Value) -> bool {
+    cfg!(target_os = "android")
+        && matches!(network["transport"].as_str(), Some("wifi" | "ethernet"))
+}
+
+pub(crate) fn same_network(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    [
+        "interfaceName",
+        "ip",
+        "transport",
+        "networkId",
+        "physicalNetworkHandle",
+        "defaultNetworkId",
+        "defaultNetworkHandle",
+    ]
+    .iter()
+    .all(|key| left[*key] == right[*key])
 }
 
 struct Run {
@@ -61,7 +96,8 @@ impl ProbePool {
                 && !value.cancelled
                 && run.started.elapsed() < Duration::from_secs(4)
                 && (!value.complete
-                    || (value.online() && run.started.elapsed() < Duration::from_secs(2)))
+                    || (value.authenticated_online()
+                        && run.started.elapsed() < Duration::from_secs(2)))
             {
                 return (run.id, run.sender.subscribe(), false);
             }
@@ -143,7 +179,7 @@ impl Observation {
             if value.complete
                 || value.cancelled
                 || (!full
-                    && value.online()
+                    && value.access_online()
                     && (!respect_session || !value.require_session || value.session_checked))
             {
                 return value;
@@ -179,6 +215,7 @@ pub(crate) fn observe(
     use std::sync::atomic::Ordering;
     let generation = state.network_change_generation.load(Ordering::SeqCst);
     let compatibility = crate::effective_vpn_compatibility(&state.config.read().unwrap());
+    let require_physical = requires_physical_probe(network);
     let adapters = crate::network_inventory::adapters();
     let require_session = network["lgnWiredHint"].as_bool().unwrap_or(false)
         && (!crate::preferred_interface_for_app(app).is_empty()
@@ -197,15 +234,21 @@ pub(crate) fn observe(
         network["transport"],
         network["networkId"],
         network["defaultNetworkId"],
+        network["physicalNetworkHandle"],
+        network["defaultNetworkHandle"],
+        network["captivePortal"],
+        network["validated"],
         compatibility.as_str(),
+        require_physical,
         require_session
     ])
     .to_string();
     let (id, receiver, start) = state.connectivity.subscribe(key);
     if start {
-        state
-            .connectivity
-            .update(id, |value| value.require_session = require_session);
+        state.connectivity.update(id, |value| {
+            value.require_session = require_session;
+            value.require_physical = require_physical;
+        });
         let app = app.clone();
         let state = state.clone();
         let network = network.clone();
@@ -213,6 +256,12 @@ pub(crate) fn observe(
         tauri::async_runtime::spawn(async move {
             let work = async {
                 let public = async {
+                    // Android Wi-Fi authentication can bind the process while
+                    // default-route probes must still use their explicit Network
+                    // handles. Only the per-socket family probes are authoritative.
+                    if require_physical {
+                        return;
+                    }
                     let started = Instant::now();
                     let results =
                         internet_probe::probe_with_updates(network["ip"].as_str(), |outcome| {
@@ -244,9 +293,7 @@ pub(crate) fn observe(
                             return;
                         }
                         let latest = crate::get_network_info(app.clone(), Some(false));
-                        if latest["interfaceName"] != network["interfaceName"]
-                            || latest["ip"] != network["ip"]
-                        {
+                        if !same_network(&latest, &network) {
                             state.connectivity.cancel(id);
                             return;
                         }
@@ -261,6 +308,29 @@ pub(crate) fn observe(
                             }
                             let _ = app.emit("link-health", health);
                         });
+                    })
+                    .await;
+                };
+                let physical = async {
+                    if !require_physical {
+                        return;
+                    }
+                    dual_stack::probe_route_with_updates(&network, true, |health| {
+                        if generation != state.network_change_generation.load(Ordering::SeqCst)
+                            || !same_network(
+                                &crate::get_network_info(app.clone(), Some(false)),
+                                &network,
+                            )
+                        {
+                            state.connectivity.cancel(id);
+                            return;
+                        }
+                        let mut health = health.clone();
+                        health.generation = generation;
+                        health.probe_id = id;
+                        state
+                            .connectivity
+                            .update(id, |value| value.physical = Some(health));
                     })
                     .await;
                 };
@@ -295,8 +365,11 @@ pub(crate) fn observe(
                         value.session_duration_ms = started.elapsed().as_millis();
                     });
                 };
-                futures_util::future::join(futures_util::future::join(public, families), session)
-                    .await;
+                futures_util::future::join(
+                    futures_util::future::join(public, families),
+                    futures_util::future::join(session, physical),
+                )
+                .await;
                 if generation != state.network_change_generation.load(Ordering::SeqCst) {
                     state.connectivity.cancel(id);
                     return;
@@ -331,6 +404,97 @@ pub(crate) fn for_app(app: &tauri::AppHandle, network: &serde_json::Value) -> Ob
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn vpn_cellular_success_cannot_authenticate_the_selected_wifi() {
+        let mut system = dual_stack::unavailable("fixture");
+        system.ipv4.status = "reachable".into();
+        let mut physical = dual_stack::unavailable("fixture");
+        physical.scope = "physical".into();
+        physical.ipv4.status = "timeout".into();
+        physical.ipv6.status = "not_configured".into();
+        let mut value = Snapshot {
+            health: Some(system),
+            physical: Some(physical),
+            require_physical: true,
+            ..Default::default()
+        };
+        assert!(
+            value.online(),
+            "the VPN/mobile default is independently online"
+        );
+        assert!(!value.authenticated_online());
+        assert!(
+            !value.access_online(),
+            "login verification must also use Wi-Fi"
+        );
+        value.physical = None;
+        assert!(
+            !value.authenticated_online(),
+            "missing results must not fall back to TUN"
+        );
+        let mut physical = dual_stack::unavailable("fixture");
+        physical.ipv6.status = "reachable".into();
+        value.physical = Some(physical);
+        assert!(
+            value.authenticated_online(),
+            "an IPv6-only Wi-Fi result is enough"
+        );
+        value.health.as_mut().unwrap().ipv4.status = "timeout".into();
+        assert!(!value.online());
+        assert!(
+            value.authenticated_online(),
+            "a broken VPN must not hide working Wi-Fi"
+        );
+        value.cancelled = true;
+        assert!(!value.authenticated_online());
+    }
+    #[test]
+    fn changed_android_network_handles_invalidate_same_ip_results() {
+        let before = serde_json::json!({"interfaceName":"wlan0","ip":"192.168.1.2","transport":"wifi","networkId":"101","physicalNetworkHandle":"10100","defaultNetworkId":"999","defaultNetworkHandle":"99900"});
+        assert!(same_network(&before, &before));
+        for key in [
+            "networkId",
+            "physicalNetworkHandle",
+            "defaultNetworkId",
+            "defaultNetworkHandle",
+        ] {
+            let mut after = before.clone();
+            after[key] = "changed".into();
+            assert!(!same_network(&before, &after), "{key}");
+        }
+    }
+    #[test]
+    fn fast_system_probe_waits_for_physical_wifi_result() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let pool = ProbePool::default();
+            let (id, receiver, _) = pool.subscribe("vpn-and-captive-wifi".into());
+            pool.update(id, |value| {
+                value.require_physical = true;
+                value.internet.push(internet_probe::InternetProbeOutcome {
+                    label: "vpn",
+                    success: true,
+                    detail: String::new(),
+                });
+            });
+            let mut waiting = Box::pin(Observation { receiver }.wait_inner(false, true));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                    .await
+                    .is_err()
+            );
+            pool.update(id, |value| {
+                value.physical = Some(dual_stack::unavailable("Wi-Fi timeout"));
+                value.complete = true;
+            });
+            let result = waiting.await;
+            assert!(result.online());
+            assert!(!result.authenticated_online());
+            assert!(
+                pool.subscribe("vpn-and-captive-wifi".into()).2,
+                "failed Wi-Fi must be retried"
+            );
+        });
+    }
     #[test]
     fn diagnostics_receive_the_exact_console_snapshot_before_completion() {
         tokio::runtime::Runtime::new().unwrap().block_on(async {

@@ -265,6 +265,52 @@ fn physical_identity_matches(
                 .is_some_and(|id| id == adapter.id))
 }
 
+#[cfg(any(target_os = "android", test))]
+fn android_snapshot_adapter(
+    network: &serde_json::Value,
+) -> Option<crate::network_inventory::NetworkAdapter> {
+    let transport = network["transport"].as_str()?;
+    let interface = network["interfaceName"].as_str()?;
+    let id = network["networkId"].as_str()?;
+    let handle = network["physicalNetworkHandle"]
+        .as_str()?
+        .parse::<u64>()
+        .ok()?;
+    if !matches!(transport, "wifi" | "ethernet")
+        || interface.is_empty()
+        || id.is_empty()
+        || handle == 0
+    {
+        return None;
+    }
+    let addresses = |key: &str, ipv6: bool| -> Option<Vec<String>> {
+        Some(
+            network[key]
+                .as_array()?
+                .iter()
+                .filter_map(|value| value.as_str())
+                .filter(|value| {
+                    if ipv6 {
+                        crate::network_inventory::usable_ipv6(value)
+                    } else {
+                        crate::usable_physical_ipv4(value).is_some()
+                    }
+                })
+                .map(str::to_string)
+                .collect(),
+        )
+    };
+    Some(crate::network_inventory::NetworkAdapter {
+        id: id.into(),
+        interface_name: interface.into(),
+        transport: transport.into(),
+        ipv4: addresses("ipv4", false)?,
+        ipv6: addresses("ipv6", true)?,
+        connected: true,
+        ..Default::default()
+    })
+}
+
 pub(crate) async fn probe_with_updates(
     network: &serde_json::Value,
     update: impl FnMut(&DualStackReport),
@@ -278,7 +324,14 @@ pub(crate) async fn probe_route_with_updates(
     mut update: impl FnMut(&DualStackReport),
 ) -> DualStackReport {
     let interface = network["interfaceName"].as_str().unwrap_or("");
+    #[cfg(not(target_os = "android"))]
     let adapters = crate::network_inventory::adapters();
+    #[cfg(target_os = "android")]
+    let adapters = if direct {
+        android_snapshot_adapter(network).into_iter().collect()
+    } else {
+        crate::network_inventory::adapters()
+    };
     let adapter = adapters
         .iter()
         .find(|adapter| physical_identity_matches(adapter, network, cfg!(target_os = "android")));
@@ -500,6 +553,22 @@ mod tests {
         adapter.transport = "wifi".into();
         adapter.connected = false;
         assert!(!physical_identity_matches(&adapter, &network, true));
+    }
+    #[test]
+    fn android_direct_probes_use_the_native_snapshot_without_an_activity_inventory() {
+        let mut snapshot = serde_json::json!({
+            "networkId":"101", "physicalNetworkHandle":"10100", "interfaceName":"wlan0", "transport":"wifi",
+            "ip":"192.168.1.2", "ipv4":["192.168.1.2", "198.18.0.1"], "ipv6":["2001:db8::1", "fe80::1"]
+        });
+        let adapter = android_snapshot_adapter(&snapshot).unwrap();
+        assert_eq!(adapter.ipv4, ["192.168.1.2"]);
+        assert_eq!(adapter.ipv6, ["2001:db8::1"]);
+        assert!(physical_identity_matches(&adapter, &snapshot, true));
+        snapshot["physicalNetworkHandle"] = "".into();
+        assert!(android_snapshot_adapter(&snapshot).is_none());
+        snapshot["physicalNetworkHandle"] = "10100".into();
+        snapshot["transport"] = "vpn".into();
+        assert!(android_snapshot_adapter(&snapshot).is_none());
     }
     #[test]
     fn absent_family_requires_inventory_and_includes_other_interfaces() {

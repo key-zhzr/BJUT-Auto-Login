@@ -160,7 +160,10 @@ button.addEventListener('click',async()=>{
     click('[data-target="settings"]');
     assert(!document.getElementById('btn-export-config-qr'), '设置页仍显示额外备份按钮');
     click('#btn-export-config');
-    await wait(()=>!!document.getElementById('config-transfer-modal'));
+    await wait(()=>!!document.querySelector('#config-transfer-modal:not(.hidden)'));
+    const transferDialog=document.querySelector<HTMLElement>('.config-transfer-dialog')!;
+    assert(parseFloat(getComputedStyle(transferDialog).paddingLeft)>=16,'备份弹窗缺少内边距');
+    if(motion) assert(document.getElementById('config-transfer-modal')!.getAnimations({subtree:true}).length>0,'备份弹窗缺少进入动画');
     (document.querySelector('#config-transfer-modal input[name="accounts"]') as HTMLInputElement).checked=false;
     (document.querySelector('#config-transfer-modal input[value="qr"]') as HTMLInputElement).checked=true;
     (document.getElementById('transfer-password') as HTMLInputElement).value='123';
@@ -185,6 +188,11 @@ button.addEventListener('click',async()=>{
     Object.defineProperty(document,'hidden',{configurable:true,value:false}); document.dispatchEvent(new Event('visibilitychange'));
     click('#btn-cancel-add'); assert(draftPassword.value==='', '取消后未清空草稿密码');
     note('通过：切换应用保留表单，取消后清空');
+    assert(!document.querySelector('.page-content'),'仍存在裁切内容的内层滚动区域');
+    assert(getComputedStyle(document.getElementById('main-content')!).overflowY==='auto','主页面未恢复整体滚动');
+    await emit('network-state-change',{state:'BjutCampus',loginType:'lgn-wired',transport:'wifi',ssid:'测试校园路由器',ip:'192.168.1.2',systemOnline:true});
+    assert(!document.getElementById('btn-login')!.hidden && document.getElementById('btn-logout-current')!.hidden,'VPN 联网覆盖了待认证 Wi-Fi 状态');
+    note('通过：完整页面滚动，系统联网与 Wi-Fi 待认证分别显示');
     const {setupAndroidKeyboard} = await import('../src/android-keyboard');
     document.body.classList.add('is-android'); setupAndroidKeyboard();
     window.__nativeKeyboardChanged?.(true,380);

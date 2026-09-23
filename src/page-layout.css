@@ -1,22 +1,13 @@
-/* The five main pages keep their header outside the scrolling content. */
-:root[data-theme] #main-content:has(> :is(#dashboard,#accounts,#diagnostics,#logs,#settings).active) {
-  overflow: hidden;
-}
-:root[data-theme] #main-content > :is(#dashboard,#accounts,#diagnostics,#logs,#settings).active {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  max-height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
+/* Keep the original full-page scroll area and room for card shadows. */
 :root[data-theme] #main-content > .page > .page-header {
   flex: 0 0 auto;
   align-items: center;
   gap: .8rem;
   margin-bottom: .9rem;
-  position: relative;
-  z-index: 2;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--theme-bg, var(--bg-color));
 }
 :root[data-theme] #main-content > .page > .page-header h1 {
   margin: 0;
@@ -33,24 +24,10 @@
   align-items: center;
   justify-content: center;
 }
-.page-content {
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior-y: contain;
-  scrollbar-gutter: stable;
-  padding: .3rem .35rem .65rem;
-}
-.page-content::-webkit-scrollbar-track,
+#main-content::-webkit-scrollbar-track,
 :root[data-theme] .custom-select-options::-webkit-scrollbar-track,
 :root[data-theme] .logs-container::-webkit-scrollbar-track { margin-block: 10px; }
-:root[data-theme] #logs > .page-content {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
+:root[data-theme] #logs.page.active { overflow: visible; }
 :root[data-theme] #logs .log-filters { flex: 0 0 auto; }
 :root[data-theme] #logs .logs-container { flex: 1 1 auto; min-height: 0; max-height: none; }
 :root[data-theme] #logs .logs-actions { flex-wrap: wrap; overflow: visible; }
@@ -65,12 +42,15 @@
   :root[data-theme] #logs .logs-actions { width: 100%; gap: .4rem; }
   :root[data-theme] #logs .logs-actions .btn { flex: 1 1 calc(50% - .4rem); justify-content: center; margin: 0; }
   :root[data-theme] #main-content > .page > .page-header { gap: .5rem; }
-  .page-content { padding-inline: .15rem; }
 }
-.config-transfer-dialog { max-width:480px; max-height:calc(100dvh - 2rem); overflow:auto; }
+.config-transfer-dialog { width:min(100%,480px); max-width:480px; max-height:calc(100dvh - 2rem); overflow:auto; padding:1.5rem; }
 .config-transfer-dialog fieldset { border:0; margin:1rem 0; padding:0; }
 .config-transfer-dialog legend { font-weight:600; margin-bottom:.6rem; }
 .config-transfer-dialog .transfer-choices { display:flex; flex-wrap:wrap; gap:.8rem 1.2rem; }
 .config-transfer-dialog .transfer-choices label { display:flex; align-items:center; gap:.4rem; }
 .config-transfer-dialog .transfer-error { color:var(--error); min-height:1.4em; font-size:.85rem; }
 .config-transfer-dialog .transfer-note { font-size:.8rem; color:var(--text-muted); }
+@media(prefers-reduced-motion:reduce) {
+  :root[data-theme] #config-transfer-modal,
+  :root[data-theme] #config-transfer-modal .modal-content { transition:none; }
+}

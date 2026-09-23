@@ -56,11 +56,19 @@ export class CustomSelect {
     CustomSelect.openInstance?.close();
     CustomSelect.openInstance = this;
     const trigger = this.trigger.getBoundingClientRect();
-    const scroller = this.element.closest<HTMLElement>('.page-content, .modal-content');
+    const scroller = this.element.closest<HTMLElement>('main, .modal-content');
     const bounds = scroller?.getBoundingClientRect();
     const viewport = window.visualViewport;
-    const top = Math.max(bounds?.top ?? 0, viewport?.offsetTop ?? 0);
-    const bottom = Math.min(bounds?.bottom ?? window.innerHeight, (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight));
+    let top = Math.max(bounds?.top ?? 0, viewport?.offsetTop ?? 0);
+    let bottom = Math.min(bounds?.bottom ?? window.innerHeight, (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight));
+    if(scroller?.tagName === 'MAIN') {
+      const header = this.element.closest('.page')?.querySelector('.page-header');
+      if(header) top = Math.max(top, header.getBoundingClientRect().bottom);
+      const nav = document.querySelector<HTMLElement>('body:not(.is-desktop) #nav');
+      if(nav && getComputedStyle(nav).position === 'fixed' && nav.getBoundingClientRect().height > 0) {
+        bottom = Math.min(bottom, nav.getBoundingClientRect().top);
+      }
+    }
     const below = Math.max(0, bottom - trigger.bottom - 12);
     const above = Math.max(0, trigger.top - top - 12);
     const opensUp = below < 160 && above > below;

@@ -566,7 +566,7 @@
 }
 
 :root[data-theme="apple27"] body.is-desktop #settings > .page-header,
-:root[data-theme="apple27"] body.is-desktop #settings > .page-content > .settings-container {
+:root[data-theme="apple27"] body.is-desktop #settings > .settings-container {
   width: min(100%, 1100px);
   margin-inline: auto;
 }

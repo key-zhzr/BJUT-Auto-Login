@@ -5,11 +5,12 @@ export interface ConfigTransferChoice {
 }
 
 export function chooseConfigTransfer(mode:'import'|'export'): Promise<ConfigTransferChoice|null> {
+  if(document.getElementById('config-transfer-modal'))return Promise.resolve(null);
   return new Promise(resolve => {
     const exporting=mode==='export';
     const previous=document.activeElement as HTMLElement|null;
-    const overlay=document.createElement('div'); overlay.className='modal-overlay'; overlay.id='config-transfer-modal';
-    overlay.innerHTML=`<form class="modal-content config-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="config-transfer-title">
+    const overlay=document.createElement('div'); overlay.className='modal-overlay hidden'; overlay.id='config-transfer-modal';
+    overlay.innerHTML=`<form class="modal-content glass-card config-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="config-transfer-title">
       <h3 id="config-transfer-title">${exporting?'导出':'导入'}配置</h3>
       <fieldset><legend>${exporting?'导出':'导入'}内容</legend><div class="transfer-choices">
         <label><input type="checkbox" name="settings" checked>设置</label>
@@ -27,8 +28,24 @@ export function chooseConfigTransfer(mode:'import'|'export'): Promise<ConfigTran
     const form=overlay.querySelector('form')!;
     const password=overlay.querySelector<HTMLInputElement>('#transfer-password')!;
     const confirm=overlay.querySelector<HTMLInputElement>('#transfer-confirm');
+    let closing=false;
+    let enterFrame=0;
     const finish=(result:ConfigTransferChoice|null)=> {
-      password.value=''; if(confirm)confirm.value=''; overlay.remove(); previous?.focus({preventScroll:true}); resolve(result);
+      if(closing)return;
+      closing=true;
+      cancelAnimationFrame(enterFrame);
+      password.value=''; if(confirm)confirm.value='';
+      overlay.classList.add('hidden');
+      const cleanup=()=> { overlay.remove(); previous?.focus({preventScroll:true}); resolve(result); };
+      if(window.matchMedia('(prefers-reduced-motion: reduce)').matches) { cleanup(); return; }
+      // Keep the element alive until both the backdrop and dialog have left.
+      // A timer also handles a WebView pausing animation events in the background.
+      const animations=overlay.getAnimations?.({subtree:true}) ?? [];
+      const timeout=new Promise<void>(done=>setTimeout(done,400));
+      void Promise.race([
+        animations.length ? Promise.allSettled(animations.map(animation=>animation.finished)) : timeout,
+        timeout,
+      ]).then(cleanup);
     };
     overlay.querySelector('[data-cancel]')!.addEventListener('click',()=>finish(null));
     overlay.addEventListener('keydown',event=>{
@@ -42,6 +59,7 @@ export function chooseConfigTransfer(mode:'import'|'export'): Promise<ConfigTran
     });
     form.addEventListener('submit',event=>{
       event.preventDefault();
+      if(closing)return;
       const scope={settings:(form.elements.namedItem('settings') as HTMLInputElement).checked,accounts:(form.elements.namedItem('accounts') as HTMLInputElement).checked};
       const error=!scope.settings&&!scope.accounts ? '请至少选择一项内容。'
         : exporting&&Array.from(password.value.trim()).length<3 ? '备份密码至少需要 3 个字符。'
@@ -49,6 +67,14 @@ export function chooseConfigTransfer(mode:'import'|'export'): Promise<ConfigTran
       overlay.querySelector('.transfer-error')!.textContent=error; if(error)return;
       finish({scope,qr:(form.elements.namedItem('method') as RadioNodeList).value==='qr',passphrase:password.value});
     });
-    document.body.append(overlay); password.focus();
+    document.body.append(overlay);
+    // Commit the hidden state first, so dynamically-created modals use the
+    // same theme transitions as the existing dialogs.
+    enterFrame=requestAnimationFrame(()=>{
+      enterFrame=requestAnimationFrame(()=>{
+        if(closing)return;
+        overlay.classList.remove('hidden'); password.focus({preventScroll:true});
+      });
+    });
   });
 }

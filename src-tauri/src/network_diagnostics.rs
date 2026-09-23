@@ -288,17 +288,25 @@ pub(super) async fn run_network_diagnostics(
         let paths = std::sync::Mutex::new(diagnostic_paths::Paths::pending());
         let connection_probe =
             connectivity::for_app(&app, &network).wait_with_updates(|snapshot| {
+                let mut paths = paths.lock().unwrap();
                 if let Some(health) = &snapshot.health {
-                    let mut paths = paths.lock().unwrap();
                     paths.system = health.clone();
-                    emit_step(&app, &run_id, &paths.step());
                 }
+                if let Some(health) = &snapshot.physical {
+                    paths.direct = health.clone();
+                }
+                emit_step(&app, &run_id, &paths.step());
             });
-        let direct_probe = dual_stack::probe_route_with_updates(&network, true, |health| {
-            let mut paths = paths.lock().unwrap();
-            paths.direct = health.clone();
-            emit_step(&app, &run_id, &paths.step());
-        });
+        let direct_probe = async {
+            if !connectivity::requires_physical_probe(&network) {
+                dual_stack::probe_route_with_updates(&network, true, |health| {
+                    let mut paths = paths.lock().unwrap();
+                    paths.direct = health.clone();
+                    emit_step(&app, &run_id, &paths.step());
+                })
+                .await;
+            }
+        };
         let (connection, _) = futures_util::future::join(connection_probe, direct_probe).await;
         let paths = paths.into_inner().unwrap();
         let session_step = connection.require_session.then(|| DiagnosticStep {
@@ -347,6 +355,7 @@ pub(super) async fn run_network_diagnostics(
             dual_stack,
             session_step,
             connection.cancelled && !wifi_route_failed,
+            connection.require_physical && !connection.access_online(),
         )
     };
     let gateway_probe = async {
@@ -412,7 +421,14 @@ pub(super) async fn run_network_diagnostics(
     };
     let (
         dns_step,
-        (online, internet_step, mut dual_stack, session_step, probe_cancelled),
+        (
+            online,
+            internet_step,
+            mut dual_stack,
+            session_step,
+            probe_cancelled,
+            physical_unconfirmed,
+        ),
         ((gateway_results, lgn_ipv6_diagnostic), portal_duration_ms),
     ) = run_diagnostic_probes(dns_probe, internet_probe, gateway_probe, |percent| {
         emit_network_diagnostic_progress(
@@ -562,14 +578,22 @@ pub(super) async fn run_network_diagnostics(
                 .state::<Arc<AppState>>()
                 .network_change_generation
                 .load(Ordering::SeqCst)
-        || latest["interfaceName"] != network["interfaceName"]
-        || latest["ip"] != network["ip"];
+        || !connectivity::same_network(&latest, &network);
     if stale {
         dual_stack.invalidate("网络或认证状态已改变，此报告仅保留原检测明细，请重新诊断");
     }
     let adapter_restart = if stale { None } else { adapter_restart };
     let (overall, summary) = if stale {
         ("changed", "检测期间网络或认证状态已改变，请重新诊断")
+    } else if physical_unconfirmed && online {
+        if network["captivePortal"].as_bool().unwrap_or(false) {
+            ("auth_required", "系统路由可联网，但当前 Wi-Fi 仍需完成认证")
+        } else {
+            (
+                "partial",
+                "系统路由可联网，但当前认证网卡直连尚未通过，请核对校园认证状态",
+            )
+        }
     } else if session_unconfirmed && online {
         ("partial", "系统互联网可达，所选认证网卡的校园会话尚未确认")
     } else if online && (ip.is_empty() || transport == "none") {
