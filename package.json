@@ -11,7 +11,9 @@
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "tauri": "tauri",
-    "site:build": "node website/build.mjs"
+    "site:build": "node website/build.mjs",
+    "site:test": "node --test website/downloads.test.mjs",
+    "site:refresh-downloads": "node website/refresh-release.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

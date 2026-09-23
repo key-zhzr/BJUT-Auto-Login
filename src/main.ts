@@ -1,3 +1,4 @@
+import { chooseConfigTransfer } from './config-transfer-dialog';
 import { NetworkProgressView, type NetworkCheckProgress } from './network-progress-view';
 import { AnimatedVisibility } from './animated-visibility';
 import { setupAndroidKeyboard } from './android-keyboard';
@@ -134,8 +135,7 @@ function showResumeMask() {
   }, 260);
 }
 
-function resetSensitivePasswordInput(input: HTMLInputElement) {
-  input.value = '';
+function maskSensitivePasswordInput(input: HTMLInputElement) {
   input.type = 'password';
   if (!input.id) return;
   const button = document.querySelector<HTMLButtonElement>(
@@ -152,13 +152,18 @@ function resetSensitivePasswordInput(input: HTMLInputElement) {
   button.title = `显示${label}`;
 }
 
-function clearTransientWebviewPasswords() {
+function resetSensitivePasswordInput(input: HTMLInputElement) {
+  input.value = '';
+  maskSensitivePasswordInput(input);
+}
+
+function concealTransientWebviewPasswords() {
   document.querySelectorAll<HTMLElement>('.password-text').forEach(element => {
     if (element.textContent !== '*************') element.textContent = '*************';
   });
   document.querySelectorAll('.action-toggle-password').forEach(button => button.classList.add('hide-password'));
   document.querySelectorAll<HTMLInputElement>('[data-sensitive-password]')
-    .forEach(resetSensitivePasswordInput);
+    .forEach(maskSensitivePasswordInput);
 }
 
 async function revealAppWindow() {
@@ -194,7 +199,7 @@ const updateWindowAppearanceState = () => {
   );
 };
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) clearTransientWebviewPasswords();
+  if (document.hidden) concealTransientWebviewPasswords();
   if (documentWasHidden && !document.hidden) {
     showResumeMask();
     scheduleAlipayAutomaticCompletionCheck();
@@ -1376,46 +1381,6 @@ function customConfirm(
     btnOk.addEventListener('click', onOk);
     btnCancel.addEventListener('click', onCancel);
     modal.classList.remove('hidden');
-  });
-}
-
-function customPasswordPrompt(text: string, title = '配置密码'): Promise<string | null> {
-  return new Promise(resolve => {
-    const modal = document.getElementById('password-prompt-modal');
-    const form = document.getElementById('password-prompt-form') as HTMLFormElement | null;
-    const input = document.getElementById('password-prompt-input') as HTMLInputElement | null;
-    const cancelButton = document.getElementById('btn-password-prompt-cancel');
-    if (!modal || !form || !input || !cancelButton) {
-      resolve(null);
-      return;
-    }
-
-    document.getElementById('password-prompt-title')!.textContent = title;
-    document.getElementById('password-prompt-text')!.textContent = text;
-    resetSensitivePasswordInput(input);
-
-    const cleanup = () => {
-      modal.classList.add('hidden');
-      resetSensitivePasswordInput(input);
-      form.removeEventListener('submit', onSubmit);
-      cancelButton.removeEventListener('click', onCancel);
-    };
-    const onSubmit = (event: Event) => {
-      event.preventDefault();
-      const value = input.value;
-      if (!value) return;
-      cleanup();
-      resolve(value);
-    };
-    const onCancel = () => {
-      cleanup();
-      resolve(null);
-    };
-
-    form.addEventListener('submit', onSubmit);
-    cancelButton.addEventListener('click', onCancel);
-    modal.classList.remove('hidden');
-    requestAnimationFrame(() => input.focus());
   });
 }
 
@@ -2626,6 +2591,7 @@ function activatePage(target: string, navTarget = target) {
   rechargeHours.setActive(target === 'billing-center' && activeBillingWorkbenchSection === 'recharge');
   if (pageChanged) {
     document.getElementById('main-content')?.scrollTo({ top: 0, behavior: 'auto' });
+    document.querySelector<HTMLElement>(`#${target} > .page-content`)?.scrollTo({ top: 0, behavior: 'auto' });
   }
   if (target === 'diagnostics') {
     void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
@@ -2643,6 +2609,7 @@ function handleAndroidBack() {
   if (visibleModal) {
     const dismiss = visibleModal.querySelector<HTMLElement>([
       '.config-qr-close',
+      '.config-transfer-dialog [data-cancel]',
       '#btn-confirm-cancel',
       '#btn-alert-ok',
       '#btn-alipay-payment-close-icon',
@@ -3767,25 +3734,11 @@ function setupEventListeners() {
   const btnExportConfig = document.getElementById('btn-export-config');
   const btnImportConfig = document.getElementById('btn-import-config');
   
-  const backupScope = () => {
-    const scope = { settings: (document.getElementById('config-scope-settings') as HTMLInputElement).checked, accounts: (document.getElementById('config-scope-accounts') as HTMLInputElement).checked };
-    if (!scope.settings && !scope.accounts) throw new Error('请至少选择设置或账号密码。');
-    return scope;
-  };
-  const exportBackup = async (qr: boolean) => {
+  const exportBackup = async () => {
       try {
-        const scope = backupScope();
-        const passphrase = await customPasswordPrompt(
-          '请设置至少 8 位的备份密码，导入时需要使用。',
-          '导出备份',
-        );
-        if (!passphrase) return;
-        const confirmedPassphrase = await customPasswordPrompt('请再输入一次备份密码。', '确认备份密码');
-        if (confirmedPassphrase === null) return;
-        if (confirmedPassphrase !== passphrase) {
-          await customAlert('两次输入的备份密码不一致，未生成导出内容。', '导出已取消');
-          return;
-        }
+        const choice = await chooseConfigTransfer('export');
+        if (!choice) return;
+        const {scope, qr, passphrase} = choice;
         await syncConfigToRust();
         const backup = await invoke<ConfigBackupExport>('export_config_backup', {
           passphrase,
@@ -3806,12 +3759,13 @@ function setupEventListeners() {
         customAlert('导出失败：' + String(e));
       }
   };
-  btnExportConfig?.addEventListener('click', () => void exportBackup(false));
-  document.getElementById('btn-export-config-qr')?.addEventListener('click', () => void exportBackup(true));
+  btnExportConfig?.addEventListener('click', () => void exportBackup());
 
-  const importBackup = async (qr: boolean) => {
+  const importBackup = async () => {
       try {
-        const scope = backupScope();
+        const choice = await chooseConfigTransfer('import');
+        if (!choice) return;
+        const {scope, qr, passphrase} = choice;
         const text = qr ? await scanConfigQr() : await readTextFromClipboard();
         if (qr && !text) return;
 
@@ -3823,10 +3777,9 @@ function setupEventListeners() {
         const confirmResult = await customConfirm(`导入将覆盖当前${selected}，是否继续？`);
         if (!confirmResult) return;
         
-        const passphrase = await customPasswordPrompt('输入导出该配置时设置的密码。', '导入配置');
-        if (!passphrase) return;
-        const envelope = JSON.parse(text.trim()) as { version?: unknown };
-        if (envelope.version === 3) {
+        const compact = text.trim().startsWith('BJUT4:');
+        const envelope = compact ? { version: 4 } : JSON.parse(text.trim()) as { version?: unknown };
+        if (envelope.version === 3 || envelope.version === 4) {
           const imported = await invoke<ConfigBackupImport>('import_config_backup', {
             payload: text.trim(),
             passphrase,
@@ -3929,8 +3882,8 @@ function setupEventListeners() {
         await customAlert('导入失败：' + String(e));
       }
   };
-  btnImportConfig?.addEventListener('click', () => void importBackup(false));
-  document.getElementById('btn-import-config-qr')?.addEventListener('click', () => void importBackup(true));
+  btnImportConfig?.addEventListener('click', () => void importBackup());
+
 
   // Password visibility toggle
   document.querySelectorAll('.toggle-password').forEach(btn => {

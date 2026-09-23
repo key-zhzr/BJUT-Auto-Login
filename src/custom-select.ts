@@ -55,6 +55,17 @@ export class CustomSelect {
     if (this.disabled) return;
     CustomSelect.openInstance?.close();
     CustomSelect.openInstance = this;
+    const trigger = this.trigger.getBoundingClientRect();
+    const scroller = this.element.closest<HTMLElement>('.page-content, .modal-content');
+    const bounds = scroller?.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const top = Math.max(bounds?.top ?? 0, viewport?.offsetTop ?? 0);
+    const bottom = Math.min(bounds?.bottom ?? window.innerHeight, (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight));
+    const below = Math.max(0, bottom - trigger.bottom - 12);
+    const above = Math.max(0, trigger.top - top - 12);
+    const opensUp = below < 160 && above > below;
+    this.element.classList.toggle('opens-up', opensUp);
+    this.optionsContainer.style.maxHeight = `${Math.min(220, opensUp ? above : below)}px`;
     this.element.classList.add('open'); this.trigger.setAttribute('aria-expanded', 'true');
     this.highlight(Math.max(0, this.options().findIndex(option => option.dataset.value === this._value)), keyboard);
   }
@@ -121,6 +132,11 @@ export class CustomSelect {
     });
     if (!CustomSelect.outsideHandlerInstalled) {
       document.addEventListener('click', () => CustomSelect.openInstance?.close());
+      document.addEventListener('scroll', event => {
+        const current = CustomSelect.openInstance;
+        if (current && event.target instanceof Element && !current.optionsContainer.contains(event.target)
+          && event.target.contains(current.element)) current.close();
+      }, {capture:true,passive:true});
       CustomSelect.outsideHandlerInstalled = true;
     }
   }

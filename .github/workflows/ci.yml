@@ -46,6 +46,11 @@ jobs:
       - name: Run frontend regression tests
         run: npm run test:frontend
 
+      - name: Verify website downloads and build previews
+        run: |
+          npm run site:test
+          npm run site:build
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 

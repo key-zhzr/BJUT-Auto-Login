@@ -158,14 +158,14 @@ button.addEventListener('click',async()=>{
     assert(document.querySelector('.billing-recharge-hours')!.textContent?.includes('08:00'), '充值时段未使用远端北京时间');
     note('通过：充值时段使用网络时间并显示绿色');
     click('[data-target="settings"]');
-    (document.getElementById('config-scope-accounts') as HTMLInputElement).checked = false;
-    click('#btn-export-config-qr');
-    for (let i=0;i<2;i++) {
-      await wait(()=>!document.getElementById('password-prompt-modal')!.classList.contains('hidden'));
-      (document.getElementById('password-prompt-input') as HTMLInputElement).value = 'fixture-passphrase';
-      (document.getElementById('password-prompt-form') as HTMLFormElement).requestSubmit();
-      await new Promise(resolve=>setTimeout(resolve,30));
-    }
+    assert(!document.getElementById('btn-export-config-qr'), '设置页仍显示额外备份按钮');
+    click('#btn-export-config');
+    await wait(()=>!!document.getElementById('config-transfer-modal'));
+    (document.querySelector('#config-transfer-modal input[name="accounts"]') as HTMLInputElement).checked=false;
+    (document.querySelector('#config-transfer-modal input[value="qr"]') as HTMLInputElement).checked=true;
+    (document.getElementById('transfer-password') as HTMLInputElement).value='123';
+    (document.getElementById('transfer-confirm') as HTMLInputElement).value='123';
+    (document.querySelector('#config-transfer-modal form') as HTMLFormElement).requestSubmit();
     await wait(()=>!!document.querySelector('.config-qr-body canvas')?.getAttribute('width'));
     assert(calls.some(call=>call.cmd==='export_config_backup' && call.payload.scope.settings && !call.payload.scope.accounts),'导出范围未送往后端');
     const canvas = document.querySelector<HTMLCanvasElement>('.config-qr-body canvas')!;
@@ -174,7 +174,17 @@ button.addEventListener('click',async()=>{
     assert(jsQR(pixels.data,pixels.width,pixels.height)?.data.startsWith('BJUTALQR1:'),'生成二维码不能解码');
     click('.config-qr-close');
     assert(!document.querySelector('.config-qr-overlay'),'关闭后二维码仍驻留');
-    note('通过：按范围导出、二维码生成与本地解码');
+    note('通过：备份弹窗、3 位密码、按范围导出与二维码解码');
+    click('[data-target="accounts"]'); click('#btn-show-add');
+    const draftPassword=document.getElementById('acc-password') as HTMLInputElement;
+    const draftUser=document.getElementById('acc-username') as HTMLInputElement;
+    draftUser.value='draft-account'; draftPassword.value='draft-password';
+    Object.defineProperty(document,'hidden',{configurable:true,value:true});
+    document.dispatchEvent(new Event('visibilitychange'));
+    assert(draftPassword.value==='draft-password' && draftPassword.type==='password' && draftUser.value==='draft-account','进入后台丢失填写内容');
+    Object.defineProperty(document,'hidden',{configurable:true,value:false}); document.dispatchEvent(new Event('visibilitychange'));
+    click('#btn-cancel-add'); assert(draftPassword.value==='', '取消后未清空草稿密码');
+    note('通过：切换应用保留表单，取消后清空');
     const {setupAndroidKeyboard} = await import('../src/android-keyboard');
     document.body.classList.add('is-android'); setupAndroidKeyboard();
     window.__nativeKeyboardChanged?.(true,380);

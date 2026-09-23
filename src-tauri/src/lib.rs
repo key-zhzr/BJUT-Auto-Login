@@ -1,3 +1,4 @@
+mod backup_cipher;
 mod billing;
 mod billing_runtime;
 mod campus_dns;
@@ -8,6 +9,7 @@ mod dual_stack;
 mod login_progress;
 #[cfg(any(target_os = "macos", test))]
 mod macos_network;
+mod month_end;
 mod network_inventory;
 mod network_platform;
 mod network_probe;
@@ -3594,8 +3596,12 @@ const CONFIG_BACKUP_ITERATIONS: u32 = 250_000;
 const CONFIG_BACKUP_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 fn validate_config_backup_passphrase(passphrase: &[u8]) -> Result<(), String> {
-    if passphrase.len() < 8 {
-        return Err("配置备份密码至少需要 8 个字节".to_string());
+    if std::str::from_utf8(passphrase)
+        .map(|value| value.trim().chars().count())
+        .unwrap_or(0)
+        < 3
+    {
+        return Err("配置备份密码至少需要 3 个字符".to_string());
     }
     if passphrase.len() > 1024 {
         return Err("配置备份密码过长".to_string());
@@ -3613,88 +3619,23 @@ fn encrypt_config_backup_payload(
     plaintext: &ConfigBackupPlaintext,
     passphrase: &[u8],
 ) -> Result<String, String> {
-    use aes_gcm::{
-        aead::{rand_core::RngCore, Aead, OsRng},
-        Aes256Gcm, KeyInit, Nonce,
-    };
-    use base64::Engine;
-
-    validate_config_backup_passphrase(passphrase)?;
-    let mut salt = [0u8; 16];
-    let mut iv = [0u8; 12];
-    OsRng.fill_bytes(&mut salt);
-    OsRng.fill_bytes(&mut iv);
-    let mut key = config_backup_key(passphrase, &salt, CONFIG_BACKUP_ITERATIONS);
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
     let mut serialized = serde_json::to_vec(plaintext).map_err(|error| error.to_string())?;
-    if serialized.len() > CONFIG_BACKUP_MAX_BYTES {
-        serialized.fill(0);
-        key.fill(0);
-        return Err("配置备份内容超过安全大小限制".to_string());
-    }
-    let encrypted = cipher
-        .encrypt(Nonce::from_slice(&iv), serialized.as_ref())
-        .map_err(|_| "配置备份加密失败".to_string());
+    let encrypted = backup_cipher::encrypt(&serialized, passphrase);
     serialized.fill(0);
-    key.fill(0);
-    let encrypted = encrypted?;
-    let base64 = base64::engine::general_purpose::STANDARD;
-    serde_json::to_string(&EncryptedConfigBackup {
-        version: CONFIG_BACKUP_VERSION,
-        kdf: "PBKDF2-HMAC-SHA256".to_string(),
-        iterations: CONFIG_BACKUP_ITERATIONS,
-        salt: base64.encode(salt),
-        iv: base64.encode(iv),
-        ciphertext: base64.encode(encrypted),
-    })
-    .map_err(|error| error.to_string())
+    encrypted
 }
 
 fn decrypt_config_backup_payload(
     payload: &str,
     passphrase: &[u8],
 ) -> Result<ConfigBackupPlaintext, String> {
-    use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
-    use base64::Engine;
-
-    validate_config_backup_passphrase(passphrase)?;
-    if payload.len() > CONFIG_BACKUP_MAX_BYTES * 2 {
-        return Err("配置备份超过安全大小限制".to_string());
-    }
-    let envelope: EncryptedConfigBackup =
-        serde_json::from_str(payload).map_err(|_| "配置备份外层格式无效".to_string())?;
-    if envelope.version != CONFIG_BACKUP_VERSION
-        || envelope.kdf != "PBKDF2-HMAC-SHA256"
-        || !(100_000..=1_000_000).contains(&envelope.iterations)
-    {
-        return Err("不是受支持的完整配置备份格式".to_string());
-    }
-    let base64 = base64::engine::general_purpose::STANDARD;
-    let salt = base64
-        .decode(envelope.salt)
-        .map_err(|_| "配置备份盐值无效".to_string())?;
-    let iv = base64
-        .decode(envelope.iv)
-        .map_err(|_| "配置备份随机向量无效".to_string())?;
-    let ciphertext = base64
-        .decode(envelope.ciphertext)
-        .map_err(|_| "配置备份密文无效".to_string())?;
-    if salt.len() != 16 || iv.len() != 12 || ciphertext.len() > CONFIG_BACKUP_MAX_BYTES {
-        return Err("配置备份参数长度无效".to_string());
-    }
-    let mut key = config_backup_key(passphrase, &salt, envelope.iterations);
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
-    let decrypted = cipher
-        .decrypt(Nonce::from_slice(&iv), ciphertext.as_ref())
-        .map_err(|_| "配置备份密码错误或内容已损坏".to_string());
-    key.fill(0);
-    let mut decrypted = decrypted?;
-    let plaintext = serde_json::from_slice::<ConfigBackupPlaintext>(&decrypted)
+    let mut decoded = backup_cipher::decrypt(payload, passphrase)?;
+    let plaintext = serde_json::from_slice::<ConfigBackupPlaintext>(&decoded)
         .map_err(|_| "配置备份内容无法解析".to_string());
-    decrypted.fill(0);
+    decoded.fill(0);
     let plaintext = plaintext?;
     if plaintext.format != "BJUT-AL-CONFIG" || plaintext.version != CONFIG_BACKUP_VERSION {
-        return Err("配置备份内容版本不匹配".to_string());
+        return Err("配置备份内容版本不匹配".into());
     }
     Ok(plaintext)
 }
@@ -6828,7 +6769,10 @@ async fn manual_login_inner(
 fn first_decimal(value: &str) -> Option<f64> {
     let number = value
         .chars()
-        .filter(|character| character.is_ascii_digit() || *character == '.')
+        .skip_while(|character| {
+            !character.is_ascii_digit() && *character != '-' && *character != '+'
+        })
+        .take_while(|character| character.is_ascii_digit() || matches!(character, '.' | '-' | '+'))
         .collect::<String>();
     number.parse::<f64>().ok()
 }
@@ -6874,10 +6818,10 @@ fn evaluate_usage_alerts(app: &tauri::AppHandle, state: &AppState, info: &UserIn
     for (kind, message) in alerts {
         let should_notify = {
             let mut history = state.usage_alert_history.lock().unwrap();
-            if history.get(kind) == Some(&today) {
+            if history.get(&format!("{kind}:{}", info.account)) == Some(&today) {
                 false
             } else {
-                history.insert(kind.to_string(), today.clone());
+                history.insert(format!("{kind}:{}", info.account), today.clone());
                 true
             }
         };
@@ -6890,6 +6834,224 @@ fn evaluate_usage_alerts(app: &tauri::AppHandle, state: &AppState, info: &UserIn
             );
         }
     }
+}
+
+fn schedule_month_end_check(app: &tauri::AppHandle, state: &Arc<AppState>, current_account: &str) {
+    let now = chrono::Utc::now();
+    let today = now
+        .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("Beijing offset"))
+        .date_naive();
+    if !month_end::in_check_window(today) {
+        return;
+    }
+    let (account, compatibility) = {
+        let config = state.config.read().unwrap();
+        if !config.usage_alerts {
+            return;
+        }
+        let Some(account) = config
+            .accounts
+            .iter()
+            .find(|account| account.user == current_account && !account.pass.is_empty())
+        else {
+            return;
+        };
+        (account.clone(), effective_vpn_compatibility(&config))
+    };
+    let attempt_key = format!("renewal-attempt:{}", account.user);
+    let done_key = format!("renewal-checked:{}", account.user);
+    let day = today.to_string();
+    let stamp_path = app.path().app_data_dir().ok().map(|directory| {
+        use sha2::Digest;
+        directory.join("month-end-checks").join(format!(
+            "{:x}.json",
+            sha2::Sha256::digest(account.user.as_bytes())
+        ))
+    });
+    {
+        let mut history = state.usage_alert_history.lock().unwrap();
+        if !history.contains_key(&attempt_key) {
+            if let Some(stamp) = stamp_path.as_deref().and_then(month_end::read_stamp) {
+                if stamp.attempted_at <= now.timestamp() {
+                    history.insert(attempt_key.clone(), stamp.attempted_at.to_string());
+                    history.insert(done_key.clone(), stamp.checked_day);
+                }
+            }
+        }
+        if history.get(&done_key) == Some(&day)
+            || history
+                .get(&attempt_key)
+                .and_then(|value| value.parse::<i64>().ok())
+                .is_some_and(|last| now.timestamp() - last < 6 * 3600)
+        {
+            return;
+        }
+        history.insert(attempt_key.clone(), now.timestamp().to_string());
+    }
+    let app = app.clone();
+    let state = state.clone();
+    tauri::async_runtime::spawn(async move {
+        // Manual billing/payment operations take precedence over this extra read.
+        let Ok(billing_guard) = state.billing_fetch_lock.try_lock() else {
+            state
+                .usage_alert_history
+                .lock()
+                .unwrap()
+                .remove(&attempt_key);
+            return;
+        };
+        if let Some(path) = &stamp_path {
+            month_end::save_stamp(
+                path,
+                month_end::CheckStamp {
+                    attempted_at: now.timestamp(),
+                    checked_day: String::new(),
+                },
+            );
+        }
+        let generation = state.network_change_generation.load(Ordering::SeqCst);
+        let access = billing::BillingAccess::saved(account.user.clone(), account.pass.clone());
+        let plan = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            billing::renewal_plan(&access, compatibility, &state.billing_sessions),
+        )
+        .await;
+        drop(billing_guard);
+        let (package, detail) = match plan {
+            Ok(Ok(Some(plan))) => plan,
+            Ok(Ok(None)) => {
+                if let Some(path) = &stamp_path {
+                    month_end::save_stamp(
+                        path,
+                        month_end::CheckStamp {
+                            attempted_at: now.timestamp(),
+                            checked_day: day.clone(),
+                        },
+                    );
+                }
+                state
+                    .usage_alert_history
+                    .lock()
+                    .unwrap()
+                    .insert(done_key, day);
+                return;
+            }
+            _ => {
+                rust_log(
+                    &app,
+                    &state,
+                    "用量提醒",
+                    "月末检查暂未取得下月套餐，将稍后再试",
+                    "debug",
+                );
+                return;
+            }
+        };
+        let Ok(_campus_guard) = state.campus_service_lock.try_lock() else {
+            let retry = now.timestamp() - 6 * 3600 + 15 * 60;
+            state
+                .usage_alert_history
+                .lock()
+                .unwrap()
+                .insert(attempt_key, retry.to_string());
+            if let Some(path) = &stamp_path {
+                month_end::save_stamp(
+                    path,
+                    month_end::CheckStamp {
+                        attempted_at: retry,
+                        checked_day: String::new(),
+                    },
+                );
+            }
+            return;
+        };
+        let seed = campus_service_session_seed(&state, &account.user);
+        let balances = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            campus_services::query_recharge_balances(
+                &account.user,
+                &account.pass,
+                &account.user,
+                seed,
+            ),
+        )
+        .await;
+        let (balances, session) = match balances {
+            Ok(Ok(result)) => result,
+            _ => {
+                rust_log(
+                    &app,
+                    &state,
+                    "用量提醒",
+                    "月末网费余额查询暂未完成，将稍后再试",
+                    "debug",
+                );
+                return;
+            }
+        };
+        persist_campus_service_session(&app, &state, session);
+        if generation != state.network_change_generation.load(Ordering::SeqCst)
+            || !state.config.read().unwrap().usage_alerts
+        {
+            return;
+        }
+        if let Some(path) = &stamp_path {
+            month_end::save_stamp(
+                path,
+                month_end::CheckStamp {
+                    attempted_at: now.timestamp(),
+                    checked_day: day.clone(),
+                },
+            );
+        }
+        state
+            .usage_alert_history
+            .lock()
+            .unwrap()
+            .insert(done_key, day);
+        if let Some((balance, fee)) =
+            month_end::insufficient(&balances.target_balance, &package, &detail)
+        {
+            let tail = account
+                .user
+                .chars()
+                .rev()
+                .take(4)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>();
+            let message = format!(
+                "尾号 {tail} 的网费余额为 {:.2} 元，按下月套餐估算需 {:.2} 元，请及时充值",
+                balance as f64 / 10_000.0,
+                fee as f64 / 10_000.0
+            );
+            rust_log(&app, &state, "用量提醒", &message, "error");
+            let _ = show_native_notification(&app, "下月网费余额提醒", &message);
+            let _ = app.emit(
+                "usage-alert",
+                serde_json::json!({"kind":"renewal","message":message}),
+            );
+        } else if month_end::monthly_fee(&package, &detail).is_none()
+            || month_end::money(&balances.target_balance).is_none()
+        {
+            rust_log(
+                &app,
+                &state,
+                "用量提醒",
+                "已额外核对移动门户网费余额，但尚未确认下月费用，请在计费中心核对套餐",
+                "info",
+            );
+        } else {
+            rust_log(
+                &app,
+                &state,
+                "用量提醒",
+                "月末检查完成：移动门户网费余额足够支付下月套餐估算费用",
+                "success",
+            );
+        }
+    });
 }
 
 fn preferred_billing_account(config: &AppConfig) -> Option<Account> {
@@ -7136,6 +7298,7 @@ async fn get_user_info(
         fetch_portal_user_info(effective_ip, compatibility, portal_route_context.as_ref()).await;
     if let Some(info) = info.as_ref() {
         evaluate_usage_alerts(&app, &state, info);
+        schedule_month_end_check(&app, state.inner(), &info.account);
     }
     Ok(info)
 }

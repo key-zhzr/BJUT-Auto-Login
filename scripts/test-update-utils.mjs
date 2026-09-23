@@ -245,6 +245,11 @@ const damaged = [...other]; damaged[0] = damaged[0].slice(0,-1)+'x';
 await assert.rejects(()=>new ConfigQrCollector().add(damaged[0]), /校验失败/);
 let time = 1000; const expired = new ConfigQrCollector(()=>time); await expired.add(frames[0]); time += 600001;
 await assert.rejects(()=>expired.add(frames[1]), /超时/);
+const compactPayload = 'BJUT4:' + 'A'.repeat(900);
+const compactCollector = new ConfigQrCollector();
+let compactResult;
+for (const frame of await encodeConfigQr(compactPayload)) compactResult = await compactCollector.add(frame);
+assert.equal(compactResult.payload, compactPayload, 'compact encrypted backups must survive QR framing');
 console.log('Encrypted QR framing, duplicate, mixed and expiry cases passed');
 const { rechargeServiceIsOpen } = await import('../src/recharge-hours.ts');
 for (const [hour, minute, open] of [[5,59,false],[6,0,true],[22,59,true],[23,0,false],[0,0,false]]) {

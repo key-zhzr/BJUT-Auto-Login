@@ -476,6 +476,81 @@ where
     result
 }
 
+/// Read only the current/next package and stop status needed for a renewal
+/// reminder. This must never submit a reservation or a recharge request.
+pub(crate) async fn renewal_plan(
+    access: &BillingAccess,
+    compatibility: VpnCompatibility,
+    pool: &std::sync::Mutex<BillingSessionPool>,
+) -> Result<Option<(String, String)>, BillingError> {
+    let (mut session, _) = acquire_billing_session(pool, access, compatibility).await?;
+    let result = async {
+        let user = dashboard_user(&session.dashboard_html);
+        if dashboard_account_status(&session.dashboard_html)
+            .map_or(user.use_flag != Some(1), |status| status != "正常")
+        {
+            return Ok(None);
+        }
+        let stop = get_page_text(&mut session, "/Self/service/goStop").await?;
+        if has_scheduled_stop(&stop) {
+            return Ok(None);
+        }
+        let package = get_page_text(&mut session, "/Self/service/package").await?;
+        let reservation = fetch_active_package_reservation(&mut session).await?;
+        let service = parse_service_state(
+            &session.dashboard_html,
+            &stop,
+            "",
+            &package,
+            "",
+            reservation.as_ref(),
+        );
+        renewal_package(service).map(Some)
+    }
+    .await;
+    if result.is_ok() {
+        pool.lock().unwrap().put(
+            &access.account,
+            access.password.as_deref().unwrap_or_default(),
+            compatibility,
+            session,
+        );
+    } else {
+        pool.lock().unwrap().remove(&access.account);
+    }
+    result
+}
+
+fn has_scheduled_stop(html: &str) -> bool {
+    tags(html, "a")
+        .into_iter()
+        .chain(tags(html, "button"))
+        .any(|tag| {
+            attribute(tag, "data-toggle").as_deref() == Some("undoPreStop")
+                && attribute(tag, "disabled").is_none()
+        })
+}
+
+fn renewal_package(service: BillingServiceState) -> Result<(String, String), BillingError> {
+    if service.package_scheduled {
+        let Some(name) = service.scheduled_package else {
+            return Err(BillingError::Protocol("尚未确认下月预约套餐".into()));
+        };
+        let detail = service
+            .package_options
+            .iter()
+            .find(|option| normalize_text(&option.name) == normalize_text(&name))
+            .map(|option| option.description.clone())
+            .unwrap_or_default();
+        Ok((name, detail))
+    } else {
+        Ok((
+            service.current_package.unwrap_or_default(),
+            service.package_detail.unwrap_or_default(),
+        ))
+    }
+}
+
 pub(crate) async fn query_records(
     access: &BillingAccess,
     compatibility: VpnCompatibility,
@@ -4706,6 +4781,32 @@ mod tests {
         assert_eq!(state.scheduled_package_id.as_deref(), Some("6"));
         assert_eq!(state.scheduled_package.as_deref(), Some("本科生默认套餐"));
         assert!(state.package_options.iter().any(|option| option.id == "7"));
+        let (name, detail) = renewal_package(state).unwrap();
+        assert_eq!(name, "本科生默认套餐");
+        assert_ne!(detail, "当前套餐", "预约套餐不能借用旧套餐费用");
+        let current = renewal_package(parse_service_state(
+            dashboard,
+            "",
+            "",
+            package_html,
+            "",
+            None,
+        ))
+        .unwrap();
+        assert_eq!(current, ("本科生10元套餐".into(), "当前套餐".into()));
+    }
+
+    #[test]
+    fn renewal_skips_a_real_stop_reservation_not_its_javascript_selector() {
+        assert!(!has_scheduled_stop(
+            r#"<script> $('[data-toggle="undoPreStop"]') </script>"#
+        ));
+        assert!(has_scheduled_stop(
+            r#"<a data-toggle="undoPreStop">取消预约停机</a>"#
+        ));
+        assert!(!has_scheduled_stop(
+            r#"<button data-toggle="undoPreStop" disabled>取消预约停机</button>"#
+        ));
     }
 
     #[test]

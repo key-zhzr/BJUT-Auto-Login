@@ -1,0 +1,14 @@
+import { readFile,writeFile } from 'node:fs/promises';
+import {REPOSITORY,releaseCatalog,newestCatalog} from './downloads.js';
+const path=new URL('./release.json',import.meta.url);
+const previous=JSON.parse(await readFile(path,'utf8'));
+const response=await fetch(`https://api.github.com/repos/${REPOSITORY}/releases?per_page=20`,{headers:{Accept:'application/vnd.github+json'},signal:AbortSignal.timeout(10000)});
+if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}; existing download links are unchanged.`);
+const releases=await response.json();
+const catalog=newestCatalog(releases,releaseCatalog(previous));
+const selected=releases.find(release=>release.tag_name===catalog.tag) || previous;
+if (!releaseCatalog(selected)) throw new Error('No public installer assets found');
+const {tag_name,draft,prerelease,published_at,html_url}=selected;
+const assets=selected.assets.map(({name,size,browser_download_url})=>({name,size,browser_download_url}));
+await writeFile(path,JSON.stringify({tag_name,draft,prerelease,published_at,html_url,assets},null,2)+'\n');
+console.log(`Verified installer metadata for ${tag_name}; run npm run site:build to update the static download links.`);

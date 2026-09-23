@@ -339,6 +339,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "corewlan",
+ "flate2",
  "futures-util",
  "http-body-util",
  "hyper",

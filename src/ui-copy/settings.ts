@@ -82,7 +82,7 @@ export const SETTINGS_COPY = {
     },
     'setting-android-notify-usage-alerts': {
       title: '余额与流量提醒',
-      description: '余额或剩余套餐流量低于提醒线',
+      description: '余额、流量不足提醒，月末核对下月套餐费用',
     },
     'setting-android-notify-background-errors': {
       title: '后台异常',
@@ -90,7 +90,7 @@ export const SETTINGS_COPY = {
     },
     'setting-usage-alerts': {
       title: '启用用量提醒',
-      description: '余额或剩余套餐流量低于提醒线时每天通知一次',
+      description: '余额、流量不足时提醒；月末核对下月套餐费用',
     },
     'setting-balance-threshold': {
       title: '余额提醒线',

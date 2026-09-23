@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="/src/themes.css" />
     <link rel="stylesheet" href="/src/theme-apple.css" />
     <link rel="stylesheet" href="/src/theme-winui.css" />
+    <link rel="stylesheet" href="/src/page-layout.css" />
   </head>
   <body>
     <div id="app-loading-mask" class="app-loading-mask is-visible" role="status" aria-live="polite">
@@ -102,6 +103,7 @@
               <i data-lucide="receipt-text"></i> 计费中心
             </button>
           </header>
+          <div class="page-content">
           
           <div id="dashboard-override-options" class="glass-card" style="display: none; padding: 1rem; margin-bottom: 1rem; border-radius: 12px;">
             <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
@@ -217,6 +219,7 @@
                 <p id="info-flow">--</p>
               </div>
             </div>
+          </div>
           </div>
         </section>
 
@@ -691,6 +694,7 @@
             </div>
             <button id="btn-show-add" class="btn btn-primary"><i data-lucide="plus"></i> 添加账号</button>
           </header>
+          <div class="page-content">
 
           <section id="discovered-account-card" class="account-discovery-card glass-card hidden" aria-live="polite">
             <div class="account-discovery-icon"><i data-lucide="user-search"></i></div>
@@ -725,6 +729,7 @@
             </div>
             <div id="credential-missing-users" class="diagnostic-note hidden"></div>
           </section>
+          </div>
         </section>
 
         <!-- Add Account Modal -->
@@ -830,6 +835,7 @@
               <button id="btn-run-diagnostics" class="btn btn-primary"><i data-lucide="activity"></i> 开始诊断</button>
             </div>
           </header>
+          <div class="page-content">
 
           <div id="diagnostic-summary" class="diagnostic-summary glass-card diagnostic-idle">
             <div>
@@ -883,6 +889,7 @@
               <div class="diagnostic-empty">运行诊断后将在此展示每一步结果</div>
             </div>
           </section>
+          </div>
         </section>
 
         <!-- Logs -->
@@ -896,6 +903,7 @@
               <button id="btn-clear-logs" class="btn btn-sm btn-log-danger">清空日志</button>
             </div>
           </header>
+          <div class="page-content">
           <div class="log-filters glass-card">
             <input id="log-search" type="search" placeholder="搜索时间、模块或内容" autocomplete="off">
             <div class="custom-select compact-select" id="log-session-filter" aria-label="启动会话">
@@ -923,6 +931,7 @@
               <!-- Dynamically populated -->
             </div>
           </div>
+          </div>
         </section>
 
         <!-- Settings -->
@@ -931,6 +940,7 @@
             <h1>设置</h1>
             <p>自定义应用程序行为</p>
           </header>
+          <div class="page-content">
           
           <div class="settings-container">
             <div class="settings-group glass-card">
@@ -1186,7 +1196,7 @@
               <div class="setting-item usage-alert-master-setting">
                 <div class="setting-info">
                   <h4>启用用量提醒</h4>
-                  <p>余额或剩余套餐流量低于提醒线时每天通知一次</p>
+                  <p>余额、流量不足时提醒；月末核对下月套餐费用</p>
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="setting-usage-alerts" checked>
@@ -1264,15 +1274,9 @@
                   <p>通过剪贴板或二维码备份、迁移设置和账号。</p>
                 </div>
                 <div>
-                  <div class="config-transfer-options" role="group" aria-label="导入导出内容">
-                    <label><input type="checkbox" id="config-scope-settings" checked> 设置</label>
-                    <label><input type="checkbox" id="config-scope-accounts" checked> 账号密码</label>
-                  </div>
                   <div class="config-transfer-actions">
-                    <button class="btn btn-secondary btn-sm" id="btn-export-config">复制备份</button>
-                    <button class="btn btn-secondary btn-sm" id="btn-import-config">粘贴导入</button>
-                    <button class="btn btn-secondary btn-sm" id="btn-export-config-qr">生成二维码</button>
-                    <button class="btn btn-secondary btn-sm" id="btn-import-config-qr">扫描二维码</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-import-config">导入</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-export-config">导出</button>
                   </div>
                 </div>
               </div>
@@ -1307,6 +1311,8 @@
               </div>
               <p class="settings-about-note">应用只会连接校园网登录、计费、统一认证、校园服务与 GitHub Releases 等明确用途的服务；敏感字段不会写入运行日志。</p>
             </div>
+          </div>
+          </div>
         </section>
       </main>
     </div>

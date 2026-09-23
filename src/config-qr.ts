@@ -39,8 +39,10 @@ export class ConfigQrCollector {
     if (this.frames.size !== total) return progress;
     const payload = Array.from({ length: total }, (_, i) => this.frames.get(i + 1)!).join('');
     if (await digest(payload) !== id) throw new Error('二维码校验失败，请重新导出。');
-    const envelope = JSON.parse(payload) as { version?: unknown; ciphertext?: unknown };
-    if (envelope.version !== 3 || typeof envelope.ciphertext !== 'string') throw new Error('备份格式不受支持。');
+    if (!/^BJUT4:[A-Za-z0-9_-]{59,}$/.test(payload)) {
+      const envelope = JSON.parse(payload) as { version?: unknown; ciphertext?: unknown };
+      if (envelope.version !== 3 || typeof envelope.ciphertext !== 'string') throw new Error('备份格式不受支持。');
+    }
     return { ...progress, payload };
   }
 }
