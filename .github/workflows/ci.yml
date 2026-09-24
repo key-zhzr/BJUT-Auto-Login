@@ -91,6 +91,10 @@ jobs:
       - name: Check platform Rust integration
         run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 
+      - name: Verify concurrent Windows startup guard
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked windows_startup::tests
+
   android-kotlin-check:
     name: Android integration check
     runs-on: ubuntu-24.04

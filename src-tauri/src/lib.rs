@@ -32,6 +32,8 @@ mod trusted_time;
 mod update_metadata;
 #[cfg(desktop)]
 mod window_geometry;
+#[cfg(target_os = "windows")]
+mod windows_startup;
 #[cfg(target_os = "android")]
 use internet_probe::check_internet_from_source;
 
@@ -9240,7 +9242,28 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().setup(|_app| {
+    #[cfg(target_os = "windows")]
+    let startup_gate = windows_startup::StartupGate::acquire("Local\\cn.edu.bjut.al.startup")
+        .expect("failed to acquire application startup guard");
+    let builder = tauri::Builder::default();
+    // Register first: a second Windows process must exit before creating a
+    // WebView, tray icon, credential store or background authentication loop.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(window) = handle.get_webview_window("main") {
+                if window.is_minimized().unwrap_or(false) {
+                    let _ = window.unminimize();
+                }
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            // During a simultaneous cold start, frontend_ready will reveal the
+            // first window once it exists and its saved geometry is restored.
+        });
+    }));
+    let builder = builder.setup(|_app| {
         #[cfg(target_os = "android")]
         _app.handle().plugin(tauri_plugin_barcode_scanner::init())?;
         #[cfg(desktop)]
@@ -9817,6 +9840,11 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
+
+    // The plugin's notification window now exists. A concurrent cold start
+    // can safely find it and exit before initializing a second application.
+    #[cfg(target_os = "windows")]
+    drop(startup_gate);
 
     app.run(|app_handle, event| {
         #[cfg(target_os = "macos")]

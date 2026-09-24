@@ -47,6 +47,7 @@ pbkdf2 = "0.12"
 corewlan = "0.2.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+tauri-plugin-single-instance = "2"
 keyring = { version = "3", features = ["windows-native"] }
 windows = { version = "0.61.3", features = [
   "Win32_Foundation",
@@ -54,7 +55,9 @@ windows = { version = "0.61.3", features = [
   "Win32_NetworkManagement_Ndis",
   "Win32_NetworkManagement_WiFi",
   "Win32_Networking_WinSock",
+  "Win32_Security",
   "Win32_System_Power",
+  "Win32_System_Threading",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
