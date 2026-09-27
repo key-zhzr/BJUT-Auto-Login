@@ -95,6 +95,10 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked windows_startup::tests
 
+      - name: Verify Windows encrypted configuration storage
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked windows_credentials::tests
+
   android-kotlin-check:
     name: Android integration check
     runs-on: ubuntu-24.04

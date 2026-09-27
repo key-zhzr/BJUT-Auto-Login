@@ -33,6 +33,8 @@ mod update_metadata;
 #[cfg(desktop)]
 mod window_geometry;
 #[cfg(target_os = "windows")]
+mod windows_credentials;
+#[cfg(target_os = "windows")]
 mod windows_startup;
 #[cfg(target_os = "android")]
 use internet_probe::check_internet_from_source;
@@ -1622,6 +1624,7 @@ struct AppState {
     update_download: UpdateDownloadControl,
     billing_fetch_lock: tokio::sync::Mutex<()>,
     billing_sessions: Mutex<billing::BillingSessionPool>,
+    billing_webvpn: tokio::sync::Mutex<billing::webvpn::Manager>,
     billing_session_expiry_generation: AtomicU64,
     campus_service_lock: tokio::sync::Mutex<()>,
     campus_recharge_pending: tokio::sync::Mutex<Option<campus_services::PendingRecharge>>,
@@ -3467,7 +3470,7 @@ const SECURE_CONFIG_SERVICE: &str = "cn.edu.bjut.al";
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const SECURE_CONFIG_USER: &str = "app-config";
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn load_secure_config(_app: &tauri::AppHandle) -> Result<Option<AppConfig>, String> {
     ensure_persistent_credential_backend()?;
     let entry = keyring::Entry::new(SECURE_CONFIG_SERVICE, SECURE_CONFIG_USER)
@@ -3481,13 +3484,53 @@ fn load_secure_config(_app: &tauri::AppHandle) -> Result<Option<AppConfig>, Stri
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn save_secure_config(_app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
     ensure_persistent_credential_backend()?;
     let entry = keyring::Entry::new(SECURE_CONFIG_SERVICE, SECURE_CONFIG_USER)
         .map_err(|e| e.to_string())?;
     let serialized = serde_json::to_string(config).map_err(|e| e.to_string())?;
     entry.set_password(&serialized).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_credential_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("credentials.dpapi"))
+        .map_err(|_| "无法定位 Windows 凭据目录".into())
+}
+
+#[cfg(target_os = "windows")]
+fn load_secure_config(app: &tauri::AppHandle) -> Result<Option<AppConfig>, String> {
+    if let Some(mut bytes) = windows_credentials::read(&windows_credential_path(app)?)? {
+        let result = serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|_| "Windows 配置内容无法解析".to_string());
+        bytes.fill(0);
+        return result;
+    }
+    // Read the old complete-config entry only when the new file does not exist.
+    // A corrupt/new-user DPAPI file must never silently revert to stale accounts.
+    ensure_persistent_credential_backend()?;
+    let entry = keyring::Entry::new(SECURE_CONFIG_SERVICE, SECURE_CONFIG_USER)
+        .map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(serialized) => serde_json::from_str(&serialized)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn save_secure_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
+    let path = windows_credential_path(app)?;
+    let mut bytes = serde_json::to_vec(config).map_err(|e| e.to_string())?;
+    let result = windows_credentials::write(&path, &bytes);
+    bytes.fill(0);
+    result
 }
 
 #[cfg(target_os = "macos")]
@@ -3594,7 +3637,14 @@ fn save_secure_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), 
 fn save_secure_config_verified(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
     save_secure_config(app, config)?;
     match load_secure_config(app)? {
-        Some(persisted) if persisted == *config => Ok(()),
+        Some(persisted) if persisted == *config => {
+            #[cfg(target_os = "windows")]
+            if let Ok(legacy) = keyring::Entry::new(SECURE_CONFIG_SERVICE, SECURE_CONFIG_USER) {
+                // Remove the old entry only after a complete, successful readback.
+                let _ = legacy.delete_credential();
+            }
+            Ok(())
+        }
         Some(_) => Err("安全存储回读内容与待保存配置不一致".to_string()),
         None => Err("安全存储写入后未能回读配置".to_string()),
     }
@@ -5453,7 +5503,7 @@ fn credential_backend_name() -> &'static str {
     } else if cfg!(target_os = "macos") {
         "macOS 本地加密文件 (AES-GCM)"
     } else if cfg!(target_os = "windows") {
-        "Windows Credential Manager"
+        "Windows 本机加密存储 (DPAPI)"
     } else if cfg!(target_os = "linux") {
         "Linux Secret Service"
     } else {
@@ -7354,6 +7404,7 @@ async fn get_billing_center(
     state: tauri::State<'_, Arc<AppState>>,
     account_user: Option<String>,
     current_session: Option<bool>,
+    webvpn: Option<bool>,
 ) -> Result<billing::BillingCenterData, String> {
     emit_billing_center_progress(&app, &state, "准备读取计费中心完整数据", 2);
     let _fetch_guard = match state.billing_fetch_lock.try_lock() {
@@ -7381,6 +7432,7 @@ async fn get_billing_center(
         account_user.as_deref(),
         current_session.unwrap_or(false),
         true,
+        webvpn.unwrap_or(false),
     )
     .await?;
     let progress_app = app.clone();
@@ -7448,6 +7500,7 @@ async fn query_billing_records(
     query: billing::BillingRecordQuery,
     account_user: Option<String>,
     current_session: Option<bool>,
+    webvpn: Option<bool>,
 ) -> Result<billing::BillingRecordResult, String> {
     let kind = query.kind.clone();
     let page = query.page;
@@ -7459,6 +7512,7 @@ async fn query_billing_records(
         account_user.as_deref(),
         current_session.unwrap_or(false),
         false,
+        webvpn.unwrap_or(false),
     )
     .await?;
     ensure_billing_foreground(&state)?;
@@ -7493,6 +7547,7 @@ async fn perform_billing_action(
     request: billing::BillingActionRequest,
     account_user: Option<String>,
     current_session: Option<bool>,
+    webvpn: Option<bool>,
 ) -> Result<billing::BillingActionResult, String> {
     let action = request.action.clone();
     let _billing_guard = if action == "changePassword" {
@@ -7513,6 +7568,7 @@ async fn perform_billing_action(
             account_user.as_deref(),
             current_session.unwrap_or(false),
             false,
+            webvpn.unwrap_or(false),
         )
         .await?;
         let account = Account {
@@ -8555,19 +8611,84 @@ async fn cancel_wechat_card_recharge(
     Ok(())
 }
 
+fn billing_credential_stamp(state: &AppState) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let config = state.config.read().unwrap();
+    let mut accounts: Vec<_> = config.accounts.iter().collect();
+    accounts.sort_by(|left, right| left.user.cmp(&right.user));
+    let mut hash = Sha256::new();
+    for account in accounts {
+        hash.update((account.user.len() as u64).to_le_bytes());
+        hash.update(account.user.as_bytes());
+        hash.update((account.pass.len() as u64).to_le_bytes());
+        hash.update(account.pass.as_bytes());
+    }
+    hash.finalize().into()
+}
+
+#[tauri::command]
+async fn begin_billing_webvpn(
+    state: tauri::State<'_, Arc<AppState>>,
+    account_user: String,
+) -> Result<billing::webvpn::LoginStatus, String> {
+    let (account, _) = billing_action_target(&state, Some(&account_user))?;
+    let mut manager = state.billing_webvpn.lock().await;
+    manager.bind_credentials(billing_credential_stamp(&state));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(75),
+        manager.begin(&account.user, &account.pass),
+    )
+    .await
+    .map_err(|_| "校外登录超时，请重试".to_string())?
+}
+
+#[tauri::command]
+async fn verify_billing_webvpn(
+    state: tauri::State<'_, Arc<AppState>>,
+    challenge_id: String,
+    token: String,
+    resend: Option<bool>,
+) -> Result<billing::webvpn::LoginStatus, String> {
+    ensure_billing_foreground(&state)?;
+    let mut manager = state.billing_webvpn.lock().await;
+    manager.bind_credentials(billing_credential_stamp(&state));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(75),
+        manager.verify(&challenge_id, &token, resend.unwrap_or(false)),
+    )
+    .await
+    .map_err(|_| "校外验证超时，请重新登录".to_string())?
+}
+
+#[tauri::command]
+async fn cancel_billing_webvpn(
+    state: tauri::State<'_, Arc<AppState>>,
+    challenge_id: String,
+) -> Result<(), String> {
+    state.billing_webvpn.lock().await.cancel(&challenge_id);
+    Ok(())
+}
+
 async fn resolve_billing_access(
     app: &tauri::AppHandle,
     state: &AppState,
     account_user: Option<&str>,
     current_session: bool,
     allow_discovery: bool,
+    webvpn: bool,
 ) -> Result<(billing::BillingAccess, VpnCompatibility), String> {
     if !current_session {
         let (account, compatibility) = billing_action_target(state, account_user)?;
-        return Ok((
-            billing::BillingAccess::saved(account.user, account.pass),
-            compatibility,
-        ));
+        let mut access = billing::BillingAccess::saved(account.user, account.pass);
+        if webvpn {
+            let mut manager = state.billing_webvpn.lock().await;
+            manager.bind_credentials(billing_credential_stamp(state));
+            access = access.via_webvpn(manager.session()?);
+        }
+        return Ok((access, compatibility));
+    }
+    if webvpn {
+        return Err("校外访问请先选择已保存的计费账号".into());
     }
     ensure_billing_foreground(state)?;
     let expected_account = account_user
@@ -8629,6 +8750,7 @@ fn billing_action_target(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Keep the existing named Tauri IPC fields compatible.
 async fn disconnect_billing_session(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -8637,6 +8759,7 @@ async fn disconnect_billing_session(
     mac: String,
     account_user: Option<String>,
     current_session: Option<bool>,
+    webvpn: Option<bool>,
 ) -> Result<String, String> {
     let _fetch_guard = state.billing_fetch_lock.lock().await;
     let (access, compatibility) = resolve_billing_access(
@@ -8645,6 +8768,7 @@ async fn disconnect_billing_session(
         account_user.as_deref(),
         current_session.unwrap_or(false),
         false,
+        webvpn.unwrap_or(false),
     )
     .await?;
     ensure_billing_foreground(&state)?;
@@ -8679,6 +8803,7 @@ async fn set_billing_mauth(
     enabled: bool,
     account_user: Option<String>,
     current_session: Option<bool>,
+    webvpn: Option<bool>,
 ) -> Result<String, String> {
     let _fetch_guard = state.billing_fetch_lock.lock().await;
     let (access, compatibility) = resolve_billing_access(
@@ -8687,6 +8812,7 @@ async fn set_billing_mauth(
         account_user.as_deref(),
         current_session.unwrap_or(false),
         false,
+        webvpn.unwrap_or(false),
     )
     .await?;
     ensure_billing_foreground(&state)?;
@@ -8896,6 +9022,7 @@ fn update_billing_background_lifecycle(
                 == generation
         {
             let removed = state.billing_sessions.lock().unwrap().clear();
+            state.billing_webvpn.lock().await.clear();
             if removed > 0 {
                 rust_log(
                     &app,
@@ -9362,6 +9489,7 @@ pub fn run() {
             update_download: UpdateDownloadControl::default(),
             billing_fetch_lock: tokio::sync::Mutex::new(()),
             billing_sessions: Mutex::new(billing::BillingSessionPool::default()),
+            billing_webvpn: tokio::sync::Mutex::new(billing::webvpn::Manager::default()),
             billing_session_expiry_generation: AtomicU64::new(0),
             campus_service_lock: tokio::sync::Mutex::new(()),
             campus_recharge_pending: tokio::sync::Mutex::new(None),
@@ -9808,6 +9936,9 @@ pub fn run() {
             accept_discovered_campus_account,
             reject_discovered_campus_account,
             get_billing_center,
+            begin_billing_webvpn,
+            verify_billing_webvpn,
+            cancel_billing_webvpn,
             query_billing_records,
             perform_billing_action,
             prepare_network_recharge,

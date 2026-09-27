@@ -18,6 +18,7 @@ use crate::portal_auth::PortalRouteContext;
 mod records;
 mod transport;
 mod types;
+pub(crate) mod webvpn;
 use transport::BillingClient;
 pub(crate) use types::*;
 
@@ -75,6 +76,7 @@ pub(crate) struct BillingAccess {
     pub account: String,
     password: Option<String>,
     current_session: Option<BillingSession>,
+    webvpn: Option<webvpn::Session>,
 }
 
 impl BillingAccess {
@@ -83,7 +85,13 @@ impl BillingAccess {
             account,
             password: Some(password),
             current_session: None,
+            webvpn: None,
         }
+    }
+
+    pub(crate) fn via_webvpn(mut self, session: webvpn::Session) -> Self {
+        self.webvpn = Some(session);
+        self
     }
 
     async fn authenticate(
@@ -92,6 +100,19 @@ impl BillingAccess {
     ) -> Result<BillingSession, BillingError> {
         if let Some(session) = &self.current_session {
             return Ok(session.clone());
+        }
+        if let Some(session) = &self.webvpn {
+            return authenticate_with_client(
+                &self.account,
+                self.password.as_deref().unwrap_or_default(),
+                BillingClient {
+                    client: session.client.clone(),
+                    compatibility,
+                    webvpn: Some(session.id.clone()),
+                },
+                session.cookies.clone(),
+            )
+            .await;
         }
         authenticate(
             &self.account,
@@ -144,6 +165,7 @@ pub(crate) async fn current_session_access(
         account,
         password: None,
         current_session: Some(session),
+        webvpn: None,
     })
 }
 
@@ -300,15 +322,21 @@ async fn acquire_billing_session(
     let account = &access.account;
     let password = access.password.as_deref().unwrap_or_default();
     let cached = pool.lock().unwrap().take(account, password, compatibility);
-    if let Some(mut session) = cached {
+    if let Some(mut session) = cached.filter(|session| {
+        session.client.webvpn.as_deref() == access.webvpn.as_ref().map(|vpn| vpn.id.as_str())
+    }) {
         if let Ok(dashboard_html) = get_page_text(&mut session, BILLING_DASHBOARD_PATH).await {
-            if embedded_user_json(&dashboard_html).is_some() {
+            if embedded_user_json(&dashboard_html).is_some()
+                && (session.client.webvpn.is_none()
+                    || dashboard_account_matches(&dashboard_html, account))
+            {
                 session.dashboard_html = dashboard_html;
                 return Ok((session, true));
             }
         }
     }
-    authenticate(account, password, compatibility)
+    access
+        .authenticate(compatibility)
         .await
         .map(|session| (session, false))
 }
@@ -1481,26 +1509,76 @@ async fn authenticate(
     password: &str,
     compatibility: VpnCompatibility,
 ) -> Result<BillingSession, BillingError> {
+    authenticate_with_client(
+        account,
+        password,
+        build_client(compatibility).await?,
+        SessionCookies::default(),
+    )
+    .await
+}
+
+async fn authenticate_with_client(
+    account: &str,
+    password: &str,
+    client: BillingClient,
+    mut cookies: SessionCookies,
+) -> Result<BillingSession, BillingError> {
     if account.trim().is_empty() || password.is_empty() {
         return Err(BillingError::InvalidRequest(
             "首选账号缺少已保存的账号或密码".to_string(),
         ));
     }
 
-    let client = build_client(compatibility).await?;
-    let mut cookies = SessionCookies::default();
+    let compatibility = client.compatibility;
     let login_url = Url::parse(BILLING_LOGIN_URL)
         .map_err(|_| BillingError::Protocol("登录地址无效".to_string()))?;
-    let (login_effective_url, login_response) = get_follow(
+    let (mut login_effective_url, login_response) = get_follow(
         &client,
-        login_url,
+        login_url.clone(),
         &mut cookies,
         None,
         "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "document",
     )
     .await?;
-    let login_html = login_response.text().await.map_err(network_error)?;
+    let mut login_html = login_response.text().await.map_err(network_error)?;
+    // WebVPN retains the upstream jfself cookie on its server. A different
+    // saved billing account can therefore replace that upstream session even
+    // though our local cookie jar is unchanged. All callers serialize access;
+    // verify the dashboard identity before using it or signing into another.
+    if client.webvpn.is_some() && embedded_user_json(&login_html).is_some() {
+        let mut session = BillingSession {
+            client: client.clone(),
+            cookies,
+            dashboard_url: login_effective_url.clone(),
+            dashboard_html: login_html.clone(),
+            ajax_csrf_token: None,
+        };
+        if dashboard_account_matches(&login_html, account) {
+            session.ajax_csrf_token = fetch_page_csrf_token(
+                &client,
+                &mut session.cookies,
+                &login_html,
+                &login_effective_url,
+            )
+            .await;
+            return Ok(session);
+        }
+        logout(&mut session).await;
+        cookies = session.cookies;
+        let (url, response) = get_follow(
+            &client,
+            login_url,
+            &mut cookies,
+            None,
+            "text/html",
+            "document",
+        )
+        .await?;
+        login_effective_url = url;
+        login_html = response.text().await.map_err(network_error)?;
+    }
 
     let checkcode = input_value(&login_html, "checkcode")
         .ok_or_else(|| BillingError::Protocol("登录页缺少 checkcode".to_string()))?;
@@ -1574,6 +1652,11 @@ async fn authenticate(
     {
         return Err(BillingError::Protocol("登录后未进入计费控制台".to_string()));
     }
+    if client.webvpn.is_some() && !dashboard_account_matches(&dashboard_html, account) {
+        return Err(BillingError::ActionRejected(
+            "计费页面的账号与所选账号不一致，请重新登录".into(),
+        ));
+    }
 
     let ajax_csrf_token =
         fetch_page_csrf_token(&client, &mut cookies, &dashboard_html, &dashboard_url).await;
@@ -1585,6 +1668,12 @@ async fn authenticate(
         dashboard_html,
         ajax_csrf_token,
     })
+}
+
+fn dashboard_account_matches(html: &str, expected: &str) -> bool {
+    embedded_user_json(html)
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .is_some_and(|value| value["userName"].as_str() == Some(expected))
 }
 
 async fn replay_login_assets(
@@ -1953,11 +2042,13 @@ async fn post_form_action(
         .header("Sec-Fetch-Mode", "cors")
         .header("Sec-Fetch-Site", "same-origin")
         .form(&fields);
-    if let Some(value) = session.cookies.header(&url) {
+    if let Some(value) = session.cookies.header(&session.client.cookie_url(&url)) {
         request = request.header(COOKIE, value);
     }
     let response = request.send().await.map_err(network_error)?;
-    session.cookies.absorb(&url, response.headers());
+    session
+        .cookies
+        .absorb(&session.client.cookie_url(&url), response.headers());
     if response.status().is_redirection() {
         if matches!(response.status().as_u16(), 307 | 308) {
             return Err(BillingError::Protocol(
@@ -2356,6 +2447,7 @@ async fn build_client(compatibility: VpnCompatibility) -> Result<BillingClient, 
         .map(|client| BillingClient {
             client,
             compatibility,
+            webvpn: None,
         })
         .map_err(network_error)
 }
@@ -2427,6 +2519,7 @@ async fn build_account_discovery_client(
         .map(|client| BillingClient {
             client,
             compatibility,
+            webvpn: None,
         })
         .map_err(network_error)
 }
@@ -2577,14 +2670,14 @@ async fn account_discovery_get_follow(
                     "none"
                 },
             );
-        if let Some(value) = cookies.header(&url) {
+        if let Some(value) = cookies.header(&client.cookie_url(&url)) {
             request = request.header(COOKIE, value);
         }
         if let Some(value) = current_referer.as_ref() {
             request = request.header(REFERER, client.referer(value));
         }
         let response = request.send().await.map_err(network_error)?;
-        cookies.absorb(&url, response.headers());
+        cookies.absorb(&client.cookie_url(&url), response.headers());
         if response.status().is_redirection() {
             let location = response
                 .headers()
@@ -2770,14 +2863,14 @@ async fn get_follow(
         if destination == "empty" {
             request = request.header("X-Requested-With", "XMLHttpRequest");
         }
-        if let Some(value) = cookies.header(&url) {
+        if let Some(value) = cookies.header(&client.cookie_url(&url)) {
             request = request.header(COOKIE, value);
         }
         if let Some(value) = current_referer.as_ref() {
             request = request.header(REFERER, client.referer(value));
         }
         let response = request.send().await.map_err(network_error)?;
-        cookies.absorb(&url, response.headers());
+        cookies.absorb(&client.cookie_url(&url), response.headers());
         if response.status().is_redirection() {
             let next = redirect_target(client, &url, &response)?;
             current_referer = Some(url.clone());
@@ -2823,11 +2916,11 @@ async fn post_login(
         .header("Sec-Fetch-Mode", "navigate")
         .header("Sec-Fetch-Site", "same-origin")
         .form(&form);
-    if let Some(value) = cookies.header(&verify_url) {
+    if let Some(value) = cookies.header(&client.cookie_url(&verify_url)) {
         request = request.header(COOKIE, value);
     }
     let response = request.send().await.map_err(network_error)?;
-    cookies.absorb(&verify_url, response.headers());
+    cookies.absorb(&client.cookie_url(&verify_url), response.headers());
     if response.status().is_redirection() {
         if matches!(response.status().as_u16(), 307 | 308) {
             return Err(BillingError::Protocol(
@@ -2871,10 +2964,16 @@ fn redirect_target(
         .get(LOCATION)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| BillingError::Protocol("重定向缺少 Location".to_string()))?;
-    let next = current
+    let next = client
+        .cookie_url(current)
         .join(location)
         .map_err(|_| BillingError::Protocol("重定向地址无效".to_string()))?;
     let next = client.canonical(next);
+    if client.webvpn.is_some() && next.host_str() == Some(webvpn::HOST) {
+        return Err(BillingError::ActionRejected(
+            "校外登录已过期，请重新验证 WebVPN".into(),
+        ));
+    }
     validate_same_origin(&next)?;
     Ok(next)
 }
@@ -4259,6 +4358,7 @@ mod tests {
             client: BillingClient {
                 client: Client::builder().build().unwrap(),
                 compatibility: VpnCompatibility::High,
+                webvpn: None,
             },
             cookies: SessionCookies::default(),
             dashboard_url: Url::parse("https://jfself.bjut.edu.cn/Self/dashboard").unwrap(),

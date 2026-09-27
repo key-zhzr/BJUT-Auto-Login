@@ -8,6 +8,7 @@ import '../../src/theme-winui.css';
 import '../../src/page-layout.css';
 import { applyAppearance } from '../../src/appearance';
 import { UI_TEXT } from '../../src/ui-text';
+import { setupPageHeaders } from '../../src/page-headers';
 import { Activity, BarChart2, CheckCircle, ChevronDown, Clock, createIcons, FileText, Home, LayoutDashboard, LogIn, Minus, Power, ReceiptText, RefreshCw, Settings, ShieldCheck, Square, User, Users, WalletCards, X } from 'lucide';
 
 const mobile = new URLSearchParams(location.search).get('layout') === 'mobile';
@@ -20,6 +21,7 @@ app.querySelectorAll('script').forEach(script => script.remove());
 document.body.replaceChildren(...(mobile ? [app] : [titlebar, app]));
 document.body.classList.add(mobile ? 'is-android' : 'is-desktop');
 applyAppearance('basic', 'blue', 'light');
+setupPageHeaders();
 const element = (id: string) => document.getElementById(id)!;
 element('network-status').textContent = UI_TEXT.networkStatus.onlineTitle;
 element('network-detail').textContent = UI_TEXT.networkStatus.onlineDetail;

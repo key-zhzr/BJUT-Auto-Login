@@ -1,4 +1,6 @@
 import { chooseConfigTransfer } from './config-transfer-dialog';
+import { setupPageHeaders } from './page-headers';
+import { loginBillingWebVpn } from './billing-webvpn';
 import { NetworkProgressView, type NetworkCheckProgress } from './network-progress-view';
 import { AnimatedVisibility } from './animated-visibility';
 import { setupAndroidKeyboard } from './android-keyboard';
@@ -1949,6 +1951,7 @@ async function init() {
   }
   
   setupNavigation();
+  setupPageHeaders();
   setupEventListeners();
   setupEventDrivenNetworkDetection();
   renderAccounts();
@@ -2609,6 +2612,7 @@ function handleAndroidBack() {
     const dismiss = visibleModal.querySelector<HTMLElement>([
       '.config-qr-close',
       '.config-transfer-dialog [data-cancel]',
+      '#billing-webvpn-modal [data-cancel]',
       '#btn-confirm-cancel',
       '#btn-alert-ok',
       '#btn-alipay-payment-close-icon',
@@ -2682,6 +2686,27 @@ function setupEventListeners() {
   btnSwitchAccount.addEventListener('click', () => void manualLogin(true));
   btnLogoutCurrent.addEventListener('click', () => void logoutCurrentCampusSession());
   btnRefreshBillingCenter.addEventListener('click', () => void refreshBillingCenterData());
+  document.getElementById('btn-billing-webvpn')!.addEventListener('click', async () => {
+    if (billingCenterLoading || billingRecordQueryBusy) return;
+    const button = document.getElementById('btn-billing-webvpn') as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      const accounts = availableBillingAccounts().map(account => ({user:account.user,label:account.user}));
+      if (!accounts.length) {
+        await customAlert('请先在账号管理中保存统一认证账号和密码。');
+        return;
+      }
+      const user = await loginBillingWebVpn(accounts, selectedBillingAccountUser());
+      if (!user) return;
+      setBillingWebVpnMode(true, user);
+      await refreshBillingCenterData();
+    } finally { button.disabled = false; }
+  });
+  document.getElementById('btn-billing-direct')!.addEventListener('click', () => {
+    if (billingCenterLoading || billingRecordQueryBusy) return;
+    setBillingWebVpnMode(false);
+    void refreshBillingCenterData();
+  });
   btnOpenBilling.addEventListener('click', () => {
     activatePage('billing-center', 'dashboard');
     document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, behavior: 'auto' });
@@ -4448,6 +4473,24 @@ function updateOverrideOptions() {
 
 const CURRENT_BILLING_SESSION = '__current_session__';
 let currentBillingSessionUser = '';
+let billingViaWebVpn = false;
+
+function setBillingWebVpnMode(enabled: boolean, account?: string) {
+  billingViaWebVpn = enabled;
+  const button = document.getElementById('btn-billing-webvpn')!;
+  button.textContent = enabled ? '校外 · 重新验证' : '校外访问';
+  button.setAttribute('aria-pressed', String(enabled));
+  document.getElementById('btn-billing-direct')!.hidden = !enabled;
+  if (account) {
+    billingAccountFollowsDefault = false;
+    billingAccountSelect.setValue(account);
+  }
+  updateBillingAccountOptions();
+  billingCenterData = null;
+  currentBillingSessionUser = '';
+  billingRecordQueryStates = {};
+  renderBillingCenter(null);
+}
 
 function availableBillingAccounts() {
   return getAccounts().filter(account => account.user && account.hasPassword);
@@ -4468,7 +4511,11 @@ function selectedBillingAccountUser(): string {
 }
 
 function billingRequestAccount() {
-  return { accountUser: selectedBillingAccountUser() || null, currentSession: billingSelectionKey() === CURRENT_BILLING_SESSION };
+  return {
+    accountUser: selectedBillingAccountUser() || null,
+    currentSession: billingSelectionKey() === CURRENT_BILLING_SESSION,
+    webvpn: billingViaWebVpn,
+  };
 }
 
 function selectedRechargePayerAccount(): string {
@@ -4507,7 +4554,8 @@ function updateBillingAccountOptions() {
     value: account.user,
     text: `${account.user}${account.isDefault ? '（默认）' : ''}${account.isDisabled ? ' · 自动登录已关闭' : ''}`,
   }));
-  const billingOptions = [{ value: CURRENT_BILLING_SESSION, text: '当前登录账号（校园网会话）' }, ...options];
+  const billingOptions = billingViaWebVpn ? options
+    : [{ value: CURRENT_BILLING_SESSION, text: '当前登录账号（校园网会话）' }, ...options];
   const fallback = defaultBillingAccountUser() || CURRENT_BILLING_SESSION;
   const currentBilling = billingAccountFollowsDefault ? fallback
     : billingOptions.some(option => option.value === previousBilling) ? previousBilling : fallback;
@@ -5062,6 +5110,8 @@ function readBillingRecordQuery(page: number, all = false): BillingRecordQuery |
 
 function setBillingRecordQueryBusy(busy: boolean) {
   billingRecordQueryBusy = busy;
+  (document.getElementById('btn-billing-webvpn') as HTMLButtonElement).disabled = busy;
+  (document.getElementById('btn-billing-direct') as HTMLButtonElement).disabled = busy;
   btnQueryBillingRecords.disabled = busy || !billingCenterData;
   btnExportBillingRecords.disabled = busy || !currentBillingRecordSelection()?.table.rows.length;
   btnExportAllBillingRecords.disabled = busy || !currentBillingRecordSelection()?.table.total;

@@ -19,7 +19,8 @@ Object.defineProperty(window, 'localStorage', { value: {
   setItem: (key: string, value: string) => memory.set(key, String(value)),
   removeItem: (key: string) => memory.delete(key), clear: () => memory.clear(),
 } });
-Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MockApp' });
+const mobileLayout = new URL(location.href).searchParams.get('platform') === 'android';
+Object.defineProperty(navigator, 'userAgent', { value: mobileLayout ? 'Mozilla/5.0 (Linux; Android 15) Mobile MockApp' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MockApp' });
 (window as any).__TAURI__ = {};
 mockWindows('main');
 const now = () => performance.now();
@@ -28,6 +29,7 @@ const table = {total: 0, rows: [], summary: {}};
 const cfg = { accounts: [
   { user: '25000001', hasPassword: true, isDefault: true, isDisabled: false },
   { user: '25000002', hasPassword: true, isDefault: false, isDisabled: true },
+  ...Array.from({length:6}, (_, i) => ({user:`2500000${i+3}`,hasPassword:true,isDefault:false,isDisabled:false})),
 ], auto_login:false, check_interval:15, check_interval_bg:60, wifi_change_detect:true, log_level:'debug', theme:'basic', accent_color:'blue', color_mode:'light', vpn_compatibility:'high', whitelist:[], blacklist:[], network_profiles:[], preferred_interface:'', adaptive_network_checks:true, usage_alerts:false };
 function center(account: string) {
   return { account, overview:{account,balance:'23 元',remainingFlow:'18 GB',status:'正常',updatedAt:'测试数据',loginHistory:[],onlineSessions:[],warnings:[]},
@@ -57,22 +59,35 @@ mockIPC(async (cmd, payload: any = {}) => {
   if (cmd === 'get_network_time') return {unixMs: Date.UTC(2026,8,21,0,0),source:'模拟 NTP'};
   if (cmd === 'export_config_backup') return {payload:JSON.stringify({version:3,ciphertext:'encrypted-fixture'.repeat(80)}),accountCount:0,passwordCount:0,missingPasswordAccounts:[]};
   if (cmd === 'get_credential_storage_status') return 'available';
-  if (cmd === 'get_credential_storage_health') return {backend:'模拟存储',status:'available',persistent:true,message:'测试',savedAccounts:2,missingPasswordAccounts:[]};
-  if (cmd === 'get_network_adapters') { await new Promise(r=>setTimeout(r,1200)); return {adapters:[],preferredInterface:'',selectionSupported:true}; }
+  if (cmd === 'get_credential_storage_health') return {backend:'模拟存储',status:'available',persistent:true,message:'测试',savedAccounts:cfg.accounts.length,missingPasswordAccounts:[]};
+  if (cmd === 'get_network_adapters') {
+    await new Promise(r=>setTimeout(r,1200));
+    return {adapters:[
+      {id:'wlan0',name:mobileLayout?'wlan0':'USB 10/100/1000 LAN',interfaceName:'wlan0',transport:mobileLayout?'wifi':'ethernet',ipv4:['192.0.2.16'],ipv6:['2001:db8::16'],connected:true,selectable:!mobileLayout,selected:true},
+      {id:'tun0',name:'tun0',interfaceName:'tun0',transport:'vpn',ipv4:['198.18.0.1'],ipv6:[],connected:true,selectable:false,selected:false},
+    ],preferredInterface:'',selectionSupported:!mobileLayout};
+  }
   if (cmd === 'get_network_schedule') return {intervalSeconds:15,interfacePollSeconds:4,reason:'模拟检查'};
   if (cmd === 'get_current_network_state') return {state:'BjutCampus',loginType:'lgn-wired',ip:'172.26.1.2',ssid:'',bssid:'',timestamp:'测试'};
   if (cmd === 'get_countdown_status') return {status:'ticking',seconds:15};
-  if (cmd === 'get_update_target') return {currentVersion:'test',platform:'windows',arch:'x86_64'};
+  if (cmd === 'get_update_target') return {currentVersion:'test',platform:mobileLayout?'android':'windows',arch:mobileLayout?'aarch64':'x86_64'};
   if (['get_logs','get_network_events','get_account_health','get_recoverable_recharges'].includes(cmd)) return [];
   if (cmd === 'plugin:window|is_visible' || cmd === 'plugin:window|is_focused') return true;
   if (cmd === 'plugin:window|is_minimized') return false;
   if (cmd === 'get_billing_center') return center(payload.currentSession ? '25000999' : payload.accountUser);
+  if (cmd === 'begin_billing_webvpn') return {stage:'sms',challengeId:'fixture-challenge',message:'请完成学校要求的短信验证'};
+  if (cmd === 'verify_billing_webvpn') {
+    if (payload.resend) return {stage:'sms',challengeId:'fixture-challenge',message:'验证码已请求，请查看短信'};
+    if (payload.token !== '123456') throw new Error('验证码未通过');
+    return {stage:'ready',challengeId:null,message:'校外连接已就绪'};
+  }
   if (cmd === 'query_billing_records') return {kind:payload.query.kind,page:1,pageSize:10,table};
   return null;
 }, {shouldMockEvents:true});
 await import('../src/main');
 const panel=document.createElement('aside'); panel.style.cssText='position:fixed;right:8px;bottom:8px;z-index:30000;padding:12px;border:1px solid #64748b;border-radius:8px;background:#fff;color:#111;max-width:380px;font-size:12px;';
 const button=document.createElement('button'); button.textContent='运行本轮界面回归'; button.id='qa-run';
+const hide=document.createElement('button');hide.textContent='隐藏验收面板';hide.onclick=()=>{panel.hidden=true;};panel.append(hide);
 const out=document.createElement('pre');out.id='qa-results';out.style.whiteSpace='pre-wrap';out.textContent='仅使用模拟账号与本地数据';panel.append(button,out);document.body.append(panel);
 const assert=(value:unknown,message:string)=>{if(!value)throw new Error(message);};
 const wait=async(test:()=>boolean)=>{for(let i=0;i<100;i++){if(test())return;await new Promise(r=>setTimeout(r,50));}throw new Error('等待界面超时');};
@@ -81,7 +96,8 @@ button.addEventListener('click',async()=>{
   button.disabled=true;out.textContent='';const note=(text:string)=>out.textContent+=text+'\n';
   try {
     await wait(()=>!document.getElementById('app-loading-mask')!.classList.contains('is-visible'));
-    assert(calls.find(c=>c.cmd==='frontend_ready')!.at < calls.find(c=>c.cmd==='get_network_adapters')!.at,'窗口仍在等待初始网卡查询');note('通过：先显示窗口，再读取网络快照');
+    if (!mobileLayout) assert(calls.find(c=>c.cmd==='frontend_ready')!.at < calls.find(c=>c.cmd==='get_network_adapters')!.at,'窗口仍在等待初始网卡查询');
+    note('通过：启动界面已就绪');
     assert(document.querySelector('#override-account [data-value="1"]'),'禁用账号未保留在手动登录列表');
     click('#btn-open-billing');await wait(()=>document.getElementById('billing-center-account')!.textContent==='25000001');
     click('#billing-account-select .custom-select-trigger');
@@ -99,6 +115,24 @@ button.addEventListener('click',async()=>{
     click('#btn-query-billing-records');
     await wait(()=>calls.some(c=>c.cmd==='query_billing_records'));
     assert(calls.some(c=>c.cmd==='query_billing_records'&&c.payload.currentSession&&c.payload.accountUser==='25000999'),'账单查询未绑定当前真实账号');assert(calls.some(c=>c.cmd==='query_billing_records'&&c.payload.query.startDate==='2024-01-01'&&c.payload.query.endDate==='2025-12-31'),'跨年查询仍被日期限制拦截');note('通过：跨年账单查询复用当前会话并携带真实账号');
+    await wait(()=>!(document.getElementById('btn-billing-webvpn') as HTMLButtonElement).disabled);
+    click('#btn-billing-webvpn');
+    await wait(()=>!!document.querySelector('#billing-webvpn-modal:not(.hidden)'));
+    (document.querySelector('#billing-webvpn-modal form') as HTMLFormElement).requestSubmit();
+    await wait(()=>!!document.querySelector('#billing-webvpn-modal .webvpn-sms:not([hidden])'));
+    assert(calls.some(c=>c.cmd==='begin_billing_webvpn'),'校外入口未启动认证');
+    assert(!calls.find(c=>c.cmd==='begin_billing_webvpn')!.payload.password,'WebView 不应提交已保存密码');
+    click('#billing-webvpn-modal [data-send]');
+    await wait(()=>calls.some(c=>c.cmd==='verify_billing_webvpn'&&c.payload.resend));
+    await wait(()=>!(document.querySelector('#billing-webvpn-modal [type="submit"]') as HTMLButtonElement).disabled);
+    (document.getElementById('webvpn-code') as HTMLInputElement).value='123456';
+    (document.querySelector('#billing-webvpn-modal form') as HTMLFormElement).requestSubmit();
+    await wait(()=>calls.some(c=>c.cmd==='get_billing_center'&&c.payload.webvpn));
+    assert(!document.querySelector('#billing-account-select [data-value="__current_session__"]'),'校外模式不应使用校园网会话');
+    await wait(()=>!(document.getElementById('btn-billing-direct') as HTMLButtonElement).disabled);
+    click('#btn-billing-direct');
+    await wait(()=>calls.filter(c=>c.cmd==='get_billing_center').slice(-1)[0]?.payload.webvpn===false);
+    note('通过：校外认证、短信验证、计费路径及切回校内');
     click('[data-target="dashboard"]');
     const progress={id:99,generation:1,revision:0,message:'正在等待新的 IP 分配',percent:5,elapsedMs:0,complete:false};
     const networkPanel = document.getElementById('network-check-progress')!;
@@ -119,7 +153,7 @@ button.addEventListener('click',async()=>{
     } else await wait(()=>networkPanel.hidden);
     click('#btn-manual-update');
     await wait(()=>document.getElementById('network-check-message')!.textContent==='手动更新正在确认登录类型');
-    await new Promise(r=>setTimeout(r,300));
+    await wait(()=>!networkPanel.classList.contains('progress-animating'));
     assert(!networkPanel.hidden && !networkPanel.classList.contains('progress-animating'),'新检测被旧退出动画隐藏或遗留动画样式');
     await emit('network-check-progress',{...progress,id:100,revision:1,message:'手动更新完成',percent:100,complete:true});
     note('通过：控制台进度出入动画与连续手动更新');
@@ -202,7 +236,7 @@ button.addEventListener('click',async()=>{
     window.__nativeKeyboardChanged?.(false,800);
     await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
     assert(!document.body.classList.contains('keyboard-open'),'键盘关闭后未恢复布局');
-    document.body.classList.remove('is-android');
+    if (!mobileLayout) document.body.classList.remove('is-android');
     note('通过：Android 键盘事件隐藏底栏并恢复布局'); note('全部通过');
   }catch(error){note('失败：'+String(error));}finally{button.disabled=false;}
 });

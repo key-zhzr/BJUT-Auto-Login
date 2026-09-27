@@ -7,7 +7,19 @@
   position: sticky;
   top: 0;
   z-index: 20;
-  background: var(--theme-bg, var(--bg-color));
+  isolation: isolate;
+  background: transparent;
+}
+:root[data-theme] #main-content > .page > .page-header::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  left: calc(-1 * var(--header-left, 0px));
+  right: calc(-1 * var(--header-right, 0px));
+  top: calc(-1 * var(--header-top, 2rem));
+  bottom: -.6rem;
+  background: var(--theme-body-bg, var(--bg-color));
 }
 :root[data-theme] #main-content > .page > .page-header h1 {
   margin: 0;
@@ -50,7 +62,16 @@
 .config-transfer-dialog .transfer-choices label { display:flex; align-items:center; gap:.4rem; }
 .config-transfer-dialog .transfer-error { color:var(--error); min-height:1.4em; font-size:.85rem; }
 .config-transfer-dialog .transfer-note { font-size:.8rem; color:var(--text-muted); }
+.config-transfer-dialog .form-group { margin-top:1rem; }
+.config-transfer-dialog .modal-actions { flex-wrap:wrap; }
+#billing-webvpn-modal .custom-select { width:100%; }
+#billing-webvpn-modal .custom-select:not(.open) .custom-select-options { max-height:0 !important; overflow:hidden; }
+#billing-webvpn-modal .custom-select-trigger::after {
+  content:''; width:.5rem; height:.5rem; border:solid currentColor;
+  border-width:0 2px 2px 0; transform:rotate(45deg); margin:0 .2rem .2rem .75rem;
+}
+#billing-webvpn-modal [data-send] { margin-top:.65rem; }
 @media(prefers-reduced-motion:reduce) {
-  :root[data-theme] #config-transfer-modal,
-  :root[data-theme] #config-transfer-modal .modal-content { transition:none; }
+  :root[data-theme] :is(#config-transfer-modal, #billing-webvpn-modal),
+  :root[data-theme] :is(#config-transfer-modal, #billing-webvpn-modal) .modal-content { transition:none; }
 }

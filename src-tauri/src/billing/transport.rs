@@ -6,6 +6,9 @@ use super::*;
 pub(super) struct BillingClient {
     pub client: Client,
     pub compatibility: VpnCompatibility,
+    // Distinguish cached billing sessions across WebVPN sign-ins as well as
+    // across direct/proxied transport. This identifier is local, not a cookie.
+    pub webvpn: Option<String>,
 }
 
 impl BillingClient {
@@ -18,6 +21,9 @@ impl BillingClient {
     }
 
     fn request(&self, method: reqwest::Method, url: Url) -> reqwest::RequestBuilder {
+        if self.webvpn.is_some() {
+            return self.client.request(method, webvpn::wire_url(&url));
+        }
         let host = url.host_str().unwrap_or_default().to_string();
         let wire = wire_url(&url, self.compatibility);
         let mut request = self.client.request(method, wire.clone());
@@ -33,7 +39,9 @@ impl BillingClient {
     }
 
     pub fn origin(&self) -> &'static str {
-        if self.compatibility == VpnCompatibility::Maximum {
+        if self.webvpn.is_some() {
+            webvpn::ORIGIN
+        } else if self.compatibility == VpnCompatibility::Maximum {
             "http://jfself.bjut.edu.cn"
         } else {
             BILLING_ORIGIN
@@ -45,12 +53,23 @@ impl BillingClient {
     }
 
     pub fn referer(&self, url: &Url) -> String {
+        if self.webvpn.is_some() {
+            return webvpn::wire_url(url).to_string();
+        }
         let mut value = wire_url(url, self.compatibility);
         // The Host header retains the site's virtual host in direct mode.
         if value != *url {
             let _ = value.set_host(url.host_str());
         }
         value.to_string()
+    }
+
+    pub fn cookie_url(&self, url: &Url) -> Url {
+        if self.webvpn.is_some() {
+            webvpn::wire_url(url)
+        } else {
+            url.clone()
+        }
     }
 }
 
@@ -71,6 +90,7 @@ fn wire_url(url: &Url, mode: VpnCompatibility) -> Url {
 }
 
 pub(super) fn canonical_url(mut url: Url, mode: VpnCompatibility) -> Url {
+    url = webvpn::canonical_url(url);
     if mode != VpnCompatibility::Maximum || url.scheme() != "http" {
         return url;
     }
@@ -124,5 +144,22 @@ mod tests {
             validate_same_origin(&canonical_url(http.clone(), VpnCompatibility::High)).is_err()
         );
         assert!(validate_same_origin(&canonical_url(http, VpnCompatibility::Maximum)).is_ok());
+    }
+
+    #[test]
+    fn webvpn_never_uses_the_campus_http_fallback() {
+        let client = BillingClient {
+            client: Client::new(),
+            compatibility: VpnCompatibility::Maximum,
+            webvpn: Some("fixture-session".into()),
+        };
+        let url = Url::parse("https://jfself.bjut.edu.cn/Self/login/verify?q=1").unwrap();
+        let request = client.post(url.clone()).build().unwrap();
+        assert_eq!(request.url().scheme(), "https");
+        assert_eq!(request.url().host_str(), Some(webvpn::HOST));
+        assert_eq!(request.url().query(), Some("q=1"));
+        assert_eq!(client.origin(), webvpn::ORIGIN);
+        assert_eq!(client.referer(&url), request.url().as_str());
+        assert!(request.headers().get(reqwest::header::HOST).is_none());
     }
 }
