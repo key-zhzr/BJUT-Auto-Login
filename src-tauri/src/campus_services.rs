@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::cookie_jar::{CookieJar, StoredCookie};
-mod mobile_portal;
+mod yd_codec;
 
 const CAS_HOST: &str = "cas.bjut.edu.cn";
 const UC_HOST: &str = "uc.bjut.edu.cn";
@@ -32,6 +32,7 @@ const ALIPAY_APP_ID: &str = "2021003142658367";
 const ALIPAY_NOTIFY_URL: &str = "https://alipay.bjut.edu.cn/PayPreService/aliPayWapBackResNotify";
 const ALIPAY_RETURN_URL: &str = "https://alipay.bjut.edu.cn/PayPreService/aliPayWapBackResReturn";
 const REGULAR_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
+const WECHAT_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 13; M2102K1C Build/TKQ1.220829.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36 XWEB/1160065 MMWEBSDK/20231202 MicroMessenger/8.0.47.2560(0x28002F30) WeChat/arm64 Weixin NetType/WIFI Language/zh_CN ABI/arm64";
 const MAX_REDIRECTS: usize = 12;
 const CONFIRMATION_LIFETIME: Duration = Duration::from_secs(120);
 const WECHAT_PAYMENT_LIFETIME: Duration = Duration::from_secs(20 * 60);
@@ -140,8 +141,6 @@ pub(crate) struct PersistedCampusSession {
     account: String,
     cookies: Vec<StoredCookie>,
     saved_at: i64,
-    #[serde(default)]
-    app_session: Option<mobile_portal::SessionState>,
 }
 
 impl PersistedCampusSession {
@@ -193,7 +192,6 @@ fn persisted_campus_cookies(jar: &CookieJar, account: &str) -> PersistedCampusSe
         account: account.to_string(),
         cookies,
         saved_at: now,
-        app_session: None,
     }
 }
 
@@ -201,7 +199,6 @@ fn persisted_campus_cookies(jar: &CookieJar, account: &str) -> PersistedCampusSe
 struct CampusSession {
     client: Client,
     cookies: CookieJar,
-    app_session: Option<mobile_portal::SessionState>,
 }
 
 impl CampusSession {
@@ -211,22 +208,16 @@ impl CampusSession {
     ) -> Result<Self, CampusServiceError> {
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9".parse().unwrap());
-        let app_session = persisted
-            .as_ref()
-            .filter(|session| session.account == account)
-            .and_then(|session| session.app_session.clone())
-            .filter(mobile_portal::SessionState::valid);
         Ok(Self {
-            client: build_client(headers)?,
+            // Use one browser identity throughout ydapp -> itsapp -> CAS and
+            // the return trip. App UA markers can switch CAS to an SMS flow.
+            client: build_client(headers, WECHAT_USER_AGENT)?,
             cookies: restored_campus_cookies(account, persisted),
-            app_session,
         })
     }
 
     fn persisted(&self, account: &str) -> PersistedCampusSession {
-        let mut persisted = persisted_campus_cookies(&self.cookies, account);
-        persisted.app_session = self.app_session.clone();
-        persisted
+        persisted_campus_cookies(&self.cookies, account)
     }
 }
 
@@ -940,11 +931,10 @@ async fn authenticate(account: &str, password: &str) -> Result<CampusSession, Ca
     }
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9".parse().unwrap());
-    let client = build_client(headers)?;
+    let client = build_client(headers, REGULAR_USER_AGENT)?;
     let mut session = CampusSession {
         client,
         cookies: CookieJar::default(),
-        app_session: None,
     };
     let (login_url, login_html) =
         get_follow_text(&mut session, parse_url(CAS_LOGIN_ENTRY)?, &[CAS_HOST], None).await?;
@@ -991,7 +981,10 @@ async fn authenticate(account: &str, password: &str) -> Result<CampusSession, Ca
     Ok(session)
 }
 
-fn build_client(headers: HeaderMap) -> Result<Client, CampusServiceError> {
+fn build_client(
+    headers: HeaderMap,
+    user_agent: &'static str,
+) -> Result<Client, CampusServiceError> {
     Client::builder()
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(12))
@@ -999,7 +992,7 @@ fn build_client(headers: HeaderMap) -> Result<Client, CampusServiceError> {
         .use_native_tls()
         .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .max_tls_version(reqwest::tls::Version::TLS_1_2)
-        .user_agent(REGULAR_USER_AGENT)
+        .user_agent(user_agent)
         .default_headers(headers)
         .build()
         .map_err(|error| CampusServiceError::network("初始化 HTTPS 客户端", error))
@@ -1015,7 +1008,6 @@ async fn enter_recharge(
             "首选账号缺少统一认证账号或密码",
         ));
     }
-    mobile_portal::prepare(session, account, password).await?;
     let (mut final_url, mut final_html) = get_follow_text(
         session,
         parse_url(YD_ENTRY)?,
@@ -1045,6 +1037,18 @@ async fn enter_recharge(
             ));
         }
         if !response.status().is_redirection() {
+            let html = response
+                .text()
+                .await
+                .map_err(|error| CampusServiceError::network("读取统一认证结果", error))?;
+            if tags(&html, "form")
+                .iter()
+                .any(|form| attribute(form, "id").as_deref() == Some("formToken"))
+            {
+                return Err(CampusServiceError::rejected(
+                    "学校统一认证要求短信验证；本次未重复提交密码，请完成学校验证后重试",
+                ));
+            }
             return Err(CampusServiceError::rejected(
                 "统一认证拒绝登录；为避免触发验证码，本次没有自动重试",
             ));
@@ -1057,11 +1061,7 @@ async fn enter_recharge(
     if final_url.host_str() != Some(YD_HOST) {
         return Err(CampusServiceError::protocol("移动门户没有进入网费充值服务"));
     }
-    if final_html.contains("资源受限") || final_html.contains("无权访问") {
-        return Err(CampusServiceError::rejected(
-            "校园一卡通限制了当前访问，请稍后重试或在日新工大中打开校园一卡通",
-        ));
-    }
+    let _ = final_html;
     let openid = extract_openid(&final_url)?;
     let opened = yd_post(session, "/netpay/openNetPay", json!({"openid": openid})).await?;
     ensure_success(&opened, "打开网费充值")?;
@@ -1138,12 +1138,20 @@ async fn yd_post(
     .await
 }
 
-async fn yd_get(session: &mut CampusSession, url: Url) -> Result<Value, CampusServiceError> {
+async fn yd_get(session: &mut CampusSession, mut url: Url) -> Result<Value, CampusServiceError> {
     validate_url(&url, &[YD_HOST])?;
+    let parameters: BTreeMap<String, String> = url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    let wrapped = yd_codec::encode(&json!(parameters))?;
+    url.set_query(None);
+    url.query_pairs_mut()
+        .append_pair("datajson", wrapped["datajson"].as_str().unwrap());
     let mut request = session
         .client
         .get(url.clone())
-        .header(USER_AGENT, mobile_portal::WEB_USER_AGENT)
+        .header(USER_AGENT, WECHAT_USER_AGENT)
         .header(ACCEPT, "application/json, text/plain, */*")
         .header(ORIGIN, YD_ORIGIN)
         .header(REFERER, "https://ydapp.bjut.edu.cn/")
@@ -1173,6 +1181,7 @@ async fn yd_post_text(
 ) -> Result<String, CampusServiceError> {
     let url = parse_url(&format!("{YD_ORIGIN}{path}"))?;
     validate_url(&url, &[YD_HOST])?;
+    let body = yd_codec::encode(&body)?;
     let mut request = session
         .client
         .post(url.clone())
@@ -1218,6 +1227,17 @@ async fn yd_post_text(
         .map_err(|error| CampusServiceError::network(stage, error))?;
     if text.len() > 128 * 1024 {
         return Err(CampusServiceError::protocol("支付入口响应体过大"));
+    }
+    // Alipay may return a raw form, or the same form inside datajson. Decode
+    // once; malformed replies must never trigger a second order submission.
+    if let Ok(value) = serde_json::from_str::<Value>(&text) {
+        return match yd_codec::decode(value)? {
+            Value::String(html) => Ok(html),
+            value => Err(CampusServiceError::rejected(format!(
+                "支付入口未能打开：{}",
+                response_message(&value)
+            ))),
+        };
     }
     Ok(text)
 }
@@ -1453,13 +1473,9 @@ async fn get_follow_text(
     let mut current_referer = referer.map(Url::to_string);
     for _ in 0..=MAX_REDIRECTS {
         validate_url(&url, allowed_hosts)?;
-        if mobile_portal::is_callback(&url) {
-            return Ok((url, String::new()));
-        }
         let mut request = session
             .client
             .get(url.clone())
-            .header(USER_AGENT, request_user_agent(&url))
             .header(
                 ACCEPT,
                 "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -1510,14 +1526,6 @@ async fn get_follow_text(
     Err(CampusServiceError::protocol("校园服务重定向次数过多"))
 }
 
-fn request_user_agent(url: &Url) -> &'static str {
-    if matches!(url.host_str(), Some(ITS_HOST | YD_HOST)) {
-        mobile_portal::WEB_USER_AGENT
-    } else {
-        REGULAR_USER_AGENT
-    }
-}
-
 async fn get_json(
     session: &mut CampusSession,
     url: Url,
@@ -1556,6 +1564,11 @@ async fn post_json(
     yd_headers: bool,
 ) -> Result<Value, CampusServiceError> {
     validate_url(&url, &[url.host_str().unwrap_or_default()])?;
+    let body = if yd_headers {
+        yd_codec::encode(&body)?
+    } else {
+        body
+    };
     let mut request = session
         .client
         .post(url.clone())
@@ -1570,7 +1583,6 @@ async fn post_json(
         .json(&body);
     if yd_headers {
         request = request
-            .header(USER_AGENT, mobile_portal::WEB_USER_AGENT)
             .header("session-type", "uniapp")
             .header("isWechatApp", "true")
             .header("orgid", "2");
@@ -1589,18 +1601,35 @@ async fn post_json(
 
 async fn response_json(response: Response, stage: &str) -> Result<Value, CampusServiceError> {
     let status = response.status();
+    let yd = response.url().host_str() == Some(YD_HOST);
     if !status.is_success() {
+        if yd && matches!(status.as_u16(), 401 | 403) {
+            return Err(CampusServiceError::rejected(format!(
+                "{stage}未通过登录验证（HTTP {}），请重新核对；若已提交付款，请先查询到账记录",
+                status.as_u16()
+            )));
+        }
         return Err(CampusServiceError::protocol(format!(
-            "接口返回 HTTP {}",
+            "{stage}返回 HTTP {}",
             status.as_u16()
         )));
     }
-    match response.json::<Value>().await {
-        Ok(value) => Ok(value),
-        Err(error) if error.is_decode() => {
-            Err(CampusServiceError::protocol("接口没有返回有效 JSON"))
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(part) = stream.next().await {
+        let part = part.map_err(|error| CampusServiceError::network(stage, error))?;
+        if bytes.len() + part.len() > 2 * 1024 * 1024 {
+            return Err(CampusServiceError::protocol(format!("{stage}响应过大")));
         }
-        Err(error) => Err(CampusServiceError::network(stage, error)),
+        bytes.extend_from_slice(&part);
+    }
+    let value = serde_json::from_slice(&bytes)
+        .map_err(|_| CampusServiceError::protocol(format!("{stage}没有返回有效 JSON")))?;
+    if yd {
+        yd_codec::decode(value)
+    } else {
+        Ok(value)
     }
 }
 
@@ -1771,7 +1800,6 @@ fn alipay_gateway_url(html: &str, expected_amount: &str) -> Result<String, Campu
 enum CasTarget {
     Uc,
     MobilePortal,
-    AppPortal,
 }
 
 fn cas_login_form(
@@ -1872,7 +1900,7 @@ fn validate_cas_action(url: &Url, target: CasTarget) -> Result<(), CampusService
                 ));
             }
         }
-        CasTarget::MobilePortal | CasTarget::AppPortal => {
+        CasTarget::MobilePortal => {
             if values.len() != 2 || values.get("noAutoRedirect").map(String::as_str) != Some("1") {
                 return Err(CampusServiceError::protocol("移动门户 CAS 参数发生变化"));
             }
@@ -1885,18 +1913,6 @@ fn validate_cas_action(url: &Url, target: CasTarget) -> Result<(), CampusService
                 return Err(CampusServiceError::protocol(
                     "CAS service 不是预期的移动门户入口",
                 ));
-            }
-            if matches!(target, CasTarget::AppPortal) {
-                if service_values.get("redirect").map(String::as_str)
-                    != Some(mobile_portal::CALLBACK)
-                    || service.fragment().is_some()
-                    || url.fragment().is_some()
-                {
-                    return Err(CampusServiceError::protocol(
-                        "CAS service 不是校园一卡通会话入口",
-                    ));
-                }
-                return Ok(());
             }
             let oauth =
                 parse_url(service_values.get("redirect").ok_or_else(|| {
@@ -1996,19 +2012,18 @@ fn solve_its_challenge(current: &Url, html: &str) -> Result<Url, CampusServiceEr
             {
                 return Err(CampusServiceError::protocol("itsapp SSO 挑战参数发生变化"));
             }
-            let redirect = current_values
-                .get("redirect")
-                .ok_or_else(|| CampusServiceError::protocol("itsapp SSO 缺少回跳地址"))?;
-            if redirect != mobile_portal::CALLBACK {
-                let oauth = parse_url(redirect)?;
-                validate_url(&oauth, &[ITS_HOST])?;
-                if oauth.path() != "/uc/api/oauth/index" {
-                    return Err(CampusServiceError::protocol(
-                        "itsapp SSO 没有回到 OAuth 入口",
-                    ));
-                }
-                validate_its_oauth_values(&unique_query_values(&oauth)?)?;
+            let oauth = parse_url(
+                current_values
+                    .get("redirect")
+                    .ok_or_else(|| CampusServiceError::protocol("itsapp SSO 缺少回跳地址"))?,
+            )?;
+            validate_url(&oauth, &[ITS_HOST])?;
+            if oauth.path() != "/uc/api/oauth/index" {
+                return Err(CampusServiceError::protocol(
+                    "itsapp SSO 没有回到 OAuth 入口",
+                ));
             }
+            validate_its_oauth_values(&unique_query_values(&oauth)?)?;
         }
         _ => {
             return Err(CampusServiceError::protocol("itsapp 挑战出现在未知路径"));
@@ -2498,7 +2513,6 @@ mod tests {
                 },
             ],
             saved_at: unix_timestamp(),
-            app_session: None,
         };
         let jar = restored_campus_cookies("student", Some(persisted));
         assert_eq!(
@@ -2510,24 +2524,6 @@ mod tests {
             .header(&Url::parse("https://ydapp.bjut.edu.cn/openV8HomePage").unwrap())
             .is_none());
         assert_eq!(persisted_campus_cookies(&jar, "student").cookies.len(), 1);
-    }
-
-    #[test]
-    fn limits_app_user_agent_to_mobile_portal_hosts() {
-        assert_eq!(
-            request_user_agent(
-                &Url::parse("https://itsapp.bjut.edu.cn/uc/api/oauth/index").unwrap()
-            ),
-            mobile_portal::WEB_USER_AGENT
-        );
-        assert_eq!(
-            request_user_agent(&Url::parse("https://ydapp.bjut.edu.cn/openV8HomePage").unwrap()),
-            mobile_portal::WEB_USER_AGENT
-        );
-        assert_eq!(
-            request_user_agent(&Url::parse("https://cas.bjut.edu.cn/login").unwrap()),
-            REGULAR_USER_AGENT
-        );
     }
 
     #[test]
@@ -2569,64 +2565,6 @@ mod tests {
             .append_pair("noAutoRedirect", "1")
             .append_pair("service", service.as_str());
         assert!(validate_cas_action(&login, CasTarget::MobilePortal).is_ok());
-    }
-
-    #[test]
-    fn app_portal_cas_callback_is_distinct_from_legacy_oauth() {
-        let mut login = Url::parse("https://cas.bjut.edu.cn/login").unwrap();
-        login
-            .query_pairs_mut()
-            .append_pair("noAutoRedirect", "1")
-            .append_pair("service", mobile_portal::ENTRY);
-        assert!(validate_cas_action(&login, CasTarget::AppPortal).is_ok());
-        assert!(validate_cas_action(&login, CasTarget::MobilePortal).is_err());
-        for redirect in [
-            "https://example.org/",
-            "//example.org/",
-            "/bjutapp/wap/app-login/local-login?next=https://example.org/",
-            "/uc/wap/login",
-        ] {
-            let mut service = Url::parse(mobile_portal::ENTRY).unwrap();
-            service.set_query(None);
-            service
-                .query_pairs_mut()
-                .append_pair("redirect", redirect)
-                .append_pair("from", "wap");
-            login.set_query(None);
-            login
-                .query_pairs_mut()
-                .append_pair("noAutoRedirect", "1")
-                .append_pair("service", service.as_str());
-            assert!(validate_cas_action(&login, CasTarget::AppPortal).is_err());
-        }
-        let current =
-            Url::parse(&format!("{}&ticket=fixture-ticket", mobile_portal::ENTRY)).unwrap();
-        let script = r#"window.location.href = "?redirect=%2Fbjutapp%2Fwap%2Fapp-login%2Flocal-login&from=wap&ticket=fixture-ticket&12345678dictkey=" + md5("192.0.2.4");"#;
-        let next = solve_its_challenge(&current, script).unwrap();
-        assert_eq!(
-            unique_query_values(&next).unwrap()["12345678dictkey"],
-            format!("{:x}", md5::compute("192.0.2.4"))
-        );
-    }
-
-    #[test]
-    fn reports_new_app_errors_and_restores_old_backups_without_app_state() {
-        assert_eq!(
-            response_message(&json!({"e":10013,"m":"用户信息已失效"})),
-            "用户信息已失效"
-        );
-        assert_eq!(
-            response_message(&json!({"error":{"message":"资源受限"}})),
-            "资源受限"
-        );
-        assert!(
-            !response_message(&json!({"code":{"ticket":"do-not-display"}}))
-                .contains("do-not-display")
-        );
-        let old: PersistedCampusSession =
-            serde_json::from_value(json!({"account":"student", "cookies":[], "saved_at":1}))
-                .unwrap();
-        assert!(old.app_session.is_none());
     }
 
     #[test]

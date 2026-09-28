@@ -1,33 +1,37 @@
-# 一卡通会话适配（2.8.8）
+# 一卡通网页登录与 datajson（2026-09-28）
 
-依据用户提供的日新工大 Android 2.8.8 APK 的调用关系实现，未执行 APK，未复制抓包中的凭据。引用会话中的字符串推测只用于定位线索。
+依据用户提供的 `ydapp.bjut.edu.cn-yda-ua.har` 及其中引用的学校公开脚本核验。原始 HAR/PCAP、账号、Cookie、验证码、票据和个人数据不得提交仓库。
 
-## 已核实的流程
+## 登录路径
 
-1. `BjutNetRepository.checkToken`：向 itsapp 的 `/bjutapp/wap/app-login/check` **POST** `ticket`。
-2. CAS 入口是 `/a_bjut/api/sso/index?redirect=/bjutapp/wap/app-login/local-login&from=wap`。CAS 的 service 和回跳参数均严格核验。
-3. `local-login` 是 WebView 拦截的回调，不能继续请求这个页面。官方 `toCasLogin` 在此同步 Cookie，然后调用 native `login`。
-4. `login` 向 `/bjutapp/wap/app-login/login` POST `imei`、`sid`、`mobile_type`；前两个字段都是应用生成的 UUID。成功响应为 `e:0`，票据位于 `d.login_ticket`。
-5. `beforeInitialWebLoad` 等待 `checkToken`，随后才在共享 Cookie 会话中访问 ydapp。
+实际 HAR 保留了原有链条：
 
-原生接口与网页导航使用不同请求格式。`HeaderInterceptor` 在 API 请求中加入 `from-eai:1` 与 `authorization-str`，后者为包含秒级字符串时间戳及 ticket 的 JSON。`rsaPost` 将 JSON 编码为表单 `content`；请求和响应使用 APK 自带的 RSA/PKCS#1 v1.5 分块格式（117 字节请求明文块、128 字节密文块）。响应也可能是明文 `e/m/d` 错误对象。网页只使用 WebView UA 和 Cookie，不携带 API 的授权头。
+`ydapp/openV8HomePage → itsapp/uc/api/oauth/index → itsapp/uc/wap/login → itsapp/a_bjut/api/sso/index → CAS → itsapp → ydapp/openV8HomePage → 首页 fragment 中的 openid`
 
-代码中的响应解码常量是该客户端 APK 随包分发的共享协议材料，并非用户私钥或服务器签名密钥。这套旧格式仅用于互操作；TLS 证书校验始终启用，本机密码与备份的加密方式不变。不要把这种协议编码用于保护新的本地数据。
+不需要先调用日新工大 App 的 native 登录接口。本实现直接使用这条网页登录路径；不提交安装统计，不读取硬件标记，不保留 App 原生登录票据或协议密钥。
 
-`&token=` 来自同一 APK 的 **SDU** 网页模块，不能套用到 BJUT。未添加猜测的 token 查询参数。
+HAR 的浏览器标识同时含微信与 `ZhilinBjutApp` 后缀，CAS 密码提交后出现 `formToken`，再由 `sendToken` / `submitToken` 完成短信验证。用户实测纯微信 UA 不触发这一分支。因此充值会话从首次访问 ydapp 到 CAS 表单提交、返回页面、后续接口都保持同一个纯微信 UA。统一认证账户设置另用原有普通浏览器会话，不受此更改影响。学校仍要求短信时明确报错，不反复提交密码，也不假装验证成功。
 
-## 实现约束
+PCAP 中 BJUT 登录连接采用 TLS，未提供解密密钥；只能确认连接，不能据此推断明文登录参数。网页 HAR 是本轮协议适配的主要依据。
 
-- 首次匿名会话检查可取得 `eai-sess` / `UUkey`，无需提交安装统计或读取硬件 IMEI。
-- 只有已明确核实的 `10013`（用户信息已失效）触发重新 CAS 登录；网络、解码错误不会触发密码重试。
-- Cookie 遵守域名与路径范围，CAS Cookie 不会复制给 itsapp 或 ydapp。
-- 票据按账号加密保存，不交给前端，不写日志、不进入配置备份；账号密码变化后沿用现有会话失效机制。
-- 只改登录与核对阶段，订单提交、二次确认、结果不明确时不自动重试等付款约束保持有效。
+## datajson 格式
 
-## 验证记录与待复测
+学校 `index.621bca5e.js` 的通用请求函数与 `$myRequest` 都先将参数包为 `{ "datajson": "..." }`，并对返回的同名字段解码：
 
-2026-09-28，以空票据、不含账号密码的只读请求访问真实 `/check`，服务返回 HTTP 200；上述封装成功解码为 `e:10013`、`m:用户信息已失效`，并签发访客 Cookie。未进行真实账号登录或支付。
+1. 生成 16 个 ASCII 字母或数字作为 AES-128 密钥。
+2. 业务 JSON 的 UTF-8 字节使用 AES-ECB、PKCS#7 填充，密文使用标准 Base64。
+3. 密钥左移 10 位再反转，作为密文之前的 16 字符前缀。
+4. 解码前缀时先反转，再左移 6 位，得到原密钥。
 
-本地 HTTPS 模拟覆盖访客 Cookie、CAS 表单、SSO 导航挑战、拦截 local-login、取得及校验票据、不同域名 Cookie 隔离、账号隔离和安全存储序列化。另有多块 UTF-8 解码、损坏响应、未知回跳地址及旧配置兼容测试。
+这个前缀携带解码材料，所以它只是服务端要求的传输封装，不能作为独立的安全加密。实现始终验证 HTTPS 证书；本机安全存储和备份仍使用原有加密。
 
-仍需真实账号核验服务端登录后的 ydapp 入口与充值信息返回，以及实际需要图片验证时的 jfself/WebVPN 页面。模拟通过不等于实际充值成功。
+所有 ydapp JSON POST、支付状态 GET 参数、支付宝 HTML 返回均经过该封装。GET 将参数包放在单个 `datajson` 查询参数中。兼容没有封装的旧 JSON/HTML 响应；出现封装但解码失败时中止，不把密文当作业务错误，也不再次提交订单。业务字段和网费通道仍沿用此前真实充值抓包核实的行为。
+
+## 验证
+
+- 本地私有 HAR 测试实际解码了捕获的请求和响应，响应 `success:true`，可读取业务对象；不输出个人字段值。
+- 固定 AES 向量由独立 OpenSSL 工具生成；测试包含中文、多块内容、随机新密钥、旧 JSON、HTML、截断与无效填充。
+- CI 在 Windows 上运行封装与验证码测试，Linux 运行完整 Rust 测试。
+- 未重放 HAR 中的 Cookie、短信验证码或请求，未提交真实订单、未扣费。真实账户的最终充值核对仍由用户复测。
+
+本地抓包回归通过 `BJUT_YDAPP_TEST_HAR` 指定私有文件后，仅运行忽略测试 `validates_local_private_har_without_printing_payloads`。测试文件不会被复制或写入仓库。
