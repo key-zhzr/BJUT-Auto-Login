@@ -32,6 +32,6 @@ PCAP 中 BJUT 登录连接采用 TLS，未提供解密密钥；只能确认连�
 - 本地私有 HAR 测试实际解码了捕获的请求和响应，响应 `success:true`，可读取业务对象；不输出个人字段值。
 - 固定 AES 向量由独立 OpenSSL 工具生成；测试包含中文、多块内容、随机新密钥、旧 JSON、HTML、截断与无效填充。
 - CI 在 Windows 上运行封装与验证码测试，Linux 运行完整 Rust 测试。
-- 未重放 HAR 中的 Cookie、短信验证码或请求，未提交真实订单、未扣费。真实账户的最终充值核对仍由用户复测。
+- 未重放 HAR 中的 Cookie、短信验证码或请求，自动测试未提交真实订单、未扣费。用户随后实测确认充值已恢复正常。
 
 本地抓包回归通过 `BJUT_YDAPP_TEST_HAR` 指定私有文件后，仅运行忽略测试 `validates_local_private_har_without_printing_payloads`。测试文件不会被复制或写入仓库。

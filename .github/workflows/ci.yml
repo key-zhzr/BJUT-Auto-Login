@@ -105,6 +105,8 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --locked campus_services::yd_codec::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --manifest-path src-tauri/Cargo.toml --locked captcha::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path src-tauri/Cargo.toml --locked billing::webvpn::tests
 
   android-kotlin-check:
     name: Android integration check

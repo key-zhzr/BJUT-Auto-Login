@@ -133,7 +133,7 @@ impl Manager {
             (url, html) = post(&mut session, url, &fields).await?;
             if is_cas_login(&url)
                 && execution_form_present(&html, "loginForm")
-                && input_named(&html, "captcha")
+                && cas_captcha(&html, &url)?.is_some()
             {
                 continue;
             }
@@ -276,16 +276,24 @@ fn execution_form_present(html: &str, id: &str) -> bool {
 }
 
 fn cas_captcha(html: &str, page: &Url) -> Result<Option<CasCaptcha>, String> {
-    if !input_named(html, "captcha") {
+    // CAS creates the input/image dynamically. Its source contains literal
+    // '<img src="\' + captchaUrl() + \'">' inside a script, not an image URL.
+    // Read only the server's small config object, never execute page scripts.
+    let configured_id = captcha_config_id(html)?;
+    let markup = captcha_markup(html);
+    if configured_id.is_none() && !input_named(&markup, "captcha") {
         return Ok(None);
     }
-    let id = input_value(html, "captchaId").filter(|id| !id.is_empty() && id.len() <= 512);
-    let mut url = if let Some(id) = &id {
+    // Only send captchaId as a form field if the form actually contains one.
+    // config.captcha.id is used to fetch the image; normal CAS submits only
+    // captcha + execution with the credentials/SMS form.
+    let id = input_value(&markup, "captchaId").filter(|id| valid_captcha_id(id));
+    let mut url = if let Some(image_id) = configured_id.as_ref().or(id.as_ref()) {
         let mut url = Url::parse(&format!("{ORIGIN}{CAS_PREFIX}/captcha")).unwrap();
-        url.query_pairs_mut().append_pair("captchaId", id);
+        url.query_pairs_mut().append_pair("captchaId", image_id);
         url
     } else {
-        let source = tags(html, "img")
+        let source = tags(&markup, "img")
             .iter()
             .filter_map(|tag| attribute(tag, "src"))
             .find(|src| src.contains("captcha"))
@@ -311,6 +319,98 @@ fn cas_captcha(html: &str, page: &Url) -> Result<Option<CasCaptcha>, String> {
     Ok(Some(CasCaptcha { url, id }))
 }
 
+fn valid_captcha_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 512
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+}
+
+fn captcha_config_id(html: &str) -> Result<Option<String>, String> {
+    for (_, script) in tag_blocks(html, "script") {
+        for (offset, _) in script.match_indices("config.captcha") {
+            let tail = script[offset + "config.captcha".len()..].trim_start();
+            let Some(tail) = tail.strip_prefix('=').map(str::trim_start) else {
+                continue;
+            };
+            let Some(tail) = tail.strip_prefix('{') else {
+                continue;
+            };
+            let object = tail
+                .split_once('}')
+                .map(|(object, _)| object)
+                .filter(|object| object.len() <= 2048)
+                .ok_or("统一认证验证码配置格式发生变化")?;
+            let literal = |key| -> Option<String> {
+                let mut values = object.split(',').filter_map(|property| {
+                    let (name, value) = property.split_once(':')?;
+                    if name.trim().trim_matches(['\'', '"']) != key {
+                        return None;
+                    }
+                    let value = value.trim();
+                    let quote = value.as_bytes().first().copied()?;
+                    if !matches!(quote, b'\'' | b'"')
+                        || value.len() < 2
+                        || value.as_bytes().last() != Some(&quote)
+                    {
+                        return None;
+                    }
+                    let value = &value[1..value.len() - 1];
+                    (!value.contains(['\\', '\'', '"'])).then(|| value.to_string())
+                });
+                let value = values.next()?;
+                values.next().is_none().then_some(value)
+            };
+            if literal("type").as_deref() != Some("image") {
+                return Err("学校要求的验证类型暂不支持".into());
+            }
+            return literal("id")
+                .filter(|id| valid_captcha_id(id))
+                .map(Some)
+                .ok_or_else(|| "统一认证页面缺少有效验证码标识".into());
+        }
+    }
+    Ok(None)
+}
+
+fn captcha_markup(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let mut result = String::new();
+    let mut cursor = 0;
+    while let Some((start, end_marker)) = [
+        ("<script", "</script"),
+        ("<style", "</style"),
+        ("<!--", "-->"),
+    ]
+    .into_iter()
+    .filter_map(|(start, end)| {
+        lower[cursor..]
+            .find(start)
+            .map(|offset| (cursor + offset, end))
+    })
+    .min_by_key(|(start, _)| *start)
+    {
+        result.push_str(&html[cursor..start]);
+        let Some(end) = lower[start..]
+            .find(end_marker)
+            .map(|offset| start + offset + end_marker.len())
+        else {
+            return result;
+        };
+        cursor = if end_marker == "-->" {
+            end
+        } else {
+            let Some(end) = lower[end..].find('>').map(|offset| end + offset + 1) else {
+                return result;
+            };
+            end
+        };
+    }
+    result.push_str(&html[cursor..]);
+    result
+}
+
 async fn answer_captcha(
     session: &mut Session,
     page: &Url,
@@ -321,7 +421,7 @@ async fn answer_captcha(
     loop {
         let mut url = spec.url.clone();
         url.query_pairs_mut()
-            .append_pair("time", &cache_buster().to_string());
+            .append_pair("r", &cache_buster().to_string());
         let mut request = session
             .client
             .get(url.clone())
@@ -532,6 +632,58 @@ pub(super) fn canonical_url(mut url: Url) -> Url {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dynamic_cas_image_uses_config_instead_of_javascript_template_as_url() {
+        let html = r#"<form id="loginForm" method="post" action="">
+          <input name="execution" value="fixture"><div id="captchaDiv"></div></form>
+          <script>vpn_eval((function(){
+            config.captcha = { type: 'image', id: 'fixture-image-id' };
+            function captchaUrl() { return 'captcha?captchaId=' + config.captcha.id + '&r=' + Math.random(); }
+            captchaDiv.append('<input name="captcha">');
+            captchaDiv.append('<img src="' + captchaUrl() + '"/>');
+          }).toString().slice(12,-2),"");</script>"#;
+        let spec = cas_captcha(html, &login_url()).unwrap().unwrap();
+        assert_eq!(spec.url.path(), format!("{CAS_PREFIX}/captcha"));
+        assert_eq!(
+            spec.url.query_pairs().collect::<Vec<_>>(),
+            vec![("captchaId".into(), "fixture-image-id".into())]
+        );
+        assert!(
+            spec.id.is_none(),
+            "script id must not become an extra login field"
+        );
+        assert!(!input_named(&captcha_markup(html), "captcha"));
+        let templates_only = r#"<form id='loginForm'></form>
+          <script>var template = '<input name="captcha"><img src="\' + captchaUrl() + \'">';</script>
+          <!-- <input name='captcha'><img src='/captcha'> -->"#;
+        assert!(cas_captcha(templates_only, &login_url()).unwrap().is_none());
+        assert!(cas_captcha(
+            "<script>config.captcha={type:'slider',id:'fixture'};</script>",
+            &login_url()
+        )
+        .is_err());
+        assert!(cas_captcha(
+            "<script>config.captcha={type:'image',id:someFunction()};</script>",
+            &login_url()
+        )
+        .is_err());
+    }
+
+    #[test]
+    #[ignore = "requires a locally saved anonymous CAS page; contains transient cookies/tokens"]
+    fn validates_local_dynamic_captcha_page() {
+        let path = std::env::var("BJUT_WEBVPN_TEST_PAGE").expect("provide local page path");
+        let html = std::fs::read_to_string(path).unwrap();
+        let spec = cas_captcha(&html, &login_url())
+            .expect("captcha parsing failed")
+            .expect("page must request an image");
+        assert!(spec.url.host_str() == Some(HOST));
+        assert!(spec.url.path() == format!("{CAS_PREFIX}/captcha"));
+        assert!(spec
+            .url
+            .query_pairs()
+            .any(|(key, value)| key == "captchaId" && valid_captcha_id(&value)));
+    }
     #[test]
     fn captcha_is_scoped_to_the_proxied_cas_session() {
         let html = "<input name='captcha'><input name='captchaId' value='fixture-id'>";

@@ -36,7 +36,7 @@ fn encrypt(input: &[u8], key: &[u8; 16]) -> Result<String, CampusServiceError> {
     let padding = 16 - input.len() % 16;
     let mut bytes = input.to_vec();
     bytes.resize(input.len() + padding, padding as u8);
-    for block in bytes.chunks_exact_mut(16) {
+    for block in bytes.as_chunks_mut::<16>().0 {
         cipher.encrypt_block(block.into());
     }
     let mut prefix = *key;
@@ -74,7 +74,7 @@ pub(super) fn decode(value: Value) -> Result<Value, CampusServiceError> {
         return Err(error("响应数据不完整"));
     }
     let cipher = Aes128::new((&key).into());
-    for block in bytes.chunks_exact_mut(16) {
+    for block in bytes.as_chunks_mut::<16>().0 {
         cipher.decrypt_block(block.into());
     }
     let padding = *bytes.last().unwrap() as usize;
