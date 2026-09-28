@@ -39,6 +39,22 @@ function center(account: string) {
     passwordPolicy:{minLength:12,maxLength:16,requireUppercase:true,requireLowercase:true,requireDigit:true,requireSpecial:true}, securityQuestions:[],rechargeAvailable:true,warnings:[] };
 }
 let diagnosticsCount = 0;
+let requireBillingCaptcha = false;
+let captchaSequence = 0;
+let pendingCaptcha: {id:string;title:string;resolve:(accepted:boolean)=>void} | null = null;
+async function publishFixtureCaptcha(title:string, resolve:(accepted:boolean)=>void) {
+  const id = `image-fixture-${++captchaSequence}`;
+  pendingCaptcha = {id,title,resolve};
+  const canvas = document.createElement('canvas'); canvas.width=168; canvas.height=56;
+  const context=canvas.getContext('2d')!;
+  context.fillStyle='#edf3fc'; context.fillRect(0,0,168,56);
+  context.font='italic 30px monospace'; context.fillStyle='#244c73'; context.fillText('7 x 2 a',14,38);
+  await emit('image-captcha',{id,title,expiresInSeconds:120,image:canvas.toDataURL('image/png')});
+}
+async function fixtureCaptcha(title:string) {
+  const accepted = await new Promise<boolean>(resolve => { void publishFixtureCaptcha(title,resolve); });
+  if (!accepted) throw new Error('已取消验证码验证');
+}
 mockIPC(async (cmd, payload: any = {}) => {
   calls.push({cmd,payload,at:now()});
   if (cmd === 'trigger_manual_check') {
@@ -74,8 +90,22 @@ mockIPC(async (cmd, payload: any = {}) => {
   if (['get_logs','get_network_events','get_account_health','get_recoverable_recharges'].includes(cmd)) return [];
   if (cmd === 'plugin:window|is_visible' || cmd === 'plugin:window|is_focused') return true;
   if (cmd === 'plugin:window|is_minimized') return false;
-  if (cmd === 'get_billing_center') return center(payload.currentSession ? '25000999' : payload.accountUser);
-  if (cmd === 'begin_billing_webvpn') return {stage:'sms',challengeId:'fixture-challenge',message:'请完成学校要求的短信验证'};
+  if (cmd === 'get_billing_center') {
+    if (requireBillingCaptcha) { requireBillingCaptcha=false; await fixtureCaptcha('计费系统验证码'); }
+    return center(payload.currentSession ? '25000999' : payload.accountUser);
+  }
+  if (cmd === 'answer_image_captcha') {
+    if (pendingCaptcha?.id !== payload.id) throw new Error('验证请求已过期');
+    const pending = pendingCaptcha; pendingCaptcha = null;
+    await emit('image-captcha-close',{id:pending.id});
+    if (payload.refresh) await publishFixtureCaptcha(pending.title,pending.resolve);
+    else pending.resolve(Boolean(payload.text));
+    return null;
+  }
+  if (cmd === 'begin_billing_webvpn') {
+    await fixtureCaptcha('学校统一认证验证码');
+    return {stage:'sms',challengeId:'fixture-challenge',message:'请完成学校要求的短信验证'};
+  }
   if (cmd === 'verify_billing_webvpn') {
     if (payload.resend) return {stage:'sms',challengeId:'fixture-challenge',message:'验证码已请求，请查看短信'};
     if (payload.token !== '123456') throw new Error('验证码未通过');
@@ -104,6 +134,17 @@ button.addEventListener('click',async()=>{
     assert(!document.querySelector('#billing-account-select .keyboard-active'),'鼠标打开后出现键盘框');
     click('#billing-account-select [data-value="25000002"]');await wait(()=>calls.some(c=>c.cmd==='get_billing_center'&&c.payload.accountUser==='25000002') && !(document.getElementById('btn-refresh-billing-center') as HTMLButtonElement).disabled);
     assert(calls.some(c=>c.cmd==='get_billing_center'&&c.payload.accountUser==='25000002'&&!c.payload.currentSession),'禁用账号请求不正确');note('通过：禁用账号可手动选择并读取计费');
+    requireBillingCaptcha=true;click('#btn-refresh-billing-center');
+    await wait(()=>!!document.querySelector('.image-captcha-overlay:not(.hidden)'));
+    click('.image-captcha-overlay:not(.hidden) [data-cancel]');
+    await wait(()=>!(document.getElementById('btn-refresh-billing-center') as HTMLButtonElement).disabled);
+    assert(document.getElementById('billing-center-message')!.textContent!.includes('取消验证码'),'取消验证没有结束计费请求');
+    requireBillingCaptcha=true;click('#btn-refresh-billing-center');
+    await wait(()=>!!document.querySelector('.image-captcha-overlay:not(.hidden)'));
+    (document.querySelector('.image-captcha-overlay:not(.hidden) input') as HTMLInputElement).value='7x2a';
+    (document.querySelector('.image-captcha-overlay:not(.hidden) form') as HTMLFormElement).requestSubmit();
+    await wait(()=>!(document.getElementById('btn-refresh-billing-center') as HTMLButtonElement).disabled);
+    note('通过：jfself 图片验证、取消及恢复查询');
     click('#billing-account-select .custom-select-trigger');click('#billing-account-select [data-value="__current_session__"]');
     await wait(()=>document.getElementById('billing-center-account')!.textContent==='25000999');
     assert(document.getElementById('billing-center-status')!.textContent==='正常','概览未采用 dashboard 状态');
@@ -119,7 +160,14 @@ button.addEventListener('click',async()=>{
     click('#btn-billing-webvpn');
     await wait(()=>!!document.querySelector('#billing-webvpn-modal:not(.hidden)'));
     (document.querySelector('#billing-webvpn-modal form') as HTMLFormElement).requestSubmit();
+    await wait(()=>!!document.querySelector('.image-captcha-overlay:not(.hidden)'));
+    const firstCaptchaId=pendingCaptcha!.id;
+    click('.image-captcha-overlay:not(.hidden) [data-refresh]');
+    await wait(()=>pendingCaptcha?.id!==firstCaptchaId && !!document.querySelector('.image-captcha-overlay:not(.hidden)'));
+    (document.querySelector('.image-captcha-overlay:not(.hidden) input') as HTMLInputElement).value='7x2a';
+    (document.querySelector('.image-captcha-overlay:not(.hidden) form') as HTMLFormElement).requestSubmit();
     await wait(()=>!!document.querySelector('#billing-webvpn-modal .webvpn-sms:not([hidden])'));
+    assert(calls.some(c=>c.cmd==='answer_image_captcha' && c.payload.refresh),'WebVPN 验证码未使用换图请求');
     assert(calls.some(c=>c.cmd==='begin_billing_webvpn'),'校外入口未启动认证');
     assert(!calls.find(c=>c.cmd==='begin_billing_webvpn')!.payload.password,'WebView 不应提交已保存密码');
     click('#billing-webvpn-modal [data-send]');

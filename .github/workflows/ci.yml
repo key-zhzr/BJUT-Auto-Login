@@ -99,6 +99,13 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked windows_credentials::tests
 
+      - name: Verify Windows campus session and image verification
+        if: runner.os == 'Windows'
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --locked campus_services::mobile_portal::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path src-tauri/Cargo.toml --locked captcha::tests
+
   android-kotlin-check:
     name: Android integration check
     runs-on: ubuntu-24.04

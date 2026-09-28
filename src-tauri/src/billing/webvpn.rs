@@ -25,6 +25,7 @@ struct Pending {
     expires: Instant,
     last_send: Option<Instant>,
     last_submit: Option<Instant>,
+    captcha: Option<CasCaptcha>,
 }
 struct ChallengeProgress {
     id: String,
@@ -78,6 +79,7 @@ impl Manager {
         &mut self,
         account: &str,
         password: &str,
+        captcha: Option<&crate::captcha::Handler>,
     ) -> Result<LoginStatus, String> {
         self.pending = None;
         let mut session = if let Some((_, session, _)) =
@@ -105,37 +107,48 @@ impl Manager {
         if verified_account(&mut session, account).await {
             return Ok(self.accept(account, session));
         }
-        let (url, html) = get(&mut session, login_url()).await?;
+        let (mut url, mut html) = get(&mut session, login_url()).await?;
         if !is_cas_login(&url) {
             if verified_account(&mut session, account).await {
                 return Ok(self.accept(account, session));
             }
             return Err("校外登录未进入学校统一认证页面".into());
         }
-        let execution = execution(&html, "loginForm")?;
-        if input_named(&html, "captcha") {
-            return Err("统一认证需要图形验证码，请在学校 WebVPN 网页完成验证".into());
+        for _ in 0..3 {
+            let execution = execution(&html, "loginForm")?;
+            let mut fields = vec![
+                ("username", account.to_string()),
+                ("password", password.to_string()),
+                (
+                    "submit",
+                    input_value(&html, "submit").unwrap_or_else(|| "登录".into()),
+                ),
+                ("type", "username_password".into()),
+                ("execution", execution),
+                ("_eventId", "submit".into()),
+            ];
+            if let Some(spec) = cas_captcha(&html, &url)? {
+                fields.extend(answer_captcha(&mut session, &url, &spec, captcha).await?);
+            }
+            (url, html) = post(&mut session, url, &fields).await?;
+            if is_cas_login(&url)
+                && execution_form_present(&html, "loginForm")
+                && input_named(&html, "captcha")
+            {
+                continue;
+            }
+            return self
+                .finish_or_challenge(account, session, url, html, None)
+                .await;
         }
-        let fields = vec![
-            ("username", account.to_string()),
-            ("password", password.to_string()),
-            (
-                "submit",
-                input_value(&html, "submit").unwrap_or_else(|| "登录".into()),
-            ),
-            ("type", "username_password".into()),
-            ("execution", execution),
-            ("_eventId", "submit".into()),
-        ];
-        let (url, html) = post(&mut session, url, &fields).await?;
-        self.finish_or_challenge(account, session, url, html, None)
-            .await
+        Err("验证码验证未通过，请重新登录".into())
     }
     pub(crate) async fn verify(
         &mut self,
         id: &str,
         token: &str,
         resend: bool,
+        captcha: Option<&crate::captcha::Handler>,
     ) -> Result<LoginStatus, String> {
         let pending = self
             .pending
@@ -162,7 +175,7 @@ impl Manager {
             }
             pending.last_submit = Some(Instant::now());
         }
-        let fields = vec![
+        let mut fields = vec![
             ("execution", pending.execution.clone()),
             (
                 "_eventId",
@@ -170,6 +183,11 @@ impl Manager {
             ),
             ("token", if resend { String::new() } else { token.into() }),
         ];
+        if let Some(spec) = &pending.captcha {
+            fields.extend(
+                answer_captcha(&mut pending.session, &pending.action, spec, captcha).await?,
+            );
+        }
         let (url, html) = post(&mut pending.session, pending.action.clone(), &fields).await?;
         let pending = self.pending.take().ok_or("验证已取消")?;
         self.finish_or_challenge(
@@ -207,6 +225,7 @@ impl Manager {
     ) -> Result<LoginStatus, String> {
         if is_cas_login(&url) && html.contains("formToken") {
             let execution = execution(&html, "formToken")?;
+            let captcha = cas_captcha(&html, &url)?;
             let progress = previous.unwrap_or_else(|| ChallengeProgress {
                 id: challenge_id(),
                 expires: Instant::now() + Duration::from_secs(5 * 60),
@@ -230,6 +249,7 @@ impl Manager {
                 expires: progress.expires,
                 last_send: progress.last_send,
                 last_submit: progress.last_submit,
+                captcha,
             });
             return Ok(LoginStatus {
                 stage: "sms",
@@ -241,6 +261,89 @@ impl Manager {
             return Ok(self.accept(account, session));
         }
         Err("WebVPN 登录未通过，请核对统一认证账号和密码".into())
+    }
+}
+
+struct CasCaptcha {
+    url: Url,
+    id: Option<String>,
+}
+
+fn execution_form_present(html: &str, id: &str) -> bool {
+    tags(html, "form")
+        .iter()
+        .any(|tag| attribute(tag, "id").as_deref() == Some(id))
+}
+
+fn cas_captcha(html: &str, page: &Url) -> Result<Option<CasCaptcha>, String> {
+    if !input_named(html, "captcha") {
+        return Ok(None);
+    }
+    let id = input_value(html, "captchaId").filter(|id| !id.is_empty() && id.len() <= 512);
+    let mut url = if let Some(id) = &id {
+        let mut url = Url::parse(&format!("{ORIGIN}{CAS_PREFIX}/captcha")).unwrap();
+        url.query_pairs_mut().append_pair("captchaId", id);
+        url
+    } else {
+        let source = tags(html, "img")
+            .iter()
+            .filter_map(|tag| attribute(tag, "src"))
+            .find(|src| src.contains("captcha"))
+            .ok_or("统一认证页面缺少验证码图片")?;
+        page.join(&source).map_err(|_| "验证码图片地址无效")?
+    };
+    if url.scheme() != "https"
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.host_str(), Some(HOST | "cas.bjut.edu.cn"))
+    {
+        return Err("验证码图片地址不受信任".into());
+    }
+    if url.path() == "/captcha" {
+        let _ = url.set_host(Some(HOST));
+        url.set_path(&format!("{CAS_PREFIX}/captcha"));
+    }
+    if url.host_str() != Some(HOST) || url.path() != format!("{CAS_PREFIX}/captcha") {
+        return Err("验证码图片路径不受支持".into());
+    }
+    Ok(Some(CasCaptcha { url, id }))
+}
+
+async fn answer_captcha(
+    session: &mut Session,
+    page: &Url,
+    spec: &CasCaptcha,
+    handler: Option<&crate::captcha::Handler>,
+) -> Result<Vec<(&'static str, String)>, String> {
+    let handler = handler.ok_or("学校要求图片验证码，请在 App 内完成登录")?;
+    loop {
+        let mut url = spec.url.clone();
+        url.query_pairs_mut()
+            .append_pair("time", &cache_buster().to_string());
+        let mut request = session
+            .client
+            .get(url.clone())
+            .header(ACCEPT, "image/*")
+            .header(REFERER, page.as_str());
+        if let Some(cookie) = session.cookies.header(&url) {
+            request = request.header(COOKIE, cookie);
+        }
+        let response = request.send().await.map_err(|_| "验证码图片连接失败")?;
+        session.cookies.absorb(&url, response.headers());
+        let image = crate::captcha::image(response).await?;
+        match handler.prompt("学校统一认证验证码", image).await? {
+            crate::captcha::Answer::Refresh => continue,
+            crate::captcha::Answer::Submit(text) => {
+                let mut fields = vec![("captcha", text.to_ascii_lowercase())];
+                if let Some(id) = &spec.id {
+                    fields.push(("captchaId", id.clone()));
+                }
+                return Ok(fields);
+            }
+            crate::captcha::Answer::Cancel => unreachable!(),
+        }
     }
 }
 
@@ -430,6 +533,34 @@ pub(super) fn canonical_url(mut url: Url) -> Url {
 mod tests {
     use super::*;
     #[test]
+    fn captcha_is_scoped_to_the_proxied_cas_session() {
+        let html = "<input name='captcha'><input name='captchaId' value='fixture-id'>";
+        let spec = cas_captcha(html, &login_url()).unwrap().unwrap();
+        assert_eq!(spec.url.host_str(), Some(HOST));
+        assert_eq!(spec.url.path(), format!("{CAS_PREFIX}/captcha"));
+        assert_eq!(spec.id.as_deref(), Some("fixture-id"));
+        let relative = "<input name='captcha'><img src='/captcha?captchaId=fixture'>";
+        assert_eq!(
+            cas_captcha(relative, &login_url())
+                .unwrap()
+                .unwrap()
+                .url
+                .host_str(),
+            Some(HOST)
+        );
+        assert!(cas_captcha(
+            "<input name='captcha'><img src='https://evil.test/captcha'>",
+            &login_url()
+        )
+        .is_err());
+        assert!(cas_captcha(
+            "<div id='captchaParent' style='display:none'></div>",
+            &login_url()
+        )
+        .unwrap()
+        .is_none());
+    }
+    #[test]
     fn only_school_sso_redirects_are_accepted() {
         assert!(validate(&login_url()).is_ok());
         for raw in [
@@ -489,20 +620,20 @@ mod tests {
         let id = result.challenge_id.unwrap();
         // Every verification below must stop locally before any HTTP request.
         assert!(manager
-            .verify(&id, "12", false)
+            .verify(&id, "12", false, None)
             .await
             .err().unwrap()
             .contains("6 位"));
-        assert!(manager.verify("different", "123456", false).await.is_err());
+        assert!(manager.verify("different", "123456", false, None).await.is_err());
         manager.pending.as_mut().unwrap().last_send = Some(Instant::now());
         assert!(manager
-            .verify(&id, "", true)
+            .verify(&id, "", true, None)
             .await
             .err().unwrap()
             .contains("稍后"));
         manager.pending.as_mut().unwrap().expires = Instant::now() - Duration::from_secs(1);
         assert!(manager
-            .verify(&id, "123456", false)
+            .verify(&id, "123456", false, None)
             .await
             .err().unwrap()
             .contains("过期"));

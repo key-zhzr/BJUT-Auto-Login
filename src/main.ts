@@ -1,6 +1,7 @@
 import { chooseConfigTransfer } from './config-transfer-dialog';
 import { setupPageHeaders } from './page-headers';
 import { loginBillingWebVpn } from './billing-webvpn';
+import { setupImageCaptchas } from './image-captcha';
 import { NetworkProgressView, type NetworkCheckProgress } from './network-progress-view';
 import { AnimatedVisibility } from './animated-visibility';
 import { setupAndroidKeyboard } from './android-keyboard';
@@ -1057,6 +1058,7 @@ async function initializeRustEvents() {
   // Register every channel independently. One unavailable event must not stop
   // network, countdown, log, or account events from being wired up.
   await Promise.all([
+    settle('图片验证码', setupImageCaptchas()),
     settle('倒计时事件', listen<CountdownPayload>('countdown-tick', event => {
       const data = event.payload;
       const countdownText = document.getElementById('countdown-text');
@@ -2607,11 +2609,13 @@ function activatePage(target: string, navTarget = target) {
 }
 
 function handleAndroidBack() {
-  const visibleModal = document.querySelector<HTMLElement>('.modal-overlay:not(.hidden)');
+  const visibleModal = document.querySelector<HTMLElement>('.image-captcha-overlay:not(.hidden)')
+    || document.querySelector<HTMLElement>('.modal-overlay:not(.hidden)');
   if (visibleModal) {
     const dismiss = visibleModal.querySelector<HTMLElement>([
       '.config-qr-close',
       '.config-transfer-dialog [data-cancel]',
+      '.image-captcha-overlay:not(.hidden) [data-cancel]',
       '#billing-webvpn-modal [data-cancel]',
       '#btn-confirm-cancel',
       '#btn-alert-ok',

@@ -3,6 +3,7 @@ mod billing;
 mod billing_runtime;
 mod campus_dns;
 mod campus_services;
+mod captcha;
 mod config_model;
 mod cookie_jar;
 mod dual_stack;
@@ -1625,6 +1626,7 @@ struct AppState {
     billing_fetch_lock: tokio::sync::Mutex<()>,
     billing_sessions: Mutex<billing::BillingSessionPool>,
     billing_webvpn: tokio::sync::Mutex<billing::webvpn::Manager>,
+    image_captcha: Arc<captcha::Control>,
     billing_session_expiry_generation: AtomicU64,
     campus_service_lock: tokio::sync::Mutex<()>,
     campus_recharge_pending: tokio::sync::Mutex<Option<campus_services::PendingRecharge>>,
@@ -7458,17 +7460,18 @@ async fn get_billing_center(
     };
     ensure_billing_foreground(&state)?;
     let result = run_billing_read_while_foreground(&state, async {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(75),
-            billing::fetch_center(
-                &access,
-                compatibility,
-                &state.billing_sessions,
-                emit_progress,
-                publish_module,
-            ),
-        )
-        .await
+        match access
+            .with_timeout(
+                std::time::Duration::from_secs(75),
+                billing::fetch_center(
+                    &access,
+                    compatibility,
+                    &state.billing_sessions,
+                    emit_progress,
+                    publish_module,
+                ),
+            )
+            .await
         {
             Ok(result) => result.map_err(|error| error.user_message()),
             Err(_) => {
@@ -8626,24 +8629,47 @@ fn billing_credential_stamp(state: &AppState) -> [u8; 32] {
     hash.finalize().into()
 }
 
+fn image_captcha_handler(app: &tauri::AppHandle, state: &AppState) -> captcha::Handler {
+    let app = app.clone();
+    captcha::Handler::new(state.image_captcha.clone(), move |name, payload| {
+        let _ = app.emit(name, payload);
+    })
+}
+
+#[tauri::command]
+fn answer_image_captcha(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+    text: Option<String>,
+    refresh: Option<bool>,
+) -> Result<(), String> {
+    state
+        .image_captcha
+        .answer(&id, text, refresh.unwrap_or(false))
+}
+
 #[tauri::command]
 async fn begin_billing_webvpn(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     account_user: String,
 ) -> Result<billing::webvpn::LoginStatus, String> {
     let (account, _) = billing_action_target(&state, Some(&account_user))?;
     let mut manager = state.billing_webvpn.lock().await;
     manager.bind_credentials(billing_credential_stamp(&state));
-    tokio::time::timeout(
-        std::time::Duration::from_secs(75),
-        manager.begin(&account.user, &account.pass),
-    )
-    .await
-    .map_err(|_| "校外登录超时，请重试".to_string())?
+    let captcha = image_captcha_handler(&app, &state);
+    captcha
+        .with_timeout(
+            std::time::Duration::from_secs(75),
+            manager.begin(&account.user, &account.pass, Some(&captcha)),
+        )
+        .await
+        .map_err(|_| "校外登录超时，请重试".to_string())?
 }
 
 #[tauri::command]
 async fn verify_billing_webvpn(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     challenge_id: String,
     token: String,
@@ -8652,12 +8678,19 @@ async fn verify_billing_webvpn(
     ensure_billing_foreground(&state)?;
     let mut manager = state.billing_webvpn.lock().await;
     manager.bind_credentials(billing_credential_stamp(&state));
-    tokio::time::timeout(
-        std::time::Duration::from_secs(75),
-        manager.verify(&challenge_id, &token, resend.unwrap_or(false)),
-    )
-    .await
-    .map_err(|_| "校外验证超时，请重新登录".to_string())?
+    let captcha = image_captcha_handler(&app, &state);
+    captcha
+        .with_timeout(
+            std::time::Duration::from_secs(75),
+            manager.verify(
+                &challenge_id,
+                &token,
+                resend.unwrap_or(false),
+                Some(&captcha),
+            ),
+        )
+        .await
+        .map_err(|_| "校外验证超时，请重新登录".to_string())?
 }
 
 #[tauri::command]
@@ -8679,7 +8712,8 @@ async fn resolve_billing_access(
 ) -> Result<(billing::BillingAccess, VpnCompatibility), String> {
     if !current_session {
         let (account, compatibility) = billing_action_target(state, account_user)?;
-        let mut access = billing::BillingAccess::saved(account.user, account.pass);
+        let mut access = billing::BillingAccess::saved(account.user, account.pass)
+            .with_captcha(image_captcha_handler(app, state));
         if webvpn {
             let mut manager = state.billing_webvpn.lock().await;
             manager.bind_credentials(billing_credential_stamp(state));
@@ -9490,6 +9524,7 @@ pub fn run() {
             billing_fetch_lock: tokio::sync::Mutex::new(()),
             billing_sessions: Mutex::new(billing::BillingSessionPool::default()),
             billing_webvpn: tokio::sync::Mutex::new(billing::webvpn::Manager::default()),
+            image_captcha: Arc::new(captcha::Control::default()),
             billing_session_expiry_generation: AtomicU64::new(0),
             campus_service_lock: tokio::sync::Mutex::new(()),
             campus_recharge_pending: tokio::sync::Mutex::new(None),
@@ -9937,6 +9972,7 @@ pub fn run() {
             reject_discovered_campus_account,
             get_billing_center,
             begin_billing_webvpn,
+            answer_image_captcha,
             verify_billing_webvpn,
             cancel_billing_webvpn,
             query_billing_records,

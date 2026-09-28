@@ -42,6 +42,7 @@ sha2 = "0.10"
 base64 = "0.22"
 aes-gcm = "0.10"
 pbkdf2 = "0.12"
+openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 corewlan = "0.2.1"

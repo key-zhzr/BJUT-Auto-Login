@@ -220,10 +220,7 @@ impl BillingError {
             Self::Protocol(detail) => format!("计费系统响应格式异常：{detail}"),
             Self::InvalidRequest(detail) => format!("计费请求未提交：{detail}"),
             Self::ActionRejected(detail) => format!("计费系统未执行操作：{detail}"),
-            Self::CaptchaRequired => {
-                "计费系统当前要求图形验证码；本次未提交账号密码，请稍后重试或先在浏览器完成验证"
-                    .to_string()
-            }
+            Self::CaptchaRequired => "计费系统需要图片验证码，请打开计费中心完成验证".to_string(),
             Self::AuthenticationRejected => {
                 "计费系统拒绝登录；为避免触发验证码，本次没有自动重试".to_string()
             }

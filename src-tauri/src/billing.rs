@@ -77,6 +77,7 @@ pub(crate) struct BillingAccess {
     password: Option<String>,
     current_session: Option<BillingSession>,
     webvpn: Option<webvpn::Session>,
+    captcha: Option<crate::captcha::Handler>,
 }
 
 impl BillingAccess {
@@ -86,12 +87,29 @@ impl BillingAccess {
             password: Some(password),
             current_session: None,
             webvpn: None,
+            captcha: None,
         }
     }
 
     pub(crate) fn via_webvpn(mut self, session: webvpn::Session) -> Self {
         self.webvpn = Some(session);
         self
+    }
+
+    pub(crate) fn with_captcha(mut self, handler: crate::captcha::Handler) -> Self {
+        self.captcha = Some(handler);
+        self
+    }
+
+    pub(crate) async fn with_timeout<F: std::future::Future>(
+        &self,
+        budget: Duration,
+        future: F,
+    ) -> Result<F::Output, ()> {
+        match &self.captcha {
+            Some(handler) => handler.with_timeout(budget, future).await,
+            None => tokio::time::timeout(budget, future).await.map_err(|_| ()),
+        }
     }
 
     async fn authenticate(
@@ -111,13 +129,16 @@ impl BillingAccess {
                     webvpn: Some(session.id.clone()),
                 },
                 session.cookies.clone(),
+                self.captcha.as_ref(),
             )
             .await;
         }
-        authenticate(
+        authenticate_with_client(
             &self.account,
             self.password.as_deref().unwrap_or_default(),
-            compatibility,
+            build_client(compatibility).await?,
+            SessionCookies::default(),
+            self.captcha.as_ref(),
         )
         .await
     }
@@ -166,6 +187,7 @@ pub(crate) async fn current_session_access(
         password: None,
         current_session: Some(session),
         webvpn: None,
+        captcha: None,
     })
 }
 
@@ -1514,6 +1536,7 @@ async fn authenticate(
         password,
         build_client(compatibility).await?,
         SessionCookies::default(),
+        None,
     )
     .await
 }
@@ -1523,6 +1546,7 @@ async fn authenticate_with_client(
     password: &str,
     client: BillingClient,
     mut cookies: SessionCookies,
+    captcha: Option<&crate::captcha::Handler>,
 ) -> Result<BillingSession, BillingError> {
     if account.trim().is_empty() || password.is_empty() {
         return Err(BillingError::InvalidRequest(
@@ -1580,94 +1604,153 @@ async fn authenticate_with_client(
         login_html = response.text().await.map_err(network_error)?;
     }
 
-    let checkcode = input_value(&login_html, "checkcode")
-        .ok_or_else(|| BillingError::Protocol("登录页缺少 checkcode".to_string()))?;
-    if checkcode.is_empty()
-        || checkcode.len() > 4
-        || !checkcode.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err(BillingError::Protocol(
-            "登录页 checkcode 格式不受支持".to_string(),
-        ));
+    for attempt in 0..3 {
+        let checkcode = input_value(&login_html, "checkcode")
+            .ok_or_else(|| BillingError::Protocol("登录页缺少 checkcode".to_string()))?;
+        if checkcode.is_empty()
+            || checkcode.len() > 4
+            || !checkcode.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(BillingError::Protocol(
+                "登录页 checkcode 格式不受支持".to_string(),
+            ));
+        }
+        let needs_captcha = captcha_required(&login_html)?;
+        if needs_captcha && captcha.is_none() {
+            return Err(BillingError::CaptchaRequired);
+        }
+        let verify_url = login_action_for(&login_html, &login_effective_url, compatibility)?;
+
+        // The service enables its normal login path only after the browser has
+        // loaded the page resources and requested randomCode. These requests are
+        // session-local, read-only, and bounded to the same HTTPS origin.
+        replay_login_assets(&client, &mut cookies, &login_html, &login_effective_url).await;
+
+        let cache_buster = cache_buster();
+        let random_code_url = same_origin_url(&format!(
+            "{BILLING_ORIGIN}/Self/login/randomCode?t=0.{cache_buster}"
+        ))?;
+        let (_, random_code_response) = get_follow(
+            &client,
+            random_code_url,
+            &mut cookies,
+            Some(&login_effective_url),
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "image",
+        )
+        .await?;
+        let mut code = String::new();
+        if needs_captcha {
+            let mut image = crate::captcha::image(random_code_response)
+                .await
+                .map_err(BillingError::Protocol)?;
+            loop {
+                match captcha
+                    .unwrap()
+                    .prompt(
+                        if attempt == 0 {
+                            "计费系统验证码"
+                        } else {
+                            "登录未通过，请重新填写验证码"
+                        },
+                        image,
+                    )
+                    .await
+                    .map_err(BillingError::ActionRejected)?
+                {
+                    crate::captcha::Answer::Submit(value) => {
+                        code = value;
+                        break;
+                    }
+                    crate::captcha::Answer::Refresh => {
+                        let url = same_origin_url(&format!(
+                            "{BILLING_ORIGIN}/Self/login/randomCode?t={}",
+                            self::cache_buster()
+                        ))?;
+                        let (_, response) = get_follow(
+                            &client,
+                            url,
+                            &mut cookies,
+                            Some(&login_effective_url),
+                            "image/*",
+                            "image",
+                        )
+                        .await?;
+                        image = crate::captcha::image(response)
+                            .await
+                            .map_err(BillingError::Protocol)?;
+                    }
+                    crate::captcha::Answer::Cancel => unreachable!(),
+                }
+            }
+        } else {
+            let _ = random_code_response.bytes().await.map_err(network_error)?;
+        }
+
+        let brand_url = same_origin_url(&format!(
+            "{BILLING_ORIGIN}/Self/login/getBrandInfo?t=0.{cache_buster}"
+        ))?;
+        if let Ok((_, response)) = get_follow(
+            &client,
+            brand_url,
+            &mut cookies,
+            Some(&login_effective_url),
+            "*/*",
+            "empty",
+        )
+        .await
+        {
+            let _ = response.bytes().await;
+        }
+
+        let (dashboard_url, dashboard_html) = post_login(
+            &client,
+            verify_url,
+            &login_effective_url,
+            &mut cookies,
+            LoginSubmission {
+                checkcode: &checkcode,
+                account,
+                password,
+                code: &code,
+            },
+        )
+        .await?;
+
+        if login_action_for(&dashboard_html, &dashboard_url, compatibility).is_ok() {
+            if captcha.is_some()
+                && captcha_required(&dashboard_html).unwrap_or(false)
+                && attempt < 2
+            {
+                login_effective_url = dashboard_url;
+                login_html = dashboard_html;
+                continue;
+            }
+            return Err(login_rejection(&dashboard_html));
+        }
+        if !dashboard_url.path().starts_with("/Self/dashboard")
+            && !dashboard_html.contains("账户余额")
+        {
+            return Err(BillingError::Protocol("登录后未进入计费控制台".to_string()));
+        }
+        if client.webvpn.is_some() && !dashboard_account_matches(&dashboard_html, account) {
+            return Err(BillingError::ActionRejected(
+                "计费页面的账号与所选账号不一致，请重新登录".into(),
+            ));
+        }
+
+        let ajax_csrf_token =
+            fetch_page_csrf_token(&client, &mut cookies, &dashboard_html, &dashboard_url).await;
+
+        return Ok(BillingSession {
+            client,
+            cookies,
+            dashboard_url,
+            dashboard_html,
+            ajax_csrf_token,
+        });
     }
-    if captcha_required(&login_html)? {
-        return Err(BillingError::CaptchaRequired);
-    }
-    let verify_url = login_action_for(&login_html, &login_effective_url, compatibility)?;
-
-    // The service enables its normal login path only after the browser has
-    // loaded the page resources and requested randomCode. These requests are
-    // session-local, read-only, and bounded to the same HTTPS origin.
-    replay_login_assets(&client, &mut cookies, &login_html, &login_effective_url).await;
-
-    let cache_buster = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let random_code_url = same_origin_url(&format!(
-        "{BILLING_ORIGIN}/Self/login/randomCode?t=0.{cache_buster}"
-    ))?;
-    let (_, random_code_response) = get_follow(
-        &client,
-        random_code_url,
-        &mut cookies,
-        Some(&login_effective_url),
-        "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "image",
-    )
-    .await?;
-    let _ = random_code_response.bytes().await.map_err(network_error)?;
-
-    let brand_url = same_origin_url(&format!(
-        "{BILLING_ORIGIN}/Self/login/getBrandInfo?t=0.{cache_buster}"
-    ))?;
-    if let Ok((_, response)) = get_follow(
-        &client,
-        brand_url,
-        &mut cookies,
-        Some(&login_effective_url),
-        "*/*",
-        "empty",
-    )
-    .await
-    {
-        let _ = response.bytes().await;
-    }
-
-    let (dashboard_url, dashboard_html) = post_login(
-        &client,
-        verify_url,
-        &login_effective_url,
-        &mut cookies,
-        &checkcode,
-        account,
-        password,
-    )
-    .await?;
-
-    if login_action_for(&dashboard_html, &dashboard_url, compatibility).is_ok() {
-        return Err(login_rejection(&dashboard_html));
-    }
-    if !dashboard_url.path().starts_with("/Self/dashboard") && !dashboard_html.contains("账户余额")
-    {
-        return Err(BillingError::Protocol("登录后未进入计费控制台".to_string()));
-    }
-    if client.webvpn.is_some() && !dashboard_account_matches(&dashboard_html, account) {
-        return Err(BillingError::ActionRejected(
-            "计费页面的账号与所选账号不一致，请重新登录".into(),
-        ));
-    }
-
-    let ajax_csrf_token =
-        fetch_page_csrf_token(&client, &mut cookies, &dashboard_html, &dashboard_url).await;
-
-    Ok(BillingSession {
-        client,
-        cookies,
-        dashboard_url,
-        dashboard_html,
-        ajax_csrf_token,
-    })
+    Err(BillingError::CaptchaRequired)
 }
 
 fn dashboard_account_matches(html: &str, expected: &str) -> bool {
@@ -2888,21 +2971,26 @@ async fn get_follow(
     Err(BillingError::Protocol("重定向次数过多".to_string()))
 }
 
+struct LoginSubmission<'a> {
+    checkcode: &'a str,
+    account: &'a str,
+    password: &'a str,
+    code: &'a str,
+}
+
 async fn post_login(
     client: &BillingClient,
     verify_url: Url,
     referer: &Url,
     cookies: &mut SessionCookies,
-    checkcode: &str,
-    account: &str,
-    password: &str,
+    submission: LoginSubmission<'_>,
 ) -> Result<(Url, String), BillingError> {
     validate_login_action(&verify_url)?;
     let form = [
-        ("checkcode", checkcode),
-        ("account", account),
-        ("password", password),
-        ("code", ""),
+        ("checkcode", submission.checkcode),
+        ("account", submission.account),
+        ("password", submission.password),
+        ("code", submission.code),
     ];
     let mut request = client
         .post(verify_url.clone())
