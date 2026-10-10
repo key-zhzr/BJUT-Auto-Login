@@ -22,7 +22,7 @@
 
 ## 开发与贡献
 
-基于 Tauri 2、Rust 和 TypeScript。参见 [开发指南](https://github.com/key-zhzr/BJUT-Auto-Login/wiki/Development) 和 [发布说明](RELEASING.md)。欢迎提交 Issue 或 Pull Request。OpenWrt 路由端正在整理为独立项目，详见 [路由端说明](https://github.com/key-zhzr/BJUT-Auto-Login/wiki/OpenWrt)。
+基于 Tauri 2、Rust 和 TypeScript。参见 [开发指南](https://github.com/key-zhzr/BJUT-Auto-Login/wiki/Development) 和 [发布说明](RELEASING.md)。欢迎提交 Issue 或 Pull Request。OpenWrt 路由端在[独立仓库](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt)维护，详见 [路由端说明](https://github.com/key-zhzr/BJUT-Auto-Login/wiki/OpenWrt)。
 
 本项目是**开源第三方工具，非学校官方应用**。使用明文 HTTP 兼容模式前，请确认网络可信；详见[隐私与安全](https://github.com/key-zhzr/BJUT-Auto-Login/wiki/Privacy)。
 
