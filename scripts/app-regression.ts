@@ -55,8 +55,19 @@ async function fixtureCaptcha(title:string) {
   const accepted = await new Promise<boolean>(resolve => { void publishFixtureCaptcha(title,resolve); });
   if (!accepted) throw new Error('已取消验证码验证');
 }
+const routerSnapshot = {
+  version: '0.1.6', managementUrl:'https://192.0.2.1/cgi-bin/luci/admin/network/bjut-autologin/billing',
+  uplinks:[
+    {id:'dorm_a',network:'wan14',network6:'wan16',device:'lan3',ipv4:'10.126.19.139',ipv6:'2001:db8::1',state:'online',message:'认证会话有效，互联网连接正常',internet4:'reachable',internet6:'reachable',account:'25***01'},
+    {id:'dorm_b',network:'wan24',device:'lan4',ipv4:'10.126.20.139',state:'authenticated_limited',message:'认证会话有效，外网探测暂未通过；保留当前登录',internet4:'unreachable',internet6:'not_configured',account:'25***02'},
+  ],
+  accounts:[{id:'account1',user:'25000001',enabled:1,hasPassword:1},{id:'account2',user:'25000002',enabled:0,hasPassword:1}],
+};
 mockIPC(async (cmd, payload: any = {}) => {
   calls.push({cmd,payload,at:now()});
+  if (['connect_router','get_router_status'].includes(cmd)) return routerSnapshot;
+  if (cmd === 'router_login') return '路由器已开始核对所选上游的登录状态';
+  if (cmd === 'sync_router_accounts') return '选定账号已同步到路由器';
   if (cmd === 'trigger_manual_check') {
     await emit('network-check-progress', {id:100,generation:1,revision:0,message:'手动更新正在确认登录类型',percent:30,elapsedMs:0,complete:false});
     return null;
@@ -260,6 +271,24 @@ button.addEventListener('click',async()=>{
     click('.config-qr-close');
     assert(!document.querySelector('.config-qr-overlay'),'关闭后二维码仍驻留');
     note('通过：备份弹窗、3 位密码、按范围导出与二维码解码');
+    (document.getElementById('router-address') as HTMLInputElement).value='https://192.0.2.1';
+    (document.getElementById('router-password') as HTMLInputElement).value='synthetic-router-password';
+    (document.getElementById('router-connect-form') as HTMLFormElement).requestSubmit();
+    await wait(()=>!document.getElementById('router-connected')!.hidden);
+    assert(document.querySelectorAll('.router-uplink-card').length===2,'路由多上游状态未分别显示');
+    assert((document.getElementById('router-password') as HTMLInputElement).value==='','连接后仍保留管理密码');
+    assert(!memory.get('bjut_router_password'),'管理密码写入了 UI 存储');
+    click('#router-uplink-select .custom-select-trigger'); click('#router-uplink-select [data-value="dorm_b"]');
+    click('#router-account-select .custom-select-trigger'); click('#router-account-select [data-value="account2"]');
+    click('#btn-router-login');
+    await wait(()=>calls.some(call=>call.cmd==='router_login'&&call.payload.uplink==='dorm_b'&&call.payload.account==='account2'));
+    (document.getElementById('router-sync-details') as HTMLDetailsElement).open=true;
+    await wait(()=>!!document.querySelector('#router-sync-accounts input[value="25000002"]'));
+    (document.querySelector('#router-sync-accounts input[value="25000002"]') as HTMLInputElement).checked=true;
+    click('#btn-router-sync');
+    await wait(()=>calls.some(call=>call.cmd==='sync_router_accounts'&&call.payload.users.length===1&&call.payload.users[0]==='25000002'));
+    note('通过：路由多上游状态、手动选择停用账号、按选定范围同步与密码清理');
+
     click('[data-target="accounts"]'); click('#btn-show-add');
     const draftPassword=document.getElementById('acc-password') as HTMLInputElement;
     const draftUser=document.getElementById('acc-username') as HTMLInputElement;

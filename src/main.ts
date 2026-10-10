@@ -1,3 +1,4 @@
+import { setupRouterControl } from './router-control';
 import { chooseConfigTransfer } from './config-transfer-dialog';
 import { setupPageHeaders } from './page-headers';
 import { loginBillingWebVpn } from './billing-webvpn';
@@ -1954,6 +1955,7 @@ async function init() {
   
   setupNavigation();
   setupPageHeaders();
+  setupRouterControl(() => accountsCache, message => log('路由协作', message));
   setupEventListeners();
   setupEventDrivenNetworkDetection();
   renderAccounts();

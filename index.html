@@ -1282,6 +1282,50 @@
               </div>
             </div>
 
+            <section id="router-control" class="settings-group glass-card router-control" style="margin-top: 1rem;">
+              <h3>路由协作</h3>
+              <p>连接 OpenWrt 路由器，查看上游、发起登录或同步账号。</p>
+              <details id="router-connection-settings" open><summary>连接设置</summary>
+              <form id="router-connect-form" class="router-connect-form">
+                <label>路由器地址<input id="router-address" type="url" autocomplete="url" placeholder="https://192.168.1.1" required></label>
+                <div class="router-controls-row">
+                  <label>管理账号<input id="router-username" autocomplete="username" required></label>
+                  <label>管理密码<input id="router-password" type="password" autocomplete="off" required></label>
+                </div>
+                <details class="router-certificate-details"><summary>路由器证书（可选）</summary>
+                  <p>使用自签证书时，粘贴路由器的 PEM 证书。</p>
+                  <textarea id="router-certificate" rows="4" spellcheck="false" aria-label="路由器 PEM 证书"></textarea>
+                </details>
+                <button id="btn-router-connect" class="btn btn-primary btn-sm" type="submit">连接</button>
+              </form>
+              </details>
+              <p id="router-message" role="status" aria-live="polite"></p>
+              <div id="router-connected" hidden>
+                <div class="router-controls-row"><strong id="router-version"></strong><div class="router-actions">
+                  <button id="btn-router-refresh" class="btn btn-secondary btn-sm" type="button">刷新</button>
+                  <button id="btn-router-disconnect" class="btn btn-secondary btn-sm" type="button">断开</button>
+                </div></div>
+                <div id="router-uplink-status" class="router-uplink-status"></div>
+                <div class="router-controls-row">
+                  <div class="custom-select" id="router-uplink-select" aria-label="路由上游">
+                    <div class="custom-select-trigger"><span>选择上游</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div>
+                  </div>
+                  <div class="custom-select" id="router-account-select" aria-label="路由登录账号">
+                    <div class="custom-select-trigger"><span>自动选择账号</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div>
+                  </div>
+                </div>
+                <div class="router-actions">
+                  <button id="btn-router-login" class="btn btn-primary btn-sm" type="button">登录所选上游</button>
+                  <button id="btn-router-billing" class="btn btn-secondary btn-sm" type="button">路由计费页面</button>
+                </div>
+                <details id="router-sync-details"><summary>同步 App 账号</summary>
+                  <p>选定账号将添加或更新至路由器，保留其他账号和上游分配。</p>
+                  <div id="router-sync-accounts" class="router-sync-accounts"></div>
+                  <button id="btn-router-sync" class="btn btn-secondary btn-sm" type="button">同步选定账号</button>
+                </details>
+              </div>
+            </section>
+
             <div id="settings-about" class="settings-group glass-card settings-about-card" style="margin-top: 1rem;">
               <div class="settings-about-header">
                 <div class="settings-about-logo" aria-hidden="true"></div>
@@ -1292,7 +1336,7 @@
                 </div>
               </div>
               <div class="settings-about-meta">
-                <div><span>当前版本</span><strong id="app-version">v0.1.5</strong></div>
+                <div><span>当前版本</span><strong id="app-version">v0.1.6</strong></div>
                 <div><span>数据原则</span><strong>账号凭据仅保存在本机安全存储</strong></div>
                 <div><span>项目性质</span><strong>开源第三方工具，非学校官方应用</strong></div>
               </div>
@@ -1302,7 +1346,7 @@
                 <button class="btn btn-secondary btn-sm" id="btn-open-project-home" type="button"><i data-lucide="external-link"></i> 开源仓库</button>
                 <button class="btn btn-secondary btn-sm" id="btn-open-project-license" type="button"><i data-lucide="file-text"></i> 开源许可</button>
               </div>
-              <p class="settings-about-note">应用只会连接校园网登录、计费、统一认证、校园服务与 GitHub Releases 等明确用途的服务；敏感字段不会写入运行日志。</p>
+              <p class="settings-about-note">应用连接校园网认证、计费、校园服务、GitHub 更新及你配置的路由器；敏感字段不会写入运行日志。</p>
             </div>
           </div>
         </section>

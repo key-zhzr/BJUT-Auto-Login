@@ -4246,3 +4246,22 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 .network-adapter-settings .diagnostic-panel-header { flex-wrap: wrap; }
 .network-adapter-settings .diagnostic-panel-header > div { min-width: 0; flex: 1 1 12rem; overflow-wrap: anywhere; }
 .network-adapter-settings .diagnostic-panel-header > button { flex-shrink: 0; }
+/* Router controls use the same cards and custom menus on desktop and mobile. */
+.router-connect-form, .router-uplink-status { display: grid; gap: 1rem; margin-block: 1rem; }
+.router-connect-form label { display: grid; gap: .5rem; min-width: 0; }
+.router-controls-row { display: flex; align-items: center; gap: 1rem; min-width: 0; }
+.router-controls-row > label, .router-controls-row > .custom-select { flex: 1; min-width: 0; }
+.router-controls-row > strong { flex: 1; }
+.router-actions { display: flex; gap: .75rem; flex-wrap: wrap; margin-block: .75rem; }
+.router-control details { margin-block: 1rem; }
+.router-control summary { cursor: pointer; }
+.router-certificate-details textarea { width: 100%; padding: .75rem; border-radius: 12px; border: 1px solid var(--card-border); background: var(--card-bg); color: var(--text-main); }
+.router-uplink-card { min-width: 0; padding: 1rem; border: 1px solid var(--card-border); border-radius: 12px; overflow-wrap: anywhere; }
+.router-uplink-card p, #router-message { margin-block: .5rem; overflow-wrap: anywhere; }
+#router-message.error { color: var(--danger-color, #e5484d); }
+.router-sync-accounts { display: grid; gap: .75rem; margin-block: 1rem; }
+.router-sync-account { display: flex; gap: .75rem; align-items: center; }
+@media (max-width: 600px) { .router-controls-row { flex-wrap: wrap; } .router-controls-row > label, .router-controls-row > .custom-select { flex-basis: 100%; } }
+
+.router-connect-form input { width: 100%; min-height: 42px; padding: .75rem; border: 1px solid var(--card-border); border-radius: 10px; background: var(--card-bg); color: var(--text-main); font: inherit; }
+.router-connect-form input:focus, .router-certificate-details textarea:focus { outline: 2px solid var(--primary-color); outline-offset: 2px; }

@@ -29,6 +29,7 @@ mod network_events;
 mod portal_auth;
 mod probe_transport;
 mod recharge_state;
+mod router_control;
 mod trusted_time;
 mod update_metadata;
 #[cfg(desktop)]
@@ -5485,6 +5486,44 @@ fn verify_legacy_credential_fingerprint(
 }
 
 #[tauri::command]
+async fn sync_router_accounts(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    manager: tauri::State<'_, router_control::Manager>,
+    users: Vec<String>,
+) -> Result<String, String> {
+    if users.is_empty() || users.len() > 31 {
+        return Err("请选定 1 至 31 个账号".to_string());
+    }
+    let accounts = {
+        let config = state.config.read().unwrap();
+        let mut selected = Vec::new();
+        for user in &users {
+            let account = config
+                .accounts
+                .iter()
+                .find(|account| &account.user == user)
+                .filter(|account| !account.pass.is_empty())
+                .ok_or_else(|| "选定账号没有已保存密码，请先补全密码".to_string())?;
+            selected.push(serde_json::json!({
+                "user": account.user, "pass": account.pass,
+                "enabled": !account.is_disabled.unwrap_or(false),
+            }));
+        }
+        selected
+    };
+    let result = Box::pin(router_control::sync(&manager, accounts)).await?;
+    rust_log(
+        &app,
+        &state,
+        "路由协作",
+        &format!("已向路由器同步 {} 个选定账号", users.len()),
+        "success",
+    );
+    Ok(result)
+}
+
+#[tauri::command]
 fn get_account_password(
     state: tauri::State<Arc<AppState>>,
     user: String,
@@ -9923,7 +9962,13 @@ pub fn run() {
     }
 
     let app = builder
+        .manage(router_control::Manager::default())
         .invoke_handler(tauri::generate_handler![
+            router_control::connect_router,
+            router_control::get_router_status,
+            router_control::router_login,
+            router_control::disconnect_router,
+            sync_router_accounts,
             get_network_info,
             get_network_adapters,
             get_link_health,
