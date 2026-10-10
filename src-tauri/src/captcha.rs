@@ -85,28 +85,34 @@ impl Handler {
                 .map(|start| start.elapsed())
                 .unwrap_or_default()
     }
-    pub(crate) async fn with_timeout<F: Future>(
-        &self,
+    pub(crate) fn with_timeout<'a, F: Future + 'a>(
+        &'a self,
         budget: Duration,
         future: F,
-    ) -> Result<F::Output, ()> {
-        let started = Instant::now();
-        let previous_wait = self.waited();
-        let timer = async {
-            loop {
-                let network_time = started
-                    .elapsed()
-                    .saturating_sub(self.waited().saturating_sub(previous_wait));
-                if network_time >= budget {
-                    break;
+    ) -> impl Future<Output = Result<F::Output, ()>> + 'a {
+        // Box before constructing the async wrapper: an async fn would retain
+        // its by-value future argument in the enclosing command's state.
+        let future = Box::pin(future);
+        async move {
+            let started = Instant::now();
+            let previous_wait = self.waited();
+            let timer = async {
+                loop {
+                    let network_time = started
+                        .elapsed()
+                        .saturating_sub(self.waited().saturating_sub(previous_wait));
+                    if network_time >= budget {
+                        break;
+                    }
+                    tokio::time::sleep((budget - network_time).min(Duration::from_millis(200)))
+                        .await;
                 }
-                tokio::time::sleep((budget - network_time).min(Duration::from_millis(200))).await;
+            };
+            futures_util::pin_mut!(timer);
+            match futures_util::future::select(future, timer).await {
+                futures_util::future::Either::Left((result, _)) => Ok(result),
+                futures_util::future::Either::Right(_) => Err(()),
             }
-        };
-        futures_util::pin_mut!(future, timer);
-        match futures_util::future::select(future, timer).await {
-            futures_util::future::Either::Left((result, _)) => Ok(result),
-            futures_util::future::Either::Right(_) => Err(()),
         }
     }
     pub(crate) async fn prompt(&self, title: &str, image: String) -> Result<Answer, String> {
@@ -239,6 +245,38 @@ mod tests {
             id: "fixture".into(),
         });
         assert!(control.pending.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dropping_a_timed_request_closes_the_active_prompt() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let control = Arc::new(Control::default());
+                let events = Arc::new(Mutex::new(Vec::new()));
+                let emitted = events.clone();
+                let handler = Handler::new(control.clone(), move |name, payload| {
+                    emitted.lock().unwrap().push((name.to_string(), payload));
+                });
+                let mut request = Box::pin(handler.with_timeout(
+                    Duration::from_secs(75),
+                    handler.prompt("fixture", "fixture".into()),
+                ));
+                assert!(futures_util::poll!(request.as_mut()).is_pending());
+                let id = events.lock().unwrap()[0].1["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                assert!(control.pending.lock().unwrap().contains_key(&id));
+                drop(request);
+                assert!(control.pending.lock().unwrap().is_empty());
+                assert!(handler.clock.lock().unwrap().started.is_none());
+                let events = events.lock().unwrap();
+                assert_eq!(events.last().unwrap().0, "image-captcha-close");
+                assert_eq!(events.last().unwrap().1["id"], id);
+            });
     }
 
     #[test]

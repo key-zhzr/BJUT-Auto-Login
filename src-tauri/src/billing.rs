@@ -101,14 +101,17 @@ impl BillingAccess {
         self
     }
 
-    pub(crate) async fn with_timeout<F: std::future::Future>(
-        &self,
+    pub(crate) fn with_timeout<'a, F: std::future::Future + 'a>(
+        &'a self,
         budget: Duration,
         future: F,
-    ) -> Result<F::Output, ()> {
-        match &self.captcha {
-            Some(handler) => handler.with_timeout(budget, future).await,
-            None => tokio::time::timeout(budget, future).await.map_err(|_| ()),
+    ) -> impl std::future::Future<Output = Result<F::Output, ()>> + 'a {
+        let future = Box::pin(future);
+        async move {
+            match &self.captcha {
+                Some(handler) => handler.with_timeout(budget, future).await,
+                None => tokio::time::timeout(budget, future).await.map_err(|_| ()),
+            }
         }
     }
 
@@ -4440,6 +4443,89 @@ fn decode_html_entities(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn billing_operation_future_stack_budget() {
+        // Construct the real center request without polling it or sending data.
+        let access = BillingAccess::saved("fixture".into(), "fixture".into()).with_captcha(
+            crate::captcha::Handler::new(std::sync::Arc::default(), |_, _| {}),
+        );
+        let pool = std::sync::Mutex::default();
+        let background = std::sync::atomic::AtomicBool::new(false);
+        let timeout = access.with_timeout(
+            Duration::from_secs(75),
+            fetch_center(&access, VpnCompatibility::High, &pool, |_, _| {}, |_| {}),
+        );
+        let timeout_size = std::mem::size_of_val(&timeout);
+        assert!(
+            timeout_size <= 4096,
+            "billing timeout occupies {timeout_size} bytes"
+        );
+        let foreground = crate::billing_runtime::run_read_while_foreground(&background, async {
+            timeout
+                .await
+                .map_err(|_| "timeout".to_string())?
+                .map_err(|error| error.user_message())
+        });
+        let foreground_size = std::mem::size_of_val(&foreground);
+        assert!(
+            foreground_size <= 4096,
+            "billing foreground guard occupies {foreground_size} bytes"
+        );
+    }
+
+    #[test]
+    fn billing_center_entry_survives_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                use std::sync::{atomic::Ordering, Arc};
+                use tauri::ipc::private::ResultFutureKind;
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let access = BillingAccess::saved("fixture".into(), String::new()).with_captcha(
+                    crate::captcha::Handler::new(std::sync::Arc::default(), |_, _| {}),
+                );
+                let pool = std::sync::Mutex::default();
+                let background = std::sync::atomic::AtomicBool::new(false);
+                let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let progress = started.clone();
+                // Empty credentials fail before the first HTTP request, after
+                // preparing the real Rustls client. Exercise Tauri's response
+                // adapter as well as the cancellation and captcha wrappers.
+                let command = async {
+                    crate::billing_runtime::run_read_while_foreground(&background, async {
+                        access
+                            .with_timeout(
+                                Duration::from_secs(75),
+                                fetch_center(
+                                    &access,
+                                    VpnCompatibility::Minimum,
+                                    &pool,
+                                    move |_, percent| {
+                                        if percent == 5 {
+                                            progress.store(true, Ordering::SeqCst);
+                                        }
+                                    },
+                                    |_| {},
+                                ),
+                            )
+                            .await
+                            .map_err(|_| "timeout".to_string())?
+                            .map_err(|error| error.user_message())
+                    })
+                    .await
+                };
+                let result = runtime.block_on(command.async_kind().future(command));
+                assert!(format!("{:?}", result.unwrap_err()).contains("首选账号缺少"));
+                assert!(started.load(Ordering::SeqCst));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     fn synthetic_billing_session() -> BillingSession {
         BillingSession {

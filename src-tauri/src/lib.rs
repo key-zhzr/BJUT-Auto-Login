@@ -2075,18 +2075,24 @@ fn ensure_billing_foreground(state: &AppState) -> Result<(), String> {
     billing_runtime::ensure_foreground(&state.is_in_background)
 }
 
-async fn run_billing_read_while_foreground<T, F>(state: &AppState, future: F) -> Result<T, String>
+fn run_billing_read_while_foreground<'a, T, F>(
+    state: &'a AppState,
+    future: F,
+) -> impl std::future::Future<Output = Result<T, String>> + 'a
 where
-    F: std::future::Future<Output = Result<T, String>>,
+    F: std::future::Future<Output = Result<T, String>> + 'a,
 {
-    billing_runtime::run_read_while_foreground(&state.is_in_background, future).await
+    billing_runtime::run_read_while_foreground(&state.is_in_background, future)
 }
 
-async fn run_billing_mutation_to_completion<T, F>(state: &AppState, future: F) -> Result<T, String>
+fn run_billing_mutation_to_completion<'a, T, F>(
+    state: &'a AppState,
+    future: F,
+) -> impl std::future::Future<Output = Result<T, String>> + 'a
 where
-    F: std::future::Future<Output = Result<T, String>>,
+    F: std::future::Future<Output = Result<T, String>> + 'a,
 {
-    billing_runtime::run_mutation_to_completion(&state.is_in_background, future).await
+    billing_runtime::run_mutation_to_completion(&state.is_in_background, future)
 }
 
 const WLGN_HOST: &str = "wlgn.bjut.edu.cn";
@@ -10032,6 +10038,21 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn billing_command_future_fits_stack_budget() {
+        fn future_size<A, B, C, D, E, F: std::future::Future>(
+            _command: impl Fn(A, B, C, D, E) -> F,
+        ) -> usize {
+            std::mem::size_of::<F>()
+        }
+        let size = future_size(get_billing_center);
+        println!("get_billing_center future: {size} bytes");
+        assert!(
+            size <= 16 * 1024,
+            "billing command future occupies {size} bytes"
+        );
+    }
 
     #[test]
     fn update_download_control_releases_exclusive_state_on_drop() {
