@@ -4,7 +4,7 @@
 
 路由端提供自动认证、多个账号顺序尝试、LuCI 设置、网络变化触发和接口绑定。运行时使用 OpenWrt 自带的 shell 与轻量辅助程序，不依赖桌面图形界面。
 
-仓库包含 `bjut-autologin` 本体和 `luci-app-bjut-autologin` 管理界面两个包，本体可单独使用。请按路由器固件版本和架构选择 SDK 编译、安装。
+仓库包含 `bjut-autologin` 本体和 `luci-app-bjut-autologin` 管理界面两个包，本体可单独使用。在 [OpenWrt packages 工作流](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/actions/workflows/openwrt-packages.yml)中可选择平台编译 IPK/APK，完成后下载任务附件；版本标签构建成功后上传至 Releases。请按路由器固件版本、平台和架构选择安装包，详见[下载与编译](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/BUILDING.md)。
 
 ## 与主项目同步
 
@@ -12,4 +12,4 @@
 
 桌面 Rust 与路由 shell 不是同一种实现，不能保证任意新功能都自动移植。工作流会保留冲突并明确指出相关文件，需要人工处理时不会覆盖路由端改动。
 
-详见[安装与配置](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/README.md)、[测试说明](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/TESTING.md)和[上游同步说明](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/UPSTREAM.md)。路由端不包含桌面计费和充值界面；离线检查通过不代表已经完成特定固件的 SDK 编译和校园网实测。
+详见[安装与配置](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/README.md)、[测试说明](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/TESTING.md)和[上游同步说明](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/UPSTREAM.md)。路由端不包含桌面计费和充值界面；SDK 编译通过不代表已经完成各设备的安装和校园网实测。
