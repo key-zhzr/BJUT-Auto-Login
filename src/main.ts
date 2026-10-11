@@ -1955,7 +1955,7 @@ async function init() {
   
   setupNavigation();
   setupPageHeaders();
-  setupRouterControl(() => accountsCache, message => log('路由协作', message));
+  setupRouterControl(() => accountsCache, message => log('路由协作', message), customConfirm);
   setupEventListeners();
   setupEventDrivenNetworkDetection();
   renderAccounts();

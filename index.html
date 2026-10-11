@@ -1293,7 +1293,7 @@
                   <label>管理密码<input id="router-password" type="password" autocomplete="off" required></label>
                 </div>
                 <details class="router-certificate-details"><summary>路由器证书（可选）</summary>
-                  <p>使用自签证书时，粘贴路由器的 PEM 证书。</p>
+                  <p>首次连接时可确认路由器证书，也可在此粘贴 PEM 证书。</p>
                   <textarea id="router-certificate" rows="4" spellcheck="false" aria-label="路由器 PEM 证书"></textarea>
                 </details>
                 <button id="btn-router-connect" class="btn btn-primary btn-sm" type="submit">连接</button>
@@ -1450,7 +1450,7 @@
     <div id="confirm-modal" class="modal-overlay hidden">
       <div class="modal-content glass-card">
         <h3 id="confirm-modal-title">确认</h3>
-        <p id="confirm-modal-text" style="margin-bottom: 1.5rem; color: var(--text-muted); font-size: 0.95rem; white-space: pre-wrap;"></p>
+        <p id="confirm-modal-text" style="margin-bottom: 1.5rem; color: var(--text-muted); font-size: 0.95rem; white-space: pre-wrap; overflow-wrap: anywhere;"></p>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" id="btn-confirm-cancel">取消</button>
           <button type="button" class="btn btn-primary" id="btn-confirm-ok">确定</button>

@@ -1,5 +1,6 @@
 //! The App talks only to the named, authenticated rpcd methods shipped by the
 //! router package. Router credentials/session tokens never enter persistent UI storage.
+use base64::Engine;
 use reqwest::{Client, Url};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -59,6 +60,7 @@ impl rustls::client::danger::ServerCertVerifier for PinnedCertificate {
 fn router_client(certificate: Option<&str>) -> Result<Client, String> {
     let mut builder = Client::builder()
         .no_proxy()
+        .use_rustls_tls()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(10));
@@ -92,6 +94,155 @@ fn router_client(certificate: Option<&str>) -> Result<Client, String> {
         builder = builder.use_preconfigured_tls(config);
     }
     builder.build().map_err(|_| "无法准备路由器连接".into())
+}
+
+fn connection_error(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        return "路由器连接超时，请检查地址与网络".into();
+    }
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = cause {
+        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+            match io.kind() {
+                std::io::ErrorKind::ConnectionRefused => {
+                    return "路由器未接受 HTTPS 连接，请确认 HTTPS 已开启及端口正确".into()
+                }
+                std::io::ErrorKind::PermissionDenied => {
+                    return "无法访问本地网络，请检查应用权限与路由器地址".into()
+                }
+                _ => {}
+            }
+        }
+        if matches!(
+            current.downcast_ref::<rustls::Error>(),
+            Some(rustls::Error::InvalidCertificate(_))
+        ) {
+            return "ROUTER_CERT_UNTRUSTED:路由器证书尚未受信任，或已保存的证书发生变化".into();
+        }
+        cause = current
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .map(|inner| inner as &(dyn std::error::Error + 'static))
+            .or_else(|| current.source());
+    }
+    "无法连接路由器，请检查网络、HTTPS 地址与端口".into()
+}
+
+// This verifier is used only for a certificate-only TLS handshake. There is
+// no HTTP client, password, session token or application payload in this path.
+#[derive(Debug)]
+struct ReadOnlyCertificateProbe(PinnedCertificate);
+impl rustls::client::danger::ServerCertVerifier for ReadOnlyCertificateProbe {
+    fn verify_server_cert(
+        &self,
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        if cert.len() > 16384 {
+            return Err(rustls::Error::General("certificate too large".into()));
+        }
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        signature: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls12_signature(message, cert, signature)
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        signature: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls13_signature(message, cert, signature)
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.supported_verify_schemes()
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RouterCertificate {
+    pem: String,
+    fingerprint: String,
+    address: String,
+}
+
+#[tauri::command]
+pub(crate) async fn probe_router_certificate(address: String) -> Result<RouterCertificate, String> {
+    use sha2::{Digest, Sha256};
+    let url = endpoint(&address)?;
+    if url.scheme() != "https" {
+        return Err("请使用路由器 HTTPS 地址".into());
+    }
+    let host = url
+        .host_str()
+        .ok_or("路由器地址无效")?
+        .trim_matches(['[', ']'])
+        .to_owned();
+    let port = url.port_or_known_default().ok_or("路由器端口无效")?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = Arc::new(ReadOnlyCertificateProbe(PinnedCertificate {
+        der: Vec::new(),
+        algorithms: provider.signature_verification_algorithms,
+    }));
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|_| "无法准备证书读取")?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    let name =
+        rustls::pki_types::ServerName::try_from(host.clone()).map_err(|_| "路由器地址无效")?;
+    let der = tokio::time::timeout(Duration::from_secs(5), async {
+        let socket = tokio::net::TcpStream::connect((host.as_str(), port))
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::ConnectionRefused {
+                    "路由器未接受 HTTPS 连接，请确认 HTTPS 已开启及端口正确"
+                } else {
+                    "无法访问路由器，请检查本地网络权限与地址"
+                }
+            })?;
+        let stream = tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(name, socket)
+            .await
+            .map_err(|_| "路由器 HTTPS 握手未完成，请检查端口与 TLS 设置")?;
+        stream
+            .get_ref()
+            .1
+            .peer_certificates()
+            .and_then(|certs| certs.first())
+            .map(|cert| cert.as_ref().to_vec())
+            .ok_or("路由器未提供证书")
+    })
+    .await
+    .map_err(|_| "读取路由器证书超时，请检查网络")??;
+    let fingerprint = Sha256::digest(&der)
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(":");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&der);
+    let lines = encoded
+        .as_bytes()
+        .chunks(64)
+        .map(|line| std::str::from_utf8(line).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut origin = url;
+    origin.set_path("/");
+    Ok(RouterCertificate {
+        pem: format!("-----BEGIN CERTIFICATE-----\n{lines}\n-----END CERTIFICATE-----\n"),
+        fingerprint,
+        address: origin.into(),
+    })
 }
 
 #[derive(Default)]
@@ -153,15 +304,11 @@ async fn rpc(
         .json(&request)
         .send()
         .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                "路由器连接超时，请检查地址与网络"
-            } else {
-                "无法连接路由器，请检查 HTTPS 地址和证书"
-            }
-            .to_string()
-        })?;
+        .map_err(|error| connection_error(&error))?;
     if !response.status().is_success() {
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err("路由管理接口未开启，请安装 uhttpd-mod-ubus 并启用 /ubus".into());
+        }
         return Err(format!("路由器返回 HTTP {}", response.status().as_u16()));
     }
     let mut bytes = Vec::new();
@@ -527,7 +674,26 @@ mod tests {
                 .unwrap()
                 .status()
                 .is_success());
-            assert!(router_client(None).unwrap().get(&url).send().await.is_err());
+            let untrusted = router_client(None)
+                .unwrap()
+                .get(&url)
+                .send()
+                .await
+                .unwrap_err();
+            assert!(
+                connection_error(&untrusted).starts_with("ROUTER_CERT_UNTRUSTED:"),
+                "{untrusted:?}"
+            );
+            let received = probe_router_certificate(url.clone()).await.unwrap();
+            let accepted = router_client(Some(&received.pem))
+                .unwrap()
+                .get(&url)
+                .send()
+                .await
+                .unwrap();
+            assert!(accepted.status().is_success());
+            assert_eq!(received.fingerprint.split(':').count(), 32);
+            assert_eq!(received.pem.trim(), pem.trim());
             let other = include_str!("portal_auth/fixtures/dorm-gateway-2024.pem");
             assert!(router_client(Some(other))
                 .unwrap()
@@ -535,6 +701,26 @@ mod tests {
                 .send()
                 .await
                 .is_err());
+        });
+    }
+
+    #[test]
+    fn closed_https_port_reports_service_problem_before_certificate_trust() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("https://{}/", listener.local_addr().unwrap());
+            drop(listener);
+            let error = router_client(None)
+                .unwrap()
+                .get(&url)
+                .send()
+                .await
+                .unwrap_err();
+            assert!(connection_error(&error).contains("未接受 HTTPS"));
+            assert!(probe_router_certificate(url)
+                .await
+                .unwrap_err()
+                .contains("未接受 HTTPS"));
         });
     }
 }

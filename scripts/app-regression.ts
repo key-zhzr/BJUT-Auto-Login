@@ -58,14 +58,19 @@ async function fixtureCaptcha(title:string) {
 const routerSnapshot = {
   version: '0.1.6', managementUrl:'https://192.0.2.1/cgi-bin/luci/admin/network/bjut-autologin/billing',
   uplinks:[
-    {id:'dorm_a',network:'wan14',network6:'wan16',device:'lan3',ipv4:'10.126.19.139',ipv6:'2001:db8::1',state:'online',message:'认证会话有效，互联网连接正常',internet4:'reachable',internet6:'reachable',account:'25***01'},
+    {id:'dorm_a',network:'wan14',network6:'wan16',device:'lan3',ipv4:'10.126.19.139',ipv6:'2001:db8::1',state:'online',message:'认证会话有效，互联网连接正常',internet4:'reachable',internet6:'reachable',account:'25***01',checking:1,check_message:'正在确认认证会话'},
     {id:'dorm_b',network:'wan24',device:'lan4',ipv4:'10.126.20.139',state:'authenticated_limited',message:'认证会话有效，外网探测暂未通过；保留当前登录',internet4:'unreachable',internet6:'not_configured',account:'25***02'},
   ],
   accounts:[{id:'account1',user:'25000001',enabled:1,hasPassword:1},{id:'account2',user:'25000002',enabled:0,hasPassword:1}],
 };
 mockIPC(async (cmd, payload: any = {}) => {
   calls.push({cmd,payload,at:now()});
-  if (['connect_router','get_router_status'].includes(cmd)) return routerSnapshot;
+  if (cmd === 'connect_router') {
+    if (!payload.certificate) throw 'ROUTER_CERT_UNTRUSTED:模拟路由器证书尚未受信任';
+    return routerSnapshot;
+  }
+  if (cmd === 'get_router_status') return routerSnapshot;
+  if (cmd === 'probe_router_certificate') return {pem:'synthetic-pem',fingerprint:Array(32).fill('AB').join(':'),address:'https://192.0.2.1/'};
   if (cmd === 'router_login') return '路由器已开始核对所选上游的登录状态';
   if (cmd === 'sync_router_accounts') return '选定账号已同步到路由器';
   if (cmd === 'trigger_manual_check') {
@@ -272,10 +277,16 @@ button.addEventListener('click',async()=>{
     assert(!document.querySelector('.config-qr-overlay'),'关闭后二维码仍驻留');
     note('通过：备份弹窗、3 位密码、按范围导出与二维码解码');
     (document.getElementById('router-address') as HTMLInputElement).value='https://192.0.2.1';
+    (document.getElementById('router-certificate') as HTMLTextAreaElement).value='';
     (document.getElementById('router-password') as HTMLInputElement).value='synthetic-router-password';
     (document.getElementById('router-connect-form') as HTMLFormElement).requestSubmit();
+    await wait(()=>!document.getElementById('confirm-modal')!.classList.contains('hidden'));
+    assert(document.getElementById('confirm-modal-text')!.textContent!.includes('SHA-256'),'未显示证书指纹');
+    assert(!calls.some(call=>call.cmd==='connect_router'&&call.payload.certificate),'证书尚未确认就发送认证');
+    click('#btn-confirm-ok');
     await wait(()=>!document.getElementById('router-connected')!.hidden);
     assert(document.querySelectorAll('.router-uplink-card').length===2,'路由多上游状态未分别显示');
+    assert(document.getElementById('router-uplink-status')!.textContent!.includes('正在确认认证会话'),'未保留状态并显示检测步骤');
     assert((document.getElementById('router-password') as HTMLInputElement).value==='','连接后仍保留管理密码');
     assert(!memory.get('bjut_router_password'),'管理密码写入了 UI 存储');
     click('#router-uplink-select .custom-select-trigger'); click('#router-uplink-select [data-value="dorm_b"]');

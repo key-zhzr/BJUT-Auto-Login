@@ -9965,6 +9965,7 @@ pub fn run() {
         .manage(router_control::Manager::default())
         .invoke_handler(tauri::generate_handler![
             router_control::connect_router,
+            router_control::probe_router_certificate,
             router_control::get_router_status,
             router_control::router_login,
             router_control::disconnect_router,

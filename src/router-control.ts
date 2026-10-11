@@ -6,6 +6,7 @@ import type { AccountView } from './models';
 interface RouterUplink {
   id: string; network?: string; network6?: string; device?: string; ipv4?: string; ipv6?: string;
   state: string; message?: string; internet4?: string; internet6?: string; account?: string;
+  checking?: number; check_message?: string;
 }
 interface RouterSnapshot {
   version: string; uplinks: RouterUplink[];
@@ -21,7 +22,8 @@ const labels: Record<string, string> = {
   login_accepted: '登录已受理', blocked: '请检查上游设置', request_failed: '认证结果待确认',
 };
 
-export function setupRouterControl(getAccounts: () => AccountView[], log: (message: string) => void): void {
+export function setupRouterControl(getAccounts: () => AccountView[], log: (message: string) => void,
+  confirmCertificate: (text: string, title: string, confirmLabel: string) => Promise<boolean>): void {
   const panel = document.getElementById('router-control')!;
   const form = document.getElementById('router-connect-form') as HTMLFormElement;
   const address = document.getElementById('router-address') as HTMLInputElement;
@@ -40,12 +42,13 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
   let busy = false;
   let snapshot: RouterSnapshot | null = null;
   let optionsStamp = '';
+  let lastPoll = 0;
   address.value = localStorage.getItem('bjut_router_address') || 'https://192.168.1.1';
   username.value = localStorage.getItem('bjut_router_username') || 'root';
   certificate.value = localStorage.getItem('bjut_router_certificate') || '';
 
   function showMessage(text: string, failed = false) {
-    message.textContent = text;
+    message.textContent = text.replace('ROUTER_CERT_UNTRUSTED:', '');
     message.classList.toggle('error', failed);
   }
   function render(data: RouterSnapshot) {
@@ -70,12 +73,17 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
       const paths = document.createElement('p');
       const family = (name: string, state?: string) => `${state === 'reachable' ? '✓' : state === 'not_configured' ? '—' : '×'} ${name}`;
       paths.textContent = `${family('IPv4', item.internet4)} · ${family('IPv6', item.internet6)}${item.account ? ` · ${item.account}` : ''}`;
-      card.append(title, detail, paths); return card;
+      card.append(title, detail, paths);
+      if (item.checking) {
+        const progress = document.createElement('p'); progress.textContent = item.check_message || '正在检测…'; card.append(progress);
+      }
+      return card;
     }));
   }
   async function refresh() {
     if (!connected || busy) return;
     busy = true;
+    lastPoll = Date.now();
     try { render(await invoke<RouterSnapshot>('get_router_status')); }
     catch (error) { showMessage(String(error), true); (document.getElementById('router-connection-settings') as HTMLDetailsElement).open = true; }
     finally { busy = false; }
@@ -84,13 +92,26 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
     event.preventDefault(); if (busy) return;
     busy = true; connectButton.disabled = true; showMessage('正在连接路由器…');
     try {
-      const data = await invoke<RouterSnapshot>('connect_router', { address: address.value.trim(), username: username.value.trim(), password: password.value, certificate: certificate.value.trim() || null });
+      const connection = { address: address.value.trim(), username: username.value.trim(), password: password.value, certificate: certificate.value.trim() || null };
+      let data: RouterSnapshot;
+      try { data = await invoke<RouterSnapshot>('connect_router', connection); }
+      catch (error) {
+        if (!String(error).includes('ROUTER_CERT_UNTRUSTED:') || connection.certificate) throw error;
+        showMessage('正在读取路由器证书…');
+        const cert = await invoke<{pem: string; fingerprint: string; address: string}>('probe_router_certificate', { address: connection.address });
+        const accepted = await confirmCertificate(`地址：${cert.address}\nSHA-256 指纹：\n${cert.fingerprint}\n\n请核对这是你的路由器。确认后将记住此证书。`, '确认路由器证书', '信任并连接');
+        if (!accepted) throw new Error('未信任路由器证书');
+        if (address.value.trim() !== connection.address) throw new Error('路由器地址已更改，请重新连接');
+        certificate.value = cert.pem; connection.certificate = cert.pem;
+        showMessage('正在连接路由器…');
+        data = await invoke<RouterSnapshot>('connect_router', connection);
+      }
       password.value = '';
       localStorage.setItem('bjut_router_address', address.value.trim());
       localStorage.setItem('bjut_router_username', username.value.trim());
       localStorage.setItem('bjut_router_certificate', certificate.value.trim());
       render(data); (document.getElementById('router-connection-settings') as HTMLDetailsElement).open = false; showMessage('路由器已连接'); log('路由器管理会话已连接');
-    } catch (error) { showMessage(String(error), true); }
+    } catch (error) { showMessage(String(error).replace('ROUTER_CERT_UNTRUSTED:', ''), true); }
     finally { busy = false; connectButton.disabled = false; }
   });
   document.getElementById('btn-router-refresh')!.addEventListener('click', () => { void refresh(); });
@@ -134,6 +155,7 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
     finally { busy = false; syncButton.disabled = false; }
   });
   window.setInterval(() => {
-    if (!document.hidden && panel.closest('.page')?.classList.contains('active')) void refresh();
-  }, 10000);
+    const interval = snapshot?.uplinks.some(item => item.checking) ? 2000 : 10000;
+    if (!document.hidden && panel.closest('.page')?.classList.contains('active') && Date.now() - lastPoll >= interval) void refresh();
+  }, 2000);
 }

@@ -4,17 +4,29 @@
 
 路由端提供多上游自动认证、IPv4/IPv6 独立接口选择、按上游分配账号、LuCI 设置与计费查询。门户会话和外网探测分开判断，兼容 mwan3 的指定出口。运行时使用 OpenWrt 自带的 shell 与轻量辅助程序，不依赖桌面图形界面。
 
-仓库包含 `bjut-autologin` 本体和 `luci-app-bjut-autologin` 管理界面两个包，本体可单独使用。在 [OpenWrt packages 工作流](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/actions/workflows/openwrt-packages.yml)中可选择平台编译 IPK/APK，完成后下载任务附件；版本标签构建成功后上传至 Releases。请按路由器固件版本、平台和架构选择安装包，详见[下载与编译](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/BUILDING.md)。
+仓库包含 `bjut-autologin` 本体和 `luci-app-bjut-autologin` 管理界面两个包，本体可单独使用。在 [OpenWrt packages 工作流](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/actions/workflows/openwrt-packages.yml)中可选择平台编译 IPK/APK，完成后下载任务附件；全部格式构建先完成 APK 再开始 IPK，版本标签构建成功后上传至 Releases。请按路由器固件版本、平台和架构选择安装包，详见[下载与编译](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/BUILDING.md)。
 
 ## App 与路由协作
 
-两端升级到 0.1.6 后，在 App 的“设置 → 路由协作”填写路由器 HTTPS 地址与管理账号。使用自签证书时，将路由器 PEM 证书（通常在 `/etc/uhttpd.crt`）填入可选证书项。
+两端升级到 0.1.6 后，在 App 的“设置 → 路由协作”填写路由器 HTTPS 地址与管理账号。路由器需先启用 HTTPS 管理及 `/ubus`；地址可包含实际 HTTPS 端口。首次遇到自签证书时，App 会读取并显示指纹，确认这是你的路由器后继续，也可手动粘贴 PEM 证书。证书变化时需要重新核对。
 
 连接后可以查看各上游的认证与 IPv4/IPv6 状态，选择上游和账号手动登录，并勾选 App 账号同步到路由端。同步仅更新选定账号，保留其他账号和接口分配；停用账号仍可手动使用。管理密码与登录令牌只留在 App 内存，两端保持独立运行。
 
-LuCI 入口为“网络 → BJUT 自动登录 → 计费系统”，可分别选择上游与账号查询余额、流量、账户状态及在线设备，直接填写图片验证码。会话按管理员、上游、账号与出口隔离，概览读取完成后先显示。
+LuCI 入口为“网络 → BJUT 自动登录 → 计费系统”，打开后自动查询各条上游，优先使用当前认证账号的免密跳转，无法使用时按上游账号分配回退。同一账号余额只汇总一次，也可选择单条上游和已保存账号，直接填写图片验证码。会话按管理员、上游、账号与出口隔离，概览读取完成后先显示。
 
-多上游通过 `uplink` 段配置，例如 `wan14/wan16`、`wan24/wan26`；IPv6 可使用独立逻辑接口。默认维护绑定设备的内存出口路由和专用 mwan3 源地址规则，保留普通 LAN 转发及用户策略。没有默认网关证据时会提示，不猜测网关或反复重启健康接口。详见独立仓库的[完整配置说明](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/README.md)。
+多上游通过 `uplink` 段配置，例如 `wan14/wan16`、`wan24/wan26`；IPv6 可使用独立逻辑接口。LuCI 每 2 秒读取最新状态，同时显示检测步骤并保留最近完成的结果。默认维护绑定设备的内存出口路由和专用 mwan3 源地址规则，保留普通 LAN 转发及用户策略。没有默认网关证据时会提示，不猜测网关或反复重启健康接口。详见独立仓库的[完整配置说明](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/README.md)。
+
+## 尚未开启 HTTPS
+
+管理地址为 `192.168.1.1`、且 `uci -q get uhttpd.main.listen_https` 没有输出时，可在路由器上运行：
+
+```sh
+uci add_list uhttpd.main.listen_https='192.168.1.1:443'
+uci commit uhttpd
+/etc/init.d/uhttpd restart
+```
+
+保留现有证书与 `/ubus` 设置；TLS 组件和 `uhttpd-mod-ubus` 需由对应固件的软件源提供。重启后仍无法连接时查看 `logread -e uhttpd`。此配置只监听所填 LAN 地址。详细说明见[路由端连接指南](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/README.md#路由器尚未开启-https)。
 
 ## 与主项目同步
 
