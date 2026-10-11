@@ -14,10 +14,56 @@ pub(crate) struct NetworkAdapter {
     // Used internally by direct probes, not displayed/exported with inventory.
     #[serde(default, skip_serializing)]
     pub(crate) dns_servers: Vec<String>,
+    #[cfg(any(target_os = "windows", target_os = "android"))]
+    #[serde(default, skip_serializing)]
+    pub(crate) gateways: Vec<String>,
     pub(crate) connected: bool,
     pub(crate) selectable: bool,
     #[serde(default)]
     pub(crate) selected: bool,
+}
+
+pub(crate) fn router_gateways() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        read("/usr/sbin/netstat", &["-rn", "-f", "inet"])
+            .lines()
+            .filter_map(|line| {
+                let columns: Vec<_> = line.split_whitespace().collect();
+                (columns.first() == Some(&"default"))
+                    .then(|| columns.get(1).map(|ip| ip.to_string()))
+                    .flatten()
+            })
+            .collect()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let routes: Vec<serde_json::Value> =
+            serde_json::from_str(&read("ip", &["-j", "-4", "route", "show", "table", "all"]))
+                .unwrap_or_default();
+        routes
+            .iter()
+            .filter(|row| row["dst"] == "default")
+            .filter_map(|row| row["gateway"].as_str().map(str::to_owned))
+            .collect()
+    }
+    #[cfg(any(target_os = "windows", target_os = "android"))]
+    {
+        adapters()
+            .into_iter()
+            .filter(|adapter| {
+                adapter.connected && ["wifi", "ethernet"].contains(&adapter.transport.as_str())
+            })
+            .flat_map(|adapter| adapter.gateways)
+            .collect()
+    }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "android"
+    )))]
+    Vec::new()
 }
 
 pub(crate) fn usable_ipv6(value: &str) -> bool {

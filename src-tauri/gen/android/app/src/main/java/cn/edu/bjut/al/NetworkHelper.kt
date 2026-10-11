@@ -132,6 +132,10 @@ class NetworkHelper {
                 }
                 val ipv4 = org.json.JSONArray()
                 val ipv6 = org.json.JSONArray()
+                val gateways = org.json.JSONArray()
+                link.routes.filter { it.isDefaultRoute }.forEach { route ->
+                    route.gateway?.hostAddress?.let { gateways.put(it) }
+                }
                 link.linkAddresses.forEach {
                     val ip = it.address
                     if (!ip.isAnyLocalAddress && !ip.isLoopbackAddress && !ip.isLinkLocalAddress && !ip.isMulticastAddress) {
@@ -141,7 +145,7 @@ class NetworkHelper {
                 }
                 entries.put(JSONObject().put("id", network.toString()).put("name", name)
                     .put("interfaceName", name).put("transport", transport)
-                    .put("ipv4", ipv4).put("ipv6", ipv6).put("connected", true).put("selectable", false))
+                    .put("ipv4", ipv4).put("ipv6", ipv6).put("gateways", gateways).put("connected", true).put("selectable", false))
             }
             return entries.toString()
         }

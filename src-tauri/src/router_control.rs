@@ -97,6 +97,11 @@ fn router_client(certificate: Option<&str>) -> Result<Client, String> {
 }
 
 fn connection_error(error: &reqwest::Error) -> String {
+    let protocol = error
+        .url()
+        .map(|url| url.scheme())
+        .unwrap_or("https")
+        .to_ascii_uppercase();
     if error.is_timeout() {
         return "路由器连接超时，请检查地址与网络".into();
     }
@@ -105,7 +110,7 @@ fn connection_error(error: &reqwest::Error) -> String {
         if let Some(io) = current.downcast_ref::<std::io::Error>() {
             match io.kind() {
                 std::io::ErrorKind::ConnectionRefused => {
-                    return "路由器未接受 HTTPS 连接，请确认 HTTPS 已开启及端口正确".into()
+                    return format!("路由器未接受 {protocol} 连接，请确认服务已开启及端口正确")
                 }
                 std::io::ErrorKind::PermissionDenied => {
                     return "无法访问本地网络，请检查应用权限与路由器地址".into()
@@ -125,7 +130,7 @@ fn connection_error(error: &reqwest::Error) -> String {
             .map(|inner| inner as &(dyn std::error::Error + 'static))
             .or_else(|| current.source());
     }
-    "无法连接路由器，请检查网络、HTTPS 地址与端口".into()
+    "无法连接路由器，请检查网络、地址与端口".into()
 }
 
 // This verifier is used only for a certificate-only TLS handshake. There is
@@ -246,7 +251,7 @@ pub(crate) async fn probe_router_certificate(address: String) -> Result<RouterCe
 }
 
 #[derive(Default)]
-pub(crate) struct Manager(Mutex<Option<Remote>>);
+pub(crate) struct Manager(Mutex<Option<Arc<Remote>>>);
 
 struct Remote {
     client: Client,
@@ -254,6 +259,7 @@ struct Remote {
     token: String,
     expires: std::sync::Mutex<Instant>,
     lifetime: Duration,
+    billing_tickets: std::sync::Mutex<std::collections::HashMap<String, Instant>>,
 }
 
 #[derive(Serialize)]
@@ -263,12 +269,28 @@ pub(crate) struct Snapshot {
     uplinks: Vec<Value>,
     accounts: Vec<Value>,
     management_url: String,
+    capabilities: Vec<String>,
+    ports: Vec<Value>,
 }
 
 fn endpoint(value: &str) -> Result<Url, String> {
-    let mut url = Url::parse(value.trim()).map_err(|_| "请填写完整的路由器 HTTPS 地址")?;
+    endpoint_with_http(value, false)
+}
+
+fn private_http_host(host: &str) -> bool {
+    host.trim_matches(['[', ']'])
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| match ip {
+            std::net::IpAddr::V4(ip) => ip.is_private() || ip.is_loopback(),
+            std::net::IpAddr::V6(ip) => ip.is_unique_local() || ip.is_loopback(),
+        })
+}
+
+fn endpoint_with_http(value: &str, allow_http: bool) -> Result<Url, String> {
+    let mut url = Url::parse(value.trim()).map_err(|_| "请填写完整的路由器地址")?;
     let loopback = matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"));
-    if (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
+    let lan_http = allow_http && url.host_str().is_some_and(private_http_host);
+    if (url.scheme() != "https" && !(url.scheme() == "http" && (loopback || lan_http)))
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -276,7 +298,7 @@ fn endpoint(value: &str) -> Result<Url, String> {
         || url.fragment().is_some()
         || !matches!(url.path(), "" | "/" | "/ubus" | "/ubus/")
     {
-        return Err("请使用路由器的 HTTPS 地址，例如 https://192.168.1.1".into());
+        return Err("请使用 HTTPS 地址；可信局域网的 HTTP 需先勾选允许选项".into());
     }
     url.set_path("/ubus");
     Ok(url)
@@ -371,6 +393,24 @@ impl Remote {
             return Err("路由端协作接口不兼容，请更新两端至 0.1.6".into());
         }
         let accounts = self.call("accounts", json!({})).await?;
+        let capabilities: Vec<String> = status
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.as_str().map(str::to_owned))
+            .take(16)
+            .collect();
+        let ports = if capabilities.iter().any(|item| item == "ports") {
+            self.call("ports", json!({}))
+                .await?
+                .get("ports")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let mut management = self.endpoint.clone();
         management.set_path("/cgi-bin/luci/admin/network/bjut-autologin/billing");
         Ok(Snapshot {
@@ -390,6 +430,8 @@ impl Remote {
                 .cloned()
                 .unwrap_or_default(),
             management_url: management.into(),
+            capabilities,
+            ports,
         })
     }
 }
@@ -401,8 +443,9 @@ pub(crate) async fn connect_router(
     username: String,
     password: String,
     certificate: Option<String>,
+    allow_http: Option<bool>,
 ) -> Result<Snapshot, String> {
-    let endpoint = endpoint(&address)?;
+    let endpoint = endpoint_with_http(&address, allow_http.unwrap_or(false))?;
     if username.trim().is_empty()
         || username.len() > 128
         || password.is_empty()
@@ -410,7 +453,11 @@ pub(crate) async fn connect_router(
     {
         return Err("请填写路由器管理账号与密码".into());
     }
-    let client = router_client(certificate.as_deref())?;
+    let client = router_client(if endpoint.scheme() == "https" {
+        certificate.as_deref()
+    } else {
+        None
+    })?;
     let login = Box::pin(rpc(
         &client,
         &endpoint,
@@ -439,9 +486,10 @@ pub(crate) async fn connect_router(
             Instant::now() + Duration::from_secs(timeout.saturating_sub(5)),
         ),
         lifetime: Duration::from_secs(timeout.saturating_sub(5)),
+        billing_tickets: std::sync::Mutex::new(std::collections::HashMap::new()),
     };
     let snapshot = Box::pin(remote.snapshot()).await?;
-    *manager.0.lock().await = Some(remote);
+    *manager.0.lock().await = Some(Arc::new(remote));
     Ok(snapshot)
 }
 
@@ -449,8 +497,7 @@ pub(crate) async fn connect_router(
 pub(crate) async fn get_router_status(
     manager: tauri::State<'_, Manager>,
 ) -> Result<Snapshot, String> {
-    let guard = manager.0.lock().await;
-    let remote = guard.as_ref().ok_or("请先连接路由器")?;
+    let remote = manager.0.lock().await.clone().ok_or("请先连接路由器")?;
     Box::pin(remote.snapshot()).await
 }
 
@@ -467,8 +514,7 @@ pub(crate) async fn router_login(
     {
         return Err("请重新选择上游与账号".into());
     }
-    let guard = manager.0.lock().await;
-    let remote = guard.as_ref().ok_or("请先连接路由器")?;
+    let remote = manager.0.lock().await.clone().ok_or("请先连接路由器")?;
     Box::pin(remote.call(
         "login",
         json!({"uplink":uplink,"account":account.unwrap_or_default()}),
@@ -489,15 +535,15 @@ pub(crate) async fn sync(manager: &Manager, accounts: Vec<Value>) -> Result<Stri
     if accounts.is_empty() || accounts.len() > 31 {
         return Err("请选定 1 至 31 个已保存密码的账号".into());
     }
-    let guard = manager.0.lock().await;
-    let remote = guard.as_ref().ok_or("请先连接路由器")?;
+    let remote = manager.0.lock().await.clone().ok_or("请先连接路由器")?;
     Box::pin(remote.call("sync_accounts", json!({"payload":serde_json::to_string(&json!({"accounts":accounts})).map_err(|_| "账号内容无法读取")?}))).await?;
     Ok("选定账号已同步到路由器".into())
 }
 
 #[tauri::command]
 pub(crate) async fn disconnect_router(manager: tauri::State<'_, Manager>) -> Result<(), String> {
-    if let Some(remote) = manager.0.lock().await.take() {
+    let remote = manager.0.lock().await.take();
+    if let Some(remote) = remote {
         let _ = Box::pin(rpc(
             &remote.client,
             &remote.endpoint,
@@ -511,10 +557,336 @@ pub(crate) async fn disconnect_router(manager: tauri::State<'_, Manager>) -> Res
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiscoveredRouter {
+    name: String,
+    address: String,
+    version: String,
+    secure: bool,
+}
+
+fn discovery_origins(gateways: &[String], last_address: Option<&str>) -> Vec<Url> {
+    let mut origins = Vec::new();
+    if let Some(address) = last_address {
+        if let Ok(mut url) = endpoint_with_http(address, true) {
+            if url.host_str().is_some_and(private_http_host) {
+                url.set_path("/");
+                origins.push(url);
+            }
+        }
+    }
+    for gateway in gateways.iter().take(16).filter(|ip| private_http_host(ip)) {
+        let host = match gateway.parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V6(ip)) => format!("[{ip}]"),
+            _ => gateway.to_owned(),
+        };
+        for scheme in ["https", "http"] {
+            if let Ok(url) = Url::parse(&format!("{scheme}://{host}/")) {
+                if !origins.contains(&url) {
+                    origins.push(url);
+                }
+            }
+        }
+    }
+    origins.truncate(32);
+    origins
+}
+
+async fn discovery_probe(client: &Client, origin: Url) -> Option<DiscoveredRouter> {
+    let url = origin.join(".well-known/bjut-autologin.json").ok()?;
+    let mut response = client.get(url).send().await.ok()?;
+    if response.status() != reqwest::StatusCode::OK {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if bytes.len() + chunk.len() > 8192 {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let data: Value = serde_json::from_slice(&bytes).ok()?;
+    if data["product"] != "BJUT-Auto-Login-OpenWrt"
+        || data["apiVersion"] != 1
+        || data["apiPath"] != "/ubus"
+    {
+        return None;
+    }
+    Some(DiscoveredRouter {
+        name: data["name"]
+            .as_str()
+            .unwrap_or("BJUT 路由器")
+            .chars()
+            .take(48)
+            .collect(),
+        address: origin.to_string(),
+        version: data["version"]
+            .as_str()
+            .unwrap_or("--")
+            .chars()
+            .take(32)
+            .collect(),
+        secure: origin.scheme() == "https",
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn discover_routers(
+    last_address: Option<String>,
+) -> Result<Vec<DiscoveredRouter>, String> {
+    use futures_util::StreamExt;
+    let gateways = tokio::task::spawn_blocking(crate::network_inventory::router_gateways)
+        .await
+        .map_err(|_| "无法读取当前局域网")?;
+    let origins = discovery_origins(&gateways, last_address.as_deref());
+    // Discovery reads only public metadata, without credentials/cookies. A
+    // self-signed certificate may identify a candidate but is never trusted by
+    // the separate authenticated RPC client until the user confirms its pin.
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = Arc::new(ReadOnlyCertificateProbe(PinnedCertificate {
+        der: Vec::new(),
+        algorithms: provider.signature_verification_algorithms,
+    }));
+    let tls = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|_| "无法准备路由器发现")?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    let client = Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .use_preconfigured_tls(tls)
+        .connect_timeout(Duration::from_millis(800))
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|_| "无法准备路由器发现")?;
+    let mut found: Vec<_> = futures_util::stream::iter(origins.into_iter().map(|origin| {
+        let client = client.clone();
+        async move { discovery_probe(&client, origin).await }
+    }))
+    .buffer_unordered(8)
+    .filter_map(|result| async { result })
+    .collect()
+    .await;
+    found.sort_by_key(|router| !router.secure);
+    let mut hosts = std::collections::HashSet::new();
+    found.retain(|router| {
+        hosts.insert(
+            router
+                .address
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .to_string(),
+        )
+    });
+    Ok(found)
+}
+
+fn valid_router_request(operation: &str, args: &Value) -> bool {
+    let Some(args) = args.as_object() else {
+        return false;
+    };
+    let allowed: &[&str] = match operation {
+        "logs" | "settings" => &[],
+        "save_settings" => &[
+            "enabled",
+            "interval",
+            "timeout",
+            "offline_confirmations",
+            "managed_routes",
+            "mwan3",
+            "log_level",
+        ],
+        "account_set" => &["account", "enabled"],
+        "billing_start" => &["uplink", "account"],
+        "billing_poll" => &["ticket"],
+        "billing_captcha" => &["ticket", "code", "refresh"],
+        _ => return false,
+    };
+    args.iter().all(|(key, value)| {
+        allowed.contains(&key.as_str())
+            && match key.as_str() {
+                "account" => value
+                    .as_str()
+                    .is_some_and(|id| id.is_empty() || valid_section(id)),
+                "uplink" => value.as_str().is_some_and(valid_section),
+                "ticket" => value.as_str().is_some_and(valid_token),
+                "code" => value.as_str().is_some_and(|code| {
+                    code.len() <= 12 && code.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                }),
+                "refresh" => value.is_boolean(),
+                "enabled" | "managed_routes" | "mwan3" => matches!(value.as_str(), Some("0" | "1")),
+                "log_level" => {
+                    matches!(value.as_str(), Some("debug" | "info" | "notice" | "error"))
+                }
+                "interval" | "timeout" | "offline_confirmations" => {
+                    value.as_str().is_some_and(|value| {
+                        value.len() <= 4 && value.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+                }
+                _ => false,
+            }
+    }) && match operation {
+        "account_set" => args.contains_key("account") && args.contains_key("enabled"),
+        "billing_start" => args.contains_key("uplink"),
+        "billing_poll" | "billing_captcha" => args.contains_key("ticket"),
+        "save_settings" => !args.is_empty(),
+        _ => true,
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn router_request(
+    manager: tauri::State<'_, Manager>,
+    operation: String,
+    mut args: Value,
+) -> Result<Value, String> {
+    if !valid_router_request(&operation, &args) {
+        return Err("路由器请求内容无效".into());
+    }
+    let remote = manager.0.lock().await.clone().ok_or("请先连接路由器")?;
+    if operation.starts_with("billing_") {
+        let mut tickets = remote.billing_tickets.lock().unwrap();
+        tickets.retain(|_, created| created.elapsed() < Duration::from_secs(600));
+        if operation == "billing_start" && tickets.len() >= 64 {
+            return Err("查询较多，请稍后重试".into());
+        }
+        if let Some(ticket) = args.get("ticket").and_then(Value::as_str) {
+            if !tickets.contains_key(ticket) {
+                return Err("计费查询已过期，请刷新".into());
+            }
+        }
+        args["owner"] = Value::String(remote.token.clone());
+    }
+    let input_ticket = args
+        .get("ticket")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let result = remote.call(&operation, args).await?;
+    if operation == "billing_poll"
+        && matches!(result["result"]["state"].as_str(), Some("ready" | "error"))
+    {
+        if let Some(ticket) = input_ticket {
+            remote.billing_tickets.lock().unwrap().remove(&ticket);
+        }
+    }
+    if operation == "billing_start" {
+        let ticket = result
+            .get("ticket")
+            .and_then(Value::as_str)
+            .filter(|token| valid_token(token))
+            .ok_or("无法开始路由计费查询")?;
+        remote
+            .billing_tickets
+            .lock()
+            .unwrap()
+            .insert(ticket.to_owned(), Instant::now());
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+    #[test]
+    fn local_http_requires_explicit_opt_in_and_a_private_literal_address() {
+        assert!(endpoint_with_http("http://192.168.1.1", false).is_err());
+        for address in [
+            "http://192.168.1.1",
+            "http://10.0.0.1:8080",
+            "http://[fd00::1]",
+        ] {
+            assert!(endpoint_with_http(address, true).is_ok(), "{address}");
+        }
+        for address in [
+            "http://1.1.1.1",
+            "http://router.lan",
+            "http://198.18.0.1",
+            "http://192.168.1.1/shell",
+            "http://root:pass@192.168.1.1",
+        ] {
+            assert!(endpoint_with_http(address, true).is_err(), "{address}");
+        }
+    }
+
+    #[test]
+    fn discovery_is_bounded_to_observed_private_gateways_and_saved_local_address() {
+        let urls = discovery_origins(
+            &[
+                "192.168.1.1".into(),
+                "198.18.0.1".into(),
+                "1.1.1.1".into(),
+                "192.168.1.1".into(),
+            ],
+            Some("https://192.168.1.1:8443"),
+        );
+        assert_eq!(urls.len(), 3);
+        assert!(urls
+            .iter()
+            .all(|url| url.host_str() == Some("192.168.1.1") && url.path() == "/"));
+        assert!(discovery_origins(&[], Some("https://public.example")).is_empty());
+    }
+
+    #[test]
+    fn collaboration_rejects_arbitrary_rpc_and_settings_requests() {
+        assert!(valid_router_request(
+            "save_settings",
+            &json!({"interval":"20","enabled":"1"})
+        ));
+        assert!(valid_router_request(
+            "billing_start",
+            &json!({"uplink":"1","account":"current"})
+        ));
+        for (operation, args) in [
+            ("exec", json!({"command":"reboot"})),
+            ("settings", json!({"path":"/etc/shadow"})),
+            ("save_settings", json!({"password":"replacement"})),
+            ("account_set", json!({"account":"x;reboot","enabled":"0"})),
+            (
+                "billing_poll",
+                json!({"ticket":"1".repeat(32),"owner":"2".repeat(32)}),
+            ),
+            (
+                "billing_captcha",
+                json!({"ticket":"1".repeat(32),"code":"../file","refresh":false}),
+            ),
+        ] {
+            assert!(!valid_router_request(operation, &args), "{operation}");
+        }
+    }
+
+    #[test]
+    fn discovery_validates_public_metadata_without_credentials_and_refuses_redirects() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            for case in 0..4 {
+                let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let address=listener.local_addr().unwrap();
+                let worker=std::thread::spawn(move || {
+                    let (mut stream,_)=listener.accept().unwrap();
+                    let mut request=Vec::new(); let mut byte=[0];
+                    while !request.ends_with(b"\r\n\r\n") {stream.read_exact(&mut byte).unwrap();request.push(byte[0]);}
+                    let request=String::from_utf8(request).unwrap();
+                    assert!(request.starts_with("GET /.well-known/bjut-autologin.json "));
+                    assert!(!request.to_ascii_lowercase().contains("authorization:"));
+                    assert!(!request.to_ascii_lowercase().contains("cookie:"));
+                    if case==1 {
+                        stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/other\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    } else {
+                        let body=if case==2 {"x".repeat(8193)} else {
+                            json!({"product":if case==3 {"unrelated"} else {"BJUT-Auto-Login-OpenWrt"},"apiVersion":1,"apiPath":"/ubus","version":"0.1.6","name":"Fixture router"}).to_string()
+                        };
+                        write!(stream,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+                    }
+                });
+                let result=discovery_probe(&router_client(None).unwrap(),Url::parse(&format!("http://{address}/")).unwrap()).await;
+                assert_eq!(result.is_some(),case==0);
+                worker.join().unwrap();
+            }
+        });
+    }
     #[test]
     fn router_endpoint_preserves_origin_and_requires_tls() {
         assert_eq!(

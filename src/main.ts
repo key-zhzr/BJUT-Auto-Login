@@ -1,4 +1,5 @@
 import { setupRouterControl } from './router-control';
+import type { RouterWorkbench } from './router-workbench';
 import { chooseConfigTransfer } from './config-transfer-dialog';
 import { setupPageHeaders } from './page-headers';
 import { loginBillingWebVpn } from './billing-webvpn';
@@ -1754,6 +1755,7 @@ let accountHealthCache = new Map<string, AccountHealth>();
 let lastDiagnosticReport: DiagnosticReport | null = null;
 let networkProfilesCache: NetworkProfile[] = [];
 let logEntriesCache: AppLogEntry[] = [];
+let routerWorkbench: RouterWorkbench | undefined;
 let logsDirty = true;
 let networkEventDebounce: number | null = null;
 let userInfoRequestId = 0;
@@ -1955,7 +1957,7 @@ async function init() {
   
   setupNavigation();
   setupPageHeaders();
-  setupRouterControl(() => accountsCache, message => log('路由协作', message), customConfirm);
+  routerWorkbench = setupRouterControl(() => accountsCache, message => log('路由协作', message), customConfirm);
   setupEventListeners();
   setupEventDrivenNetworkDetection();
   renderAccounts();
@@ -2267,7 +2269,14 @@ async function runDiagnostics() {
   diagnosticProgressValue = 0;
   updateDiagnosticProgress(0, '正在检查网络链路…', true);
   try {
+    const routerSteps = routerWorkbench?.diagnosticSteps() || Promise.resolve([]);
     lastDiagnosticReport = await invoke<DiagnosticReport>('run_network_diagnostics', { runId: diagnosticRunId });
+    const upstreamSteps = await routerSteps;
+    lastDiagnosticReport.steps.push(...upstreamSteps);
+    if (lastDiagnosticReport.overall === 'healthy' && upstreamSteps.some(step => step.status !== 'success')) {
+      lastDiagnosticReport.overall = 'partial';
+      lastDiagnosticReport.summary = '当前设备联网正常，部分路由上游需检查';
+    }
     finishDiagnosticProgress();
     renderDiagnosticReport(lastDiagnosticReport);
     await Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
@@ -2595,6 +2604,7 @@ function activatePage(target: string, navTarget = target) {
   nav?.querySelector<HTMLElement>('.nav-billing-tree')
     ?.setAttribute('aria-hidden', String(!billingExpanded));
   pages.forEach(page => page.classList.toggle('active', page.id === target));
+  routerWorkbench?.onPage(target);
   rechargeHours.setActive(target === 'billing-center' && activeBillingWorkbenchSection === 'recharge');
   if (pageChanged) {
     document.getElementById('main-content')?.scrollTo({ top: 0, behavior: 'auto' });
@@ -2623,6 +2633,7 @@ function handleAndroidBack() {
       '#btn-alert-ok',
       '#btn-alipay-payment-close-icon',
       '#btn-password-prompt-cancel',
+      '#btn-router-connect-cancel',
       '#btn-cancel-add',
       '#btn-cancel-edit',
       '#btn-cancel-delete',
@@ -2692,6 +2703,7 @@ function setupEventListeners() {
   btnSwitchAccount.addEventListener('click', () => void manualLogin(true));
   btnLogoutCurrent.addEventListener('click', () => void logoutCurrentCampusSession());
   btnRefreshBillingCenter.addEventListener('click', () => void refreshBillingCenterData());
+  window.addEventListener('router-billing-local-selected', () => { void refreshBillingCenterData(); });
   document.getElementById('btn-billing-webvpn')!.addEventListener('click', async () => {
     if (billingCenterLoading || billingRecordQueryBusy) return;
     const button = document.getElementById('btn-billing-webvpn') as HTMLButtonElement;
@@ -5596,6 +5608,7 @@ function finishBillingRefreshProgress() {
 }
 
 async function refreshBillingCenterData() {
+  if (routerWorkbench?.billingSelected) { await routerWorkbench.refreshBilling(); return; }
   if (billingRecordQueryBusy || billingCenterLoading) return;
   if (!await ensureBillingRequestForeground()) return;
   const selection = billingSelectionKey();

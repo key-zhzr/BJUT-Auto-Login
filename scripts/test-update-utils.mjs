@@ -1,4 +1,17 @@
 import assert from 'node:assert/strict';
+const { routerCounter, routerBytes, routerBillingSummary } = await import('../src/router-model.ts');
+assert.equal(routerCounter('9007199254740993'), 9007199254740993n);
+assert.equal(routerCounter('../counter'), 0n);
+assert.equal(routerBytes(1024n ** 3n), '1.0 GiB');
+const routerJob = item => ({uplink:'test',account:'current',ticket:'',running:false,starting:false,item});
+assert.deepEqual(routerBillingSummary([
+  routerJob({state:'ready',account:'one',balance:'12.125',updatedAt:1}),
+  routerJob({state:'ready',account:'one',balance:'13.125',updatedAt:2}),
+  routerJob({state:'ready',account:'two',balance:'20'}),
+  routerJob({state:'error',account:'three',balance:'500'}),
+]), {accounts:2,balance:33.125});
+assert.deepEqual(routerBillingSummary([routerJob({state:'ready',account:'one',balance:''})]), {accounts:1,balance:null});
+console.log('Router counters and deduplicated billing regression cases passed');
 
 const { isVersionNewer } = await import('../src/update-utils.ts');
 const {

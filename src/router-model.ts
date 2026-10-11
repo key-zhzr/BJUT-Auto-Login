@@ -1,0 +1,40 @@
+export interface RouterUplink {
+  id: string; network?: string; network6?: string; device?: string; device6?: string;
+  ipv4?: string; ipv6?: string; state: string; message?: string; internet4?: string;
+  internet6?: string; account?: string; checking?: number; check_message?: string;
+  updated_at?: number; route4?: string; route6?: string; session?: string; transport?: string;
+}
+export interface RouterPort { uplink: string; device?: string; linkUp?: number; speedMbps?: string; rxBytes?: string; txBytes?: string; }
+export interface RouterAccount { id: string; user: string; enabled: number; hasPassword: number; }
+export interface RouterSnapshot { version: string; uplinks: RouterUplink[]; accounts: RouterAccount[]; managementUrl: string; capabilities?: string[]; ports?: RouterPort[]; }
+export interface RouterCandidate { name: string; address: string; version: string; secure: boolean; }
+export interface RouterBillingItem { state: string; message?: string; percent?: number; account?: string; balance?: string; remainingFlow?: string; accountStatus?: string; package?: string; image?: string; updatedAt?: number; }
+export interface RouterBillingJob { uplink: string; account: string; ticket: string; running: boolean; starting: boolean; item: RouterBillingItem; sessions?: Record<string,string>[]; sessionsAvailable?: boolean; }
+
+export const routerLabels: Record<string, string> = {
+  online:'互联网已连接', busy:'正在检测', authenticated_limited:'已认证，探测受限', probe_uncertain:'连通性待确认',
+  offline_suspected:'正在复核', waiting_interface:'等待接口', cooldown:'等待重试', auth_rejected:'账号未通过',
+  portal_not_found:'未发现认证网关', portal_not_ready:'等待认证网关', no_account:'请选择账号', stopped:'尚未运行',
+  login_accepted:'登录已受理', blocked:'请检查上游', request_failed:'认证结果待确认',
+};
+
+export function routerCounter(value?: string): bigint {
+  return value && /^\d{1,20}$/.test(value) ? BigInt(value) : 0n;
+}
+export function routerBytes(value: bigint | number): string {
+  let n = Math.max(0, Number(value)), unit = 0;
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
+  while (n >= 1024 && unit < units.length - 1) { n /= 1024; unit++; }
+  return `${n.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
+}
+export function routerBillingSummary(jobs: RouterBillingJob[]): { accounts: number; balance: number | null } {
+  const unique = new Map<string, RouterBillingItem>();
+  for (const {item} of jobs) {
+    if (item.account && ['loading','ready'].includes(item.state)) {
+      const previous = unique.get(item.account);
+      if (!previous || (item.updatedAt || 0) >= (previous.updatedAt || 0)) unique.set(item.account, item);
+    }
+  }
+  const balances = [...unique.values()].map(item => item.balance?.trim() ? Number(item.balance) : NaN);
+  return {accounts: unique.size, balance: balances.length && balances.every(Number.isFinite) ? balances.reduce((a,b)=>a+b,0) : null};
+}

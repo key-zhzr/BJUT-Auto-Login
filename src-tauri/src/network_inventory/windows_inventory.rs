@@ -2,8 +2,9 @@ use super::NetworkAdapter;
 use std::mem::size_of;
 use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
-    GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_MULTICAST, IF_TYPE_ETHERNET_CSMACD,
-    IF_TYPE_IEEE80211, IF_TYPE_SOFTWARE_LOOPBACK, IP_ADAPTER_ADDRESSES_LH,
+    GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST,
+    GAA_FLAG_SKIP_MULTICAST, IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_SOFTWARE_LOOPBACK,
+    IP_ADAPTER_ADDRESSES_LH,
 };
 use windows::Win32::NetworkManagement::Ndis::{IfOperStatusUnknown, IfOperStatusUp};
 use windows::Win32::Networking::WinSock::{
@@ -11,7 +12,7 @@ use windows::Win32::Networking::WinSock::{
 };
 
 pub(super) fn adapters() -> Vec<NetworkAdapter> {
-    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST;
+    let flags = GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST;
     let mut bytes = 0;
     // SAFETY: size query does not dereference an adapter buffer.
     if unsafe { GetAdaptersAddresses(AF_UNSPEC.0 as u32, flags, None, None, &mut bytes) }
@@ -75,6 +76,25 @@ pub(super) fn adapters() -> Vec<NetworkAdapter> {
                 ..Default::default()
             };
             let mut address_ptr = record.FirstUnicastAddress;
+            let mut gateway_ptr = record.FirstGatewayAddress;
+            while !gateway_ptr.is_null() {
+                // SAFETY: linked records belong to storage; check the socket size
+                // and family before reading the IPv4 address.
+                let gateway = unsafe { &*gateway_ptr };
+                gateway_ptr = gateway.Next;
+                let socket = gateway.Address;
+                if !socket.lpSockaddr.is_null()
+                    && socket.iSockaddrLength as usize >= size_of::<SOCKADDR_IN>()
+                    && unsafe { (*socket.lpSockaddr).sa_family } == AF_INET
+                {
+                    let address = unsafe { &*socket.lpSockaddr.cast::<SOCKADDR_IN>() };
+                    let bytes = unsafe { address.sin_addr.S_un.S_un_b };
+                    adapter.gateways.push(
+                        std::net::Ipv4Addr::new(bytes.s_b1, bytes.s_b2, bytes.s_b3, bytes.s_b4)
+                            .to_string(),
+                    );
+                }
+            }
             let mut dns_ptr = record.FirstDnsServerAddress;
             while !dns_ptr.is_null() {
                 // SAFETY: DNS records and socket addresses belong to storage;

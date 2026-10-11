@@ -57,6 +57,9 @@ async function fixtureCaptcha(title:string) {
 }
 const routerSnapshot = {
   version: '0.1.6', managementUrl:'https://192.0.2.1/cgi-bin/luci/admin/network/bjut-autologin/billing',
+  capabilities:['ports','billing','logs','settings','account_set'],
+  ports:[{uplink:'dorm_a',device:'lan3',linkUp:1,speedMbps:'1000',rxBytes:'10000000000',txBytes:'2000000000'},
+    {uplink:'dorm_b',device:'lan4',linkUp:1,speedMbps:'2500',rxBytes:'30000000000',txBytes:'5000000000'}],
   uplinks:[
     {id:'dorm_a',network:'wan14',network6:'wan16',device:'lan3',ipv4:'10.126.19.139',ipv6:'2001:db8::1',state:'online',message:'认证会话有效，互联网连接正常',internet4:'reachable',internet6:'reachable',account:'25***01',checking:1,check_message:'正在确认认证会话'},
     {id:'dorm_b',network:'wan24',device:'lan4',ipv4:'10.126.20.139',state:'authenticated_limited',message:'认证会话有效，外网探测暂未通过；保留当前登录',internet4:'unreachable',internet6:'not_configured',account:'25***02'},
@@ -64,8 +67,22 @@ const routerSnapshot = {
   accounts:[{id:'account1',user:'25000001',enabled:1,hasPassword:1},{id:'account2',user:'25000002',enabled:0,hasPassword:1}],
 };
 let routerRefreshDelay = 0;
+let routerQuerySequence = 0;
+const routerTickets = new Map<string,string>();
 mockIPC(async (cmd, payload: any = {}) => {
   calls.push({cmd,payload,at:now()});
+  if (cmd === 'discover_routers') return [{name:'测试路由器',address:'https://192.0.2.1/',version:'0.1.6',secure:true}];
+  if (cmd === 'router_request') {
+    if (payload.operation === 'billing_start') {
+      const ticket=String(++routerQuerySequence).padStart(32,'0');routerTickets.set(ticket,payload.args.uplink);return {state:'loading',ticket};
+    }
+    if (payload.operation === 'billing_poll') return {result:{state:'ready',message:'计费数据已更新',account:'25000001',balance:'42.125',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
+    if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'}};
+    if (payload.operation === 'logs') return {text:'[测试路由器] 上游 lan3 认证已确认'};
+    if (payload.operation === 'account_set') {const account=routerSnapshot.accounts.find(item=>item.id===payload.args.account)!;account.enabled=Number(payload.args.enabled);return {state:'ready'};}
+    if (payload.operation === 'save_settings') return {state:'ready'};
+  }
+
   if (cmd === 'connect_router') {
     if (!payload.certificate) throw 'ROUTER_CERT_UNTRUSTED:模拟路由器证书尚未受信任';
     return routerSnapshot;
@@ -280,6 +297,8 @@ button.addEventListener('click',async()=>{
     click('.config-qr-close');
     assert(!document.querySelector('.config-qr-overlay'),'关闭后二维码仍驻留');
     note('通过：备份弹窗、3 位密码、按范围导出与二维码解码');
+    click('#btn-router-manual-connect');
+    assert(!document.getElementById('router-connect-modal')!.classList.contains('hidden'),'手动连接弹窗未出现');
     (document.getElementById('router-address') as HTMLInputElement).value='https://192.0.2.1';
     (document.getElementById('router-certificate') as HTMLTextAreaElement).value='';
     (document.getElementById('router-password') as HTMLInputElement).value='synthetic-router-password';
@@ -289,7 +308,7 @@ button.addEventListener('click',async()=>{
     assert(!calls.some(call=>call.cmd==='connect_router'&&call.payload.certificate),'证书尚未确认就发送认证');
     click('#btn-confirm-ok');
     await wait(()=>!document.getElementById('router-connected')!.hidden);
-    assert(document.querySelectorAll('.router-uplink-card').length===2,'路由多上游状态未分别显示');
+    assert(document.querySelectorAll('.router-port-card').length===2,'路由端口状态未分别显示');
     assert(document.getElementById('router-uplink-status')!.textContent!.includes('正在确认认证会话'),'未保留状态并显示检测步骤');
     assert((document.getElementById('router-password') as HTMLInputElement).value==='','连接后仍保留管理密码');
     assert(!memory.get('bjut_router_password'),'管理密码写入了 UI 存储');
@@ -304,10 +323,27 @@ button.addEventListener('click',async()=>{
     await wait(()=>calls.some(call=>call.cmd==='sync_router_accounts'&&call.payload.users.length===1&&call.payload.users[0]==='25000002'));
     note('通过：路由多上游状态、手动选择停用账号、按选定范围同步与密码清理');
     await wait(()=>!(document.getElementById('btn-router-sync') as HTMLButtonElement).disabled);
+    assert(!document.getElementById('router-connect-modal')!.classList.contains('hidden')===false,'连接后弹窗未关闭');
+    click('#btn-open-billing');
+    await wait(()=>document.querySelectorAll('.router-billing-card').length===2 && document.getElementById('router-billing-summary')!.textContent!.includes('42.13'));
+    assert(document.querySelector<HTMLElement>('.billing-workbench')!.hidden,'路由计费与本机计费同时展示');
+    assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_start').length===2,'未自动查询全部上游');
+    click('[data-target="accounts"]');
+    assert(!document.getElementById('router-accounts-panel')!.hidden && document.getElementById('router-accounts-list')!.textContent!.includes('25000002'),'账号管理未融合路由账号');
+    click('[data-target="logs"]');
+    await wait(()=>document.getElementById('router-logs-content')!.textContent!.includes('lan3 认证'));
+    click('[data-target="settings"]');
+    await wait(()=>(document.getElementById('router-service-interval') as HTMLInputElement).value==='20');
+    (document.getElementById('router-service-interval') as HTMLInputElement).value='30';
+    (document.getElementById('router-settings-form') as HTMLFormElement).requestSubmit();
+    await wait(()=>calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='save_settings'&&call.payload.args.interval==='30'));
+    note('通过：路由计费自动汇总去重、账号融合、日志与设置保存');
+    await wait(()=>!(document.getElementById('btn-router-settings-save') as HTMLButtonElement).disabled);
     routerRefreshDelay=180;
     click('#btn-router-refresh'); click('#btn-router-disconnect');
     await new Promise(resolve => setTimeout(resolve,260));
     assert(document.getElementById('router-connected')!.hidden,'断开后旧检测结果重新显示已连接');
+    assert(document.getElementById('router-accounts-panel')!.hidden && !document.querySelector<HTMLElement>('.billing-workbench')!.hidden,'断开后路由数据或查询来源未清理');
     routerRefreshDelay=0;
     note('通过：断开路由连接后忽略尚未返回的检测结果');
 

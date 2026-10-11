@@ -2,36 +2,19 @@ import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { CustomSelect } from './custom-select';
 import type { AccountView } from './models';
-
-interface RouterUplink {
-  id: string; network?: string; network6?: string; device?: string; ipv4?: string; ipv6?: string;
-  state: string; message?: string; internet4?: string; internet6?: string; account?: string;
-  checking?: number; check_message?: string;
-}
-interface RouterSnapshot {
-  version: string; uplinks: RouterUplink[];
-  accounts: { id: string; user: string; enabled: number; hasPassword: number }[];
-  managementUrl: string;
-}
-
-const labels: Record<string, string> = {
-  online: '互联网已连接', busy: '此出口正在检测', authenticated_limited: '认证有效，外网探测受限',
-  probe_uncertain: '连通性待确认', offline_suspected: '正在复核', waiting_interface: '等待接口',
-  cooldown: '等待重试', auth_rejected: '账号未通过', portal_not_found: '未发现认证网关',
-  portal_not_ready: '等待认证网关', no_account: '请选择账号', stopped: '尚未运行',
-  login_accepted: '登录已受理', blocked: '请检查上游设置', request_failed: '认证结果待确认',
-};
+import type { RouterSnapshot } from './router-model';
+import { RouterWorkbench } from './router-workbench';
 
 export function setupRouterControl(getAccounts: () => AccountView[], log: (message: string) => void,
-  confirmCertificate: (text: string, title: string, confirmLabel: string) => Promise<boolean>): void {
-  const panel = document.getElementById('router-control')!;
+  confirmCertificate: (text: string, title: string, confirmLabel: string) => Promise<boolean>): RouterWorkbench {
   const form = document.getElementById('router-connect-form') as HTMLFormElement;
   const address = document.getElementById('router-address') as HTMLInputElement;
   const username = document.getElementById('router-username') as HTMLInputElement;
   const password = document.getElementById('router-password') as HTMLInputElement;
   const certificate = document.getElementById('router-certificate') as HTMLTextAreaElement;
+  const allowHttp = document.getElementById('router-allow-http') as HTMLInputElement;
+  const modal = document.getElementById('router-connect-modal')!;
   const message = document.getElementById('router-message')!;
-  const status = document.getElementById('router-uplink-status')!;
   const connectedPanel = document.getElementById('router-connected')!;
   const connectButton = document.getElementById('btn-router-connect') as HTMLButtonElement;
   const syncButton = document.getElementById('btn-router-sync') as HTMLButtonElement;
@@ -47,10 +30,30 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
   address.value = localStorage.getItem('bjut_router_address') || 'https://192.168.1.1';
   username.value = localStorage.getItem('bjut_router_username') || 'root';
   certificate.value = localStorage.getItem('bjut_router_certificate') || '';
+  allowHttp.checked = localStorage.getItem('bjut_router_allow_http') === 'true';
+  let returnFocus: HTMLElement | null = null;
+  function openConnection(endpoint?: string) {
+    if (endpoint) address.value = endpoint;
+    returnFocus = document.activeElement as HTMLElement | null;
+    (document.getElementById('router-connection-settings') as HTMLDetailsElement).open = true;
+    modal.classList.remove('hidden');
+    window.setTimeout(() => password.focus({preventScroll:true}), 150);
+  }
+  function closeConnection() {
+    modal.classList.add('hidden'); returnFocus?.focus({preventScroll:true});
+  }
+  document.getElementById('btn-router-connect-cancel')!.addEventListener('click', closeConnection);
+  modal.addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); closeConnection(); } });
+  const workbench = new RouterWorkbench({connect:openConnection,refresh,login:loginUplink,log});
 
   function showMessage(text: string, failed = false) {
     message.textContent = text.replace('ROUTER_CERT_UNTRUSTED:', '');
     message.classList.toggle('error', failed);
+    document.getElementById('router-connect-message')!.textContent = message.textContent;
+    if (failed && connected) {
+      document.getElementById('router-discovery-message')!.textContent = message.textContent;
+      document.getElementById('btn-router-auto-connect')!.hidden = false;
+    }
   }
   function render(data: RouterSnapshot) {
     snapshot = data;
@@ -67,19 +70,7 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
       account.value = data.accounts.some(item => item.id === previousAccount) ? previousAccount : '';
       optionsStamp = stamp;
     }
-    status.replaceChildren(...data.uplinks.map(item => {
-      const card = document.createElement('div'); card.className = 'router-uplink-card';
-      const title = document.createElement('strong'); title.textContent = [item.id, item.network, labels[item.state] || item.state].filter(Boolean).join(' · ');
-      const detail = document.createElement('p'); detail.textContent = item.message || '';
-      const paths = document.createElement('p');
-      const family = (name: string, state?: string) => `${state === 'reachable' ? '✓' : state === 'not_configured' ? '—' : '×'} ${name}`;
-      paths.textContent = `${family('IPv4', item.internet4)} · ${family('IPv6', item.internet6)}${item.account ? ` · ${item.account}` : ''}`;
-      card.append(title, detail, paths);
-      if (item.checking) {
-        const progress = document.createElement('p'); progress.textContent = item.check_message || '正在检测…'; card.append(progress);
-      }
-      return card;
-    }));
+    workbench.render(data);
   }
   async function refresh() {
     if (!connected || busy) return;
@@ -102,7 +93,7 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
     const generation = ++connectionGeneration;
     busy = true; connectButton.disabled = true; showMessage('正在连接路由器…');
     try {
-      const connection = { address: address.value.trim(), username: username.value.trim(), password: password.value, certificate: certificate.value.trim() || null };
+      const connection = { address: address.value.trim(), username: username.value.trim(), password: password.value, certificate: certificate.value.trim() || null, allowHttp:allowHttp.checked };
       let data: RouterSnapshot;
       try { data = await invoke<RouterSnapshot>('connect_router', connection); }
       catch (error) {
@@ -122,7 +113,8 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
       localStorage.setItem('bjut_router_address', connection.address);
       localStorage.setItem('bjut_router_username', connection.username);
       localStorage.setItem('bjut_router_certificate', connection.certificate || '');
-      render(data); (document.getElementById('router-connection-settings') as HTMLDetailsElement).open = false; showMessage('路由器已连接'); log('路由器管理会话已连接');
+      localStorage.setItem('bjut_router_allow_http', String(connection.allowHttp));
+      render(data); closeConnection(); showMessage('路由器已连接'); log('路由器管理会话已连接');
     } catch (error) { if (generation === connectionGeneration) showMessage(String(error), true); }
     finally { busy = false; connectButton.disabled = false; }
   });
@@ -130,21 +122,23 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
   document.getElementById('btn-router-disconnect')!.addEventListener('click', async () => {
     const generation = ++connectionGeneration;
     connected = false; snapshot = null; connectedPanel.hidden = true;
+    workbench.disconnect();
     await invoke('disconnect_router');
     if (generation === connectionGeneration) showMessage('已断开路由管理连接');
   });
-  document.getElementById('btn-router-login')!.addEventListener('click', async () => {
-    if (!connected || busy || !uplink.value) return;
+  async function loginUplink(target: string, selectedAccount?: string) {
+    if (!connected || busy || !target) return;
     const generation = connectionGeneration;
     busy = true;
     try {
-      const result = await invoke<string>('router_login', { uplink: uplink.value, account: account.value || null });
+      const result = await invoke<string>('router_login', { uplink: target, account: selectedAccount || account.value || null });
       if (!connected || generation !== connectionGeneration) return;
       showMessage(result); log(result);
       window.setTimeout(() => { void refresh(); }, 3000);
     } catch (error) { if (connected && generation === connectionGeneration) showMessage(String(error), true); }
     finally { busy = false; }
-  });
+  }
+  document.getElementById('btn-router-login')!.addEventListener('click', () => { void loginUplink(uplink.value); });
   document.getElementById('btn-router-billing')!.addEventListener('click', () => {
     if (snapshot) void openUrl(snapshot.managementUrl).catch(error => showMessage(String(error), true));
   });
@@ -174,6 +168,7 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
   });
   window.setInterval(() => {
     const interval = snapshot?.uplinks.some(item => item.checking) ? 2000 : 10000;
-    if (!document.hidden && panel.closest('.page')?.classList.contains('active') && Date.now() - lastPoll >= interval) void refresh();
+    if (!document.hidden && connected && Date.now() - lastPoll >= interval) void refresh();
   }, 2000);
+  return workbench;
 }
