@@ -43,6 +43,7 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
   let snapshot: RouterSnapshot | null = null;
   let optionsStamp = '';
   let lastPoll = 0;
+  let connectionGeneration = 0;
   address.value = localStorage.getItem('bjut_router_address') || 'https://192.168.1.1';
   username.value = localStorage.getItem('bjut_router_username') || 'root';
   certificate.value = localStorage.getItem('bjut_router_certificate') || '';
@@ -83,13 +84,22 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
   async function refresh() {
     if (!connected || busy) return;
     busy = true;
+    const generation = connectionGeneration;
     lastPoll = Date.now();
-    try { render(await invoke<RouterSnapshot>('get_router_status')); }
-    catch (error) { showMessage(String(error), true); (document.getElementById('router-connection-settings') as HTMLDetailsElement).open = true; }
+    try {
+      const data = await invoke<RouterSnapshot>('get_router_status');
+      if (connected && generation === connectionGeneration) render(data);
+    }
+    catch (error) {
+      if (connected && generation === connectionGeneration) {
+        showMessage(String(error), true); (document.getElementById('router-connection-settings') as HTMLDetailsElement).open = true;
+      }
+    }
     finally { busy = false; }
   }
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (busy) return;
+    const generation = ++connectionGeneration;
     busy = true; connectButton.disabled = true; showMessage('正在连接路由器…');
     try {
       const connection = { address: address.value.trim(), username: username.value.trim(), password: password.value, certificate: certificate.value.trim() || null };
@@ -101,32 +111,38 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
         const cert = await invoke<{pem: string; fingerprint: string; address: string}>('probe_router_certificate', { address: connection.address });
         const accepted = await confirmCertificate(`地址：${cert.address}\nSHA-256 指纹：\n${cert.fingerprint}\n\n请核对这是你的路由器。确认后将记住此证书。`, '确认路由器证书', '信任并连接');
         if (!accepted) throw new Error('未信任路由器证书');
+        if (generation !== connectionGeneration) return;
         if (address.value.trim() !== connection.address) throw new Error('路由器地址已更改，请重新连接');
         certificate.value = cert.pem; connection.certificate = cert.pem;
         showMessage('正在连接路由器…');
         data = await invoke<RouterSnapshot>('connect_router', connection);
       }
+      if (generation !== connectionGeneration) { await invoke('disconnect_router'); return; }
       password.value = '';
-      localStorage.setItem('bjut_router_address', address.value.trim());
-      localStorage.setItem('bjut_router_username', username.value.trim());
-      localStorage.setItem('bjut_router_certificate', certificate.value.trim());
+      localStorage.setItem('bjut_router_address', connection.address);
+      localStorage.setItem('bjut_router_username', connection.username);
+      localStorage.setItem('bjut_router_certificate', connection.certificate || '');
       render(data); (document.getElementById('router-connection-settings') as HTMLDetailsElement).open = false; showMessage('路由器已连接'); log('路由器管理会话已连接');
-    } catch (error) { showMessage(String(error).replace('ROUTER_CERT_UNTRUSTED:', ''), true); }
+    } catch (error) { if (generation === connectionGeneration) showMessage(String(error), true); }
     finally { busy = false; connectButton.disabled = false; }
   });
   document.getElementById('btn-router-refresh')!.addEventListener('click', () => { void refresh(); });
   document.getElementById('btn-router-disconnect')!.addEventListener('click', async () => {
+    const generation = ++connectionGeneration;
     connected = false; snapshot = null; connectedPanel.hidden = true;
-    await invoke('disconnect_router'); showMessage('已断开路由管理连接');
+    await invoke('disconnect_router');
+    if (generation === connectionGeneration) showMessage('已断开路由管理连接');
   });
   document.getElementById('btn-router-login')!.addEventListener('click', async () => {
     if (!connected || busy || !uplink.value) return;
+    const generation = connectionGeneration;
     busy = true;
     try {
       const result = await invoke<string>('router_login', { uplink: uplink.value, account: account.value || null });
+      if (!connected || generation !== connectionGeneration) return;
       showMessage(result); log(result);
       window.setTimeout(() => { void refresh(); }, 3000);
-    } catch (error) { showMessage(String(error), true); }
+    } catch (error) { if (connected && generation === connectionGeneration) showMessage(String(error), true); }
     finally { busy = false; }
   });
   document.getElementById('btn-router-billing')!.addEventListener('click', () => {
@@ -145,13 +161,15 @@ export function setupRouterControl(getAccounts: () => AccountView[], log: (messa
   });
   syncButton.addEventListener('click', async () => {
     if (!connected || busy) return;
+    const generation = connectionGeneration;
     const users = Array.from(localAccounts.querySelectorAll<HTMLInputElement>('input:checked')).map(input => input.value);
     if (!users.length) { showMessage('请勾选要同步的账号'); return; }
     busy = true; syncButton.disabled = true;
     try {
       const result = await invoke<string>('sync_router_accounts', { users }); showMessage(result); log(result);
-      optionsStamp = ''; render(await invoke<RouterSnapshot>('get_router_status'));
-    } catch (error) { showMessage(String(error), true); }
+      const data = await invoke<RouterSnapshot>('get_router_status');
+      if (connected && generation === connectionGeneration) { optionsStamp = ''; render(data); }
+    } catch (error) { if (connected && generation === connectionGeneration) showMessage(String(error), true); }
     finally { busy = false; syncButton.disabled = false; }
   });
   window.setInterval(() => {

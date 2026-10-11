@@ -63,13 +63,17 @@ const routerSnapshot = {
   ],
   accounts:[{id:'account1',user:'25000001',enabled:1,hasPassword:1},{id:'account2',user:'25000002',enabled:0,hasPassword:1}],
 };
+let routerRefreshDelay = 0;
 mockIPC(async (cmd, payload: any = {}) => {
   calls.push({cmd,payload,at:now()});
   if (cmd === 'connect_router') {
     if (!payload.certificate) throw 'ROUTER_CERT_UNTRUSTED:模拟路由器证书尚未受信任';
     return routerSnapshot;
   }
-  if (cmd === 'get_router_status') return routerSnapshot;
+  if (cmd === 'get_router_status') {
+    if (routerRefreshDelay) await new Promise(resolve => setTimeout(resolve, routerRefreshDelay));
+    return routerSnapshot;
+  }
   if (cmd === 'probe_router_certificate') return {pem:'synthetic-pem',fingerprint:Array(32).fill('AB').join(':'),address:'https://192.0.2.1/'};
   if (cmd === 'router_login') return '路由器已开始核对所选上游的登录状态';
   if (cmd === 'sync_router_accounts') return '选定账号已同步到路由器';
@@ -299,6 +303,13 @@ button.addEventListener('click',async()=>{
     click('#btn-router-sync');
     await wait(()=>calls.some(call=>call.cmd==='sync_router_accounts'&&call.payload.users.length===1&&call.payload.users[0]==='25000002'));
     note('通过：路由多上游状态、手动选择停用账号、按选定范围同步与密码清理');
+    await wait(()=>!(document.getElementById('btn-router-sync') as HTMLButtonElement).disabled);
+    routerRefreshDelay=180;
+    click('#btn-router-refresh'); click('#btn-router-disconnect');
+    await new Promise(resolve => setTimeout(resolve,260));
+    assert(document.getElementById('router-connected')!.hidden,'断开后旧检测结果重新显示已连接');
+    routerRefreshDelay=0;
+    note('通过：断开路由连接后忽略尚未返回的检测结果');
 
     click('[data-target="accounts"]'); click('#btn-show-add');
     const draftPassword=document.getElementById('acc-password') as HTMLInputElement;
