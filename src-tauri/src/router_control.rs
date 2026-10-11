@@ -350,6 +350,11 @@ async fn rpc(
         .and_then(Value::as_array)
         .ok_or("路由器没有返回操作结果")?;
     match result.first().and_then(Value::as_u64) {
+        // A successful rpcd session destroy has no response payload. uhttpd
+        // supplies the current session itself and rejects it in caller args.
+        Some(0) if object == "session" && method == "destroy" && result.len() == 1 => {
+            Ok(Value::Null)
+        }
         Some(0) => result
             .get(1)
             .cloned()
@@ -550,7 +555,7 @@ pub(crate) async fn disconnect_router(manager: tauri::State<'_, Manager>) -> Res
             &remote.token,
             "session",
             "destroy",
-            json!({"ubus_rpc_session":remote.token}),
+            json!({}),
         ))
         .await;
     }
@@ -791,6 +796,80 @@ pub(crate) async fn router_request(
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+
+    #[test]
+    #[ignore = "requires an explicitly configured LAN router and interactive administrator password"]
+    fn live_lan_router_read_only() {
+        let address = std::env::var("BJUT_TEST_ROUTER_URL").expect("set BJUT_TEST_ROUTER_URL");
+        let username = std::env::var("BJUT_TEST_ROUTER_USER").unwrap_or_else(|_| "root".into());
+        let endpoint = endpoint_with_http(&address, true).unwrap();
+        assert_eq!(
+            endpoint.scheme(),
+            "http",
+            "this check uses trusted LAN HTTP"
+        );
+        eprintln!("Enter the existing router administrator password (not saved):");
+        let mut password = String::new();
+        std::io::stdin().read_line(&mut password).unwrap();
+        let password = password.trim_end_matches(['\r', '\n']).to_owned();
+        assert!(!password.is_empty());
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let client = router_client(None).unwrap();
+            let mut origin = endpoint.clone();
+            origin.set_path("/");
+            assert!(discovery_probe(&client, origin).await.is_some());
+            let login = rpc(
+                &client,
+                &endpoint,
+                "00000000000000000000000000000000",
+                "session",
+                "login",
+                json!({"username":username,"password":password,"timeout":60}),
+            )
+            .await
+            .unwrap();
+            let token = login["ubus_rpc_session"]
+                .as_str()
+                .filter(|value| valid_token(value))
+                .unwrap()
+                .to_owned();
+            let remote = Remote {
+                client,
+                endpoint,
+                token,
+                expires: std::sync::Mutex::new(Instant::now() + Duration::from_secs(55)),
+                lifetime: Duration::from_secs(55),
+                billing_tickets: std::sync::Mutex::new(std::collections::HashMap::new()),
+            };
+            let snapshot = remote.snapshot().await;
+            let settings = remote.call("settings", json!({})).await;
+            let logs = remote.call("logs", json!({})).await;
+            // Some stock ACLs do not expose session.destroy over HTTP; keep
+            // their normal short expiry instead of expanding permissions.
+            // No network, account or service configuration is changed.
+            let logout = rpc(
+                &remote.client,
+                &remote.endpoint,
+                &remote.token,
+                "session",
+                "destroy",
+                json!({}),
+            )
+            .await;
+            if let Err(error) = logout {
+                assert!(error.contains("拒绝") || error.contains("权限"));
+            }
+            let snapshot = snapshot.unwrap();
+            assert!(!snapshot.uplinks.is_empty());
+            assert!(!snapshot.ports.is_empty());
+            assert!(settings.is_ok() && logs.is_ok());
+            eprintln!(
+                "Live router read-only check passed: {} upstreams, {} ports",
+                snapshot.uplinks.len(),
+                snapshot.ports.len()
+            );
+        });
+    }
     #[test]
     fn local_http_requires_explicit_opt_in_and_a_private_literal_address() {
         assert!(endpoint_with_http("http://192.168.1.1", false).is_err());
@@ -967,6 +1046,61 @@ mod tests {
             assert!(error.contains(if redirect { "302" } else { "拒绝" }));
             worker.join().unwrap();
         }
+        });
+    }
+
+    #[test]
+    fn session_logout_accepts_no_payload_but_status_still_requires_data() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            for (object, method, accepted) in [
+                ("session", "destroy", true),
+                ("bjut-autologin", "status", false),
+            ] {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let address = listener.local_addr().unwrap();
+                let worker = std::thread::spawn(move || {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut headers = Vec::new();
+                    let mut byte = [0];
+                    while !headers.ends_with(b"\r\n\r\n") {
+                        stream.read_exact(&mut byte).unwrap();
+                        headers.push(byte[0]);
+                    }
+                    let length: usize = String::from_utf8(headers)
+                        .unwrap()
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|n| n.trim().parse().unwrap())
+                        })
+                        .unwrap();
+                    let mut body = vec![0; length];
+                    stream.read_exact(&mut body).unwrap();
+                    let request: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(request["params"][3], json!({}));
+                    let response =
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":[0]}).to_string();
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .unwrap();
+                });
+                let result = rpc(
+                    &router_client(None).unwrap(),
+                    &Url::parse(&format!("http://{address}/ubus")).unwrap(),
+                    &"1".repeat(32),
+                    object,
+                    method,
+                    json!({}),
+                )
+                .await;
+                assert_eq!(result.is_ok(), accepted);
+                worker.join().unwrap();
+            }
         });
     }
 
