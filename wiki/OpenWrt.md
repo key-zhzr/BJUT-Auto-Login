@@ -26,7 +26,27 @@ uci commit uhttpd
 /etc/init.d/uhttpd restart
 ```
 
-保留现有证书与 `/ubus` 设置；TLS 组件和 `uhttpd-mod-ubus` 需由对应固件的软件源提供。重启后仍无法连接时查看 `logread -e uhttpd`。此配置只监听所填 LAN 地址。详细说明见[路由端连接指南](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/README.md#路由器尚未开启-https)。
+保留现有证书与 `/ubus` 设置；TLS 组件和 `uhttpd-mod-ubus` 需由对应固件的软件源提供。此配置只监听所填 LAN 地址。
+
+若已配置监听却仍被拒绝连接，检查证书和生成工具：
+
+```sh
+ls -l /etc/uhttpd.crt /etc/uhttpd.key /lib/libustream-ssl.so /usr/sbin/px5g /usr/bin/openssl
+```
+
+如果 TLS 库存在，但证书、私钥和两个生成工具均不存在，安装 `openssl-util` 后重启，uhttpd 会使用现有配置自动生成证书：
+
+```sh
+if command -v apk >/dev/null 2>&1; then
+  apk update && apk add openssl-util
+else
+  opkg update && opkg install openssl-util
+fi && /etc/init.d/uhttpd restart
+
+ls -l /etc/uhttpd.crt /etc/uhttpd.key
+```
+
+只使用对应固件的软件源。重启时的 `4+0 records` 不代表证书已生成，`logread -e uhttpd` 也可能没有输出。已有证书和私钥时不要删除重建；恢复 HTTPS 后在 App 中核对证书指纹并连接。详细说明见[路由端连接指南](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/README.md#路由器尚未开启-https)。
 
 ## 与主项目同步
 
