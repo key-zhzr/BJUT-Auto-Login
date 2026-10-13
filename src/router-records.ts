@@ -1,10 +1,12 @@
 import { CustomSelect } from './custom-select';
+import { invoke } from '@tauri-apps/api/core';
+import { IS_ANDROID } from './platform';
 
 export interface RouterRecordTarget { uplink: string; account: string; title: string; }
 interface RecordResult {state:string;message?:string;percent?:number;image?:string;account?:string;kind?:string;total?:number;page?:number;columns?:string[];rows?:string[][];}
 interface RecordJob {target:RouterRecordTarget;ticket:string;running:boolean;item:RecordResult;card:HTMLElement;}
 const kinds=[['usage','上网明细'],['monthly','月账单'],['payments','缴费记录'],['operations','操作记录'],['stopLogs','停机记录'],['reopenLogs','复机记录'],['packageLogs','套餐变更']];
-const labels:Record<string,string>={loginTime:'登录时间',logoutTime:'下线时间',time:'在线时长',flow:'流量',costMoney:'费用',internetUpFlow:'互联网上传',internetDownFlow:'互联网下载',chinanetUpFlow:'校园网上传',chinanetDownFlow:'校园网下载',userIp:'IPv4',userIp1:'IPv6',macAddress:'MAC',nasIp:'网关',nasPort:'端口',startAt:'开始日期',endAt:'结束日期',package:'套餐',baseFee:'基本费',usageFee:'用量费',durationMinutes:'在线分钟',flowMb:'流量（MB）',billedAt:'结算时间',paidAt:'缴费时间',type:'类型',amount:'金额',terminal:'终端',note:'备注',operatedAt:'操作时间',description:'说明',unused:'其他',fldoperatedate:'操作日期',fldoperateid:'操作',fldadminid:'操作员',fldmemo:'备注',fldnewvalue:'内容',fldchangedate:'变更日期',fldexcutedate:'生效日期',flddefaultname1:'原套餐',flddefaultname2:'新套餐',fldstate:'状态',fldstatedate:'状态日期',fldextend:'备注'};
+const labels:Record<string,string>={loginTime:'登录时间',logoutTime:'下线时间',time:'在线时长（分钟）',flow:'流量（MB）',costMoney:'费用（元）',internetUpFlow:'互联网上传',internetDownFlow:'互联网下载',chinanetUpFlow:'校园网上传',chinanetDownFlow:'校园网下载',userIp:'IPv4',userIp1:'IPv6',macAddress:'MAC',nasIp:'网关',nasPort:'端口',startAt:'开始日期',endAt:'结束日期',package:'套餐',baseFee:'基本费（元）',usageFee:'用量费（元）',durationMinutes:'在线分钟',flowMb:'流量（MB）',billedAt:'结算时间',paidAt:'缴费时间',type:'类型',amount:'金额（元）',terminal:'终端',note:'备注',operatedAt:'操作时间',description:'说明',unused:'其他',fldoperatedate:'操作日期',fldoperateid:'操作',fldadminid:'操作员',fldmemo:'备注',fldnewvalue:'内容',fldchangedate:'变更日期',fldexcutedate:'生效日期',flddefaultname1:'原套餐',flddefaultname2:'新套餐',fldstate:'状态',fldstatedate:'状态日期',fldextend:'备注'};
 const el=(tag:string,text='',className='')=>{const e=document.createElement(tag);e.textContent=text;e.className=className;return e;};
 function btn(text:string,action:()=>void){const b=el('button',text,'btn btn-secondary btn-sm') as HTMLButtonElement;b.type='button';b.addEventListener('click',action);return b;}
 
@@ -92,9 +94,17 @@ export class RouterRecords {
       catch(error){if(generation===this.generation){job.running=false;this.message.textContent=String(error);}}
     };const actions=el('div','','router-actions');actions.append(btn('换一张',()=>{void answer(true);}),btn('继续',()=>{void answer(false);}));job.card.append(image,input,actions);
   }
-  private export(item:RecordResult){
+  private async export(item:RecordResult){
     const quote=(value:string)=>`"${(/^[=+\-@\t\r]/.test(value)?`'${value}`:value).replaceAll('"','""')}"`;
     const lines=[(item.columns || []).map(key=>labels[key] || '其他'),...(item.rows || [])].map(row=>row.map(quote).join(',')).join('\r\n');
+    if(window.__TAURI__){
+      try{
+        const path=await invoke<string>('export_billing_csv',{kind:item.kind,csv:'\ufeff'+lines});
+        if(IS_ANDROID && window.AndroidBridge?.shareExportFile){if(!window.AndroidBridge.shareExportFile(path,'BJUT-AL 路由计费记录'))throw new Error('系统分享窗口启动失败');}
+        else this.message.textContent=`CSV 已导出到：${path}`;
+      }catch(error){this.message.textContent=`导出未完成：${String(error)}`;}
+      return;
+    }
     const url=URL.createObjectURL(new Blob(['\ufeff',lines],{type:'text/csv;charset=utf-8'})),link=document.createElement('a');link.href=url;link.download=`计费记录-${item.kind}-第${item.page || 1}页.csv`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
 }

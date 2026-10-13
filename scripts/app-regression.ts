@@ -77,6 +77,7 @@ mockIPC(async (cmd, payload: any = {}) => {
   if (cmd === 'discover_routers') return [{name:'测试路由器',address:'https://192.0.2.1/',version:'0.1.6',secure:true}];
   if (cmd === 'saved_router_connection') return savedRouterInfo;
   if (cmd === 'forget_router_password') {savedRouterInfo=null;return;}
+  if (cmd === 'export_billing_csv') return '/mock-exports/router-usage.csv';
   if (cmd === 'reconnect_router') {
     if(payload.rememberPassword===false)savedRouterInfo=null;
     return routerSnapshot;
@@ -350,6 +351,8 @@ button.addEventListener('click',async()=>{
     (document.getElementById('router-record-end') as HTMLInputElement).value='2026-10-13';click('#btn-router-record-query');
     await wait(()=>document.getElementById('router-billing-records')!.textContent!.includes('2026-10-13 12:00'));
     assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_records').length===1,'重复查询了同一认证账号');
+    Array.from(document.querySelectorAll<HTMLButtonElement>('#router-billing-records button')).find(button=>button.textContent==='导出本页')!.click();
+    await wait(()=>calls.some(call=>call.cmd==='export_billing_csv'&&call.payload.kind==='usage'&&call.payload.csv.includes('流量（MB）')));
     click('[data-target="accounts"]');
     assert(!document.getElementById('router-accounts-panel')!.hidden && document.getElementById('router-accounts-list')!.textContent!.includes('25000002'),'账号管理未融合路由账号');
     Array.from(document.querySelectorAll<HTMLButtonElement>('#router-accounts-list button')).find(button=>button.textContent==='编辑')!.click();

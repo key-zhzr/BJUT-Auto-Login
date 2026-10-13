@@ -4294,8 +4294,12 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 .router-source-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-block: 1rem; }
 .router-source-row .btn[aria-pressed="true"] { color: var(--primary-color); border-color: var(--primary-color); background: rgba(var(--primary-rgb), .1); }
 .router-billing-filters { margin-block: 1rem; }
-.router-billing-tabs { display:flex; flex-wrap:wrap; gap:.5rem; margin-block:1rem; }
-.router-billing-tabs .active { color:var(--primary-color); background:rgba(var(--primary-rgb),.1); }
+#router-billing-panel .router-billing-filters { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; gap:.5rem; }
+#router-billing-panel .router-billing-filters .custom-select { min-width:0; }
+#router-billing-panel .router-billing-filters .custom-select-trigger,#router-billing-panel .router-billing-filters .btn { min-height:40px; }
+#router-billing-panel .router-billing-filters .custom-select-trigger span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#router-billing-panel .router-billing-tabs { display:flex; flex-direction:row; flex-wrap:wrap; width:100%; height:auto; min-height:0; min-width:0; max-width:none; flex-basis:auto; position:static; inset:auto; z-index:auto; background:none; border:none; border-radius:0; box-shadow:none; backdrop-filter:none; padding:0; gap:.5rem; margin:1rem 0; }
+#router-billing-panel .router-billing-tabs .active { color:var(--primary-color); background:rgba(var(--primary-rgb),.1); }
 .router-record-controls { display:flex; flex-wrap:wrap; align-items:end; gap:.75rem; }
 .router-record-controls label { flex:1; min-width:140px; display:grid; gap:.4rem; }
 .router-record-controls input { min-width:0; width:100%; padding:.6rem; }
@@ -4311,7 +4315,7 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 #router-billing-panel [hidden] { display:none !important; }
 .nav-billing-tree [data-billing-section-target][hidden] { display:none !important; }
 #router-billing-message { margin-block: .75rem; color: var(--text-muted); }
-.router-billing-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-block: 1rem; }
+.router-billing-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-block: 1rem; }
 .router-billing-metric { padding: 1.25rem; }
 .router-billing-metric span { color: var(--text-muted); font-size: .8rem; }
 .router-billing-metric strong { display: block; font-size: 1.5rem; margin-top: .5rem; }
@@ -4336,6 +4340,7 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
   .router-port-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
   .router-dashboard, .router-page-panel { padding: 1rem; }
   .router-billing-results { grid-template-columns: minmax(0, 1fr); }
+  .router-billing-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .router-account-row { align-items: flex-start; }
   .router-account-row > .btn { flex-shrink: 0; font-size: .72rem; }
   .router-connect-modal-content { padding: 1.25rem; }

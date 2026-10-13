@@ -545,6 +545,8 @@ pub(crate) fn forget_router_password(
 }
 
 #[tauri::command]
+// Keep the existing flat IPC fields; the first three arguments are injected by Tauri.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn connect_router(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<crate::AppState>>,

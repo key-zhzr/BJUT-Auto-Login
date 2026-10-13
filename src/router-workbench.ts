@@ -194,7 +194,10 @@ export class RouterWorkbench {
     byId('billing-center-subtitle').textContent=this.billingSelected?'各上游账号、用量与在线设备':'账户状态、在线会话与近期上网记录';
     byId('btn-billing-source-router').setAttribute('aria-pressed',String(this.billingSelected));
     byId('btn-billing-source-local').setAttribute('aria-pressed',String(!this.billingSelected));
-    for(const button of document.querySelectorAll<HTMLElement>('.nav-billing-tree [data-billing-section-target]'))button.hidden=this.billingSelected && ['services','recharge'].includes(button.dataset.billingSectionTarget || '');
+    for(const button of document.querySelectorAll<HTMLElement>('.nav-billing-tree [data-billing-section-target]')){
+      const section=button.dataset.billingSectionTarget || '';button.hidden=this.billingSelected && ['services','recharge'].includes(section);
+      if(section==='devices')button.querySelector('span')!.textContent=this.billingSelected?'在线设备':'设备与安全';
+    }
     if(this.billingSelected)this.selectBillingTab(this.billingTab);
     if (load && this.billingSelected) void this.refreshBilling();
     if (load && !this.billingSelected) window.dispatchEvent(new Event('router-billing-local-selected'));
