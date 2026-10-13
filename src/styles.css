@@ -4294,6 +4294,22 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 .router-source-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-block: 1rem; }
 .router-source-row .btn[aria-pressed="true"] { color: var(--primary-color); border-color: var(--primary-color); background: rgba(var(--primary-rgb), .1); }
 .router-billing-filters { margin-block: 1rem; }
+.router-billing-tabs { display:flex; flex-wrap:wrap; gap:.5rem; margin-block:1rem; }
+.router-billing-tabs .active { color:var(--primary-color); background:rgba(var(--primary-rgb),.1); }
+.router-record-controls { display:flex; flex-wrap:wrap; align-items:end; gap:.75rem; }
+.router-record-controls label { flex:1; min-width:140px; display:grid; gap:.4rem; }
+.router-record-controls input { min-width:0; width:100%; padding:.6rem; }
+.router-record-results { display:grid; gap:1rem; margin-block:1rem; }
+.router-record-card { min-width:0; padding:1.25rem; }
+.router-record-card h3 { font-size:1rem; margin-bottom:.5rem; }
+.router-record-card progress { width:100%; height:.35rem; accent-color:var(--primary-color); }
+.router-record-card img { max-width:100%; display:block; margin-block:.75rem; }
+.router-table-scroll { overflow:auto; margin-block:1rem; }
+.router-record-table { border-collapse:collapse; font-size:.8rem; min-width:100%; }
+.router-record-table th,.router-record-table td { text-align:left; padding:.65rem; border-bottom:1px solid var(--card-border); white-space:nowrap; }
+.router-device-item { margin-top:1rem; font-size:.85rem; overflow-wrap:anywhere; }
+#router-billing-panel [hidden] { display:none !important; }
+.nav-billing-tree [data-billing-section-target][hidden] { display:none !important; }
 #router-billing-message { margin-block: .75rem; color: var(--text-muted); }
 .router-billing-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-block: 1rem; }
 .router-billing-metric { padding: 1.25rem; }
@@ -4324,3 +4340,21 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
   .router-account-row > .btn { flex-shrink: 0; font-size: .72rem; }
   .router-connect-modal-content { padding: 1.25rem; }
 }
+
+/* Router panels follow the existing billing/page motion, without replaying
+   entry animations on every status poll. */
+.router-enter { animation: billingSectionEnter 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+#router-dashboard:not([hidden]),#router-accounts-panel:not([hidden]),#router-diagnostics-panel:not([hidden]),#router-logs-panel:not([hidden]),#router-settings-form:not([hidden]) { animation:billingSectionEnter 220ms cubic-bezier(0.2,0.8,0.2,1) both; }
+.router-path, .router-port-state, .router-account-row { transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease; }
+.router-editor-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin-block:1rem; }
+.router-admin-modal { width:min(94%,640px);max-width:640px;padding:1.5rem; }
+.router-admin-modal input, .router-editor-grid input { width:100%;min-width:0;padding:.65rem .8rem; }
+.router-editor-grid .router-setting-switch input { width:auto; }
+.router-editor-grid fieldset { grid-column:1 / -1;border:1px solid var(--card-border);border-radius:12px;padding:1rem; }
+.router-admin-uplink-list { display:grid;gap:.6rem;margin-block:1rem; }
+.router-account-row .router-actions { margin:0; }
+#router-service-advanced > summary, .router-port-details > summary { cursor:pointer; }
+#router-service-advanced[open] > .router-editor-grid, #router-service-advanced[open] > #router-configured-uplinks,
+.router-port-details[open] > p { animation: billingSectionEnter 180ms ease both; }
+@media(max-width:600px) { .router-editor-grid{grid-template-columns:minmax(0,1fr)}.router-admin-modal{padding:1.25rem}.router-account-row{flex-wrap:wrap}.router-account-row .router-actions{width:100%} }
+@media(prefers-reduced-motion:reduce) { .router-enter,#router-dashboard,#router-accounts-panel,#router-diagnostics-panel,#router-logs-panel,#router-settings-form, #router-service-advanced[open] > *, .router-port-details[open] > p{animation:none!important}.router-path,.router-port-state,.router-account-row{transition:none!important} }

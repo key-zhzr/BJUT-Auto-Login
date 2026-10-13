@@ -1542,6 +1542,7 @@ fn merge_backup_config(current: &AppConfig, imported: AppConfig, scope: BackupSc
         current.campus_service_sessions.clone()
     };
     merged.recharge_transactions = current.recharge_transactions.clone();
+    merged.saved_router = current.saved_router.clone();
     merged
 }
 
@@ -1954,7 +1955,7 @@ fn login_type_from_profile(value: &str) -> Option<LoginType> {
     match value {
         "bjut-sushe" | "bjut_sushe" | "type1" => Some(LoginType::Type1),
         "bjut-wifi" | "bjut_wifi" | "type2" => Some(LoginType::Type2),
-        "wired" | "lgn-wired" | "type3" => Some(LoginType::Type3),
+        "wired" | "lgn" | "lgn-wired" | "type3" => Some(LoginType::Type3),
         _ => None,
     }
 }
@@ -1963,7 +1964,7 @@ fn parse_login_type_override(value: Option<&str>) -> Option<LoginType> {
     match value {
         Some("bjut-sushe") | Some("bjut_sushe") => Some(LoginType::Type1),
         Some("bjut-wifi") | Some("bjut_wifi") => Some(LoginType::Type2),
-        Some("wired") | Some("lgn-wired") => Some(LoginType::Type3),
+        Some("wired") | Some("lgn") | Some("lgn-wired") => Some(LoginType::Type3),
         _ => None,
     }
 }
@@ -3461,6 +3462,7 @@ fn public_config(config: &AppConfig) -> AppConfig {
     public.blacklist.clear();
     public.campus_service_sessions.clear();
     public.recharge_transactions = recharge_state::RechargeJournal::default();
+    public.saved_router = None;
     public
 }
 
@@ -3846,7 +3848,7 @@ fn parse_log_line(line: &str) -> Option<LogEntry> {
     Some(LogEntry {
         time,
         module: rest2[idx4 + 1..idx5].to_string(),
-        message: rest2[idx5 + 1..].trim().to_string(),
+        message: portal_auth::protocol_labels(rest2[idx5 + 1..].trim()),
         log_type,
     })
 }
@@ -3951,7 +3953,7 @@ fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &st
     let entry = LogEntry {
         time: time_str,
         module: module.to_string(),
-        message: message.to_string(),
+        message: portal_auth::protocol_labels(message),
         log_type: log_type.to_string(),
     };
     if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -4156,6 +4158,7 @@ fn save_config(
     // receives them, so ordinary setting/account saves must not erase an
     // unfinished payment.
     new_cfg.recharge_transactions = previous_cfg.recharge_transactions.clone();
+    new_cfg.saved_router = previous_cfg.saved_router.clone();
     let storage_was_unreadable = {
         let status = state.credential_storage_status.lock().unwrap();
         status.as_str() == "error" || status.as_str() == "unknown"
@@ -4882,7 +4885,10 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                         &app,
                         &state,
                         "网络",
-                        &format!("检测到校园网登录页面 (登录类型: {:?})", login_type),
+                        &format!(
+                            "检测到校园网登录页面 (认证方式: {})",
+                            login_type.display_name()
+                        ),
                         "info",
                     );
                     let mut login_succeeded = false;
@@ -5741,7 +5747,7 @@ fn get_logs(state: tauri::State<Arc<AppState>>) -> Vec<LogEntry> {
 
 #[tauri::command]
 fn get_log_text(app: tauri::AppHandle) -> String {
-    std::fs::read_to_string(get_log_path(&app)).unwrap_or_default()
+    portal_auth::protocol_labels(&std::fs::read_to_string(get_log_path(&app)).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -5768,7 +5774,10 @@ fn export_logs(app: tauri::AppHandle) -> Result<String, String> {
         chrono::Local::now().format("%Y%m%d-%H%M%S")
     );
     let destination = directory.join(filename);
-    std::fs::copy(&source, &destination).map_err(|error| format!("导出日志失败：{error}"))?;
+    let text =
+        std::fs::read_to_string(&source).map_err(|error| format!("读取日志失败：{error}"))?;
+    std::fs::write(&destination, portal_auth::protocol_labels(&text))
+        .map_err(|error| format!("导出日志失败：{error}"))?;
     Ok(destination.to_string_lossy().into_owned())
 }
 
@@ -9507,6 +9516,7 @@ pub fn run() {
         }
         let app_state = std::sync::Arc::new(AppState {
             config: RwLock::new(AppConfig {
+                saved_router: None,
                 preferred_interface: String::new(),
                 adaptive_network_checks: true,
                 accounts: Vec::new(),
@@ -9965,6 +9975,9 @@ pub fn run() {
         .manage(router_control::Manager::default())
         .invoke_handler(tauri::generate_handler![
             router_control::connect_router,
+            router_control::saved_router_connection,
+            router_control::reconnect_router,
+            router_control::forget_router_password,
             router_control::discover_routers,
             router_control::router_request,
             router_control::probe_router_certificate,
@@ -10422,6 +10435,13 @@ mod tests {
             }))
             .unwrap();
         let config = AppConfig {
+            saved_router: Some(config_model::SavedRouter {
+                address: "http://192.168.1.1".into(),
+                username: "root".into(),
+                password: "private-router-password".into(),
+                certificate: None,
+                allow_http: true,
+            }),
             preferred_interface: String::new(),
             adaptive_network_checks: true,
             accounts: vec![Account {
@@ -10456,6 +10476,8 @@ mod tests {
         };
         let serialized = serde_json::to_string(&public_config(&config)).unwrap();
         assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("private-router-password"));
+        assert!(public_config(&config).saved_router.is_none());
         assert!(!serialized.contains("eai-sess"));
         assert!(!serialized.contains("durable-cookie-secret"));
         assert_eq!(public_config(&config).accounts[0].pass, "");
@@ -10463,6 +10485,42 @@ mod tests {
         assert!(public_config(&config).whitelist.is_empty());
         assert!(public_config(&config).blacklist.is_empty());
         assert!(public_config(&config).recharge_transactions.0.is_empty());
+    }
+
+    #[test]
+    fn router_administrator_profile_stays_out_of_imports_and_exports() {
+        let profile = config_model::SavedRouter {
+            address: "https://192.168.1.1".into(),
+            username: "root".into(),
+            password: "fixture-router-secret".into(),
+            certificate: None,
+            allow_http: false,
+        };
+        let mut current = serde_json::from_str::<AppConfig>("{}").unwrap();
+        current.saved_router = Some(profile.clone());
+        let mut imported = serde_json::from_str::<AppConfig>("{}").unwrap();
+        imported.saved_router = Some(config_model::SavedRouter {
+            address: "https://10.0.0.2".into(),
+            password: "foreign-secret".into(),
+            ..profile.clone()
+        });
+        let scope = BackupScope {
+            settings: true,
+            accounts: true,
+        };
+        let restored = merge_backup_config(&current, imported, scope);
+        assert_eq!(restored.saved_router, current.saved_router);
+        let exported = merge_backup_config(
+            &serde_json::from_str::<AppConfig>("{}").unwrap(),
+            current,
+            scope,
+        );
+        assert!(exported.saved_router.is_none());
+        assert!(!format!("{profile:?}").contains("fixture-router-secret"));
+        assert_eq!(
+            portal_auth::protocol_labels("Type1 Type2_251_3 Type3_172_30 Type10"),
+            "bjut-sushe bjut_wifi lgn Type10"
+        );
     }
 
     #[test]
@@ -10898,6 +10956,7 @@ mod tests {
         assert_eq!(login_type_from_profile("bjut_wifi"), Some(LoginType::Type2));
         assert_eq!(login_type_from_profile("wired"), Some(LoginType::Type3));
         assert_eq!(login_type_from_profile("lgn-wired"), Some(LoginType::Type3));
+        assert_eq!(login_type_from_profile("lgn"), Some(LoginType::Type3));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
-import { openUrl } from '@tauri-apps/plugin-opener';
+import { RouterAdmin } from './router-admin';
+import { RouterRecords } from './router-records';
 import { CustomSelect } from './custom-select';
 import { routerPortIcon } from './router-port-icon';
 import type { DiagnosticStep } from './models';
@@ -25,8 +26,11 @@ export class RouterWorkbench {
   private billingPolling = false;
   private lastBillingPoll = 0;
   private lastLogsPoll = 0;
-  private settingsLoaded = false;
-  private settingsLoading = false;
+  private admin: RouterAdmin;
+  private records: RouterRecords;
+  private billingTab = 'overview';
+  private summaryStamp = '';
+  private devicesStamp = '';
   private optionsStamp = '';
   private ports = new Map<string, HTMLElement>();
   private samples = new Map<string, {at: number; tx: bigint; rx: bigint}>();
@@ -40,6 +44,7 @@ export class RouterWorkbench {
     refresh: () => Promise<void>;
     login: (uplink: string, account?: string) => Promise<void>;
     log: (message: string) => void;
+    confirm: (message:string,title:string,label:string)=>Promise<boolean>;
   }) {
     for (const id of ['btn-router-discover','btn-router-settings-discover']) byId(id).addEventListener('click', () => { void this.discover(); });
     byId('btn-router-auto-connect').addEventListener('click', () => options.connect(this.candidates[0]?.address));
@@ -50,12 +55,13 @@ export class RouterWorkbench {
     for (const select of [this.billingUplink,this.billingAccount]) select.addEventListener('change', () => { void this.refreshBilling(); });
     byId('btn-router-diagnostics-refresh').addEventListener('click', () => { void options.refresh(); });
     byId('btn-router-logs-refresh').addEventListener('click', () => { void this.refreshLogs(); });
-    byId('router-settings-form').addEventListener('submit', event => { event.preventDefault(); void this.saveSettings(); });
-    byId('btn-router-settings-advanced').addEventListener('click', () => {
-      if (this.snapshot) {
-        const url = new URL(this.snapshot.managementUrl); url.pathname = '/cgi-bin/luci/admin/network/bjut-autologin/config';
-        void openUrl(url.toString());
-      }
+    this.admin = new RouterAdmin({request:<T>(name:string,args?:Record<string,unknown>)=>this.request<T>(name,args),refresh:options.refresh,confirm:options.confirm,log:options.log});
+    this.records = new RouterRecords(byId('router-billing-records'),{request:<T>(name:string,args?:Record<string,unknown>)=>this.request<T>(name,args),targets:()=>{
+      const seen=new Set<string>();
+      return this.billingJobs.filter(job=>{const key=job.item.account || job.uplink;if(seen.has(key))return false;seen.add(key);return true;}).map(job=>({uplink:job.uplink,account:job.account,title:this.snapshot?.uplinks.find(item=>item.id===job.uplink)?.device || job.uplink}));
+    }});
+    for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-router-billing-tab]')) tab.addEventListener('click',()=>{
+      this.selectBillingTab(tab.dataset.routerBillingTab!);
     });
     window.setInterval(() => {
       if (document.hidden || !this.snapshot) return;
@@ -85,7 +91,8 @@ export class RouterWorkbench {
 
   render(data: RouterSnapshot): void {
     const firstConnection = !this.snapshot;
-    this.snapshot = data;
+    this.snapshot = data; this.admin.update(data);
+    this.records.setSupported(this.supports('billing_records'));
     for (const id of ['router-dashboard','router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','dashboard-local-label','router-local-accounts-title']) byId(id).hidden = false;
     byId('btn-router-auto-connect').hidden = true;
     byId('btn-router-discover').hidden = true;
@@ -109,7 +116,7 @@ export class RouterWorkbench {
 
   disconnect(): void {
     this.generation++; this.billingGeneration++; this.snapshot = null; this.billingJobs = [];
-    this.optionsStamp = ''; this.settingsLoaded = false; this.settingsLoading = false; this.logSnapshot = '';
+    this.optionsStamp = ''; this.admin.disconnect(); this.records.disconnect(); this.summaryStamp=''; this.devicesStamp=''; this.logSnapshot = '';
     this.ports.clear(); this.samples.clear(); byId('router-uplink-status').replaceChildren();
     for (const id of ['router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','router-settings-form','dashboard-local-label','router-local-accounts-title']) byId(id).hidden = true;
     this.selectBillingSource(false, false);
@@ -130,7 +137,7 @@ export class RouterWorkbench {
     for (const item of this.snapshot.uplinks) {
       let card = this.ports.get(item.id);
       if (!card) {
-        card = node('article','', 'router-port-card'); card.dataset.uplink = item.id;
+        card = node('article','', 'router-port-card router-enter'); card.dataset.uplink = item.id;
         const title = node('strong','','router-port-title'); title.dataset.field = 'title';
         const icon = node('div','','router-port-icon'); icon.innerHTML = routerPortIcon;
         const speed = node('span','','router-port-speed'); speed.dataset.field = 'speed';
@@ -169,29 +176,13 @@ export class RouterWorkbench {
     }
   }
 
-  private renderAccounts(): void {
-    if (!this.snapshot) return;
-    byId('router-accounts-count').textContent = `${this.snapshot.accounts.length} 个账号`;
-    byId('router-accounts-list').replaceChildren(...this.snapshot.accounts.map(item=>{
-      const row=node('div','','router-account-row');
-      const text=node('div'); text.append(node('strong',item.user),node('p',item.enabled?'参与自动登录':'仅手动使用'));
-      const control=button(item.enabled?'停用自动登录':'启用自动登录',()=>{ void toggle(); });
-      control.disabled=!this.supports('account_set');
-      const toggle=async()=>{
-        control.disabled=true; const generation=this.generation;
-        try { await this.request('account_set',{account:item.id,enabled:item.enabled?'0':'1'}); if (generation===this.generation) await this.options.refresh(); }
-        catch(error) { if (generation===this.generation) control.textContent=String(error).slice(0,80); }
-        finally { if (generation===this.generation) control.disabled=false; }
-      };
-      row.append(text,control); return row;
-    }));
-  }
+  private renderAccounts(): void { this.admin.renderAccounts(); }
 
   onPage(page: string): void {
     if (!this.snapshot) return;
     if (page==='billing-center' && this.billingSelected && !this.billingJobs.length) void this.refreshBilling();
     if (page==='logs' && Date.now()-this.lastLogsPoll>=5000) void this.refreshLogs();
-    if (page==='settings' && !this.settingsLoaded && !this.settingsLoading) void this.loadSettings();
+    if (page==='settings') void this.admin.load();
   }
 
   selectBillingSource(router: boolean, load=true): void {
@@ -200,10 +191,21 @@ export class RouterWorkbench {
     local.hidden=this.billingSelected;
     byId('billing-center').querySelector<HTMLElement>('.billing-header-tools')!.hidden=this.billingSelected;
     byId('router-billing-panel').hidden=!this.billingSelected;
+    byId('billing-center-subtitle').textContent=this.billingSelected?'各上游账号、用量与在线设备':'账户状态、在线会话与近期上网记录';
     byId('btn-billing-source-router').setAttribute('aria-pressed',String(this.billingSelected));
     byId('btn-billing-source-local').setAttribute('aria-pressed',String(!this.billingSelected));
+    for(const button of document.querySelectorAll<HTMLElement>('.nav-billing-tree [data-billing-section-target]'))button.hidden=this.billingSelected && ['services','recharge'].includes(button.dataset.billingSectionTarget || '');
+    if(this.billingSelected)this.selectBillingTab(this.billingTab);
     if (load && this.billingSelected) void this.refreshBilling();
     if (load && !this.billingSelected) window.dispatchEvent(new Event('router-billing-local-selected'));
+  }
+
+  selectBillingTab(section:string):void {
+    if(!['overview','records','devices'].includes(section))return;
+    this.billingTab=section;byId('billing-center-subtitle').textContent='各上游账号、用量与在线设备';
+    for(const button of document.querySelectorAll<HTMLButtonElement>('[data-router-billing-tab]')){const active=button.dataset.routerBillingTab===section;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));}
+    for(const button of document.querySelectorAll<HTMLButtonElement>('.nav-billing-tree [data-billing-section-target]')){const active=button.dataset.billingSectionTarget===section;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));}
+    for(const panel of ['overview','records','devices'])byId(`router-billing-${panel}`).hidden=section!==panel;
   }
 
   async refreshBilling(): Promise<void> {
@@ -247,12 +249,15 @@ export class RouterWorkbench {
     (byId('btn-router-billing-refresh') as HTMLButtonElement).disabled=busy;
     byId('router-billing-message').textContent=busy?'正在查询各条上游…':'路由器查询已完成';
     const summary=routerBillingSummary(this.billingJobs);
-    const metric=(label:string,value:string)=>{const card=node('article','','glass-card router-billing-metric');card.append(node('span',label),node('strong',value));return card;};
-    byId('router-billing-summary').replaceChildren(metric('已查询账号',String(summary.accounts)),metric('余额合计',summary.balance===null?'--':`${summary.balance.toFixed(2)} 元`));
+    const metrics=[['已查询账号',String(summary.accounts)],['余额合计',summary.balance===null?'--':`${summary.balance.toFixed(2)} 元`],['总流量',summary.totalFlow===null?'--':`${(summary.totalFlow/1024).toFixed(2)} GB`],['剩余流量',summary.remainingFlow===null?'--':`${(summary.remainingFlow/1024).toFixed(2)} GB`]];
+    if(JSON.stringify(metrics)!==this.summaryStamp){
+      this.summaryStamp=JSON.stringify(metrics);const root=byId('router-billing-summary');
+      metrics.forEach(([label,value],index)=>{let card=root.children[index] as HTMLElement|undefined;if(!card){card=node('article','','glass-card router-billing-metric router-enter');card.append(node('span',label),node('strong'));root.append(card);}card.lastElementChild!.textContent=value;});
+    }
     const container=byId('router-billing-results');
     for (const job of this.billingJobs) {
       let card=Array.from(container.children).find(child=>(child as HTMLElement).dataset.uplink===job.uplink) as HTMLElement | undefined;
-      if (!card) {card=node('article','','glass-card router-billing-card');card.dataset.uplink=job.uplink;container.append(card);}
+      if (!card) {card=node('article','','glass-card router-billing-card router-enter');card.dataset.uplink=job.uplink;container.append(card);}
       if (job.item.state==='captcha' && card.dataset.captcha===job.item.image) continue;
       card.dataset.captcha=job.item.state==='captcha'?job.item.image || '':'';
       const item=this.snapshot?.uplinks.find(item=>item.id===job.uplink);
@@ -260,7 +265,7 @@ export class RouterWorkbench {
       card.replaceChildren(title,node('p',job.item.message || '等待查询','router-billing-status'));
       if (job.item.state==='loading') {const progress=document.createElement('progress');progress.max=100;progress.value=job.item.percent || 2;card.append(progress);}
       if (job.item.account) {
-        const fields=[['账号',job.item.account],['余额',job.item.balance?.trim()?`${Number(job.item.balance).toFixed(2)} 元`:'--'],['剩余流量',job.item.remainingFlow?.trim()?`${(Number(job.item.remainingFlow)/1024).toFixed(2)} GB`:'--'],['状态',job.item.accountStatus || '--'],['套餐',job.item.package || '--']];
+        const fields=[['账号',job.item.account],['余额',job.item.balance?.trim()?`${Number(job.item.balance).toFixed(2)} 元`:'--'],['总流量',job.item.totalFlow?.trim()?`${(Number(job.item.totalFlow)/1024).toFixed(2)} GB`:'--'],['剩余流量',job.item.remainingFlow?.trim()?`${(Number(job.item.remainingFlow)/1024).toFixed(2)} GB`:'--'],['状态',job.item.accountStatus || '--'],['套餐',job.item.package || '--']];
         for (const [label,value] of fields) {const row=node('p','','router-billing-row');row.append(node('span',label),node('strong',value));card.append(row);}
       }
       if (job.item.state==='captcha') this.showCaptcha(card,job);
@@ -273,6 +278,14 @@ export class RouterWorkbench {
     }
     const live=new Set(this.billingJobs.map(job=>job.uplink));
     for (const child of Array.from(container.children)) if (!live.has((child as HTMLElement).dataset.uplink || '')) child.remove();
+    const stamp=JSON.stringify(this.billingJobs.map(job=>[job.item.account,job.item.state,job.sessions,job.sessionsAvailable]));
+    if(stamp!==this.devicesStamp){
+      this.devicesStamp=stamp;const seen=new Set<string>(),cards:HTMLElement[]=[];
+      for(const job of this.billingJobs){if(job.item.state!=='ready' || !job.item.account || seen.has(job.item.account))continue;seen.add(job.item.account);const card=node('article','','glass-card router-billing-card router-enter');card.append(node('h3',`账号 ${job.item.account}`));
+        if(!job.sessions?.length)card.append(node('p',job.sessionsAvailable?'暂无在线设备':'在线设备暂时无法查询'));
+        for(const session of job.sessions || []){const detail=node('div','','router-device-item');for(const [label,key] of [['IPv4','ip'],['IPv6','ipv6'],['MAC','mac'],['在线时长','useTime']]){if(session[key])detail.append(node('p',`${label}：${key==='useTime'?`${Math.round(Number(session[key])/60)} 分钟`:session[key]}`));}card.append(detail);}cards.push(card);
+      }byId('router-billing-devices').replaceChildren(...cards);if(!cards.length)byId('router-billing-devices').append(node('p','请先查询计费账号。'));
+    }
   }
 
   private showCaptcha(card: HTMLElement, job: RouterBillingJob): void {
@@ -322,27 +335,4 @@ export class RouterWorkbench {
   }
   logText(): string {return this.logSnapshot;}
 
-  private async loadSettings(): Promise<void> {
-    if (!this.supports('settings')) return;
-    this.settingsLoading=true;const generation=this.generation;
-    try {
-      const response=await this.request<{service:Record<string,string>}>('settings');
-      if (generation!==this.generation || !this.snapshot) return;
-      const values=response.service;
-      for (const [id,key,fallback] of [['router-service-interval','interval','20'],['router-service-timeout','timeout','3'],['router-service-offline','offline_confirmations','2']]) (byId(id) as HTMLInputElement).value=values[key] || fallback;
-      for (const [id,key] of [['router-service-enabled','enabled'],['router-service-routes','managed_routes'],['router-service-mwan','mwan3']]) (byId(id) as HTMLInputElement).checked=values[key]==='1';
-      this.settingsLoaded=true;byId('router-settings-message').textContent='';
-    } catch(error) {if (generation===this.generation) byId('router-settings-message').textContent=String(error);}
-    finally {this.settingsLoading=false;}
-  }
-  private async saveSettings(): Promise<void> {
-    if (!this.snapshot || !this.settingsLoaded) return;
-    const generation=this.generation,save=byId('btn-router-settings-save') as HTMLButtonElement;save.disabled=true;
-    const args:Record<string,string>={};
-    for (const [id,key] of [['router-service-interval','interval'],['router-service-timeout','timeout'],['router-service-offline','offline_confirmations']]) args[key]=(byId(id) as HTMLInputElement).value;
-    for (const [id,key] of [['router-service-enabled','enabled'],['router-service-routes','managed_routes'],['router-service-mwan','mwan3']]) args[key]=(byId(id) as HTMLInputElement).checked?'1':'0';
-    try {await this.request('save_settings',args);if (generation===this.generation) {byId('router-settings-message').textContent='路由器设置已保存';this.options.log('路由器设置已保存');await this.options.refresh();}}
-    catch(error) {if (generation===this.generation) byId('router-settings-message').textContent=String(error);}
-    finally {save.disabled=false;}
-  }
 }

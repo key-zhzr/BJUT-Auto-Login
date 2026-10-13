@@ -87,12 +87,18 @@ const LGN_PAGE_INDEX: &str = "cHAmjX1755497856";
 const LGN_JS_VERSION: &str = "4.2.2";
 const EPORTAL_XOR_KEY: u16 = 0x16;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum LoginType {
     Type1,
     Type2,
     Type3,
     Unknown,
+}
+
+impl std::fmt::Debug for LoginType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.display_name())
+    }
 }
 
 impl LoginType {
@@ -109,10 +115,26 @@ impl LoginType {
         match self {
             Self::Type1 => "bjut-sushe",
             Self::Type2 => "bjut_wifi",
-            Self::Type3 => "lgn 有线",
+            Self::Type3 => "lgn",
             Self::Unknown => "未识别",
         }
     }
+}
+
+pub(crate) fn protocol_labels(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    for token in text.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+        let word = token.trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+        let label = match word {
+            "Type1" | "Type1_221_98" => "bjut-sushe",
+            "Type2" | "Type2_251_3" => "bjut_wifi",
+            "Type3" | "Type3_172_30" => "lgn",
+            _ => word,
+        };
+        result.push_str(label);
+        result.push_str(&token[word.len()..]);
+    }
+    result
 }
 
 fn random_request_id() -> String {

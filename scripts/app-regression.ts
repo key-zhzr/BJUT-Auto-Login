@@ -20,6 +20,7 @@ Object.defineProperty(window, 'localStorage', { value: {
   removeItem: (key: string) => memory.delete(key), clear: () => memory.clear(),
 } });
 const mobileLayout = new URL(location.href).searchParams.get('platform') === 'android';
+Object.defineProperty(document,'hidden',{configurable:true,value:false});
 Object.defineProperty(navigator, 'userAgent', { value: mobileLayout ? 'Mozilla/5.0 (Linux; Android 15) Mobile MockApp' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MockApp' });
 (window as any).__TAURI__ = {};
 mockWindows('main');
@@ -57,37 +58,50 @@ async function fixtureCaptcha(title:string) {
 }
 const routerSnapshot = {
   version: '0.1.6', managementUrl:'https://192.0.2.1/cgi-bin/luci/admin/network/bjut-autologin/billing',
-  capabilities:['ports','billing','logs','settings','account_set'],
+  capabilities:['ports','billing','logs','settings','account_set','account_manage','uplink_manage','billing_records'],
   ports:[{uplink:'dorm_a',device:'lan3',linkUp:1,speedMbps:'1000',rxBytes:'10000000000',txBytes:'2000000000'},
     {uplink:'dorm_b',device:'lan4',linkUp:1,speedMbps:'2500',rxBytes:'30000000000',txBytes:'5000000000'}],
   uplinks:[
-    {id:'dorm_a',network:'wan14',network6:'wan16',device:'lan3',ipv4:'10.126.19.139',ipv6:'2001:db8::1',state:'online',message:'认证会话有效，互联网连接正常',internet4:'reachable',internet6:'reachable',account:'25***01',checking:1,check_message:'正在确认认证会话'},
-    {id:'dorm_b',network:'wan24',device:'lan4',ipv4:'10.126.20.139',state:'authenticated_limited',message:'认证会话有效，外网探测暂未通过；保留当前登录',internet4:'unreachable',internet6:'not_configured',account:'25***02'},
+    {id:'dorm_a',network:'wan14',network6:'wan16',device:'lan3',ipv4:'10.126.19.139',ipv6:'2001:db8::1',state:'online',message:'认证会话有效，互联网连接正常',internet4:'reachable',internet6:'reachable',account:'25000001',checking:1,check_message:'正在确认认证会话'},
+    {id:'dorm_b',network:'wan24',device:'lan4',ipv4:'10.126.20.139',state:'authenticated_limited',message:'认证会话有效，外网探测暂未通过；保留当前登录',internet4:'unreachable',internet6:'not_configured',account:'25000002'},
   ],
-  accounts:[{id:'account1',user:'25000001',enabled:1,hasPassword:1},{id:'account2',user:'25000002',enabled:0,hasPassword:1}],
+  accounts:[{id:'account1',user:'25000001',enabled:1,hasPassword:1,loginType:'auto'},{id:'account2',user:'25000002',enabled:0,hasPassword:1,loginType:'lgn'}],
 };
 let routerRefreshDelay = 0;
 let routerQuerySequence = 0;
 const routerTickets = new Map<string,string>();
+const recordTickets = new Set<string>();
+let savedRouterInfo:any=new URL(location.href).searchParams.has('saved')?{address:'https://192.0.2.1',username:'root',certificate:'synthetic-pem',allowHttp:false}:null,routerFailures=0;
 mockIPC(async (cmd, payload: any = {}) => {
   calls.push({cmd,payload,at:now()});
   if (cmd === 'discover_routers') return [{name:'测试路由器',address:'https://192.0.2.1/',version:'0.1.6',secure:true}];
+  if (cmd === 'saved_router_connection') return savedRouterInfo;
+  if (cmd === 'forget_router_password') {savedRouterInfo=null;return;}
+  if (cmd === 'reconnect_router') {
+    if(payload.rememberPassword===false)savedRouterInfo=null;
+    return routerSnapshot;
+  }
   if (cmd === 'router_request') {
     if (payload.operation === 'billing_start') {
       const ticket=String(++routerQuerySequence).padStart(32,'0');routerTickets.set(ticket,payload.args.uplink);return {state:'loading',ticket};
     }
-    if (payload.operation === 'billing_poll') return {result:{state:'ready',message:'计费数据已更新',account:'25000001',balance:'42.125',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
-    if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'}};
+    if (payload.operation === 'billing_records') {const ticket=String(++routerQuerySequence).padStart(32,'0');recordTickets.add(ticket);return {ticket};}
+    if (payload.operation === 'billing_poll') return recordTickets.has(payload.args.ticket)?{result:{state:'ready',message:'用量与账单已更新',account:'25000001',kind:'usage',total:1,page:1,columns:['loginTime','flow'],rows:[['2026-10-13 12:00','1024']]}}:{result:{state:'ready',message:'计费数据已更新',account:'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
+    if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'},uplinks:[{id:'dorm_a',enabled:'1',network:'wan14',network6:'wan16',login_type:'bjut-sushe',accounts:'account1'},{id:'dorm_b',network:'wan24',enabled:'1'}]};
     if (payload.operation === 'logs') return {text:'[测试路由器] 上游 lan3 认证已确认'};
     if (payload.operation === 'account_set') {const account=routerSnapshot.accounts.find(item=>item.id===payload.args.account)!;account.enabled=Number(payload.args.enabled);return {state:'ready'};}
     if (payload.operation === 'save_settings') return {state:'ready'};
+    if (payload.operation === 'account_save') {const item=routerSnapshot.accounts.find(item=>item.id===payload.args.account);if(item){item.user=payload.args.username;item.loginType=payload.args.login_type;}return {state:'ready'};}
+    if (['account_delete','account_move','uplink_save','uplink_delete'].includes(payload.operation)) return {state:'ready'};
   }
 
   if (cmd === 'connect_router') {
     if (!payload.certificate) throw 'ROUTER_CERT_UNTRUSTED:模拟路由器证书尚未受信任';
+    savedRouterInfo=payload.rememberPassword?{address:payload.address,username:payload.username,certificate:payload.certificate,allowHttp:payload.allowHttp}:null;
     return routerSnapshot;
   }
   if (cmd === 'get_router_status') {
+    if(routerFailures){routerFailures--;throw '连接暂时中断';}
     if (routerRefreshDelay) await new Promise(resolve => setTimeout(resolve, routerRefreshDelay));
     return routerSnapshot;
   }
@@ -157,7 +171,7 @@ const button=document.createElement('button'); button.textContent='运行本轮�
 const hide=document.createElement('button');hide.textContent='隐藏验收面板';hide.onclick=()=>{panel.hidden=true;};panel.append(hide);
 const out=document.createElement('pre');out.id='qa-results';out.style.whiteSpace='pre-wrap';out.textContent='仅使用模拟账号与本地数据';panel.append(button,out);document.body.append(panel);
 const assert=(value:unknown,message:string)=>{if(!value)throw new Error(message);};
-const wait=async(test:()=>boolean)=>{for(let i=0;i<100;i++){if(test())return;await new Promise(r=>setTimeout(r,50));}throw new Error('等待界面超时');};
+const wait=async(test:()=>boolean,timeout=5000)=>{const deadline=performance.now()+timeout;while(performance.now()<deadline){if(test())return;await new Promise(r=>setTimeout(r,50));}throw new Error('等待界面超时');};
 const click=(selector:string)=>(document.querySelector(selector) as HTMLElement)?.click();
 button.addEventListener('click',async()=>{
   button.disabled=true;out.textContent='';const note=(text:string)=>out.textContent+=text+'\n';
@@ -302,6 +316,7 @@ button.addEventListener('click',async()=>{
     (document.getElementById('router-address') as HTMLInputElement).value='https://192.0.2.1';
     (document.getElementById('router-certificate') as HTMLTextAreaElement).value='';
     (document.getElementById('router-password') as HTMLInputElement).value='synthetic-router-password';
+    (document.getElementById('router-remember-password') as HTMLInputElement).checked=true;
     (document.getElementById('router-connect-form') as HTMLFormElement).requestSubmit();
     await wait(()=>!document.getElementById('confirm-modal')!.classList.contains('hidden'));
     assert(document.getElementById('confirm-modal-text')!.textContent!.includes('SHA-256'),'未显示证书指纹');
@@ -312,6 +327,7 @@ button.addEventListener('click',async()=>{
     assert(document.getElementById('router-uplink-status')!.textContent!.includes('正在确认认证会话'),'未保留状态并显示检测步骤');
     assert((document.getElementById('router-password') as HTMLInputElement).value==='','连接后仍保留管理密码');
     assert(!memory.get('bjut_router_password'),'管理密码写入了 UI 存储');
+    assert(savedRouterInfo && !JSON.stringify(savedRouterInfo).includes('synthetic-router-password'),'保存信息包含明文密码');
     click('#router-uplink-select .custom-select-trigger'); click('#router-uplink-select [data-value="dorm_b"]');
     click('#router-account-select .custom-select-trigger'); click('#router-account-select [data-value="account2"]');
     click('#btn-router-login');
@@ -325,11 +341,24 @@ button.addEventListener('click',async()=>{
     await wait(()=>!(document.getElementById('btn-router-sync') as HTMLButtonElement).disabled);
     assert(!document.getElementById('router-connect-modal')!.classList.contains('hidden')===false,'连接后弹窗未关闭');
     click('#btn-open-billing');
-    await wait(()=>document.querySelectorAll('.router-billing-card').length===2 && document.getElementById('router-billing-summary')!.textContent!.includes('42.13'));
+    await wait(()=>document.querySelectorAll('#router-billing-results .router-billing-card').length===2 && document.getElementById('router-billing-summary')!.textContent!.includes('42.13'));
     assert(document.querySelector<HTMLElement>('.billing-workbench')!.hidden,'路由计费与本机计费同时展示');
     assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_start').length===2,'未自动查询全部上游');
+    assert(document.getElementById('router-billing-summary')!.textContent!.includes('40.00 GB') && document.getElementById('router-billing-summary')!.textContent!.includes('30.00 GB'),'流量汇总未按实际账号去重');
+    click('[data-router-billing-tab="records"]');
+    (document.getElementById('router-record-start') as HTMLInputElement).value='2026-01-01';
+    (document.getElementById('router-record-end') as HTMLInputElement).value='2026-10-13';click('#btn-router-record-query');
+    await wait(()=>document.getElementById('router-billing-records')!.textContent!.includes('2026-10-13 12:00'));
+    assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_records').length===1,'重复查询了同一认证账号');
     click('[data-target="accounts"]');
     assert(!document.getElementById('router-accounts-panel')!.hidden && document.getElementById('router-accounts-list')!.textContent!.includes('25000002'),'账号管理未融合路由账号');
+    Array.from(document.querySelectorAll<HTMLButtonElement>('#router-accounts-list button')).find(button=>button.textContent==='编辑')!.click();
+    await wait(()=>!!document.querySelector('#router-admin-editor:not(.hidden)'));
+    const editor=document.getElementById('router-admin-editor')!,user=editor.querySelector<HTMLInputElement>('input[type=text]')!;
+    user.value='25000011';window.dispatchEvent(new Event('focus'));assert(user.value==='25000011','路由账号编辑草稿丢失');
+    (editor.querySelector('form') as HTMLFormElement).requestSubmit();
+    await wait(()=>calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='account_save'&&call.payload.args.username==='25000011'&&call.payload.args.password===''));
+    await wait(()=>!document.getElementById('router-admin-editor'));
     click('[data-target="logs"]');
     await wait(()=>document.getElementById('router-logs-content')!.textContent!.includes('lan3 认证'));
     click('[data-target="settings"]');
@@ -339,6 +368,10 @@ button.addEventListener('click',async()=>{
     await wait(()=>calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='save_settings'&&call.payload.args.interval==='30'));
     note('通过：路由计费自动汇总去重、账号融合、日志与设置保存');
     await wait(()=>!(document.getElementById('btn-router-settings-save') as HTMLButtonElement).disabled);
+    routerFailures=1;click('#btn-router-refresh');
+    await wait(()=>document.getElementById('router-message')!.textContent!.includes('连接中断'));
+    await wait(()=>calls.some(call=>call.cmd==='reconnect_router') && !document.getElementById('router-connected')!.hidden,7000);
+    note('通过：路由账号编辑、流量去重、账单查询和断线自动重连');
     routerRefreshDelay=180;
     click('#btn-router-refresh'); click('#btn-router-disconnect');
     await new Promise(resolve => setTimeout(resolve,260));

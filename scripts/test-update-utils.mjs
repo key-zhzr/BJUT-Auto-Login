@@ -9,8 +9,14 @@ assert.deepEqual(routerBillingSummary([
   routerJob({state:'ready',account:'one',balance:'13.125',updatedAt:2}),
   routerJob({state:'ready',account:'two',balance:'20'}),
   routerJob({state:'error',account:'three',balance:'500'}),
-]), {accounts:2,balance:33.125});
-assert.deepEqual(routerBillingSummary([routerJob({state:'ready',account:'one',balance:''})]), {accounts:1,balance:null});
+]), {accounts:2,balance:33.125,totalFlow:null,remainingFlow:null});
+assert.deepEqual(routerBillingSummary([routerJob({state:'ready',account:'one',balance:''})]), {accounts:1,balance:null,totalFlow:null,remainingFlow:null});
+assert.deepEqual(routerBillingSummary([
+  routerJob({state:'ready',account:'one',balance:'1',totalFlow:'1024',remainingFlow:'512',updatedAt:1}),
+  routerJob({state:'ready',account:'one',balance:'2',totalFlow:'2048',remainingFlow:'256',updatedAt:2}),
+  routerJob({state:'ready',account:'two',balance:'3',totalFlow:'0',remainingFlow:'0'}),
+]),{accounts:2,balance:5,totalFlow:2048,remainingFlow:256});
+assert.equal(routerBillingSummary([routerJob({state:'ready',account:'one',totalFlow:'-1',remainingFlow:'unlimited'})]).totalFlow,null);
 console.log('Router counters and deduplicated billing regression cases passed');
 
 const { isVersionNewer } = await import('../src/update-utils.ts');

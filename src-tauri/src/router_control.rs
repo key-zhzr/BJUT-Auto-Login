@@ -1,5 +1,6 @@
 //! The App talks only to the named, authenticated rpcd methods shipped by the
-//! router package. Router credentials/session tokens never enter persistent UI storage.
+//! router package. Remembered router passwords use the encrypted configuration backend; tokens stay in memory.
+use crate::config_model::SavedRouter;
 use base64::Engine;
 use reqwest::{Client, Url};
 use serde::Serialize;
@@ -9,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-const MAX_RESPONSE: usize = 256 * 1024;
+const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
@@ -251,7 +252,7 @@ pub(crate) async fn probe_router_certificate(address: String) -> Result<RouterCe
 }
 
 #[derive(Default)]
-pub(crate) struct Manager(Mutex<Option<Arc<Remote>>>);
+pub(crate) struct Manager(Mutex<Option<Arc<Remote>>>, Mutex<Option<SavedRouter>>);
 
 struct Remote {
     client: Client,
@@ -441,25 +442,17 @@ impl Remote {
     }
 }
 
-#[tauri::command]
-pub(crate) async fn connect_router(
-    manager: tauri::State<'_, Manager>,
-    address: String,
-    username: String,
-    password: String,
-    certificate: Option<String>,
-    allow_http: Option<bool>,
-) -> Result<Snapshot, String> {
-    let endpoint = endpoint_with_http(&address, allow_http.unwrap_or(false))?;
-    if username.trim().is_empty()
-        || username.len() > 128
-        || password.is_empty()
-        || password.len() > 1024
+async fn authenticate(profile: &SavedRouter) -> Result<(Arc<Remote>, Snapshot), String> {
+    let endpoint = endpoint_with_http(&profile.address, profile.allow_http)?;
+    if profile.username.trim().is_empty()
+        || profile.username.len() > 128
+        || profile.password.is_empty()
+        || profile.password.len() > 1024
     {
         return Err("请填写路由器管理账号与密码".into());
     }
     let client = router_client(if endpoint.scheme() == "https" {
-        certificate.as_deref()
+        profile.certificate.as_deref()
     } else {
         None
     })?;
@@ -469,7 +462,7 @@ pub(crate) async fn connect_router(
         "00000000000000000000000000000000",
         "session",
         "login",
-        json!({"username":username.trim(),"password":password,"timeout":300}),
+        json!({"username":profile.username.trim(),"password":profile.password,"timeout":300}),
     ))
     .await?;
     let token = login
@@ -494,7 +487,127 @@ pub(crate) async fn connect_router(
         billing_tickets: std::sync::Mutex::new(std::collections::HashMap::new()),
     };
     let snapshot = Box::pin(remote.snapshot()).await?;
-    *manager.0.lock().await = Some(Arc::new(remote));
+    Ok((Arc::new(remote), snapshot))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SavedConnection {
+    address: String,
+    username: String,
+    certificate: Option<String>,
+    allow_http: bool,
+}
+
+fn persist_router(
+    app: &tauri::AppHandle,
+    state: &crate::AppState,
+    profile: Option<SavedRouter>,
+) -> Result<(), String> {
+    let mut config = state.config.write().unwrap();
+    if config.saved_router == profile {
+        return Ok(());
+    }
+    if state.credential_storage_status.lock().unwrap().as_str() != "available" {
+        return Err("安全存储尚未就绪，暂时无法记住密码".into());
+    }
+    let mut updated = config.clone();
+    updated.saved_router = profile;
+    crate::save_secure_config_verified(app, &updated)?;
+    *config = updated;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn saved_router_connection(
+    state: tauri::State<'_, Arc<crate::AppState>>,
+) -> Option<SavedConnection> {
+    state
+        .config
+        .read()
+        .unwrap()
+        .saved_router
+        .as_ref()
+        .map(|p| SavedConnection {
+            address: p.address.clone(),
+            username: p.username.clone(),
+            certificate: p.certificate.clone(),
+            allow_http: p.allow_http,
+        })
+}
+
+#[tauri::command]
+pub(crate) fn forget_router_password(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<crate::AppState>>,
+) -> Result<(), String> {
+    persist_router(&app, &state, None)
+}
+
+#[tauri::command]
+pub(crate) async fn connect_router(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<crate::AppState>>,
+    manager: tauri::State<'_, Manager>,
+    address: String,
+    username: String,
+    password: String,
+    certificate: Option<String>,
+    allow_http: Option<bool>,
+    remember_password: Option<bool>,
+) -> Result<Snapshot, String> {
+    let profile = SavedRouter {
+        address,
+        username,
+        password,
+        certificate,
+        allow_http: allow_http.unwrap_or(false),
+    };
+    let (remote, snapshot) = authenticate(&profile).await?;
+    if let Some(remember) = remember_password {
+        persist_router(
+            &app,
+            &state,
+            if remember {
+                Some(profile.clone())
+            } else {
+                None
+            },
+        )?;
+    }
+    *manager.1.lock().await = Some(profile);
+    *manager.0.lock().await = Some(remote);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub(crate) async fn reconnect_router(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<crate::AppState>>,
+    manager: tauri::State<'_, Manager>,
+    remember_password: Option<bool>,
+) -> Result<Snapshot, String> {
+    let profile = manager
+        .1
+        .lock()
+        .await
+        .clone()
+        .or_else(|| state.config.read().unwrap().saved_router.clone())
+        .ok_or("请先连接路由器")?;
+    let (remote, snapshot) = authenticate(&profile).await?;
+    if let Some(remember) = remember_password {
+        persist_router(
+            &app,
+            &state,
+            if remember {
+                Some(profile.clone())
+            } else {
+                None
+            },
+        )?;
+    }
+    *manager.1.lock().await = Some(profile);
+    *manager.0.lock().await = Some(remote);
     Ok(snapshot)
 }
 
@@ -548,6 +661,7 @@ pub(crate) async fn sync(manager: &Manager, accounts: Vec<Value>) -> Result<Stri
 #[tauri::command]
 pub(crate) async fn disconnect_router(manager: tauri::State<'_, Manager>) -> Result<(), String> {
     let remote = manager.0.lock().await.take();
+    *manager.1.lock().await = None;
     if let Some(remote) = remote {
         let _ = Box::pin(rpc(
             &remote.client,
@@ -693,49 +807,123 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
     let Some(args) = args.as_object() else {
         return false;
     };
+    let service = [
+        "enabled",
+        "network",
+        "device",
+        "transport",
+        "login_type",
+        "compatibility",
+        "strict_network",
+        "expected_ssid",
+        "expected_bssid",
+        "interval",
+        "timeout",
+        "offline_confirmations",
+        "max_backoff",
+        "credential_cooldown",
+        "post_login_delay",
+        "online_url",
+        "online_code",
+        "managed_routes",
+        "mwan3",
+        "log_level",
+    ];
+    let upstream = [
+        "enabled",
+        "network",
+        "network6",
+        "device",
+        "device6",
+        "source4",
+        "source6",
+        "transport",
+        "login_type",
+        "accounts",
+        "expected_ssid",
+        "expected_bssid",
+    ];
     let allowed: &[&str] = match operation {
         "logs" | "settings" => &[],
-        "save_settings" => &[
-            "enabled",
-            "interval",
-            "timeout",
-            "offline_confirmations",
-            "managed_routes",
-            "mwan3",
-            "log_level",
-        ],
+        "save_settings" => &service,
         "account_set" => &["account", "enabled"],
+        "account_save" => &["account", "username", "password", "enabled", "login_type"],
+        "account_delete" => &["account"],
+        "account_move" => &["account", "direction"],
+        "uplink_save" => &["uplink", "payload"],
+        "uplink_delete" => &["uplink"],
         "billing_start" => &["uplink", "account"],
+        "billing_records" => &[
+            "uplink",
+            "account",
+            "kind",
+            "start_date",
+            "end_date",
+            "year",
+            "page",
+        ],
         "billing_poll" => &["ticket"],
         "billing_captcha" => &["ticket", "code", "refresh"],
         _ => return false,
     };
-    args.iter().all(|(key, value)| {
+    if !args.iter().all(|(key, value)| {
         allowed.contains(&key.as_str())
             && match key.as_str() {
-                "account" => value
+                "payload" => value
+                    .as_str()
+                    .filter(|v| v.len() <= 32768)
+                    .and_then(|v| serde_json::from_str::<Value>(v).ok())
+                    .is_some_and(|v| {
+                        v.as_object().is_some_and(|fields| {
+                            !fields.is_empty()
+                                && fields.iter().all(|(k, v)| {
+                                    upstream.contains(&k.as_str())
+                                        && v.as_str().is_some_and(|s| {
+                                            s.len() <= 4096 && !s.chars().any(char::is_control)
+                                        })
+                                })
+                        })
+                    }),
+                "refresh" => value.is_boolean(),
+                "ticket" => value.as_str().is_some_and(valid_token),
+                "account" | "uplink" => value
                     .as_str()
                     .is_some_and(|id| id.is_empty() || valid_section(id)),
-                "uplink" => value.as_str().is_some_and(valid_section),
-                "ticket" => value.as_str().is_some_and(valid_token),
-                "code" => value.as_str().is_some_and(|code| {
-                    code.len() <= 12 && code.bytes().all(|byte| byte.is_ascii_alphanumeric())
-                }),
-                "refresh" => value.is_boolean(),
-                "enabled" | "managed_routes" | "mwan3" => matches!(value.as_str(), Some("0" | "1")),
-                "log_level" => {
-                    matches!(value.as_str(), Some("debug" | "info" | "notice" | "error"))
+                "code" => value
+                    .as_str()
+                    .is_some_and(|v| v.len() <= 12 && v.bytes().all(|b| b.is_ascii_alphanumeric())),
+                "direction" => matches!(value.as_str(), Some("up" | "down")),
+                "enabled" | "managed_routes" | "mwan3" | "strict_network" => {
+                    matches!(value.as_str(), Some("0" | "1"))
                 }
-                "interval" | "timeout" | "offline_confirmations" => {
-                    value.as_str().is_some_and(|value| {
-                        value.len() <= 4 && value.bytes().all(|byte| byte.is_ascii_digit())
-                    })
-                }
-                _ => false,
+                _ => value
+                    .as_str()
+                    .is_some_and(|v| v.len() <= 4096 && !v.chars().any(char::is_control)),
             }
-    }) && match operation {
+    }) {
+        return false;
+    }
+    match operation {
         "account_set" => args.contains_key("account") && args.contains_key("enabled"),
-        "billing_start" => args.contains_key("uplink"),
+        "account_save" => {
+            ["username", "password", "enabled", "login_type"]
+                .iter()
+                .all(|k| args.contains_key(*k))
+                && args["username"]
+                    .as_str()
+                    .is_some_and(|v| !v.is_empty() && v.len() <= 256)
+        }
+        "account_delete" | "account_move" => {
+            args.get("account")
+                .and_then(Value::as_str)
+                .is_some_and(|v| !v.is_empty())
+                && (operation != "account_move" || args.contains_key("direction"))
+        }
+        "uplink_save" => args.contains_key("payload"),
+        "uplink_delete" | "billing_start" | "billing_records" => args
+            .get("uplink")
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.is_empty()),
         "billing_poll" | "billing_captcha" => args.contains_key("ticket"),
         "save_settings" => !args.is_empty(),
         _ => true,
@@ -755,7 +943,8 @@ pub(crate) async fn router_request(
     if operation.starts_with("billing_") {
         let mut tickets = remote.billing_tickets.lock().unwrap();
         tickets.retain(|_, created| created.elapsed() < Duration::from_secs(600));
-        if operation == "billing_start" && tickets.len() >= 64 {
+        if matches!(operation.as_str(), "billing_start" | "billing_records") && tickets.len() >= 64
+        {
             return Err("查询较多，请稍后重试".into());
         }
         if let Some(ticket) = args.get("ticket").and_then(Value::as_str) {
@@ -777,7 +966,7 @@ pub(crate) async fn router_request(
             remote.billing_tickets.lock().unwrap().remove(&ticket);
         }
     }
-    if operation == "billing_start" {
+    if matches!(operation.as_str(), "billing_start" | "billing_records") {
         let ticket = result
             .get("ticket")
             .and_then(Value::as_str)
@@ -912,6 +1101,18 @@ mod tests {
     #[test]
     fn collaboration_rejects_arbitrary_rpc_and_settings_requests() {
         assert!(valid_router_request(
+            "account_save",
+            &json!({"account":"account1","username":"25000001","password":"fixture password","enabled":"1","login_type":"lgn"})
+        ));
+        assert!(valid_router_request(
+            "uplink_save",
+            &json!({"uplink":"dorm_a","payload":r#"{"network":"wan14","network6":"wan16","source4":"10.126.19.139","accounts":"account1"}"#})
+        ));
+        assert!(valid_router_request(
+            "billing_records",
+            &json!({"uplink":"dorm_a","account":"current","kind":"usage","start_date":"2026-01-01","end_date":"2026-10-13","page":"1"})
+        ));
+        assert!(valid_router_request(
             "save_settings",
             &json!({"interval":"20","enabled":"1"})
         ));
@@ -923,6 +1124,16 @@ mod tests {
             ("exec", json!({"command":"reboot"})),
             ("settings", json!({"path":"/etc/shadow"})),
             ("save_settings", json!({"password":"replacement"})),
+            (
+                "uplink_save",
+                json!({"payload":r#"{"network":"wan14","shell":"reboot"}"#}),
+            ),
+            ("uplink_save", json!({"payload":r#"{"enabled":true}"#})),
+            ("account_delete", json!({"account":""})),
+            (
+                "account_save",
+                json!({"username":"one","password":"secret","enabled":"1","login_type":"auto","file":"/etc/shadow"}),
+            ),
             ("account_set", json!({"account":"x;reboot","enabled":"0"})),
             (
                 "billing_poll",

@@ -2,6 +2,23 @@ use std::collections::HashMap;
 
 use crate::{campus_services, recharge_state};
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+pub(crate) struct SavedRouter {
+    pub(crate) address: String,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    pub(crate) certificate: Option<String>,
+    pub(crate) allow_http: bool,
+}
+impl std::fmt::Debug for SavedRouter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SavedRouter")
+            .field("address", &self.address)
+            .field("password", &"[hidden]")
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub(crate) struct Account {
     #[serde(alias = "username")]
@@ -40,6 +57,8 @@ pub(crate) struct NetworkProfile {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub(crate) struct AppConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) saved_router: Option<SavedRouter>,
     #[serde(default)]
     pub(crate) preferred_interface: String,
     #[serde(default = "default_true")]

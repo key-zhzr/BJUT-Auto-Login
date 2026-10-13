@@ -1008,7 +1008,7 @@ function applyNetworkStatePayload(data: NetworkStatePayload) {
   else if (data.state === 'Offline') state = NetworkState.Offline;
   const loginType = ['bjut-sushe', 'Type1_221_98'].includes(data.loginType || '') ? LoginType.BjutSushe
     : ['bjut_wifi', 'Type2_251_3'].includes(data.loginType || '') ? LoginType.BjutWifi
-    : ['lgn-wired', 'Type3_172_30'].includes(data.loginType || '') ? LoginType.LgnWired
+    : ['lgn', 'lgn-wired', 'Type3_172_30'].includes(data.loginType || '') ? LoginType.LgnWired
     : LoginType.Unknown;
 
   currentNetworkState = state;
@@ -1453,7 +1453,7 @@ enum NetworkState {
 enum LoginType {
   BjutSushe = 'bjut-sushe',
   BjutWifi = 'bjut_wifi',
-  LgnWired = 'lgn 有线',
+  LgnWired = 'lgn',
   Unknown = '未识别'
 }
 
@@ -2536,6 +2536,9 @@ function syncBillingCenterMessageVisibility() {
 
 function activateBillingWorkbenchSection(section: string, resetScroll = false) {
   if (!billingWorkbenchSections.includes(section as BillingWorkbenchSection)) return;
+  if(routerWorkbench?.billingSelected && ['overview','records','devices'].includes(section)) {
+    routerWorkbench.selectBillingTab(section);return;
+  }
   const changed = activeBillingWorkbenchSection !== section;
   activeBillingWorkbenchSection = section as BillingWorkbenchSection;
   billingCenterSubtitle.textContent = billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];

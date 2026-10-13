@@ -5,10 +5,10 @@ export interface RouterUplink {
   updated_at?: number; route4?: string; route6?: string; session?: string; transport?: string;
 }
 export interface RouterPort { uplink: string; device?: string; linkUp?: number; speedMbps?: string; rxBytes?: string; txBytes?: string; }
-export interface RouterAccount { id: string; user: string; enabled: number; hasPassword: number; }
+export interface RouterAccount { id: string; user: string; enabled: number; hasPassword: number; loginType?: string; }
 export interface RouterSnapshot { version: string; uplinks: RouterUplink[]; accounts: RouterAccount[]; managementUrl: string; capabilities?: string[]; ports?: RouterPort[]; }
 export interface RouterCandidate { name: string; address: string; version: string; secure: boolean; }
-export interface RouterBillingItem { state: string; message?: string; percent?: number; account?: string; balance?: string; remainingFlow?: string; accountStatus?: string; package?: string; image?: string; updatedAt?: number; }
+export interface RouterBillingItem { state: string; message?: string; percent?: number; account?: string; balance?: string; remainingFlow?: string; totalFlow?: string; usedFlow?: string; accountStatus?: string; package?: string; image?: string; updatedAt?: number; }
 export interface RouterBillingJob { uplink: string; account: string; ticket: string; running: boolean; starting: boolean; item: RouterBillingItem; sessions?: Record<string,string>[]; sessionsAvailable?: boolean; }
 
 export const routerLabels: Record<string, string> = {
@@ -27,7 +27,7 @@ export function routerBytes(value: bigint | number): string {
   while (n >= 1024 && unit < units.length - 1) { n /= 1024; unit++; }
   return `${n.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
 }
-export function routerBillingSummary(jobs: RouterBillingJob[]): { accounts: number; balance: number | null } {
+export function routerBillingSummary(jobs: RouterBillingJob[]): { accounts: number; balance: number | null; totalFlow: number | null; remainingFlow: number | null } {
   const unique = new Map<string, RouterBillingItem>();
   for (const {item} of jobs) {
     if (item.account && ['loading','ready'].includes(item.state)) {
@@ -36,5 +36,9 @@ export function routerBillingSummary(jobs: RouterBillingJob[]): { accounts: numb
     }
   }
   const balances = [...unique.values()].map(item => item.balance?.trim() ? Number(item.balance) : NaN);
-  return {accounts: unique.size, balance: balances.length && balances.every(Number.isFinite) ? balances.reduce((a,b)=>a+b,0) : null};
+  const sum = (key:'totalFlow'|'remainingFlow') => {
+    const values=[...unique.values()].map(item=>item[key]?.trim()?Number(item[key]):NaN);
+    return values.length && values.every(value=>Number.isFinite(value) && value>=0)?values.reduce((a,b)=>a+b,0):null;
+  };
+  return {accounts: unique.size, balance: balances.length && balances.every(Number.isFinite) ? balances.reduce((a,b)=>a+b,0) : null,totalFlow:sum('totalFlow'),remainingFlow:sum('remainingFlow')};
 }

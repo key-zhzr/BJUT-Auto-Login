@@ -115,7 +115,7 @@
             <div id="router-connected" hidden>
               <div class="router-panel-header"><strong id="router-version"></strong><div class="router-actions">
                 <button id="btn-router-refresh" class="btn btn-secondary btn-sm" type="button">刷新</button>
-                <button id="btn-router-disconnect" class="btn btn-secondary btn-sm" type="button">断开</button>
+                <button id="btn-router-disconnect" class="btn btn-secondary btn-sm" type="button">停止协作</button>
               </div></div>
               <div id="router-uplink-status" class="router-port-grid"></div>
               <details class="router-more-actions"><summary>指定上游和账号</summary>
@@ -123,7 +123,7 @@
                   <div class="custom-select" id="router-uplink-select" aria-label="路由上游"><div class="custom-select-trigger"><span>选择上游</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div></div>
                   <div class="custom-select" id="router-account-select" aria-label="路由登录账号"><div class="custom-select-trigger"><span>自动选择账号</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div></div>
                 </div>
-                <div class="router-actions"><button id="btn-router-login" class="btn btn-primary btn-sm" type="button">登录所选上游</button><button id="btn-router-billing" class="btn btn-secondary btn-sm" type="button">路由计费页面</button></div>
+                <div class="router-actions"><button id="btn-router-login" class="btn btn-primary btn-sm" type="button">登录所选上游</button><button id="btn-router-billing" class="btn btn-secondary btn-sm" type="button">计费中心</button></div>
               </details>
             </div>
           </section>
@@ -283,8 +283,17 @@
               <button id="btn-router-billing-refresh" class="btn btn-secondary btn-sm" type="button">刷新</button>
             </div>
             <p id="router-billing-message" role="status"></p>
-            <div id="router-billing-summary" class="router-billing-summary"></div>
-            <div id="router-billing-results" class="router-billing-results"></div>
+            <nav class="router-billing-tabs" aria-label="路由计费功能" role="tablist">
+              <button type="button" class="btn btn-secondary active" role="tab" aria-selected="true" data-router-billing-tab="overview">概览</button>
+              <button type="button" class="btn btn-secondary" role="tab" aria-selected="false" data-router-billing-tab="records">用量与账单</button>
+              <button type="button" class="btn btn-secondary" role="tab" aria-selected="false" data-router-billing-tab="devices">在线设备</button>
+            </nav>
+            <div id="router-billing-overview" class="router-enter">
+              <div id="router-billing-summary" class="router-billing-summary"></div>
+              <div id="router-billing-results" class="router-billing-results"></div>
+            </div>
+            <section id="router-billing-records" class="router-enter" hidden></section>
+            <section id="router-billing-devices" class="router-billing-results router-enter" hidden></section>
           </section>
 
           <div class="billing-workbench">
@@ -753,7 +762,7 @@
           </div>
 
           <section id="router-accounts-panel" class="glass-card router-page-panel" hidden>
-            <div class="router-panel-header"><h3>路由账号</h3><span id="router-accounts-count"></span></div>
+            <div class="router-panel-header"><h3>路由账号</h3><span id="router-accounts-count"></span><button id="btn-router-add-account" type="button" class="btn btn-primary btn-sm">添加账号</button></div><p id="router-accounts-message" role="status"></p>
             <div id="router-accounts-list"></div>
             <details id="router-sync-details"><summary>同步本机账号至路由器</summary>
               <div id="router-sync-accounts" class="router-sync-accounts"></div>
@@ -1344,14 +1353,11 @@
               <h3>路由协作</h3>
               <p id="router-settings-connection">自动查找当前局域网中的 BJUT 路由器。</p>
               <div class="router-actions"><button id="btn-router-settings-discover" class="btn btn-secondary btn-sm" type="button">重新查找</button><button id="btn-router-manual-connect" class="btn btn-secondary btn-sm" type="button">手动连接</button></div>
-              <p id="router-message" role="status" aria-live="polite"></p>
+              <p id="router-message" role="status" aria-live="polite"></p><button id="btn-router-forget-password" class="btn btn-secondary btn-sm" type="button" hidden>忘记已保存的路由密码</button>
               <form id="router-settings-form" class="router-connect-form" hidden>
                 <h3>路由器设置</h3>
-                <label class="router-setting-switch"><input id="router-service-enabled" type="checkbox">自动登录</label>
-                <div class="router-controls-row"><label>检测间隔（秒）<input id="router-service-interval" type="number" min="5" max="3600" value="20" required></label><label>请求超时（秒）<input id="router-service-timeout" type="number" min="1" max="30" value="3" required></label></div>
-                <label>离线确认次数<input id="router-service-offline" type="number" min="1" max="10" value="2" required></label>
-                <label class="router-setting-switch"><input id="router-service-routes" type="checkbox">固定上游出口</label>
-                <label class="router-setting-switch"><input id="router-service-mwan" type="checkbox">兼容 mwan3</label>
+                <div id="router-service-common" class="router-editor-grid"></div>
+                <details id="router-service-advanced"><summary>更多设置与上游</summary><div id="router-service-more" class="router-editor-grid"></div><h4>上游接口</h4><div id="router-configured-uplinks"></div></details>
                 <div class="router-actions"><button id="btn-router-settings-save" class="btn btn-primary btn-sm" type="submit">保存</button><button id="btn-router-settings-advanced" class="btn btn-secondary btn-sm" type="button">接口与更多设置</button></div>
                 <p id="router-settings-message" role="status"></p>
               </form>
@@ -1392,6 +1398,7 @@
           <form id="router-connect-form" class="router-connect-form">
             <label>路由器地址<input id="router-address" type="url" autocomplete="url" placeholder="https://192.168.1.1" required></label>
             <div class="router-controls-row"><label>管理账号<input id="router-username" autocomplete="username" required></label><label>管理密码<input id="router-password" type="password" autocomplete="off" required></label></div>
+            <label class="router-setting-switch"><input id="router-remember-password" type="checkbox">记住路由密码</label><p class="router-http-note">下次启动或连接中断时自动重连。</p>
             <label class="router-setting-switch"><input id="router-allow-http" type="checkbox">允许局域网 HTTP</label>
             <p class="router-http-note">HTTP 仅用于可信局域网，密码将明文传输。</p>
             <details class="router-certificate-details"><summary>路由器证书（可选）</summary><p>首次连接可确认指纹，也可粘贴 PEM 证书。</p><textarea id="router-certificate" rows="4" spellcheck="false" aria-label="路由器 PEM 证书"></textarea></details>
