@@ -58,7 +58,7 @@ async function fixtureCaptcha(title:string) {
 }
 const routerSnapshot = {
   version: '0.1.6', managementUrl:'https://192.0.2.1/cgi-bin/luci/admin/network/bjut-autologin/billing',
-  capabilities:['ports','billing','logs','settings','account_set','account_manage','uplink_manage','billing_records'],
+  capabilities:['ports','billing','logs','settings','account_set','account_manage','uplink_manage','billing_records','billing_actions','uplink_actions','log_settings'],
   ports:[{uplink:'dorm_a',device:'lan3',linkUp:1,speedMbps:'1000',rxBytes:'10000000000',txBytes:'2000000000'},
     {uplink:'dorm_b',device:'lan4',linkUp:1,speedMbps:'2500',rxBytes:'30000000000',txBytes:'5000000000'}],
   uplinks:[
@@ -71,6 +71,7 @@ let routerRefreshDelay = 0;
 let routerQuerySequence = 0;
 const routerTickets = new Map<string,string>();
 const recordTickets = new Set<string>();
+const moduleTickets=new Map<string,string>();
 let savedRouterInfo:any=new URL(location.href).searchParams.has('saved')?{address:'https://192.0.2.1',username:'root',certificate:'synthetic-pem',allowHttp:false}:null,routerFailures=0;
 mockIPC(async (cmd, payload: any = {}) => {
   calls.push({cmd,payload,at:now()});
@@ -87,18 +88,23 @@ mockIPC(async (cmd, payload: any = {}) => {
       const ticket=String(++routerQuerySequence).padStart(32,'0');routerTickets.set(ticket,payload.args.uplink);return {state:'loading',ticket};
     }
     if (payload.operation === 'billing_records') {const ticket=String(++routerQuerySequence).padStart(32,'0');recordTickets.add(ticket);return {ticket};}
+    if (payload.operation === 'billing_details'){const ticket=String(++routerQuerySequence).padStart(32,'0');moduleTickets.set(ticket,payload.args.module);return {ticket};}
+    if (payload.operation === 'billing_action'){const ticket=String(++routerQuerySequence).padStart(32,'0');moduleTickets.set(ticket,'action');return {ticket};}
+    if (payload.operation === 'billing_poll' && moduleTickets.has(payload.args.ticket)){
+      const module=moduleTickets.get(payload.args.ticket);return {result:{state:'ready',account:'25000001',module:module==='action'?undefined:module,message:module==='action'?'操作已完成':'计费数据已更新',canStop:1,canReopen:0,canCancel:1,installmentFlag:'100',useMoney:'25',packages:[{id:'2',name:'测试校园套餐'}],questions:[{id:'1',name:'测试问题一'},{id:'2',name:'测试问题二'},{id:'3',name:'测试问题三'}],FLDMINLENGTH:8,mauth:'1',macs:{columns:['online','mac','device','lastLoginAt','lastIp'],rows:[['在线','aabbccddeeff','测试设备','2026-10-18','192.0.2.20']]},history:{columns:['loginTime','logoutTime','ip','flow'],rows:[['2026-10-18 12:00','2026-10-18 13:00','192.0.2.20','1024 MB']]}},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'aabbccddeeff',useTime:'3600'}],sessionsAvailable:true};
+    }
     if (payload.operation === 'billing_poll') return recordTickets.has(payload.args.ticket)?{result:{state:'ready',message:'用量与账单已更新',account:'25000001',kind:'usage',total:1,page:1,columns:['loginTime','flow'],rows:[['2026-10-13 12:00','1024']]}}:{result:{state:'ready',message:'计费数据已更新',account:'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
     if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'},uplinks:[{id:'dorm_a',enabled:'1',network:'wan14',network6:'wan16',login_type:'bjut-sushe',accounts:'account1'},{id:'dorm_b',network:'wan24',enabled:'1'}]};
     if (payload.operation === 'logs') return {text:'[测试路由器] 上游 lan3 认证已确认'};
     if (payload.operation === 'account_set') {const account=routerSnapshot.accounts.find(item=>item.id===payload.args.account)!;account.enabled=Number(payload.args.enabled);return {state:'ready'};}
     if (payload.operation === 'save_settings') return {state:'ready'};
     if (payload.operation === 'account_save') {const item=routerSnapshot.accounts.find(item=>item.id===payload.args.account);if(item){item.user=payload.args.username;item.loginType=payload.args.login_type;}return {state:'ready'};}
-    if (['account_delete','account_move','uplink_save','uplink_delete'].includes(payload.operation)) return {state:'ready'};
+    if (['account_delete','account_move','uplink_save','uplink_delete','logout','switch_account'].includes(payload.operation)) return {state:'ready'};
   }
 
   if (cmd === 'connect_router') {
     if (!payload.certificate) throw 'ROUTER_CERT_UNTRUSTED:模拟路由器证书尚未受信任';
-    savedRouterInfo=payload.rememberPassword?{address:payload.address,username:payload.username,certificate:payload.certificate,allowHttp:payload.allowHttp}:null;
+    savedRouterInfo=payload.rememberPassword?{address:payload.address,username:payload.username,certificate:payload.certificate,allowHttp:payload.allowHttp,autoReconnectReady:true,networkName:"测试路由网络"}:null;
     return routerSnapshot;
   }
   if (cmd === 'get_router_status') {
@@ -353,6 +359,18 @@ button.addEventListener('click',async()=>{
     assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_records').length===1,'重复查询了同一认证账号');
     Array.from(document.querySelectorAll<HTMLButtonElement>('#router-billing-records button')).find(button=>button.textContent==='导出本页')!.click();
     await wait(()=>calls.some(call=>call.cmd==='export_billing_csv'&&call.payload.kind==='usage'&&call.payload.csv.includes('流量（MB）')));
+    click('[data-router-billing-tab="services"]');
+    await wait(()=>document.getElementById('router-billing-services')!.textContent!.includes('消费限额'));
+    const stop=Array.from(document.querySelectorAll<HTMLButtonElement>('#router-billing-services button')).find(b=>b.textContent==='立即报停')!;
+    assert(!!stop,'路由计费未显示可用业务');stop.click();await wait(()=>!document.getElementById('confirm-modal')!.classList.contains('hidden'));
+    assert(document.getElementById('confirm-modal-text')!.textContent!.includes('25000001'),'计费操作未提示账号');click('#btn-confirm-ok');
+    await wait(()=>calls.some(call=>call.cmd==='router_request' && call.payload.operation==='billing_action' && call.payload.args.operation==='stopNow'));
+    click('[data-router-billing-tab="devices"]');await wait(()=>document.getElementById('router-billing-devices')!.textContent!.includes('已绑定设备'));
+    assert(document.getElementById('router-billing-devices')!.textContent!.includes('无感认证'),'缺少无感认证设置');
+    Array.from(document.querySelectorAll<HTMLButtonElement>('#router-billing-devices button')).find(b=>b.textContent==='账号安全')!.click();
+    await wait(()=>document.getElementById('router-billing-devices')!.textContent!.includes('修改计费密码'));
+    assert(document.getElementById('router-billing-devices')!.textContent!.includes('密码保护'),'缺少密码保护');
+    note('通过：路由计费业务办理、设备和账号安全在 App 内完成');
     click('[data-target="accounts"]');
     assert(!document.getElementById('router-accounts-panel')!.hidden && document.getElementById('router-accounts-list')!.textContent!.includes('25000002'),'账号管理未融合路由账号');
     Array.from(document.querySelectorAll<HTMLButtonElement>('#router-accounts-list button')).find(button=>button.textContent==='编辑')!.click();
@@ -379,6 +397,7 @@ button.addEventListener('click',async()=>{
     click('#btn-router-refresh'); click('#btn-router-disconnect');
     await new Promise(resolve => setTimeout(resolve,260));
     assert(document.getElementById('router-connected')!.hidden,'断开后旧检测结果重新显示已连接');
+    await wait(()=>document.getElementById('router-accounts-panel')!.hidden);
     assert(document.getElementById('router-accounts-panel')!.hidden && !document.querySelector<HTMLElement>('.billing-workbench')!.hidden,'断开后路由数据或查询来源未清理');
     routerRefreshDelay=0;
     note('通过：断开路由连接后忽略尚未返回的检测结果');
@@ -408,6 +427,8 @@ button.addEventListener('click',async()=>{
     await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
     assert(!document.body.classList.contains('keyboard-open'),'键盘关闭后未恢复布局');
     if (!mobileLayout) document.body.classList.remove('is-android');
-    note('通过：Android 键盘事件隐藏底栏并恢复布局'); note('全部通过');
+    note('通过：Android 键盘事件隐藏底栏并恢复布局');
+    const {runMotionRegression}=await import('./motion-regression');await runMotionRegression(note);
+    note('全部通过');
   }catch(error){note('失败：'+String(error));}finally{button.disabled=false;}
 });

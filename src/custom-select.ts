@@ -13,10 +13,11 @@ export class CustomSelect {
   private selectedOptions: HTMLElement[] = [];
   private highlightedOption: HTMLElement | null = null;
   private scrollFrame: number | null = null;
+  private closeTimer: number | null = null;
   onChangeCallbacks: ((value: string) => void)[] = [];
 
   private options() { return this.allOptions.filter(option => option.getAttribute('aria-disabled') !== 'true'); }
-  private close() {
+  close() {
     if (CustomSelect.openInstance === this) CustomSelect.openInstance = null;
     if (this.scrollFrame !== null) { cancelAnimationFrame(this.scrollFrame); this.scrollFrame = null; }
     if (!this.element.classList.contains('open')) return;
@@ -24,6 +25,15 @@ export class CustomSelect {
     this.trigger.removeAttribute('aria-activedescendant');
     this.highlightedOption?.classList.remove('keyboard-active');
     this.highlightedOption = null;
+    this.optionsContainer.inert = true;
+    if (this.closeTimer !== null) window.clearTimeout(this.closeTimer);
+    const style = getComputedStyle(this.optionsContainer);
+    const milliseconds = (value: string) => Math.max(0, ...value.split(',').map(part => Number.parseFloat(part) * (part.trim().endsWith('ms') ? 1 : 1000)));
+    const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : milliseconds(style.transitionDuration) + milliseconds(style.transitionDelay);
+    this.closeTimer = window.setTimeout(() => {
+      this.closeTimer = null;
+      if (!this.element.classList.contains('open')) this.optionsContainer.hidden = true;
+    }, duration);
   }
   private highlight(index: number, keyboard = true) {
     const options = this.options(); if (!options.length) return;
@@ -55,6 +65,10 @@ export class CustomSelect {
     if (this.disabled) return;
     CustomSelect.openInstance?.close();
     CustomSelect.openInstance = this;
+    if (this.closeTimer !== null) { window.clearTimeout(this.closeTimer); this.closeTimer = null; }
+    this.element.classList.add('menu-positioning');
+    this.optionsContainer.hidden = false;
+    this.optionsContainer.inert = false;
     const trigger = this.trigger.getBoundingClientRect();
     const scroller = this.element.closest<HTMLElement>('main, .modal-content');
     const bounds = scroller?.getBoundingClientRect();
@@ -71,9 +85,15 @@ export class CustomSelect {
     }
     const below = Math.max(0, bottom - trigger.bottom - 12);
     const above = Math.max(0, trigger.top - top - 12);
-    const opensUp = below < 160 && above > below;
+    // Resolve placement while the flyout is invisible. Keep that placement on
+    // exit too; changing top/bottom halfway through a transform causes a jump.
+    this.element.classList.remove('open');
+    const desired = Math.min(220, this.optionsContainer.scrollHeight || 220);
+    const opensUp = below < desired && above > below;
     this.element.classList.toggle('opens-up', opensUp);
     this.optionsContainer.style.maxHeight = `${Math.min(220, opensUp ? above : below)}px`;
+    this.optionsContainer.getBoundingClientRect();
+    this.element.classList.remove('menu-positioning');
     this.element.classList.add('open'); this.trigger.setAttribute('aria-expanded', 'true');
     this.highlight(Math.max(0, this.options().findIndex(option => option.dataset.value === this._value)), keyboard);
   }
@@ -97,6 +117,8 @@ export class CustomSelect {
     this.trigger = this.element.querySelector('.custom-select-trigger')!;
     this.triggerSpan = this.trigger.querySelector('span')!;
     this.optionsContainer = this.element.querySelector('.custom-select-options')!;
+    this.optionsContainer.hidden = true;
+    this.optionsContainer.inert = true;
     this.trigger.tabIndex = 0; this.trigger.setAttribute('role', 'combobox');
     this.trigger.setAttribute('aria-haspopup', 'listbox'); this.trigger.setAttribute('aria-expanded', 'false');
     const accessibleLabel = this.element.getAttribute('aria-label');

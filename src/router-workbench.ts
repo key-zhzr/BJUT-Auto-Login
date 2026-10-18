@@ -1,7 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { RouterAdmin } from './router-admin';
 import { RouterRecords } from './router-records';
+import { RouterBillingTools, type BillingTarget } from './router-billing-tools';
 import { CustomSelect } from './custom-select';
+import { animateResize, setVisible } from './layout-motion';
 import { routerPortIcon } from './router-port-icon';
 import type { DiagnosticStep } from './models';
 import { routerLabels, routerBytes, routerCounter, routerBillingSummary } from './router-model';
@@ -28,11 +30,13 @@ export class RouterWorkbench {
   private lastLogsPoll = 0;
   private admin: RouterAdmin;
   private records: RouterRecords;
+  private billingTools = new Map<string,RouterBillingTools>();
+  private loadedTools = new Set<string>();
   private billingTab = 'overview';
   private summaryStamp = '';
-  private devicesStamp = '';
   private optionsStamp = '';
   private ports = new Map<string, HTMLElement>();
+  private portAccounts = new Map<string, CustomSelect>();
   private samples = new Map<string, {at: number; tx: bigint; rx: bigint}>();
   private billingUplink = new CustomSelect('router-billing-uplink');
   private billingAccount = new CustomSelect('router-billing-account');
@@ -60,12 +64,19 @@ export class RouterWorkbench {
       const seen=new Set<string>();
       return this.billingJobs.filter(job=>{const key=job.item.account || job.uplink;if(seen.has(key))return false;seen.add(key);return true;}).map(job=>({uplink:job.uplink,account:job.account,title:this.snapshot?.uplinks.find(item=>item.id===job.uplink)?.device || job.uplink}));
     }});
+    let toolsSequence=0;
+    for(const module of ['services','devices','history'])this.billingTools.set(module,new RouterBillingTools(byId(`router-billing-${module}`),{
+      request:<T>(name:string,args:Record<string,unknown>)=>this.request<T>(name,args),
+      confirm:message=>options.confirm(message,'确认计费操作','继续'),changed:()=>{void options.refresh();},
+      select:(parent,label,choices)=>{const field=node('label',label),wrapper=node('div','','custom-select');wrapper.id=`router-billing-tools-select-${++toolsSequence}`;wrapper.innerHTML='<div class="custom-select-trigger"><span></span><span aria-hidden="true">⌄</span></div><div class="custom-select-options"></div>';field.append(wrapper);parent.append(field);const select=new CustomSelect(wrapper.id);select.setOptions(choices);return {value:()=>select.value,close:()=>select.close()};}
+    }));
     for(const tab of document.querySelectorAll<HTMLButtonElement>('[data-router-billing-tab]')) tab.addEventListener('click',()=>{
       this.selectBillingTab(tab.dataset.routerBillingTab!);
     });
     window.setInterval(() => {
       if (document.hidden || !this.snapshot) return;
       const page = document.querySelector('.page.active')?.id;
+      if(page==='billing-center')for(const tool of this.billingTools.values())void tool.poll();
       if (page === 'billing-center' && Date.now() - this.lastBillingPoll >= 2000) void this.pollBilling();
       if (page === 'logs' && Date.now() - this.lastLogsPoll >= 5000) void this.refreshLogs();
     },1000);
@@ -82,7 +93,7 @@ export class RouterWorkbench {
       this.candidates = Array.isArray(result) ? result : [];
       if (this.snapshot) return;
       const found = this.candidates[0];
-      byId('router-dashboard').hidden = !found;
+      setVisible(byId('router-dashboard'), !!found);
       byId('router-discovery-message').textContent = found ? `${found.name} · ${new URL(found.address).host}` : '';
       byId('router-settings-connection').textContent = found ? `发现 ${new URL(found.address).host}，可在控制台连接。` : '未发现路由器，可手动填写地址连接。';
     } catch { if (!this.snapshot) byId('router-settings-connection').textContent = '暂未发现路由器，可使用手动连接。'; }
@@ -93,7 +104,7 @@ export class RouterWorkbench {
     const firstConnection = !this.snapshot;
     this.snapshot = data; this.admin.update(data);
     this.records.setSupported(this.supports('billing_records'));
-    for (const id of ['router-dashboard','router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','dashboard-local-label','router-local-accounts-title']) byId(id).hidden = false;
+    for (const id of ['router-dashboard','router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), true);
     byId('btn-router-auto-connect').hidden = true;
     byId('btn-router-discover').hidden = true;
     byId('router-discovery-message').textContent = new URL(data.managementUrl).host;
@@ -109,20 +120,21 @@ export class RouterWorkbench {
       this.renderAccounts();
     }
     this.renderPorts(); this.renderDiagnostics();
-    byId('router-settings-form').hidden = !this.supports('settings');
+    setVisible(byId('router-settings-form'), this.supports('settings'));
     if (firstConnection) this.selectBillingSource(true, false);
     this.onPage(document.querySelector('.page.active')?.id || 'dashboard');
   }
 
   disconnect(): void {
     this.generation++; this.billingGeneration++; this.snapshot = null; this.billingJobs = [];
-    this.optionsStamp = ''; this.admin.disconnect(); this.records.disconnect(); this.summaryStamp=''; this.devicesStamp=''; this.logSnapshot = '';
+    this.optionsStamp = ''; this.admin.disconnect(); this.records.disconnect(); this.summaryStamp='';this.loadedTools.clear();this.billingTools.forEach(tool=>tool.clear()); this.logSnapshot = '';
+    this.portAccounts.forEach(select=>select.close());this.portAccounts.clear();
     this.ports.clear(); this.samples.clear(); byId('router-uplink-status').replaceChildren();
-    for (const id of ['router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','router-settings-form','dashboard-local-label','router-local-accounts-title']) byId(id).hidden = true;
+    for (const id of ['router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','router-settings-form','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), false);
     this.selectBillingSource(false, false);
     byId('btn-router-auto-connect').hidden = false; byId('btn-router-discover').hidden = false;
     byId('router-settings-connection').textContent = '已断开，可重新查找或手动连接。';
-    byId('router-dashboard').hidden = !this.candidates.length;
+    setVisible(byId('router-dashboard'), !!this.candidates.length);
     byId('router-discovery-message').textContent = this.candidates[0]?.name || '';
   }
 
@@ -131,9 +143,12 @@ export class RouterWorkbench {
     return invoke<T>('router_request',{operation,args});
   }
   private renderPorts(): void {
+    animateResize(byId('router-uplink-status'), () => this.updatePorts());
+  }
+  private updatePorts(): void {
     if (!this.snapshot) return;
     const live = new Set(this.snapshot.uplinks.map(item=>item.id));
-    for (const [id,card] of this.ports) if (!live.has(id)) { card.remove(); this.ports.delete(id); this.samples.delete(id); }
+    for (const [id,card] of this.ports) if (!live.has(id)) { this.portAccounts.get(id)?.close();this.portAccounts.delete(id);card.remove(); this.ports.delete(id); this.samples.delete(id); }
     for (const item of this.snapshot.uplinks) {
       let card = this.ports.get(item.id);
       if (!card) {
@@ -150,10 +165,21 @@ export class RouterWorkbench {
         for (const field of ['tx','rx']) { const row=node('span'); row.dataset.field=field; traffic.append(row); }
         const detail=node('details','','router-port-details'); detail.append(node('summary','网络详情'));
         const description=node('p'); description.dataset.field='description'; detail.append(description);
-        const login=button('登录',()=>{ void this.options.login(item.id); },'btn btn-secondary btn-sm router-port-login');
-        card.append(title,icon,speed,paths,state,account,progress,traffic,login,detail);
+        const choice=node('div','','custom-select');choice.id=`router-port-account-${item.id}`;choice.setAttribute('aria-label',`${item.device || item.id} 登录账号`);
+        choice.innerHTML='<div class="custom-select-trigger"><span></span><span aria-hidden="true">⌄</span></div><div class="custom-select-options"></div>';
+        const tools=node('div','','router-port-actions');
+        const login=button('登录',()=>{ void this.options.login(item.id,this.portAccounts.get(item.id)?.value); },'btn btn-secondary btn-sm router-port-login');
+        const change=button('切换账号',()=>{void this.portAction(item.id,'switch_account');});
+        const logout=button('注销',()=>{void this.portAction(item.id,'logout');});
+        change.dataset.requires=logout.dataset.requires='uplink_actions';tools.append(login,change,logout);
+        card.append(title,icon,speed,paths,state,account,progress,traffic,choice,tools,detail);
         this.ports.set(item.id,card); byId('router-uplink-status').append(card);
+        this.portAccounts.set(item.id,new CustomSelect(choice.id));
       }
+      const selector=this.portAccounts.get(item.id)!;
+      const stamp=JSON.stringify(this.snapshot.accounts);
+      if(card.dataset.accounts!==stamp){const previous=selector.value;selector.setOptions([{value:'',text:'自动选择账号'},...this.snapshot.accounts.filter(a=>a.hasPassword).map(a=>({value:a.id,text:a.user+(a.enabled?'':'（手动）')}))]);selector.value=this.snapshot.accounts.some(a=>a.id===previous)?previous:'';card.dataset.accounts=stamp;}
+      card.querySelectorAll<HTMLElement>('[data-requires]').forEach(element=>element.hidden=!this.supports(element.dataset.requires!));
       const field=(key:string)=>card!.querySelector<HTMLElement>(`[data-field="${key}"]`)!;
       const port=this.snapshot.ports?.find(port=>port.uplink===item.id);
       field('title').textContent = item.device || port?.device || item.network || item.id;
@@ -176,6 +202,15 @@ export class RouterWorkbench {
     }
   }
 
+  private async portAction(uplink:string,operation:'logout'|'switch_account') {
+    const account=this.portAccounts.get(uplink)?.value || '';
+    if(operation==='switch_account' && !account){this.ports.get(uplink)!.querySelector('[data-field="progress"]')!.textContent='请先选择要切换的账号';return;}
+    const description=operation==='logout'?'注销该上游并暂停自动登录？再次点击登录可恢复。':`将该上游切换到账号 ${this.snapshot?.accounts.find(a=>a.id===account)?.user || ''}？`;
+    if(!await this.options.confirm(description,operation==='logout'?'注销上游':'切换账号','继续'))return;
+    try{await this.request(operation,{uplink,account});this.options.log(operation==='logout'?'已提交上游注销':'已提交上游账号切换');await this.options.refresh();}
+    catch(error){this.ports.get(uplink)?.querySelector('[data-field="progress"]')?.replaceChildren(document.createTextNode(String(error)));}
+  }
+
   private renderAccounts(): void { this.admin.renderAccounts(); }
 
   onPage(page: string): void {
@@ -191,12 +226,12 @@ export class RouterWorkbench {
     local.hidden=this.billingSelected;
     byId('billing-center').querySelector<HTMLElement>('.billing-header-tools')!.hidden=this.billingSelected;
     byId('router-billing-panel').hidden=!this.billingSelected;
-    byId('billing-center-subtitle').textContent=this.billingSelected?'各上游账号、用量与在线设备':'账户状态、在线会话与近期上网记录';
+    byId('billing-center-subtitle').textContent=this.billingSelected?'各上游账号、用量与业务办理':'账户状态、在线会话与近期上网记录';
     byId('btn-billing-source-router').setAttribute('aria-pressed',String(this.billingSelected));
     byId('btn-billing-source-local').setAttribute('aria-pressed',String(!this.billingSelected));
     for(const button of document.querySelectorAll<HTMLElement>('.nav-billing-tree [data-billing-section-target]')){
-      const section=button.dataset.billingSectionTarget || '';button.hidden=this.billingSelected && ['services','recharge'].includes(section);
-      if(section==='devices')button.querySelector('span')!.textContent=this.billingSelected?'在线设备':'设备与安全';
+      const section=button.dataset.billingSectionTarget || '';button.hidden=this.billingSelected && section==='recharge';
+      if(section==='devices')button.querySelector('span')!.textContent='设备与安全';
     }
     if(this.billingSelected)this.selectBillingTab(this.billingTab);
     if (load && this.billingSelected) void this.refreshBilling();
@@ -204,16 +239,18 @@ export class RouterWorkbench {
   }
 
   selectBillingTab(section:string):void {
-    if(!['overview','records','devices'].includes(section))return;
-    this.billingTab=section;byId('billing-center-subtitle').textContent='各上游账号、用量与在线设备';
+    if(!['overview','records','services','devices'].includes(section))return;
+    this.billingTab=section;byId('billing-center-subtitle').textContent='各上游账号、用量与业务办理';
     for(const button of document.querySelectorAll<HTMLButtonElement>('[data-router-billing-tab]')){const active=button.dataset.routerBillingTab===section;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));}
     for(const button of document.querySelectorAll<HTMLButtonElement>('.nav-billing-tree [data-billing-section-target]')){const active=button.dataset.billingSectionTarget===section;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));}
-    for(const panel of ['overview','records','devices'])byId(`router-billing-${panel}`).hidden=section!==panel;
+    animateResize(byId('router-billing-panel'),()=>{for(const panel of ['overview','records','services','devices'])byId(`router-billing-${panel}`).hidden=section!==panel;});
+    this.loadBillingTools();
   }
 
   async refreshBilling(): Promise<void> {
     if (!this.snapshot || !this.billingSelected || this.billingJobs.some(job=>job.running || job.starting)) return;
     if (!this.supports('billing')) { byId('router-billing-message').textContent='请更新路由端后使用计费汇总。'; return; }
+    this.loadedTools.clear();this.billingTools.forEach(tool=>tool.clear());
     const generation=++this.billingGeneration,connection=this.generation;
     const uplinks=this.billingUplink.value==='all'?this.snapshot.uplinks:this.snapshot.uplinks.filter(item=>item.id===this.billingUplink.value);
     this.billingJobs=uplinks.map(item=>({uplink:item.id,account:this.billingAccount.value || 'current',ticket:'',running:false,starting:true,item:{state:'loading',message:'正在准备查询',percent:2}}));
@@ -265,30 +302,35 @@ export class RouterWorkbench {
       card.dataset.captcha=job.item.state==='captcha'?job.item.image || '':'';
       const item=this.snapshot?.uplinks.find(item=>item.id===job.uplink);
       const title=node('h3',[item?.device,item?.network].filter(Boolean).join(' · ') || job.uplink);
-      card.replaceChildren(title,node('p',job.item.message || '等待查询','router-billing-status'));
-      if (job.item.state==='loading') {const progress=document.createElement('progress');progress.max=100;progress.value=job.item.percent || 2;card.append(progress);}
+      const resultCard=card;
+      animateResize(resultCard,()=>{
+      resultCard.replaceChildren(title,node('p',job.item.message || '等待查询','router-billing-status'));
+      if (job.item.state==='loading') {const progress=document.createElement('progress');progress.max=100;progress.value=job.item.percent || 2;resultCard.append(progress);}
       if (job.item.account) {
         const fields=[['账号',job.item.account],['余额',job.item.balance?.trim()?`${Number(job.item.balance).toFixed(2)} 元`:'--'],['总流量',job.item.totalFlow?.trim()?`${(Number(job.item.totalFlow)/1024).toFixed(2)} GB`:'--'],['剩余流量',job.item.remainingFlow?.trim()?`${(Number(job.item.remainingFlow)/1024).toFixed(2)} GB`:'--'],['状态',job.item.accountStatus || '--'],['套餐',job.item.package || '--']];
-        for (const [label,value] of fields) {const row=node('p','','router-billing-row');row.append(node('span',label),node('strong',value));card.append(row);}
+        for (const [label,value] of fields) {const row=node('p','','router-billing-row');row.append(node('span',label),node('strong',value));resultCard.append(row);}
       }
-      if (job.item.state==='captcha') this.showCaptcha(card,job);
+      if (job.item.state==='captcha') this.showCaptcha(resultCard,job);
       if (job.item.state==='ready') {
         const details=node('details','','router-port-details');details.append(node('summary','在线设备'));
         if (!job.sessions?.length) details.append(node('p',job.sessionsAvailable?'暂无在线设备':'在线设备暂时无法查询'));
         for (const session of job.sessions || []) details.append(node('p',[session.ip,session.ipv6,session.mac].filter(Boolean).join(' · ')));
-        card.append(details);
+        resultCard.append(details);
       }
+      });
     }
     const live=new Set(this.billingJobs.map(job=>job.uplink));
     for (const child of Array.from(container.children)) if (!live.has((child as HTMLElement).dataset.uplink || '')) child.remove();
-    const stamp=JSON.stringify(this.billingJobs.map(job=>[job.item.account,job.item.state,job.sessions,job.sessionsAvailable]));
-    if(stamp!==this.devicesStamp){
-      this.devicesStamp=stamp;const seen=new Set<string>(),cards:HTMLElement[]=[];
-      for(const job of this.billingJobs){if(job.item.state!=='ready' || !job.item.account || seen.has(job.item.account))continue;seen.add(job.item.account);const card=node('article','','glass-card router-billing-card router-enter');card.append(node('h3',`账号 ${job.item.account}`));
-        if(!job.sessions?.length)card.append(node('p',job.sessionsAvailable?'暂无在线设备':'在线设备暂时无法查询'));
-        for(const session of job.sessions || []){const detail=node('div','','router-device-item');for(const [label,key] of [['IPv4','ip'],['IPv6','ipv6'],['MAC','mac'],['在线时长','useTime']]){if(session[key])detail.append(node('p',`${label}：${key==='useTime'?`${Math.round(Number(session[key])/60)} 分钟`:session[key]}`));}card.append(detail);}cards.push(card);
-      }byId('router-billing-devices').replaceChildren(...cards);if(!cards.length)byId('router-billing-devices').append(node('p','请先查询计费账号。'));
-    }
+    this.loadBillingTools();
+  }
+
+  private loadBillingTools(){
+    if(!this.billingSelected || !this.supports('billing_actions') || this.billingJobs.some(job=>job.running || job.starting))return;
+    const module=this.billingTab==='overview'?'history':this.billingTab;
+    if(!this.billingTools.has(module) || this.loadedTools.has(module))return;
+    const seen=new Set<string>();const targets:BillingTarget[]=this.billingJobs.filter(job=>job.item.state==='ready' && job.item.account && !seen.has(job.item.account) && !!seen.add(job.item.account)).map(job=>({uplink:job.uplink,account:job.account,title:job.item.account!,ticket:job.ticket}));
+    if(!targets.length)return;
+    this.loadedTools.add(module);void this.billingTools.get(module)!.load(module,targets);
   }
 
   private showCaptcha(card: HTMLElement, job: RouterBillingJob): void {
@@ -310,9 +352,10 @@ export class RouterWorkbench {
 
   private renderDiagnostics(): void {
     if (!this.snapshot) return;
-    byId('router-diagnostics-results').replaceChildren(...this.snapshot.uplinks.map(item=>{
+    const uplinks=this.snapshot.uplinks;
+    animateResize(byId('router-diagnostics-results'),()=>byId('router-diagnostics-results').replaceChildren(...uplinks.map(item=>{
       const row=node('div','','router-diagnostic-row');row.append(node('strong',[item.device,item.network].filter(Boolean).join(' · ') || item.id),node('p',this.diagnosticMessage(item)));return row;
-    }));
+    })));
   }
   private diagnosticMessage(item: RouterUplink): string {
     const family=(name:string,state?:string)=>`${name} ${state==='reachable'?'通过':state==='unreachable'?'未通过':state==='not_configured'?'未取得地址':'待检测'}`;

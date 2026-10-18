@@ -1,4 +1,11 @@
 /* Keep the original full-page scroll area and room for card shadows. */
+html, #main-content, .modal-content, .custom-select-options, .logs-container,
+.router-table-scroll, .billing-records-table-wrap { scrollbar-gutter: stable both-edges; }
+@media(max-width:768px) {
+  :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap) { scrollbar-width: thin; }
+  :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap)::-webkit-scrollbar { width:3px!important; height:3px!important; }
+  :root[data-theme] :is(.logs-container,#router-logs-content)::-webkit-scrollbar { width:8px!important; height:8px!important; }
+}
 :root[data-theme] #main-content > .page > .page-header {
   flex: 0 0 auto;
   align-items: center;
@@ -70,10 +77,19 @@
 :root[data-theme] #logs .log-filters { flex: 0 0 auto; }
 :root[data-theme] #logs .logs-container { flex: 1 1 auto; min-height: 0; max-height: none; }
 :root[data-theme] #logs .logs-actions { flex-wrap: wrap; overflow: visible; }
-:root[data-theme] .custom-select.open.opens-up .custom-select-options {
+:root[data-theme] .custom-select.opens-up .custom-select-options {
   top: auto;
   bottom: calc(100% + 5px);
   transform-origin: bottom center;
+}
+:root[data-theme] .custom-select.opens-up:not(.open) .custom-select-options {
+  transform: translateY(6px) scale(var(--closed-menu-scale, 1));
+}
+:root[data-theme="apple27"] .custom-select { --closed-menu-scale: .985; }
+:root[data-theme] .custom-select.menu-positioning .custom-select-options {
+  transition: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
 }
 @media(max-width:768px) {
   :root[data-theme] #main-content > .page > .page-header h1 { font-size: 1.6rem; }
@@ -96,7 +112,6 @@
 .image-captcha-picture img { display:block; max-width:100%; max-height:140px; border-radius:6px; }
 .image-captcha-overlay input { width:100%; margin-top:.5rem; }
 #billing-webvpn-modal .custom-select { width:100%; }
-#billing-webvpn-modal .custom-select:not(.open) .custom-select-options { max-height:0 !important; overflow:hidden; }
 #billing-webvpn-modal .custom-select-trigger::after {
   content:''; width:.5rem; height:.5rem; border:solid currentColor;
   border-width:0 2px 2px 0; transform:rotate(45deg); margin:0 .2rem .2rem .75rem;
@@ -106,3 +121,9 @@
   :root[data-theme] :is(#config-transfer-modal, #billing-webvpn-modal, .image-captcha-overlay),
   :root[data-theme] :is(#config-transfer-modal, #billing-webvpn-modal, .image-captcha-overlay) .modal-content { transition:none; }
 }
+
+.router-port-actions{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;width:100%}.router-port-actions .router-port-login{grid-column:1/-1}.router-port-actions .btn{min-width:0;margin:0}.router-port-card>.custom-select{width:100%;min-width:0}
+
+:root[data-theme] :is(.logs-container,#router-logs-content){scrollbar-width:auto}
+
+.router-billing-disclosure{font-size:.9rem;margin-top:1rem}.router-billing-disclosure>summary{cursor:pointer;padding-block:.4rem}.router-billing-card .bj-form>p{font-size:.8rem;color:var(--text-muted)}

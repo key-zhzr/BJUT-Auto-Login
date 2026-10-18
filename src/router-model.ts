@@ -12,6 +12,7 @@ export interface RouterBillingItem { state: string; message?: string; percent?: 
 export interface RouterBillingJob { uplink: string; account: string; ticket: string; running: boolean; starting: boolean; item: RouterBillingItem; sessions?: Record<string,string>[]; sessionsAvailable?: boolean; }
 
 export const routerLabels: Record<string, string> = {
+  logged_out:'已注销（自动登录已暂停）',logout_failed:'注销未完成',
   online:'互联网已连接', busy:'正在检测', authenticated_limited:'已认证，探测受限', probe_uncertain:'连通性待确认',
   offline_suspected:'正在复核', waiting_interface:'等待接口', cooldown:'等待重试', auth_rejected:'账号未通过',
   portal_not_found:'未发现认证网关', portal_not_ready:'等待认证网关', no_account:'请选择账号', stopped:'尚未运行',

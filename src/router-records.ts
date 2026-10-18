@@ -1,3 +1,4 @@
+import { animateResize } from './layout-motion';
 import { CustomSelect } from './custom-select';
 import { invoke } from '@tauri-apps/api/core';
 import { IS_ANDROID } from './platform';
@@ -64,7 +65,8 @@ export class RouterRecords {
       catch(error){if(generation===this.generation){job.running=false;job.item={state:'error',message:String(error)};}}
     }));if(generation===this.generation)this.draw();}finally{this.polling=false;}
   }
-  private draw(){
+  private draw(){animateResize(this.results,()=>this.drawRows());}
+  private drawRows(){
     this.busy=this.jobs.some(job=>job.running);this.query.disabled=this.busy || !this.supported;this.kind.setDisabled(this.busy);for(const input of [this.start,this.end,this.year])input.disabled=this.busy;
     this.message.textContent=this.busy?'正在查询用量与账单…':'查询已完成';
     const seen=new Set<string>();

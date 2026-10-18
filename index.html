@@ -286,13 +286,16 @@
             <nav class="router-billing-tabs" aria-label="路由计费功能" role="tablist">
               <button type="button" class="btn btn-secondary active" role="tab" aria-selected="true" data-router-billing-tab="overview">概览</button>
               <button type="button" class="btn btn-secondary" role="tab" aria-selected="false" data-router-billing-tab="records">用量与账单</button>
-              <button type="button" class="btn btn-secondary" role="tab" aria-selected="false" data-router-billing-tab="devices">在线设备</button>
+              <button type="button" class="btn btn-secondary" role="tab" aria-selected="false" data-router-billing-tab="services">账户服务</button>
+              <button type="button" class="btn btn-secondary" role="tab" aria-selected="false" data-router-billing-tab="devices">设备与安全</button>
             </nav>
             <div id="router-billing-overview" class="router-enter">
               <div id="router-billing-summary" class="router-billing-summary"></div>
               <div id="router-billing-results" class="router-billing-results"></div>
+              <h3>最近上网记录</h3><section id="router-billing-history" class="router-billing-results"></section>
             </div>
             <section id="router-billing-records" class="router-enter" hidden></section>
+            <section id="router-billing-services" class="router-billing-results router-enter" hidden></section>
             <section id="router-billing-devices" class="router-billing-results router-enter" hidden></section>
           </section>
 
@@ -742,7 +745,7 @@
             <button id="btn-show-add" class="btn btn-primary"><i data-lucide="plus"></i> 添加账号</button>
           </header>
 
-          <section id="discovered-account-card" class="account-discovery-card glass-card hidden" aria-live="polite">
+          <section id="discovered-account-card" class="account-discovery-card glass-card" hidden aria-live="polite">
             <div class="account-discovery-icon"><i data-lucide="user-search"></i></div>
             <div class="account-discovery-copy">
               <h3 id="discovered-account-title">发现当前校园网账号</h3>
@@ -783,7 +786,7 @@
               <div><span>已保存密码</span><strong id="credential-saved-count">0</strong></div>
               <div><span>需要补录</span><strong id="credential-missing-count">0</strong></div>
             </div>
-            <div id="credential-missing-users" class="diagnostic-note hidden"></div>
+            <div id="credential-missing-users" class="diagnostic-note" hidden></div>
           </section>
         </section>
 
@@ -1398,7 +1401,7 @@
           <form id="router-connect-form" class="router-connect-form">
             <label>路由器地址<input id="router-address" type="url" autocomplete="url" placeholder="https://192.168.1.1" required></label>
             <div class="router-controls-row"><label>管理账号<input id="router-username" autocomplete="username" required></label><label>管理密码<input id="router-password" type="password" autocomplete="off" required></label></div>
-            <label class="router-setting-switch"><input id="router-remember-password" type="checkbox">记住路由密码</label><p class="router-http-note">下次启动或连接中断时自动重连。</p>
+            <label class="router-setting-switch"><input id="router-remember-password" type="checkbox">记住路由密码</label><p class="router-http-note">仅在记住的网络中自动重连。</p>
             <label class="router-setting-switch"><input id="router-allow-http" type="checkbox">允许局域网 HTTP</label>
             <p class="router-http-note">HTTP 仅用于可信局域网，密码将明文传输。</p>
             <details class="router-certificate-details"><summary>路由器证书（可选）</summary><p>首次连接可确认指纹，也可粘贴 PEM 证书。</p><textarea id="router-certificate" rows="4" spellcheck="false" aria-label="路由器 PEM 证书"></textarea></details>

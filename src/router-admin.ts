@@ -1,4 +1,5 @@
 import { CustomSelect } from './custom-select';
+import { animateResize, toggleExpanded } from './layout-motion';
 import type { RouterAccount, RouterSnapshot } from './router-model';
 
 export interface RouterConfiguration { service: Record<string,string>; uplinks: Record<string,string>[]; networks?: {id:string}[]; }
@@ -19,11 +20,14 @@ const fields: Field[] = [
   {key:'transport',label:'上游类型',default:'auto',choices:transport},
   {key:'compatibility',label:'连接方式',default:'secure',choices:[['secure','HTTPS'],['legacy_http','旧式 HTTP']]},
   {key:'strict_network',label:'核对校园网身份',flag:true,default:'1'},
-  {key:'network',label:'旧版单上游接口'}, {key:'device',label:'旧版单上游设备'},
   {key:'expected_ssid',label:'指定 Wi-Fi 名称'}, {key:'expected_bssid',label:'指定 Wi-Fi 地址'},
   {key:'online_url',label:'联网检测地址',default:'http://connect.rom.miui.com/generate_204'},
   {key:'online_code',label:'联网成功状态码',default:'204',min:100,max:599},
-  {key:'log_level',label:'日志级别',default:'notice',choices:[['debug','调试'],['info','信息'],['notice','通知'],['error','仅错误']]},
+  {key:'log_target',label:'日志保存位置',default:'system',choices:[['system','系统日志'],['file','自定义目录']]},
+  {key:'log_directory',label:'日志目录',default:'/tmp/bjut-autologin-log'},
+  {key:'log_web',label:'创建网页日志链接（局域网可访问）',flag:true,default:'0'},
+  {key:'log_max_kb',label:'单个日志大小（KB）',min:64,max:4096,default:'256'},
+  {key:'log_level',label:'日志级别',default:'info',choices:[['trace','详细调试'],['debug','调试'],['info','信息'],['notice','通知'],['warning','警告'],['error','仅错误']]},
 ];
 const legacy = new Set(['enabled','interval','timeout','offline_confirmations','managed_routes','mwan3','log_level']);
 const inputIds: Record<string,string> = {interval:'router-service-interval',timeout:'router-service-timeout',offline_confirmations:'router-service-offline',enabled:'router-service-enabled',managed_routes:'router-service-routes',mwan3:'router-service-mwan'};
@@ -79,6 +83,7 @@ export class RouterAdmin {
     const common=document.getElementById('router-service-common')!, more=document.getElementById('router-service-more')!;
     this.controls.forEach(c=>c.close());this.controls.clear();common.replaceChildren();more.replaceChildren();
     for (const definition of fields) {
+      if (definition.key.startsWith('log_') && definition.key!=='log_level' && !this.supports('log_settings')) continue;
       if (!this.supports('uplink_manage') && !legacy.has(definition.key)) continue;
       const target=legacy.has(definition.key)?common:more;
       this.controls.set(definition.key,field(target,definition,this.configuration!.service[definition.key] || definition.default || '',inputIds[definition.key]));
@@ -86,7 +91,7 @@ export class RouterAdmin {
   }
   private async showMore() {
     await this.load();
-    const details=document.getElementById('router-service-advanced') as HTMLDetailsElement;details.open=!details.open;
+    toggleExpanded(document.getElementById('router-service-advanced') as HTMLDetailsElement);
   }
   private async saveSettings() {
     if(!this.snapshot || !this.configuration)return;
@@ -106,7 +111,7 @@ export class RouterAdmin {
     const accounts=this.snapshot.accounts;
     document.getElementById('router-accounts-count')!.textContent=`${accounts.length} 个账号`;
     (document.getElementById('btn-router-add-account') as HTMLButtonElement).disabled=!this.supports('account_manage');
-    container.replaceChildren(...accounts.map((account,index)=>{
+    animateResize(container, () => container.replaceChildren(...accounts.map((account,index)=>{
       const row=element('article','','router-account-row router-enter');
       const text=element('div');text.append(element('strong',account.user),element('p',`${account.enabled?'参与自动登录':'仅手动使用'} · ${protocol(account.loginType || 'auto')==='auto'?'所有认证方式':protocol(account.loginType || 'auto')}`));
       const tools=element('div','','router-actions');
@@ -117,7 +122,7 @@ export class RouterAdmin {
         tools.append(action('编辑',()=>this.editAccount(account)),up,down,action('删除',()=>{void this.remove('account_delete',{account:account.id},`删除路由账号 ${account.user}？`);}));
       }
       row.append(text,tools);return row;
-    }));
+    })));
   }
   private async mutate(operation:string,args:Record<string,unknown>) {
     const generation=this.generation;
@@ -166,7 +171,7 @@ export class RouterAdmin {
     body.querySelector<HTMLInputElement>('input')?.focus({preventScroll:true});
   }
   private renderUplinks() {
-    const container=document.getElementById('router-configured-uplinks')!;container.replaceChildren();
+    const container=document.getElementById('router-configured-uplinks')!;animateResize(container,()=>{container.replaceChildren();
     if(!this.supports('uplink_manage')){container.append(element('p','更新路由端后，可在这里编辑上游接口。'));return;}
     const list=element('div','','router-admin-uplink-list');
     for(const uplink of this.configuration?.uplinks || []) {
@@ -175,6 +180,7 @@ export class RouterAdmin {
       const controls=element('div','','router-actions');controls.append(action('编辑',()=>this.editUplink(uplink)),action('删除',()=>{void this.remove('uplink_delete',{uplink:uplink.id},`删除上游 ${uplink.network}？`);}));card.append(text,controls);list.append(card);
     }
     container.append(list,action('添加上游',()=>this.editUplink(),'btn btn-secondary'));
+    });
   }
   private editUplink(uplink?:Record<string,string>) {
     const editor=this.createEditor(uplink?'编辑路由上游':'添加路由上游');

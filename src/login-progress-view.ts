@@ -1,4 +1,5 @@
 import type { LoginProgress } from './models';
+import { AnimatedVisibility } from './animated-visibility';
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const phases: Record<string, string> = { safety: '安全检查', checking: '核对网卡', gateway: '确认网关', queued: '等待操作', logout: '注销旧账号', preparing: '准备认证', authenticating: '提交认证', verifying: '验证联网', complete: '完成', stopped: '已停止' };
@@ -12,6 +13,7 @@ export class LoginProgressView {
   private safetyMs: number | null = null;
   private hideTimer: number | null = null;
   private finished = false;
+  private readonly visibility = new AnimatedVisibility(element('login-progress-panel'));
   private onFinished: (summary: string, success?: boolean) => void;
   private onCancel: (id: string) => Promise<void>;
 
@@ -33,9 +35,9 @@ export class LoginProgressView {
     element('btn-cancel-login').hidden = false;
     if (this.timer !== null) window.clearInterval(this.timer);
     this.timer = window.setInterval(() => { element('login-progress-time').textContent = `已用时 ${((performance.now() - this.started) / 1000).toFixed(1)} 秒`; }, 100);
-    element('login-progress-panel').hidden = false;
     element('login-progress-phases').replaceChildren();
     this.local('安全检查中，可在提交认证前取消');
+    this.visibility.setVisible(true);
     return this.id;
   }
 
@@ -66,6 +68,6 @@ export class LoginProgressView {
     if (message) element('login-progress-message').textContent = message;
     element('btn-cancel-login').hidden = true;
     this.onFinished([element('login-progress-message').textContent, element('login-progress-time').textContent, element('login-progress-phases').textContent].filter(Boolean).join('；'), success);
-    this.hideTimer = window.setTimeout(() => { element('login-progress-panel').hidden = true; this.hideTimer = null; }, 15_000);
+    this.hideTimer = window.setTimeout(() => { this.visibility.setVisible(false); this.hideTimer = null; }, 15_000);
   }
 }

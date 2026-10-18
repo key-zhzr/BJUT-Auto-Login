@@ -1,6 +1,6 @@
 //! The App talks only to the named, authenticated rpcd methods shipped by the
 //! router package. Remembered router passwords use the encrypted configuration backend; tokens stay in memory.
-use crate::config_model::SavedRouter;
+use crate::config_model::{RouterBinding, SavedRouter};
 use base64::Engine;
 use reqwest::{Client, Url};
 use serde::Serialize;
@@ -258,6 +258,7 @@ struct Remote {
     client: Client,
     endpoint: Url,
     token: String,
+    router_id: Option<String>,
     expires: std::sync::Mutex<Instant>,
     lifetime: Duration,
     billing_tickets: std::sync::Mutex<std::collections::HashMap<String, Instant>>,
@@ -371,6 +372,10 @@ impl Remote {
         if Instant::now() >= *self.expires.lock().unwrap() {
             return Err("路由器登录已过期，请重新连接".into());
         }
+        // No token is sent until the public package identity has been checked.
+        // Recheck on every operation: an identical LAN address on a new network
+        // must not inherit the previous router's authenticated session.
+        verify_router(&self.client, &self.endpoint, self.router_id.as_deref()).await?;
         let value = rpc(
             &self.client,
             &self.endpoint,
@@ -394,11 +399,26 @@ impl Remote {
     }
 
     async fn snapshot(&self) -> Result<Snapshot, String> {
-        let status = self.call("status", json!({})).await?;
+        // Device IDs were introduced together with the combined dashboard API.
+        // One RPC keeps the status, counters and account list in the same read.
+        let combined = if self.router_id.is_some() {
+            Some(self.call("dashboard", json!({})).await?)
+        } else {
+            None
+        };
+        let status = if let Some(data) = &combined {
+            data["status"].clone()
+        } else {
+            self.call("status", json!({})).await?
+        };
         if status.get("apiVersion").and_then(Value::as_u64) != Some(1) {
             return Err("路由端协作接口不兼容，请更新两端至 0.1.6".into());
         }
-        let accounts = self.call("accounts", json!({})).await?;
+        let accounts = if let Some(data) = &combined {
+            data["accounts"].clone()
+        } else {
+            self.call("accounts", json!({})).await?
+        };
         let capabilities: Vec<String> = status
             .get("capabilities")
             .and_then(Value::as_array)
@@ -408,9 +428,12 @@ impl Remote {
             .take(16)
             .collect();
         let ports = if capabilities.iter().any(|item| item == "ports") {
-            self.call("ports", json!({}))
-                .await?
-                .get("ports")
+            let data = if let Some(data) = &combined {
+                data["ports"].clone()
+            } else {
+                self.call("ports", json!({})).await?
+            };
+            data.get("ports")
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default()
@@ -456,6 +479,12 @@ async fn authenticate(profile: &SavedRouter) -> Result<(Arc<Remote>, Snapshot), 
     } else {
         None
     })?;
+    let router_id = verify_router(
+        &client,
+        &endpoint,
+        profile.binding.as_ref().map(|b| b.router_id.as_str()),
+    )
+    .await?;
     let login = Box::pin(rpc(
         &client,
         &endpoint,
@@ -480,6 +509,7 @@ async fn authenticate(profile: &SavedRouter) -> Result<(Arc<Remote>, Snapshot), 
         client,
         endpoint,
         token,
+        router_id,
         expires: std::sync::Mutex::new(
             Instant::now() + Duration::from_secs(timeout.saturating_sub(5)),
         ),
@@ -497,6 +527,8 @@ pub(crate) struct SavedConnection {
     username: String,
     certificate: Option<String>,
     allow_http: bool,
+    auto_reconnect_ready: bool,
+    network_name: String,
 }
 
 fn persist_router(
@@ -533,6 +565,18 @@ pub(crate) fn saved_router_connection(
             username: p.username.clone(),
             certificate: p.certificate.clone(),
             allow_http: p.allow_http,
+            auto_reconnect_ready: p.binding.is_some(),
+            network_name: p
+                .binding
+                .as_ref()
+                .map(|b| {
+                    if b.ssid.is_empty() {
+                        "有线网络".to_owned()
+                    } else {
+                        b.ssid.clone()
+                    }
+                })
+                .unwrap_or_default(),
         })
 }
 
@@ -558,14 +602,20 @@ pub(crate) async fn connect_router(
     allow_http: Option<bool>,
     remember_password: Option<bool>,
 ) -> Result<Snapshot, String> {
-    let profile = SavedRouter {
+    let mut profile = SavedRouter {
         address,
         username,
         password,
         certificate,
         allow_http: allow_http.unwrap_or(false),
+        binding: None,
     };
+    let mut binding = capture_network(&app).await?;
     let (remote, snapshot) = authenticate(&profile).await?;
+    if let Some(id) = &remote.router_id {
+        binding.router_id = id.clone();
+        profile.binding = Some(binding);
+    }
     if let Some(remember) = remember_password {
         persist_router(
             &app,
@@ -596,6 +646,14 @@ pub(crate) async fn reconnect_router(
         .clone()
         .or_else(|| state.config.read().unwrap().saved_router.clone())
         .ok_or("请先连接路由器")?;
+    let binding = profile
+        .binding
+        .as_ref()
+        .ok_or("ROUTER_REPAIR_REQUIRED:请手动连接一次，以记住路由器和当前网络")?;
+    let current = capture_network(&app).await?;
+    if !same_network(binding, &current) {
+        return Err("ROUTER_NETWORK_MISMATCH:当前网络与记住的路由器不匹配，已暂停自动连接".into());
+    }
     let (remote, snapshot) = authenticate(&profile).await?;
     if let Some(remember) = remember_password {
         persist_router(
@@ -665,6 +723,16 @@ pub(crate) async fn disconnect_router(manager: tauri::State<'_, Manager>) -> Res
     let remote = manager.0.lock().await.take();
     *manager.1.lock().await = None;
     if let Some(remote) = remote {
+        if verify_router(
+            &remote.client,
+            &remote.endpoint,
+            remote.router_id.as_deref(),
+        )
+        .await
+        .is_err()
+        {
+            return Ok(());
+        }
         let _ = Box::pin(rpc(
             &remote.client,
             &remote.endpoint,
@@ -691,7 +759,9 @@ fn discovery_origins(gateways: &[String], last_address: Option<&str>) -> Vec<Url
     let mut origins = Vec::new();
     if let Some(address) = last_address {
         if let Ok(mut url) = endpoint_with_http(address, true) {
-            if url.host_str().is_some_and(private_http_host) {
+            if url.host_str().is_some_and(|host| {
+                private_http_host(host) && gateways.iter().any(|gateway| gateway == host)
+            }) {
                 url.set_path("/");
                 origins.push(url);
             }
@@ -714,26 +784,99 @@ fn discovery_origins(gateways: &[String], last_address: Option<&str>) -> Vec<Url
     origins
 }
 
-async fn discovery_probe(client: &Client, origin: Url) -> Option<DiscoveredRouter> {
-    let url = origin.join(".well-known/bjut-autologin.json").ok()?;
-    let mut response = client.get(url).send().await.ok()?;
+const NETWORK_MISMATCH: &str = "ROUTER_NETWORK_MISMATCH:当前路由器与记住的信息不符，已暂停自动连接";
+
+async fn capture_network(app: &tauri::AppHandle) -> Result<RouterBinding, String> {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let data = crate::get_network_info(app, Some(true));
+        let text = |key| {
+            data[key]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"')
+                .chars()
+                .take(128)
+                .collect::<String>()
+        };
+        RouterBinding {
+            router_id: String::new(),
+            gateways: crate::network_inventory::router_gateways(),
+            ssid: text("ssid"),
+            bssid: text("bssid").to_ascii_lowercase().replace('-', ":"),
+            transport: text("transport"),
+        }
+    })
+    .await
+    .map_err(|_| "无法核对当前网络".into())
+}
+
+fn same_network(saved: &RouterBinding, current: &RouterBinding) -> bool {
+    // DHCP address changes are normal; do not bind to a client's exact IP.
+    // An AP may roam within the same SSID. The router ID is checked separately
+    // before any password or session token is sent.
+    if !saved.ssid.is_empty() {
+        return saved.ssid == current.ssid;
+    }
+    if !saved.bssid.is_empty() {
+        return saved.bssid == current.bssid;
+    }
+    !saved.gateways.is_empty()
+        && saved
+            .gateways
+            .iter()
+            .any(|ip| current.gateways.contains(ip))
+}
+
+async fn router_metadata(client: &Client, origin: &Url) -> Result<Value, String> {
+    let mut url = origin.clone();
+    url.set_path("/.well-known/bjut-autologin.json");
+    let mut response = client
+        .get(url)
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
     if response.status() != reqwest::StatusCode::OK {
-        return None;
+        return Err("未发现路由端协作服务，请检查地址或更新路由端".into());
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.ok()? {
+    while let Some(chunk) = response.chunk().await.map_err(|_| "路由标识读取中断")? {
         if bytes.len() + chunk.len() > 8192 {
-            return None;
+            return Err("路由标识无效".into());
         }
         bytes.extend_from_slice(&chunk);
     }
-    let data: Value = serde_json::from_slice(&bytes).ok()?;
+    let data: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "未发现路由端协作服务，请检查地址或更新路由端")?;
     if data["product"] != "BJUT-Auto-Login-OpenWrt"
         || data["apiVersion"] != 1
         || data["apiPath"] != "/ubus"
     {
-        return None;
+        return Err("未发现路由端协作服务，请检查地址或更新路由端".into());
     }
+    Ok(data)
+}
+
+async fn verify_router(
+    client: &Client,
+    endpoint: &Url,
+    expected: Option<&str>,
+) -> Result<Option<String>, String> {
+    let data = router_metadata(client, endpoint).await?;
+    let id = data["routerId"]
+        .as_str()
+        .filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(str::to_owned);
+    if expected.is_some_and(|expected| id.as_deref() != Some(expected)) {
+        return Err(NETWORK_MISMATCH.into());
+    }
+    Ok(id)
+}
+
+async fn discovery_probe(client: &Client, origin: Url) -> Option<DiscoveredRouter> {
+    let data = router_metadata(client, &origin).await.ok()?;
     Some(DiscoveredRouter {
         name: data["name"]
             .as_str()
@@ -811,8 +954,6 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
     };
     let service = [
         "enabled",
-        "network",
-        "device",
         "transport",
         "login_type",
         "compatibility",
@@ -830,6 +971,10 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
         "managed_routes",
         "mwan3",
         "log_level",
+        "log_target",
+        "log_directory",
+        "log_web",
+        "log_max_kb",
     ];
     let upstream = [
         "enabled",
@@ -854,7 +999,10 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
         "account_move" => &["account", "direction"],
         "uplink_save" => &["uplink", "payload"],
         "uplink_delete" => &["uplink"],
+        "logout" | "switch_account" => &["uplink", "account"],
         "billing_start" => &["uplink", "account"],
+        "billing_details" => &["uplink", "account", "module"],
+        "billing_action" => &["ticket", "operation", "payload"],
         "billing_records" => &[
             "uplink",
             "account",
@@ -871,6 +1019,16 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
     if !args.iter().all(|(key, value)| {
         allowed.contains(&key.as_str())
             && match key.as_str() {
+                "payload" if operation == "billing_action" => value.as_str().is_some_and(|text| {
+                    valid_billing_payload(
+                        args.get("operation").and_then(Value::as_str).unwrap_or(""),
+                        text,
+                    )
+                }),
+                "module" => matches!(
+                    value.as_str(),
+                    Some("services" | "devices" | "security" | "history")
+                ),
                 "payload" => value
                     .as_str()
                     .filter(|v| v.len() <= 32768)
@@ -895,7 +1053,7 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
                     .as_str()
                     .is_some_and(|v| v.len() <= 12 && v.bytes().all(|b| b.is_ascii_alphanumeric())),
                 "direction" => matches!(value.as_str(), Some("up" | "down")),
-                "enabled" | "managed_routes" | "mwan3" | "strict_network" => {
+                "enabled" | "managed_routes" | "mwan3" | "strict_network" | "log_web" => {
                     matches!(value.as_str(), Some("0" | "1"))
                 }
                 _ => value
@@ -922,14 +1080,57 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
                 && (operation != "account_move" || args.contains_key("direction"))
         }
         "uplink_save" => args.contains_key("payload"),
-        "uplink_delete" | "billing_start" | "billing_records" => args
+        "uplink_delete" | "logout" | "switch_account" | "billing_start" | "billing_details"
+        | "billing_records" => args
             .get("uplink")
             .and_then(Value::as_str)
             .is_some_and(|v| !v.is_empty()),
         "billing_poll" | "billing_captcha" => args.contains_key("ticket"),
+        "billing_action" => ["ticket", "operation", "payload"]
+            .iter()
+            .all(|key| args.contains_key(*key)),
         "save_settings" => !args.is_empty(),
         _ => true,
     }
+}
+
+fn valid_billing_payload(operation: &str, text: &str) -> bool {
+    if text.len() > 16384 {
+        return false;
+    }
+    let keys: &[&str] = match operation {
+        "stopNow" | "reopenNow" | "cancelPackage" => &[],
+        "schedulePackage" => &["packageId"],
+        "setConsumeLimit" => &["consumeLimit"],
+        "bindMac" | "unbindMac" => &["mac"],
+        "disconnectSession" => &["sessionIndex"],
+        "setMauth" => &["enabled"],
+        "changePassword" => &["oldPassword", "newPassword"],
+        "updateQuestions" => &[
+            "oldPassword",
+            "question1",
+            "question2",
+            "question3",
+            "answer1",
+            "answer2",
+            "answer3",
+        ],
+        _ => return false,
+    };
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .is_some_and(|object| {
+            object.len() == keys.len()
+                && keys.iter().all(|key| {
+                    object
+                        .get(*key)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| {
+                            value.len() <= 4096 && !value.chars().any(char::is_control)
+                        })
+                })
+        })
 }
 
 #[tauri::command]
@@ -945,7 +1146,10 @@ pub(crate) async fn router_request(
     if operation.starts_with("billing_") {
         let mut tickets = remote.billing_tickets.lock().unwrap();
         tickets.retain(|_, created| created.elapsed() < Duration::from_secs(600));
-        if matches!(operation.as_str(), "billing_start" | "billing_records") && tickets.len() >= 64
+        if matches!(
+            operation.as_str(),
+            "billing_start" | "billing_records" | "billing_details" | "billing_action"
+        ) && tickets.len() >= 128
         {
             return Err("查询较多，请稍后重试".into());
         }
@@ -956,19 +1160,11 @@ pub(crate) async fn router_request(
         }
         args["owner"] = Value::String(remote.token.clone());
     }
-    let input_ticket = args
-        .get("ticket")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
     let result = remote.call(&operation, args).await?;
-    if operation == "billing_poll"
-        && matches!(result["result"]["state"].as_str(), Some("ready" | "error"))
-    {
-        if let Some(ticket) = input_ticket {
-            remote.billing_tickets.lock().unwrap().remove(&ticket);
-        }
-    }
-    if matches!(operation.as_str(), "billing_start" | "billing_records") {
+    if matches!(
+        operation.as_str(),
+        "billing_start" | "billing_records" | "billing_details" | "billing_action"
+    ) {
         let ticket = result
             .get("ticket")
             .and_then(Value::as_str)
@@ -987,6 +1183,90 @@ pub(crate) async fn router_request(
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+
+    #[test]
+    fn remembered_router_is_scoped_to_wifi_or_observed_wired_gateway() {
+        let saved = RouterBinding {
+            router_id: "a".repeat(32),
+            ssid: "Campus router".into(),
+            bssid: "00:11:22:33:44:55".into(),
+            gateways: vec!["192.168.1.1".into()],
+            transport: "wifi".into(),
+        };
+        let mut current = saved.clone();
+        current.bssid = "00:11:22:33:44:66".into();
+        assert!(
+            same_network(&saved, &current),
+            "roaming inside the same SSID still requires the same router ID"
+        );
+        current.ssid = "Different network".into();
+        assert!(!same_network(&saved, &current));
+        let mut wired = saved.clone();
+        wired.ssid.clear();
+        wired.bssid.clear();
+        wired.transport = "ethernet".into();
+        assert!(same_network(&wired, &current));
+        current.gateways = vec!["10.0.0.1".into()];
+        assert!(!same_network(&wired, &current));
+        assert!(!same_network(
+            &RouterBinding::default(),
+            &RouterBinding::default()
+        ));
+        let old:SavedRouter=serde_json::from_value(json!({"address":"https://192.168.1.1","username":"root","password":"fixture","certificate":null,"allow_http":false})).unwrap();
+        assert!(
+            old.binding.is_none(),
+            "legacy passwords must require manual pairing before reuse"
+        );
+    }
+
+    #[test]
+    fn wrong_router_identity_receives_no_password_or_session_token() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            for (valid_product, already_connected) in [(false, false), (true, false), (false, true), (true, true)] {
+                let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();
+                let server=std::thread::spawn(move || {
+                    let (mut stream,_)=listener.accept().unwrap();let mut bytes=Vec::new();let mut byte=[0];
+                    while !bytes.ends_with(b"\r\n\r\n"){stream.read_exact(&mut byte).unwrap();bytes.push(byte[0]);}
+                    let request=String::from_utf8(bytes).unwrap();assert!(request.starts_with("GET /.well-known/bjut-autologin.json "));assert!(!request.contains("fixture-password"));assert!(!request.contains(&"c".repeat(32)));
+                    let body=json!({"product":if valid_product {"BJUT-Auto-Login-OpenWrt"} else {"Other router"},"apiVersion":1,"apiPath":"/ubus","routerId":"b".repeat(32)}).to_string();
+                    write!(stream,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();drop(stream);
+                    listener.set_nonblocking(true).unwrap();std::thread::sleep(Duration::from_millis(150));assert!(listener.accept().is_err(),"an authenticated request followed a failed identity check");
+                });
+                let profile=SavedRouter {address:format!("http://{address}"),username:"root".into(),password:"fixture-password".into(),certificate:None,allow_http:true,binding:Some(RouterBinding {router_id:"a".repeat(32),..Default::default()})};
+                let rejected = if already_connected {
+                    let remote = Remote {
+                        client: router_client(None).unwrap(),
+                        endpoint: Url::parse(&format!("http://{address}/ubus")).unwrap(),
+                        token: "c".repeat(32),
+                        router_id: Some("a".repeat(32)),
+                        expires: std::sync::Mutex::new(Instant::now() + Duration::from_secs(60)),
+                        lifetime: Duration::from_secs(60),
+                        billing_tickets: std::sync::Mutex::new(std::collections::HashMap::new()),
+                    };
+                    remote.call("status", json!({})).await.is_err()
+                } else { authenticate(&profile).await.is_err() };
+                assert!(rejected);server.join().unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn billing_actions_only_accept_exact_named_string_fields() {
+        assert!(valid_billing_payload("stopNow", "{}"));
+        assert!(valid_billing_payload(
+            "changePassword",
+            r#"{"oldPassword":"fixture-old","newPassword":"Fixture-123"}"#
+        ));
+        for (operation, payload) in [
+            ("exec", "{}"),
+            ("stopNow", r#"{"path":"/Self/unsafe"}"#),
+            ("changePassword", r#"{"oldPassword":"x"}"#),
+            ("setMauth", r#"{"enabled":true}"#),
+            ("bindMac", r#"{"mac":"a\nb"}"#),
+        ] {
+            assert!(!valid_billing_payload(operation, payload));
+        }
+    }
 
     #[test]
     #[ignore = "requires an explicitly configured LAN router and interactive administrator password"]
@@ -1028,6 +1308,7 @@ mod tests {
                 client,
                 endpoint,
                 token,
+                router_id: None,
                 expires: std::sync::Mutex::new(Instant::now() + Duration::from_secs(55)),
                 lifetime: Duration::from_secs(55),
                 billing_tickets: std::sync::Mutex::new(std::collections::HashMap::new()),

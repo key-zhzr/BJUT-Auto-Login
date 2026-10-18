@@ -32,7 +32,7 @@ export class AnimatedVisibility {
       this.element.hidden = !visible;
       return;
     }
-    const collapsed = { height: '0px', marginTop: '0px', marginBottom: '0px', opacity: '0', transform: 'translateY(-4px)' };
+    const collapsed = { height: '0px', minHeight: '0px', marginTop: '0px', marginBottom: '0px', paddingTop: '0px', paddingBottom: '0px', borderTopWidth: '0px', borderBottomWidth: '0px', opacity: '0', transform: 'translateY(-4px)' };
     this.element.classList.add('progress-animating');
     const animation = this.element.animate(
       [previous || collapsed, visible ? expanded : collapsed],
@@ -50,6 +50,6 @@ export class AnimatedVisibility {
 
   private frame() {
     const style = getComputedStyle(this.element);
-    return { height: style.height, marginTop: style.marginTop, marginBottom: style.marginBottom, opacity: style.opacity, transform: style.transform };
+    return { height: style.height, minHeight: style.minHeight, marginTop: style.marginTop, marginBottom: style.marginBottom, paddingTop: style.paddingTop, paddingBottom: style.paddingBottom, borderTopWidth: style.borderTopWidth, borderBottomWidth: style.borderBottomWidth, opacity: style.opacity, transform: style.transform };
   }
 }

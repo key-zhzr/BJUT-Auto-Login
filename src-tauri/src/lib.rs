@@ -10441,6 +10441,7 @@ mod tests {
                 password: "private-router-password".into(),
                 certificate: None,
                 allow_http: true,
+                binding: None,
             }),
             preferred_interface: String::new(),
             adaptive_network_checks: true,
@@ -10495,6 +10496,7 @@ mod tests {
             password: "fixture-router-secret".into(),
             certificate: None,
             allow_http: false,
+            binding: None,
         };
         let mut current = serde_json::from_str::<AppConfig>("{}").unwrap();
         current.saved_router = Some(profile.clone());
