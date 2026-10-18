@@ -2,6 +2,40 @@ import { CustomSelect } from '../src/custom-select';
 import { AnimatedVisibility } from '../src/animated-visibility';
 import { setExpanded } from '../src/layout-motion';
 
+export async function checkRouterDropdownLayout(note:(text:string)=>void){
+  const assert=(value:boolean,text:string)=>{if(!value)throw new Error(text);};
+  const frame=()=>new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
+  const main=document.getElementById('main-content')!,header=document.querySelector<HTMLElement>('#settings > .page-header')!;
+  const details=document.getElementById('router-service-advanced') as HTMLDetailsElement;
+  const trigger=document.querySelector<HTMLElement>('#router-service-more [aria-label="认证方式"] .custom-select-trigger')!;
+  const theme=document.documentElement.dataset.theme,scroll=main.scrollTop;
+  document.querySelector<HTMLElement>('[data-target="settings"]')!.click();
+  setExpanded(details,true);
+  while(details.getAnimations().length)await frame();
+  try{
+    for(const value of ['basic','apple27','winui']){
+      document.documentElement.dataset.theme=value;await frame();
+      trigger.scrollIntoView({block:'center'});await frame();const before=main.scrollTop;
+      trigger.click();for(let i=0;i<22;i++)await frame();
+      const menu=trigger.parentElement!.querySelector<HTMLElement>('.custom-select-options')!,option=menu.querySelector<HTMLElement>('.selected')!;
+      const title=header.querySelector('h1')!.getBoundingClientRect(),hit=document.elementFromPoint(title.left+title.width/2,title.top+title.height/2);
+      assert(!!hit && header.contains(hit),`${value} 路由设置菜单遮住顶栏`);
+      assert(Math.abs(main.scrollTop-before)<1,`${value} 展开菜单移动了页面`);
+      const outer=menu.getBoundingClientRect(),inner=option.getBoundingClientRect();
+      const style=getComputedStyle(menu);
+      assert(inner.left-outer.left-parseFloat(style.paddingLeft)<=2 && outer.right-inner.right-parseFloat(style.paddingRight)<=2,`${value} 菜单选项两侧出现空白`);
+      trigger.click();for(let i=0;i<22;i++)await frame();
+      assert(Math.abs(main.scrollTop-before)<1,`${value} 收起菜单移动了页面`);
+    }
+    const body=document.body.getBoundingClientRect();
+    assert(Math.abs(body.left)<1 && Math.abs(body.right-window.innerWidth)<1,'应用未铺满窗口，两侧露出背景');
+    note('通过：三种主题展开路由设置菜单时顶栏可见、页面不跳动、选项无白边，窗口无侧边留白');
+  }finally{
+    if(trigger.getAttribute('aria-expanded')==='true')trigger.click();
+    document.documentElement.dataset.theme=theme;main.scrollTop=scroll;
+  }
+}
+
 export async function runMotionRegression(note:(text:string)=>void){
   const assert=(value:boolean,text:string)=>{if(!value)throw new Error(text);};
   const frame=()=>new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));

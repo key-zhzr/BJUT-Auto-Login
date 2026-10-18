@@ -1,6 +1,9 @@
 /* Keep the original full-page scroll area and room for card shadows. */
-html, #main-content, .modal-content, .custom-select-options, .logs-container,
+#main-content, .modal-content, .logs-container,
 .router-table-scroll, .billing-records-table-wrap { scrollbar-gutter: stable both-edges; }
+/* Only scrolling content reserves space. A root gutter exposes the native
+   window background; menu gutters leave unpainted bands beside each option. */
+#main-content { isolation: isolate; }
 @media(max-width:768px) {
   :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap) { scrollbar-width: thin; }
   :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap)::-webkit-scrollbar { width:3px!important; height:3px!important; }
@@ -13,7 +16,9 @@ html, #main-content, .modal-content, .custom-select-options, .logs-container,
   margin-bottom: .9rem;
   position: sticky;
   top: 0;
-  z-index: 20;
+  /* Raised settings cards contain menus, but must stay below the page header.
+     Main's isolated stack also keeps this below dialogs outside the page. */
+  z-index: 3000;
   isolation: isolate;
   background: transparent;
 }

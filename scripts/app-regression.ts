@@ -19,13 +19,15 @@ Object.defineProperty(window, 'localStorage', { value: {
   setItem: (key: string, value: string) => memory.set(key, String(value)),
   removeItem: (key: string) => memory.delete(key), clear: () => memory.clear(),
 } });
-const mobileLayout = new URL(location.href).searchParams.get('platform') === 'android';
+const platform = new URL(location.href).searchParams.get('platform');
+const mobileLayout = platform === 'android';
 Object.defineProperty(document,'hidden',{configurable:true,value:false});
-Object.defineProperty(navigator, 'userAgent', { value: mobileLayout ? 'Mozilla/5.0 (Linux; Android 15) Mobile MockApp' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MockApp' });
+Object.defineProperty(navigator, 'userAgent', { value: mobileLayout ? 'Mozilla/5.0 (Linux; Android 15) Mobile MockApp' : platform === 'macos' ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) MockApp' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MockApp' });
 (window as any).__TAURI__ = {};
 mockWindows('main');
 const now = () => performance.now();
 const calls: {cmd: string, payload: any, at: number}[] = [];
+let initialAdapterFinishedAt = Infinity;
 const table = {total: 0, rows: [], summary: {}};
 const cfg = { accounts: [
   { user: '25000001', hasPassword: true, isDefault: true, isDisabled: false },
@@ -136,6 +138,7 @@ mockIPC(async (cmd, payload: any = {}) => {
   if (cmd === 'get_credential_storage_health') return {backend:'模拟存储',status:'available',persistent:true,message:'测试',savedAccounts:cfg.accounts.length,missingPasswordAccounts:[]};
   if (cmd === 'get_network_adapters') {
     await new Promise(r=>setTimeout(r,1200));
+    if (initialAdapterFinishedAt === Infinity) initialAdapterFinishedAt = now();
     return {adapters:[
       {id:'wlan0',name:mobileLayout?'wlan0':'USB 10/100/1000 LAN',interfaceName:'wlan0',transport:mobileLayout?'wifi':'ethernet',ipv4:['192.0.2.16'],ipv6:['2001:db8::16'],connected:true,selectable:!mobileLayout,selected:true},
       {id:'tun0',name:'tun0',interfaceName:'tun0',transport:'vpn',ipv4:['198.18.0.1'],ipv6:[],connected:true,selectable:false,selected:false},
@@ -176,15 +179,16 @@ await import('../src/main');
 const panel=document.createElement('aside'); panel.style.cssText='position:fixed;right:8px;bottom:8px;z-index:30000;padding:12px;border:1px solid #64748b;border-radius:8px;background:#fff;color:#111;max-width:380px;font-size:12px;';
 const button=document.createElement('button'); button.textContent='运行本轮界面回归'; button.id='qa-run';
 const hide=document.createElement('button');hide.textContent='隐藏验收面板';hide.onclick=()=>{panel.hidden=true;};panel.append(hide);
-const out=document.createElement('pre');out.id='qa-results';out.style.whiteSpace='pre-wrap';out.textContent='仅使用模拟账号与本地数据';panel.append(button,out);document.body.append(panel);
+const status=document.createElement('p');status.id='qa-status';status.setAttribute('role','status');
+const out=document.createElement('pre');out.id='qa-results';out.style.cssText='white-space:pre-wrap;max-height:35vh;overflow:auto';out.textContent='仅使用模拟账号与本地数据';panel.append(button,status,out);document.body.append(panel);
 const assert=(value:unknown,message:string)=>{if(!value)throw new Error(message);};
 const wait=async(test:()=>boolean,timeout=5000)=>{const deadline=performance.now()+timeout;while(performance.now()<deadline){if(test())return;await new Promise(r=>setTimeout(r,50));}throw new Error('等待界面超时');};
 const click=(selector:string)=>(document.querySelector(selector) as HTMLElement)?.click();
 button.addEventListener('click',async()=>{
-  button.disabled=true;out.textContent='';const note=(text:string)=>out.textContent+=text+'\n';
+  button.disabled=true;out.textContent='';const note=(text:string)=>{status.textContent=text;out.textContent+=text+'\n';};
   try {
     await wait(()=>!document.getElementById('app-loading-mask')!.classList.contains('is-visible'));
-    if (!mobileLayout) assert(calls.find(c=>c.cmd==='frontend_ready')!.at < calls.find(c=>c.cmd==='get_network_adapters')!.at,'窗口仍在等待初始网卡查询');
+    if (!mobileLayout) assert(calls.find(c=>c.cmd==='frontend_ready')!.at < initialAdapterFinishedAt,'窗口仍在等待初始网卡查询');
     note('通过：启动界面已就绪');
     assert(document.querySelector('#override-account [data-value="1"]'),'禁用账号未保留在手动登录列表');
     click('#btn-open-billing');await wait(()=>document.getElementById('billing-center-account')!.textContent==='25000001');
@@ -393,6 +397,7 @@ button.addEventListener('click',async()=>{
     await wait(()=>document.getElementById('router-message')!.textContent!.includes('连接中断'));
     await wait(()=>calls.some(call=>call.cmd==='reconnect_router') && !document.getElementById('router-connected')!.hidden,7000);
     note('通过：路由账号编辑、流量去重、账单查询和断线自动重连');
+    const {checkRouterDropdownLayout}=await import('./motion-regression');await checkRouterDropdownLayout(note);
     routerRefreshDelay=180;
     click('#btn-router-refresh'); click('#btn-router-disconnect');
     await new Promise(resolve => setTimeout(resolve,260));

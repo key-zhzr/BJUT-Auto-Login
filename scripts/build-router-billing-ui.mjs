@@ -12,5 +12,6 @@ const source=fs.readFileSync(path.join(root,'src/router-billing-tools.ts'),'utf8
  .replace('export class RouterBillingTools','class RouterBillingTools')
  .replace('export interface BillingTarget','interface BillingTarget');
 const {outputText}=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.None}});
-fs.writeFileSync(destination,"'use strict';\n'require baseclass';\n'require bjut-autologin.workbench as bjut';\n// Generated from the App's router-billing-tools.ts. Do not edit the shared view here.\n"+outputText+'\nreturn RouterBillingTools;\n');
+// LuCI requires a baseclass subclass and imports its instance, not a bare ES class.
+fs.writeFileSync(destination,"'use strict';\n'require baseclass';\n'require bjut-autologin.workbench as bjut';\n// Generated from the App's router-billing-tools.ts. Do not edit the shared view here.\n"+outputText+'\nreturn baseclass.extend({\n create: function(root, options) { return new RouterBillingTools(root, options); }\n});\n');
 console.log('路由端计费控件已同步');
