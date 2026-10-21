@@ -1,4 +1,11 @@
 import { setupRouterControl } from './router-control';
+import {
+  getBillingSource,
+  getRouterBillingBridge,
+  onBillingSourceChange,
+  setRouterBillingDataListener,
+  type BillingSource,
+} from './router-billing-bridge';
 import type { RouterWorkbench } from './router-workbench';
 import { chooseConfigTransfer } from './config-transfer-dialog';
 import { setupPageHeaders } from './page-headers';
@@ -131,8 +138,22 @@ function setLoadingMaskVisible(visible: boolean, text = '正在启动 BJUT-AL…
   mask.setAttribute('aria-hidden', visible ? 'false' : 'true');
 }
 
-function showResumeMask() {
+const RESUME_MASK_MIN_HIDDEN_MS = 5000;
+const RESUME_MASK_COOLDOWN_MS = 15000;
+let resumeHiddenAt = document.hidden ? Date.now() : 0;
+let lastResumeMaskAt = 0;
+
+function showResumeMask(hiddenFor?: number) {
   if (!appLaunchRevealed) return;
+  const now = Date.now();
+  const elapsed = typeof hiddenFor === 'number' && Number.isFinite(hiddenFor)
+    ? Math.max(0, hiddenFor)
+    : resumeHiddenAt ? now - resumeHiddenAt : 0;
+  // Brief app switches do not need a full repaint cover. Keeping the mask for
+  // real background returns only also keeps focus changes from flashing it.
+  if (elapsed < RESUME_MASK_MIN_HIDDEN_MS) return;
+  if (lastResumeMaskAt && now - lastResumeMaskAt < RESUME_MASK_COOLDOWN_MS) return;
+  lastResumeMaskAt = now;
   if (loadingMaskTimer !== null) window.clearTimeout(loadingMaskTimer);
   setLoadingMaskVisible(true, '正在恢复应用…');
   loadingMaskTimer = window.setTimeout(() => {
@@ -205,9 +226,13 @@ const updateWindowAppearanceState = () => {
   );
 };
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) concealTransientWebviewPasswords();
+  if (document.hidden) {
+    resumeHiddenAt = Date.now();
+    concealTransientWebviewPasswords();
+  }
   if (documentWasHidden && !document.hidden) {
-    showResumeMask();
+    showResumeMask(resumeHiddenAt ? Date.now() - resumeHiddenAt : 0);
+    resumeHiddenAt = 0;
     scheduleAlipayAutomaticCompletionCheck();
     scheduleWechatAutomaticCompletionCheck();
     void updateUserInfo(true);
@@ -1106,7 +1131,7 @@ async function initializeRustEvents() {
     settle('计费进度事件', listen<{ message: string; percent?: number }>(
       'billing-center-progress',
       event => {
-        if (!billingCenterLoading) return;
+        if (!billingCenterLoading || getBillingSource() === 'router') return;
         const message = event.payload?.message?.trim();
         if (!message) return;
         updateBillingRefreshProgress(event.payload.percent ?? 0, true);
@@ -1117,7 +1142,7 @@ async function initializeRustEvents() {
     settle('计费模块事件', listen<BillingCenterModuleUpdate>(
       'billing-center-module',
       event => {
-        if (!billingCenterLoading || event.payload.account !== billingSelectionKey()) return;
+        if (!billingCenterLoading || getBillingSource() === 'router' || event.payload.account !== billingSelectionKey()) return;
         const update = event.payload;
         if (update.module === 'overview') {
           if (billingSelectionKey() === CURRENT_BILLING_SESSION) {
@@ -1684,6 +1709,7 @@ let billingRecordKindSelect: CustomSelect;
 let billingRecordYearSelect: CustomSelect;
 let billingRecordPageSizeSelect: CustomSelect;
 let billingQuestionSelects: CustomSelect[] = [];
+const BILLING_PAGE_SIZE_OPTIONS = [10, 20, 25, 50, 100].map(value => ({ value: String(value), text: `每页 ${value} 条` }));
 let billingCenterData: BillingCenterData | null = null;
 let activeRechargeMethod: RechargeMethod = 'campus-card';
 let activeAlipayPayment: ActiveAlipayPayment | null = null;
@@ -1708,6 +1734,7 @@ let wechatReturnPromptShown = false;
 let billingRecordQueryStates: Partial<Record<BillingRecordKind, BillingRecordQueryState>> = {};
 let billingRecordQueryBusy = false;
 let billingCenterLoading = false;
+let billingViewGeneration = 0;
 let selectedBillingPackageId = '';
 let effectiveNextBillingPackageId = '';
 let effectiveNextBillingPackageName = '';
@@ -1878,6 +1905,30 @@ async function init() {
     else renderBillingRecords();
   });
   billingAccountSelect.addEventListener('change', () => {
+    const generation = ++billingViewGeneration;
+    if (getBillingSource() === 'router') {
+      billingCenterData = null;
+      billingRecordQueryStates = {};
+      currentBillingSessionUser = '';
+      resetBillingCenterForSelectedAccount();
+      const bridge = getRouterBillingBridge();
+      if (bridge) {
+        billingAccountSelect.setDisabled(true);
+        setBillingRecordQueryBusy(true);
+        void bridge.selectAccount(billingAccountSelect.value)
+          .catch(error => {
+            if (generation !== billingViewGeneration) return;
+            billingCenterMessage.textContent = `路由器计费数据读取失败：${String(error)}`;
+            syncBillingCenterMessageVisibility();
+          })
+          .finally(() => {
+            if (generation !== billingViewGeneration) return;
+            billingAccountSelect.setDisabled(false);
+            setBillingRecordQueryBusy(false);
+          });
+      }
+      return;
+    }
     billingAccountFollowsDefault = billingSelectionKey() === defaultBillingAccountUser();
     currentBillingSessionUser = '';
     billingCenterData = null;
@@ -1959,6 +2010,10 @@ async function init() {
   setupNavigation();
   setupPageHeaders();
   setupDisclosureMotion();
+  onBillingSourceChange(source => applyBillingSource(source));
+  setRouterBillingDataListener(data => {
+    if (getBillingSource() === 'router') renderBillingCenterData(data);
+  });
   routerWorkbench = setupRouterControl(() => accountsCache, message => log('路由协作', message), customConfirm);
   setupEventListeners();
   setupEventDrivenNetworkDetection();
@@ -2537,12 +2592,11 @@ function syncBillingCenterMessageVisibility() {
 
 function activateBillingWorkbenchSection(section: string, resetScroll = false) {
   if (!billingWorkbenchSections.includes(section as BillingWorkbenchSection)) return;
-  if(routerWorkbench?.billingSelected && ['overview','records','services','devices'].includes(section)) {
-    routerWorkbench.selectBillingTab(section);return;
-  }
   const changed = activeBillingWorkbenchSection !== section;
   activeBillingWorkbenchSection = section as BillingWorkbenchSection;
-  billingCenterSubtitle.textContent = billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
+  billingCenterSubtitle.textContent = getBillingSource() === 'router' && activeBillingWorkbenchSection === 'recharge'
+    ? '路由器计费不包含充值'
+    : billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
   if (activeBillingWorkbenchSection === 'recharge' && rechargePayerFollowsBilling) {
     const user = selectedBillingAccountUser();
     const account = availableBillingAccounts().some(account => account.user === user) ? user : defaultBillingAccountUser();
@@ -2707,7 +2761,6 @@ function setupEventListeners() {
   btnSwitchAccount.addEventListener('click', () => void manualLogin(true));
   btnLogoutCurrent.addEventListener('click', () => void logoutCurrentCampusSession());
   btnRefreshBillingCenter.addEventListener('click', () => void refreshBillingCenterData());
-  window.addEventListener('router-billing-local-selected', () => { void refreshBillingCenterData(); });
   document.getElementById('btn-billing-webvpn')!.addEventListener('click', async () => {
     if (billingCenterLoading || billingRecordQueryBusy) return;
     const button = document.getElementById('btn-billing-webvpn') as HTMLButtonElement;
@@ -4529,6 +4582,10 @@ function billingSelectionKey(): string {
 
 function selectedBillingAccountUser(): string {
   const selection = billingSelectionKey();
+  if (getBillingSource() === 'router') {
+    return routerWorkbench?.snapshot?.accounts.find(account => account.id === selection)?.user
+      || (selection === 'current' ? billingCenterData?.account || '' : '');
+  }
   return selection === CURRENT_BILLING_SESSION ? currentBillingSessionUser : selection;
 }
 
@@ -4570,6 +4627,13 @@ function resetRechargeAccountSelectionToBilling() {
 
 function updateBillingAccountOptions() {
   if (!billingAccountSelect || !billingRechargeCardAccountSelect || !billingRechargeTargetAccountSelect) return;
+  if (getBillingSource() === 'router') {
+    const bridge = getRouterBillingBridge();
+    const options = bridge?.accounts() || [];
+    billingAccountSelect.setOptions(options);
+    billingAccountSelect.setValue(bridge?.currentAccount() || options[0]?.value || '');
+    return;
+  }
   const accounts = availableBillingAccounts();
   const previousBilling = billingAccountSelect.value;
   const options = accounts.map(account => ({
@@ -4611,6 +4675,49 @@ function updateBillingAccountOptions() {
     billingRecordQueryStates = {};
     resetBillingCenterForSelectedAccount();
   }
+}
+
+function applyBillingSource(source: BillingSource) {
+  if (!billingAccountSelect?.element) return;
+  billingViewGeneration++;
+  billingCenterLoading = false;
+  btnRefreshBillingCenter.disabled = false;
+  billingAccountSelect.setDisabled(false);
+  updateBillingRefreshProgress(0, false);
+  setBillingRecordQueryBusy(false);
+  billingRecordsList.style.removeProperty('min-height');
+  btnQueryBillingRecords.textContent = '查询';
+  btnExportBillingRecords.textContent = '导出本页';
+  btnExportAllBillingRecords.textContent = '导出全部';
+  const router = source === 'router';
+  const bridge = getRouterBillingBridge();
+  const webvpn = document.getElementById('btn-billing-webvpn') as HTMLButtonElement | null;
+  const direct = document.getElementById('btn-billing-direct') as HTMLButtonElement | null;
+  if (webvpn) webvpn.hidden = router;
+  if (direct) direct.hidden = router || !billingViaWebVpn;
+  const unavailable = document.getElementById('billing-recharge-unavailable');
+  const payment = document.querySelector<HTMLElement>('.billing-payment-panel');
+  const rechargeDescription = document.getElementById('billing-recharge-description');
+  if (unavailable) unavailable.hidden = !router;
+  if (payment) payment.hidden = router;
+  if (rechargeDescription) rechargeDescription.textContent = router
+    ? '路由器计费不包含充值，请切换到当前设备完成充值。'
+    : '选择支付方式，为自己或他人充值网费。';
+  billingRecordPageSizeSelect.setOptions(router ? [{ value: '100', text: '每页 100 条' }] : BILLING_PAGE_SIZE_OPTIONS);
+  billingRecordPageSizeSelect.setDisabled(router);
+  billingCenterData = null;
+  billingRecordQueryStates = {};
+  currentBillingSessionUser = '';
+  updateBillingAccountOptions();
+  resetBillingCenterForSelectedAccount();
+  if (router) billingCenterAccount.textContent = '--';
+  billingCenterSubtitle.textContent = router && activeBillingWorkbenchSection === 'recharge'
+    ? '路由器计费不包含充值'
+    : billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
+  billingCenterMessage.textContent = router ? '正在读取路由器计费数据…' : '正在读取当前账号的计费数据…';
+  syncBillingCenterMessageVisibility();
+  if (router && bridge) billingAccountSelect.setValue(bridge.currentAccount());
+  void refreshBillingCenterData();
 }
 
 // Split Network Check Loops
@@ -5057,10 +5164,11 @@ function currentBillingRecordQueryState(kind = activeBillingRecordKind()): Billi
 
 function initializeBillingRecordQueryStates(data: BillingCenterData) {
   const next: Partial<Record<BillingRecordKind, BillingRecordQueryState>> = {};
+  const pageSize = getBillingSource() === 'router' ? 100 : 10;
   (Object.keys(billingRecordDefinitions) as BillingRecordKind[]).forEach(kind => {
     next[kind] = {
       page: 1,
-      pageSize: 10,
+      pageSize,
       startDate: data.queryStartDate,
       endDate: data.queryEndDate,
       year: data.queryYear,
@@ -5132,6 +5240,10 @@ function readBillingRecordQuery(page: number, all = false): BillingRecordQuery |
 
 function setBillingRecordQueryBusy(busy: boolean) {
   billingRecordQueryBusy = busy;
+  for (const id of ['btn-billing-source-router', 'btn-billing-source-local']) {
+    const source = document.getElementById(id) as HTMLButtonElement | null;
+    if (source) source.disabled = busy;
+  }
   (document.getElementById('btn-billing-webvpn') as HTMLButtonElement).disabled = busy;
   (document.getElementById('btn-billing-direct') as HTMLButtonElement).disabled = busy;
   btnQueryBillingRecords.disabled = busy || !billingCenterData;
@@ -5145,9 +5257,22 @@ function setBillingRecordQueryBusy(busy: boolean) {
   }
 }
 
+async function requestBillingRecordResult(query: BillingRecordQuery): Promise<BillingRecordResult> {
+  if (getBillingSource() === 'router') {
+    const bridge = getRouterBillingBridge();
+    if (!bridge) throw new Error('路由器计费连接不可用，请重新连接');
+    return bridge.queryRecords(query);
+  }
+  return invoke<BillingRecordResult>('query_billing_records', {
+    query,
+    ...billingRequestAccount(),
+  });
+}
+
 async function queryBillingRecords(page: number) {
   if (!billingCenterData || billingRecordQueryBusy) return;
-  if (!await ensureBillingRequestForeground()) return;
+  const generation = billingViewGeneration;
+  if (getBillingSource() !== 'router' && !await ensureBillingRequestForeground()) return;
   const query = readBillingRecordQuery(page);
   if (!query) return;
   const queriedKind = query.kind;
@@ -5159,10 +5284,8 @@ async function queryBillingRecords(page: number) {
   setBillingRecordQueryBusy(true);
   btnQueryBillingRecords.textContent = '查询中…';
   try {
-    const result = await invoke<BillingRecordResult>('query_billing_records', {
-      query,
-      ...billingRequestAccount(),
-    });
+    const result = await requestBillingRecordResult(query);
+    if (generation !== billingViewGeneration) return;
     if (!billingCenterData || result.kind !== queriedKind) {
       throw new Error('计费记录类型与请求不一致');
     }
@@ -5181,8 +5304,10 @@ async function queryBillingRecords(page: number) {
       renderBillingRecords();
     }
   } catch (error) {
+    if (generation !== billingViewGeneration) return;
     await customAlert(`账单记录查询失败：${String(error)}`);
   } finally {
+    if (generation !== billingViewGeneration) return;
     btnQueryBillingRecords.innerHTML = original;
     setBillingRecordQueryBusy(false);
     renderIcons(btnQueryBillingRecords);
@@ -5461,12 +5586,18 @@ function applyBillingPasswordPolicy(policy: BillingPasswordPolicy) {
 
 function syncStandaloneBillingSecurity() {
   applyBillingPasswordPolicy(UNIFIED_AUTH_PASSWORD_POLICY);
-  btnBillingPassword.disabled = !availableBillingAccounts().some(account => account.user === selectedBillingAccountUser());
+  const accountAvailable = getBillingSource() === 'router'
+    ? Boolean(getRouterBillingBridge()?.currentAccount())
+    : availableBillingAccounts().some(account => account.user === selectedBillingAccountUser());
+  btnBillingPassword.disabled = !accountAvailable;
 }
 
 function renderBillingSecurity(data: BillingCenterData) {
   applyBillingPasswordPolicy(data.passwordPolicy || UNIFIED_AUTH_PASSWORD_POLICY);
-  btnBillingPassword.disabled = !availableBillingAccounts().some(account => account.user === selectedBillingAccountUser());
+  const accountAvailable = getBillingSource() === 'router'
+    ? Boolean(getRouterBillingBridge()?.currentAccount())
+    : availableBillingAccounts().some(account => account.user === selectedBillingAccountUser());
+  btnBillingPassword.disabled = !accountAvailable;
   const questionOptions = data.securityQuestions.map(question => ({ value: question.id, text: question.text }));
   billingQuestionSelects.forEach((select, index) => {
     select.setOptions(questionOptions.map(option => ({ ...option })));
@@ -5520,6 +5651,22 @@ function resetBillingCenterForSelectedAccount() {
 }
 
 function renderBillingCenterData(data: BillingCenterData) {
+  if (getBillingSource() === 'router') {
+    billingCenterData = data;
+    const info = billingOverviewToUserInfo(data.overview);
+    renderBillingCenter(info);
+    initializeBillingRecordQueryStates(data);
+    syncBillingRecordControls();
+    renderBillingRecords();
+    renderBillingService(data);
+    renderBillingDevices(data);
+    renderBillingSecurity(data);
+    const messages = [...info.billingWarnings, ...data.warnings].filter(Boolean) as string[];
+    billingCenterMessage.textContent = messages.join('\n');
+    syncBillingCenterMessageVisibility();
+    renderIcons(document.getElementById('billing-center')!);
+    return;
+  }
   if (billingSelectionKey() === CURRENT_BILLING_SESSION) currentBillingSessionUser = data.account;
   billingCenterData = data;
   updateBillingAccountOptions();
@@ -5612,9 +5759,40 @@ function finishBillingRefreshProgress() {
 }
 
 async function refreshBillingCenterData() {
-  if (routerWorkbench?.billingSelected) { await routerWorkbench.refreshBilling(); return; }
+  const generation = billingViewGeneration;
+  if (getBillingSource() === 'router') {
+    const bridge = getRouterBillingBridge();
+    if (!bridge || billingCenterLoading || billingRecordQueryBusy) return;
+    billingCenterLoading = true;
+    btnRefreshBillingCenter.disabled = true;
+    billingAccountSelect.setDisabled(true);
+    setBillingRecordQueryBusy(true);
+    updateBillingRefreshProgress(2, true);
+    billingCenterMessage.textContent = '正在查询路由器计费数据…';
+    syncBillingCenterMessageVisibility();
+    let completed = false;
+    try {
+      await bridge.refresh();
+      if (generation !== billingViewGeneration) return;
+      completed = true;
+    } catch (error) {
+      if (generation !== billingViewGeneration) return;
+      billingCenterMessage.textContent = `路由器计费数据读取失败：${String(error)}`;
+      syncBillingCenterMessageVisibility();
+    } finally {
+      if (generation !== billingViewGeneration) return;
+      btnRefreshBillingCenter.disabled = false;
+      billingAccountSelect.setDisabled(false);
+      if (completed) finishBillingRefreshProgress();
+      else updateBillingRefreshProgress(0, false);
+      setBillingRecordQueryBusy(false);
+      billingCenterLoading = false;
+    }
+    return;
+  }
   if (billingRecordQueryBusy || billingCenterLoading) return;
   if (!await ensureBillingRequestForeground()) return;
+  if (generation !== billingViewGeneration) return;
   const selection = billingSelectionKey();
   const requestAccount = billingRequestAccount();
   billingCenterLoading = true;
@@ -5627,14 +5805,16 @@ async function refreshBillingCenterData() {
   let completed = false;
   try {
     const data = await invoke<BillingCenterData>('get_billing_center', requestAccount);
-    if (billingSelectionKey() !== selection) return;
+    if (generation !== billingViewGeneration || billingSelectionKey() !== selection) return;
     renderBillingCenterData(data);
     completed = true;
   } catch (error) {
+    if (generation !== billingViewGeneration) return;
     billingCenterMessage.textContent = `完整计费数据读取失败：${String(error)}`;
     syncBillingCenterMessageVisibility();
     syncStandaloneBillingSecurity();
   } finally {
+    if (generation !== billingViewGeneration) return;
     btnRefreshBillingCenter.disabled = false;
     billingAccountSelect.setDisabled(false);
     if (completed) finishBillingRefreshProgress();
@@ -5686,9 +5866,10 @@ async function saveBillingCsv(kind: BillingRecordKind, title: string, csv: strin
 }
 
 async function exportBillingRecords(all: boolean) {
+  const generation = billingViewGeneration;
   const selection = currentBillingRecordSelection();
   if (!selection || (all ? selection.table.total === 0 : selection.table.rows.length === 0)) return;
-  if (all && !await ensureBillingRequestForeground()) return;
+  if (all && getBillingSource() !== 'router' && !await ensureBillingRequestForeground()) return;
   const button = all ? btnExportAllBillingRecords : btnExportBillingRecords;
   const original = button.innerHTML;
   setBillingRecordQueryBusy(true);
@@ -5698,18 +5879,18 @@ async function exportBillingRecords(all: boolean) {
     if (all) {
       const query = readBillingRecordQuery(1, true);
       if (!query) return;
-      const result = await invoke<BillingRecordResult>('query_billing_records', {
-        query,
-        ...billingRequestAccount(),
-      });
+      const result = await requestBillingRecordResult(query);
+      if (generation !== billingViewGeneration) return;
       if (result.kind !== selection.kind) throw new Error('计费记录类型与请求不一致');
       table = result.table;
     }
     const csv = buildBillingCsv(table, selection.definition);
     await saveBillingCsv(selection.kind, selection.definition.title, csv);
   } catch (error) {
+    if (generation !== billingViewGeneration) return;
     await customAlert(`导出账单记录失败：${String(error)}`);
   } finally {
+    if (generation !== billingViewGeneration) return;
     button.innerHTML = original;
     setBillingRecordQueryBusy(false);
     renderIcons(button);
@@ -6960,13 +7141,43 @@ async function performConfirmedBillingAction(
   confirmation: string,
   button: HTMLButtonElement,
 ) {
-  const requestedAccount = billingRequestAccount();
-  if (!await customConfirm(confirmation, title)) {
+  const generation = billingViewGeneration;
+  if (!await customConfirm(confirmation, title) || generation !== billingViewGeneration) {
     request.oldPassword = undefined;
     request.newPassword = undefined;
     clearBillingSecretInputs();
     return;
   }
+  if (getBillingSource() === 'router') {
+    const bridge = getRouterBillingBridge();
+    if (!bridge) {
+      await customAlert('路由器计费连接不可用，请重新连接。', title);
+      return;
+    }
+    const original = button.textContent;
+    const wasDisabled = button.disabled;
+    button.disabled = true;
+    button.textContent = '处理中…';
+    try {
+      const result = await bridge.performAction(request);
+      if (generation !== billingViewGeneration) return;
+      clearBillingSecretInputs();
+      await refreshBillingCenterData();
+      await customAlert(result.message, '操作完成');
+    } catch (error) {
+      clearBillingSecretInputs();
+      await customAlert(`操作失败：${String(error)}`, title);
+    } finally {
+      request.oldPassword = undefined;
+      request.newPassword = undefined;
+      request.questions = undefined;
+      clearBillingSecretInputs();
+      button.textContent = original;
+      if (!billingCenterData) button.disabled = wasDisabled;
+    }
+    return;
+  }
+  const requestedAccount = billingRequestAccount();
   if (request.action !== 'changePassword' && !await ensureBillingRequestForeground()) return;
   const original = button.textContent;
   const wasDisabled = button.disabled;
@@ -7051,6 +7262,7 @@ function renderBillingCenter(info: UserInfo | null) {
 }
 
 async function disconnectBillingSession(button: HTMLButtonElement) {
+  const generation = billingViewGeneration;
   const sessionId = button.dataset.sessionId;
   const ip = button.dataset.ip;
   const mac = button.dataset.mac;
@@ -7061,7 +7273,28 @@ async function disconnectBillingSession(button: HTMLButtonElement) {
   const tip = billingCenterData?.overview.offlineTip
     || '注销会话会中断对应设备的校园网连接；无感认证设备可能还需要解绑 MAC。';
   const confirmed = await customConfirm(`${tip}\n\n设备 IP：${ip}\n设备 MAC：${mac || '--'}`, '确认注销在线会话');
-  if (!confirmed) return;
+  if (!confirmed || generation !== billingViewGeneration) return;
+  if (getBillingSource() === 'router') {
+    const bridge = getRouterBillingBridge();
+    if (!bridge) {
+      await customAlert('路由器计费连接不可用，请重新连接。');
+      return;
+    }
+    button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = '注销中…';
+    try {
+      const message = await bridge.disconnectSession(sessionId, ip, mac);
+      await refreshBillingCenterData();
+      await customAlert(message, '操作完成');
+    } catch (error) {
+      await customAlert(`注销失败：${String(error)}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+    return;
+  }
   if (!await ensureBillingRequestForeground()) return;
   button.disabled = true;
   const originalText = button.textContent;
@@ -7084,6 +7317,7 @@ async function disconnectBillingSession(button: HTMLButtonElement) {
 }
 
 async function toggleBillingMauth() {
+  const generation = billingViewGeneration;
   const current = billingCenterData?.overview.mauthEnabled;
   if (typeof current !== 'boolean') {
     await customAlert('无感认证状态尚未读取，请刷新后重试。');
@@ -7094,6 +7328,25 @@ async function toggleBillingMauth() {
     ? '确认开启无感认证吗？计费系统将按已绑定设备识别校园网会话。'
     : '关闭无感认证可能导致当前设备下线，确认继续吗？';
   if (!await customConfirm(text, enabled ? '开启无感认证' : '关闭无感认证')) return;
+  if (generation !== billingViewGeneration) return;
+  if (getBillingSource() === 'router') {
+    const bridge = getRouterBillingBridge();
+    if (!bridge) {
+      await customAlert('路由器计费连接不可用，请重新连接。');
+      return;
+    }
+    btnToggleBillingMauth.disabled = true;
+    try {
+      const message = await bridge.setMauth(enabled);
+      await refreshBillingCenterData();
+      await customAlert(message, '操作完成');
+    } catch (error) {
+      await customAlert(`修改失败：${String(error)}`);
+    } finally {
+      btnToggleBillingMauth.disabled = typeof billingCenterData?.overview.mauthEnabled !== 'boolean';
+    }
+    return;
+  }
   if (!await ensureBillingRequestForeground()) return;
   btnToggleBillingMauth.disabled = true;
   try {

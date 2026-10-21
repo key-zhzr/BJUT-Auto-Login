@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 const { routerCounter, routerBytes, routerBillingSummary } = await import('../src/router-model.ts');
 assert.equal(routerCounter('9007199254740993'), 9007199254740993n);
 assert.equal(routerCounter('../counter'), 0n);
@@ -239,6 +241,57 @@ assert.equal(typeof partialWebViewListener, 'function');
 partialWebViewListener();
 assert.equal(partialWebViewResult, 'light');
 console.log('Appearance normalization regression cases passed');
+
+const themeBootstrap = readFileSync(new URL('../public/theme-bootstrap.js', import.meta.url), 'utf8');
+function runThemeBootstrap(preferences, systemDark = false) {
+  const root = {
+    dataset: {},
+    style: {
+      colorScheme: '',
+      values: {},
+      setProperty(name, value) { this.values[name] = value; },
+    },
+  };
+  const meta = { content: '' };
+  vm.runInNewContext(themeBootstrap, {
+    localStorage: { getItem: key => preferences[key] ?? null },
+    window: { matchMedia: () => ({ matches: systemDark }) },
+    document: { documentElement: root, querySelector: () => meta },
+  });
+  return { dataset: root.dataset, style: root.style, meta: meta.content };
+}
+
+const lightBootstrap = runThemeBootstrap({
+  bjut_theme: 'basic',
+  bjut_color_mode: 'light',
+  bjut_accent_color: 'orange',
+});
+assert.equal(lightBootstrap.dataset.theme, 'basic');
+assert.equal(lightBootstrap.dataset.colorScheme, 'light');
+assert.equal(lightBootstrap.dataset.accent, 'orange');
+assert.equal(lightBootstrap.style.values['--accent-color'], '#f59e0b');
+assert.equal(lightBootstrap.meta, '#eef2f7');
+
+const darkAppleBootstrap = runThemeBootstrap({
+  bjut_theme: 'apple27',
+  bjut_color_mode: 'system',
+  bjut_accent_color: 'violet',
+}, true);
+assert.equal(darkAppleBootstrap.dataset.theme, 'apple27');
+assert.equal(darkAppleBootstrap.dataset.colorScheme, 'dark');
+assert.equal(darkAppleBootstrap.dataset.accent, 'violet');
+assert.equal(darkAppleBootstrap.style.values['--accent-color'], '#8b7cf6');
+assert.equal(darkAppleBootstrap.meta, '#000000');
+
+const fallbackBootstrap = runThemeBootstrap({
+  bjut_theme: 'removed-theme',
+  bjut_color_mode: 'unsupported',
+  bjut_accent_color: 'unsupported',
+});
+assert.equal(fallbackBootstrap.dataset.theme, 'basic');
+assert.equal(fallbackBootstrap.dataset.colorScheme, 'light');
+assert.equal(fallbackBootstrap.dataset.accent, 'blue');
+console.log('Pre-paint theme bootstrap regression cases passed');
 
 const { compactFamilyLabel } = await import('../src/network-experience.ts');
 for (const [status, label] of [['not_configured', '未配置'], ['dns_error', 'DNS 失败'], ['tls_error', 'TLS 失败'], ['timeout', '超时']]) {

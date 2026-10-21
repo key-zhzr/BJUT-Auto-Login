@@ -130,5 +130,3 @@
 .router-port-actions{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;width:100%}.router-port-actions .router-port-login{grid-column:1/-1}.router-port-actions .btn{min-width:0;margin:0}.router-port-card>.custom-select{width:100%;min-width:0}
 
 :root[data-theme] :is(.logs-container,#router-logs-content){scrollbar-width:auto}
-
-.router-billing-disclosure{font-size:.9rem;margin-top:1rem}.router-billing-disclosure>summary{cursor:pointer;padding-block:.4rem}.router-billing-card .bj-form>p{font-size:.8rem;color:var(--text-muted)}

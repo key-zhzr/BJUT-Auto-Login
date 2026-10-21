@@ -31,7 +31,7 @@ interface Navigator {
 interface Window {
   __TAURI__?: unknown;
   AndroidBridge?: AndroidBridgeApi;
-  __showResumeMask?: () => void;
+  __showResumeMask?: (hiddenForMs?: number) => void;
   __nativeNetworkChanged?: (source?: string) => void;
   __nativeNotificationAction?: (action: 'check' | 'pause' | 'resume') => Promise<void>;
   __handleAndroidBack?: () => boolean;

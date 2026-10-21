@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0f172a" />
     <title>BJUT-Auto-Login</title>
+    <script src="/theme-bootstrap.js"></script>
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="stylesheet" href="/src/themes.css" />
     <link rel="stylesheet" href="/src/theme-apple.css" />
@@ -276,28 +277,6 @@
           <div id="router-billing-source" class="router-source-row" hidden>
             <span>查询来源</span><button id="btn-billing-source-router" class="btn btn-secondary btn-sm" type="button" aria-pressed="true">路由器</button><button id="btn-billing-source-local" class="btn btn-secondary btn-sm" type="button" aria-pressed="false">当前设备</button>
           </div>
-          <section id="router-billing-panel" hidden>
-            <div class="router-controls-row router-billing-filters">
-              <div class="custom-select" id="router-billing-uplink" aria-label="计费上游"><div class="custom-select-trigger"><span>所有上游</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div></div>
-              <div class="custom-select" id="router-billing-account" aria-label="路由计费账号"><div class="custom-select-trigger"><span>当前认证账号</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div></div>
-              <button id="btn-router-billing-refresh" class="btn btn-secondary btn-sm" type="button">刷新</button>
-            </div>
-            <p id="router-billing-message" role="status"></p>
-            <nav class="router-billing-tabs" aria-label="路由计费功能" role="tablist">
-              <button type="button" class="btn btn-secondary active" role="tab" aria-selected="true" data-router-billing-tab="overview">概览</button>
-              <button type="button" class="btn btn-secondary" role="tab" aria-selected="false" data-router-billing-tab="records">用量与账单</button>
-              <button type="button" class="btn btn-secondary" role="tab" aria-selected="false" data-router-billing-tab="services">账户服务</button>
-              <button type="button" class="btn btn-secondary" role="tab" aria-selected="false" data-router-billing-tab="devices">设备与安全</button>
-            </nav>
-            <div id="router-billing-overview" class="router-enter">
-              <div id="router-billing-summary" class="router-billing-summary"></div>
-              <div id="router-billing-results" class="router-billing-results"></div>
-              <h3>最近上网记录</h3><section id="router-billing-history" class="router-billing-results"></section>
-            </div>
-            <section id="router-billing-records" class="router-enter" hidden></section>
-            <section id="router-billing-services" class="router-billing-results router-enter" hidden></section>
-            <section id="router-billing-devices" class="router-billing-results router-enter" hidden></section>
-          </section>
 
           <div class="billing-workbench">
             <nav class="billing-mobile-nav" aria-label="计费中心功能" role="tablist">
@@ -560,9 +539,10 @@
                   <i data-lucide="wallet-cards"></i>
                   <h2>充值</h2>
                 </div>
-                <p>选择支付方式，为自己或他人充值网费。</p>
+                <p id="billing-recharge-description">选择支付方式，为自己或他人充值网费。</p>
               </div>
             </div>
+            <div id="billing-recharge-unavailable" class="billing-empty" hidden>路由器计费不包含充值，请切换到当前设备完成充值。</div>
             <div class="billing-payment-panel">
               <div class="billing-recharge-hours" role="note">
                 <i data-lucide="clock"></i>
@@ -1353,16 +1333,30 @@
             </div>
 
             <section id="router-control" class="settings-group glass-card router-control" style="margin-top: 1rem;">
-              <h3>路由协作</h3>
-              <p id="router-settings-connection">自动查找当前局域网中的 BJUT 路由器。</p>
-              <div class="router-actions"><button id="btn-router-settings-discover" class="btn btn-secondary btn-sm" type="button">重新查找</button><button id="btn-router-manual-connect" class="btn btn-secondary btn-sm" type="button">手动连接</button></div>
-              <p id="router-message" role="status" aria-live="polite"></p><button id="btn-router-forget-password" class="btn btn-secondary btn-sm" type="button" hidden>忘记已保存的路由密码</button>
-              <form id="router-settings-form" class="router-connect-form" hidden>
-                <h3>路由器设置</h3>
-                <div id="router-service-common" class="router-editor-grid"></div>
-                <details id="router-service-advanced"><summary>更多设置与上游</summary><div id="router-service-more" class="router-editor-grid"></div><h4>上游接口</h4><div id="router-configured-uplinks"></div></details>
-                <div class="router-actions"><button id="btn-router-settings-save" class="btn btn-primary btn-sm" type="submit">保存</button><button id="btn-router-settings-advanced" class="btn btn-secondary btn-sm" type="button">接口与更多设置</button></div>
-                <p id="router-settings-message" role="status"></p>
+              <div class="setting-group-heading">
+                <div>
+                  <h3>路由协作</h3>
+                  <p id="router-settings-connection">自动查找当前局域网中的 BJUT 路由器。</p>
+                  <p id="router-message" role="status" aria-live="polite"></p>
+                </div>
+                <div class="setting-group-actions">
+                  <button id="btn-router-settings-discover" class="btn btn-secondary btn-sm" type="button">重新查找</button>
+                  <button id="btn-router-manual-connect" class="btn btn-secondary btn-sm" type="button">手动连接</button>
+                  <button id="btn-router-forget-password" class="btn btn-secondary btn-sm" type="button" hidden>忘记路由密码</button>
+                </div>
+              </div>
+              <form id="router-settings-form" class="router-settings-form" hidden>
+                <div id="router-service-common" class="router-settings-list"></div>
+                <details id="router-service-advanced" class="router-settings-advanced">
+                  <summary>更多设置与上游</summary>
+                  <div id="router-service-more" class="router-settings-list"></div>
+                  <h4 class="router-settings-subheading">上游接口</h4>
+                  <div id="router-configured-uplinks"></div>
+                </details>
+                <div class="router-settings-footer">
+                  <p id="router-settings-message" role="status"></p>
+                  <button id="btn-router-settings-save" class="btn btn-primary btn-sm" type="submit">保存设置</button>
+                </div>
               </form>
             </section>
 

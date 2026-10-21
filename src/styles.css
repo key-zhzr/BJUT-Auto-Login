@@ -4253,15 +4253,41 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 .router-controls-row > label, .router-controls-row > .custom-select { flex: 1; min-width: 0; }
 .router-controls-row > strong { flex: 1; }
 .router-actions { display: flex; gap: .75rem; flex-wrap: wrap; margin-block: .75rem; }
-.router-control details { margin-block: 1rem; }
+.router-control details { margin-block: .5rem; }
 .router-control summary { cursor: pointer; }
+#router-message:empty, #router-settings-message:empty { display: none; }
+.router-control .router-settings-form { margin-top: .25rem; }
+.router-settings-list { display: block; }
+.router-setting-item { gap: 1.25rem; }
+.router-setting-control { display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto; min-width: 0; }
+.router-setting-select { width: 250px; max-width: 42vw; }
+.router-setting-input { width: min(340px, 42vw); min-height: 40px; padding: .6rem .75rem; border: 1px solid var(--card-border); border-radius: 9px; background: var(--card-bg); color: var(--text-main); font: inherit; }
+.router-setting-control .input-inline { min-height: 40px; padding: .6rem .75rem; }
+.router-control .router-settings-advanced { margin: 0; }
+.router-settings-advanced > summary { padding: 1rem 0; font-weight: 600; color: var(--text-main); }
+.router-settings-advanced[open] > summary { margin-bottom: .25rem; }
+.router-settings-subheading { margin: 1rem 0 .25rem; font-size: .9rem; color: var(--text-main); }
+.router-settings-footer { display: flex; align-items: center; justify-content: flex-end; gap: 1rem; flex-wrap: wrap; padding-top: 1rem; }
+#router-settings-message { margin: 0 auto 0 0; min-height: 1.2em; color: var(--text-muted); font-size: .8rem; overflow-wrap: anywhere; }
 .router-certificate-details textarea { width: 100%; padding: .75rem; border-radius: 12px; border: 1px solid var(--card-border); background: var(--card-bg); color: var(--text-main); }
 .router-uplink-card { min-width: 0; padding: 1rem; border: 1px solid var(--card-border); border-radius: 12px; overflow-wrap: anywhere; }
 .router-uplink-card p, #router-message { margin-block: .5rem; overflow-wrap: anywhere; }
 #router-message.error { color: var(--danger-color, #e5484d); }
 .router-sync-accounts { display: grid; gap: .75rem; margin-block: 1rem; }
 .router-sync-account { display: flex; gap: .75rem; align-items: center; }
-@media (max-width: 600px) { .router-controls-row { flex-wrap: wrap; } .router-controls-row > label, .router-controls-row > .custom-select { flex-basis: 100%; } }
+@media (max-width: 600px) {
+  .router-controls-row { flex-wrap: wrap; }
+  .router-controls-row > label, .router-controls-row > .custom-select { flex-basis: 100%; }
+  .router-control .setting-group-actions #btn-router-forget-password { grid-column: 1 / -1; }
+  .router-setting-item { flex-direction: column; align-items: stretch; gap: .6rem; }
+  .router-setting-item:has(.router-setting-control .switch) { flex-direction: row; align-items: center; }
+  .router-setting-item:has(.router-setting-control .switch) .router-setting-control { width: auto; flex: 0 0 auto; }
+  .router-setting-control { width: 100%; justify-content: flex-start; }
+  .router-setting-select, .router-setting-input { width: 100%; max-width: none; }
+  .router-setting-control .input-inline { width: 100% !important; }
+  .router-settings-footer { flex-direction: column; align-items: stretch; }
+  .router-settings-footer .btn { width: 100%; min-width: 0; }
+}
 
 .router-connect-form input { width: 100%; min-height: 42px; padding: .75rem; border: 1px solid var(--card-border); border-radius: 10px; background: var(--card-bg); color: var(--text-main); font: inherit; }
 .router-connect-form input:focus, .router-certificate-details textarea:focus { outline: 2px solid var(--primary-color); outline-offset: 2px; }
@@ -4293,43 +4319,7 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 .router-account-row p { font-size: .75rem; margin-bottom: 0; }
 .router-source-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-block: 1rem; }
 .router-source-row .btn[aria-pressed="true"] { color: var(--primary-color); border-color: var(--primary-color); background: rgba(var(--primary-rgb), .1); }
-.router-billing-filters { margin-block: 1rem; }
-#router-billing-panel .router-billing-filters { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; gap:.5rem; }
-#router-billing-panel .router-billing-filters .custom-select { min-width:0; }
-#router-billing-panel .router-billing-filters .custom-select-trigger,#router-billing-panel .router-billing-filters .btn { min-height:40px; }
-#router-billing-panel .router-billing-filters .custom-select-trigger span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-#router-billing-panel .router-billing-tabs { display:flex; flex-direction:row; flex-wrap:wrap; width:100%; height:auto; min-height:0; min-width:0; max-width:none; flex-basis:auto; position:static; inset:auto; z-index:auto; background:none; border:none; border-radius:0; box-shadow:none; backdrop-filter:none; padding:0; gap:.5rem; margin:1rem 0; }
-#router-billing-panel .router-billing-tabs .active { color:var(--primary-color); background:rgba(var(--primary-rgb),.1); }
-.router-record-controls { display:flex; flex-wrap:wrap; align-items:end; gap:.75rem; }
-.router-record-controls label { flex:1; min-width:140px; display:grid; gap:.4rem; }
-.router-record-controls input { min-width:0; width:100%; padding:.6rem; }
-.router-record-results { display:grid; gap:1rem; margin-block:1rem; }
-.router-record-card { min-width:0; padding:1.25rem; }
-.router-record-card h3 { font-size:1rem; margin-bottom:.5rem; }
-.router-record-card progress { width:100%; height:.35rem; accent-color:var(--primary-color); }
-.router-record-card img { max-width:100%; display:block; margin-block:.75rem; }
-.router-table-scroll { overflow:auto; margin-block:1rem; }
-.router-record-table { border-collapse:collapse; font-size:.8rem; min-width:100%; }
-.router-record-table th,.router-record-table td { text-align:left; padding:.65rem; border-bottom:1px solid var(--card-border); white-space:nowrap; }
-.router-device-item { margin-top:1rem; font-size:.85rem; overflow-wrap:anywhere; }
-#router-billing-panel [hidden] { display:none !important; }
-.nav-billing-tree [data-billing-section-target][hidden] { display:none !important; }
-#router-billing-message { margin-block: .75rem; color: var(--text-muted); }
-.router-billing-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-block: 1rem; }
-.router-billing-metric { padding: 1.25rem; }
-.router-billing-metric span { color: var(--text-muted); font-size: .8rem; }
-.router-billing-metric strong { display: block; font-size: 1.5rem; margin-top: .5rem; }
-.router-billing-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; padding-block: .25rem 1rem; }
-.router-billing-card { min-width: 0; padding: 1.25rem; }
-.router-billing-card h3 { font-size: .95rem; margin-bottom: .75rem; }
-.router-billing-status { font-size: .75rem; color: var(--text-muted); overflow-wrap: anywhere; }
-.router-billing-row { display: flex; justify-content: space-between; gap: .75rem; padding-block: .4rem; font-size: .8rem; }
-.router-billing-row span { color: var(--text-muted); }
-.router-billing-row strong { text-align: right; overflow-wrap: anywhere; }
-.router-billing-card progress { width: 100%; height: .35rem; margin-block: .75rem; accent-color: var(--primary-color); }
-.router-billing-card img { max-width: 100%; margin-block: .75rem; }
-.router-captcha-input { width: 100%; padding: .65rem; border: 1px solid var(--card-border); border-radius: 10px; background: var(--card-bg); color: var(--text-main); }
-.router-diagnostic-row { padding-block: .75rem; border-bottom: 1px solid var(--card-border); font-size: .8rem; }
+.router-diagnostic-row { padding-block:.75rem; border-bottom: 1px solid var(--card-border); font-size: .8rem; }
 .router-log-content { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; font: .72rem/1.8 monospace; color: var(--text-main); }
 .router-connect-modal-content { width: min(94%, 550px); max-width: 550px; padding: 1.5rem; }
 .router-connect-modal-content > p, .router-http-note { color: var(--text-muted); font-size: .8rem; }
@@ -4339,8 +4329,6 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 @media (max-width: 600px) {
   .router-port-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
   .router-dashboard, .router-page-panel { padding: 1rem; }
-  .router-billing-results { grid-template-columns: minmax(0, 1fr); }
-  .router-billing-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .router-account-row { align-items: flex-start; }
   .router-account-row > .btn { flex-shrink: 0; font-size: .72rem; }
   .router-connect-modal-content { padding: 1.25rem; }

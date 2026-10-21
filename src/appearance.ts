@@ -35,6 +35,9 @@ export const DEFAULT_APPEARANCE_THEME: AppearanceTheme = 'basic';
 export const DEFAULT_ACCENT_COLOR: AccentColor = 'blue';
 export const DEFAULT_COLOR_MODE: AppearanceColorMode = 'system';
 
+// public/theme-bootstrap.js mirrors these aliases and colors so the loading
+// mask paints with the persisted theme before this module is evaluated.
+
 export const APPEARANCE_THEME_OPTIONS: readonly AppearanceOption<AppearanceTheme>[] = [
   {
     value: 'basic',

@@ -70,9 +70,10 @@ const routerSnapshot = {
   accounts:[{id:'account1',user:'25000001',enabled:1,hasPassword:1,loginType:'auto'},{id:'account2',user:'25000002',enabled:0,hasPassword:1,loginType:'lgn'}],
 };
 let routerRefreshDelay = 0;
+let routerBillingPollDelay = 0;
 let routerQuerySequence = 0;
 const routerTickets = new Map<string,string>();
-const recordTickets = new Set<string>();
+const recordTickets = new Map<string, any>();
 const moduleTickets=new Map<string,string>();
 let savedRouterInfo:any=new URL(location.href).searchParams.has('saved')?{address:'https://192.0.2.1',username:'root',certificate:'synthetic-pem',allowHttp:false}:null,routerFailures=0;
 mockIPC(async (cmd, payload: any = {}) => {
@@ -89,13 +90,19 @@ mockIPC(async (cmd, payload: any = {}) => {
     if (payload.operation === 'billing_start') {
       const ticket=String(++routerQuerySequence).padStart(32,'0');routerTickets.set(ticket,payload.args.uplink);return {state:'loading',ticket};
     }
-    if (payload.operation === 'billing_records') {const ticket=String(++routerQuerySequence).padStart(32,'0');recordTickets.add(ticket);return {ticket};}
+    if (payload.operation === 'billing_records') {const ticket=String(++routerQuerySequence).padStart(32,'0');recordTickets.set(ticket,payload.args);return {ticket};}
     if (payload.operation === 'billing_details'){const ticket=String(++routerQuerySequence).padStart(32,'0');moduleTickets.set(ticket,payload.args.module);return {ticket};}
     if (payload.operation === 'billing_action'){const ticket=String(++routerQuerySequence).padStart(32,'0');moduleTickets.set(ticket,'action');return {ticket};}
+    if (payload.operation === 'billing_poll' && routerBillingPollDelay) await new Promise(resolve => setTimeout(resolve,routerBillingPollDelay));
+    if (payload.operation === 'billing_poll' && recordTickets.has(payload.args.ticket)) {
+      const query=recordTickets.get(payload.args.ticket),page=Number(query.page),offset=(page-1)*100;
+      return {result:{state:'ready',account:'25000001',kind:query.kind,total:205,page,columns:['loginTime','flow'],rows:Array.from({length:Math.min(100,205-offset)},(_,i)=>[`2026-10-13 12:00 · ${offset+i+1}`,'1024'])}};
+    }
+    if (payload.operation === 'billing_poll' && moduleTickets.get(payload.args.ticket)==='action') return {result:{state:'ready',message:'操作已完成'}};
     if (payload.operation === 'billing_poll' && moduleTickets.has(payload.args.ticket)){
       const module=moduleTickets.get(payload.args.ticket);return {result:{state:'ready',account:'25000001',module:module==='action'?undefined:module,message:module==='action'?'操作已完成':'计费数据已更新',canStop:1,canReopen:0,canCancel:1,installmentFlag:'100',useMoney:'25',packages:[{id:'2',name:'测试校园套餐'}],questions:[{id:'1',name:'测试问题一'},{id:'2',name:'测试问题二'},{id:'3',name:'测试问题三'}],FLDMINLENGTH:8,mauth:'1',macs:{columns:['online','mac','device','lastLoginAt','lastIp'],rows:[['在线','aabbccddeeff','测试设备','2026-10-18','192.0.2.20']]},history:{columns:['loginTime','logoutTime','ip','flow'],rows:[['2026-10-18 12:00','2026-10-18 13:00','192.0.2.20','1024 MB']]}},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'aabbccddeeff',useTime:'3600'}],sessionsAvailable:true};
     }
-    if (payload.operation === 'billing_poll') return recordTickets.has(payload.args.ticket)?{result:{state:'ready',message:'用量与账单已更新',account:'25000001',kind:'usage',total:1,page:1,columns:['loginTime','flow'],rows:[['2026-10-13 12:00','1024']]}}:{result:{state:'ready',message:'计费数据已更新',account:'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
+    if (payload.operation === 'billing_poll') return {result:{state:'ready',message:'计费数据已更新',account:'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
     if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'},uplinks:[{id:'dorm_a',enabled:'1',network:'wan14',network6:'wan16',login_type:'bjut-sushe',accounts:'account1'},{id:'dorm_b',network:'wan24',enabled:'1'}]};
     if (payload.operation === 'logs') return {text:'[测试路由器] 上游 lan3 认证已确认'};
     if (payload.operation === 'account_set') {const account=routerSnapshot.accounts.find(item=>item.id===payload.args.account)!;account.enabled=Number(payload.args.enabled);return {state:'ready'};}
@@ -352,29 +359,63 @@ button.addEventListener('click',async()=>{
     await wait(()=>!(document.getElementById('btn-router-sync') as HTMLButtonElement).disabled);
     assert(!document.getElementById('router-connect-modal')!.classList.contains('hidden')===false,'连接后弹窗未关闭');
     click('#btn-open-billing');
-    await wait(()=>document.querySelectorAll('#router-billing-results .router-billing-card').length===2 && document.getElementById('router-billing-summary')!.textContent!.includes('42.13'));
-    assert(document.querySelector<HTMLElement>('.billing-workbench')!.hidden,'路由计费与本机计费同时展示');
-    assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_start').length===2,'未自动查询全部上游');
-    assert(document.getElementById('router-billing-summary')!.textContent!.includes('40.00 GB') && document.getElementById('router-billing-summary')!.textContent!.includes('30.00 GB'),'流量汇总未按实际账号去重');
-    click('[data-router-billing-tab="records"]');
-    (document.getElementById('router-record-start') as HTMLInputElement).value='2026-01-01';
-    (document.getElementById('router-record-end') as HTMLInputElement).value='2026-10-13';click('#btn-router-record-query');
-    await wait(()=>document.getElementById('router-billing-records')!.textContent!.includes('2026-10-13 12:00'));
-    assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_records').length===1,'重复查询了同一认证账号');
-    Array.from(document.querySelectorAll<HTMLButtonElement>('#router-billing-records button')).find(button=>button.textContent==='导出本页')!.click();
-    await wait(()=>calls.some(call=>call.cmd==='export_billing_csv'&&call.payload.kind==='usage'&&call.payload.csv.includes('流量（MB）')));
-    click('[data-router-billing-tab="services"]');
-    await wait(()=>document.getElementById('router-billing-services')!.textContent!.includes('消费限额'));
-    const stop=Array.from(document.querySelectorAll<HTMLButtonElement>('#router-billing-services button')).find(b=>b.textContent==='立即报停')!;
-    assert(!!stop,'路由计费未显示可用业务');stop.click();await wait(()=>!document.getElementById('confirm-modal')!.classList.contains('hidden'));
-    assert(document.getElementById('confirm-modal-text')!.textContent!.includes('25000001'),'计费操作未提示账号');click('#btn-confirm-ok');
+    await wait(()=>document.getElementById('billing-center-balance')!.textContent!.includes('42.13'));
+    assert(!document.querySelector<HTMLElement>('.billing-workbench')!.hidden,'路由计费未使用本机计费界面');
+    assert(document.getElementById('btn-billing-source-router')!.getAttribute('aria-pressed')==='true','未选中路由来源');
+    assert(document.getElementById('billing-center-account')!.textContent!.includes('25000001'),'路由账号未映射');
+    assert(document.getElementById('billing-center-flow')!.textContent!.includes('30.00 GB'),'剩余流量未映射');
+    assert(document.getElementById('billing-mauth-badge')!.textContent==='已开启','无感认证状态未映射');
+    assert(document.querySelectorAll('#billing-online-list .billing-record-card').length===1,'在线会话未映射');
+    assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_start').length===1,'路由计费未按账号查询');
+    click('.billing-mobile-nav [data-billing-section-target="records"]');
+    (document.getElementById('billing-record-start-date') as HTMLInputElement).value='2026-01-01';
+    (document.getElementById('billing-record-end-date') as HTMLInputElement).value='2026-10-13';
+    click('#btn-query-billing-records');
+    await wait(()=>document.getElementById('billing-records-list')!.textContent!.includes('2026-10-13 12:00'));
+    assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_records').length===1,'重复查询了路由账单');
+    assert(document.getElementById('billing-record-total')!.textContent==='205','路由账单合计未保留');
+    click('#btn-billing-record-next');
+    await wait(()=>document.getElementById('billing-records-list')!.textContent!.includes('2026-10-13 12:00 · 101'));
+    assert(document.getElementById('billing-record-page-label')!.textContent!.includes('2 / 3'),'路由账单翻页未保留总页数');
+    assert(calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='billing_records'&&call.payload.args.page==='2'),'路由账单没有请求第二页');
+    click('#btn-export-billing-records');
+    await wait(()=>calls.some(call=>call.cmd==='export_billing_csv'&&call.payload.kind==='usage'&&call.payload.csv.includes('使用流量')));
+    await wait(()=>!document.getElementById('alert-modal')!.classList.contains('hidden'));
+    click('#btn-alert-ok');
+    click('.billing-mobile-nav [data-billing-section-target="services"]');
+    await wait(()=>document.getElementById('billing-service-package')!.textContent!.includes('测试套餐'));
+    assert(document.getElementById('billing-service-limit')!.textContent!.includes('100'),'消费限额未映射');
+    click('#btn-billing-stop-now');
+    await wait(()=>!document.getElementById('confirm-modal')!.classList.contains('hidden'));
+    assert(document.getElementById('confirm-modal-text')!.textContent!.includes('停机'),'计费操作未提示风险');
+    click('#btn-confirm-ok');
     await wait(()=>calls.some(call=>call.cmd==='router_request' && call.payload.operation==='billing_action' && call.payload.args.operation==='stopNow'));
-    click('[data-router-billing-tab="devices"]');await wait(()=>document.getElementById('router-billing-devices')!.textContent!.includes('已绑定设备'));
-    assert(document.getElementById('router-billing-devices')!.textContent!.includes('无感认证'),'缺少无感认证设置');
-    Array.from(document.querySelectorAll<HTMLButtonElement>('#router-billing-devices button')).find(b=>b.textContent==='账号安全')!.click();
-    await wait(()=>document.getElementById('router-billing-devices')!.textContent!.includes('修改计费密码'));
-    assert(document.getElementById('router-billing-devices')!.textContent!.includes('密码保护'),'缺少密码保护');
-    note('通过：路由计费业务办理、设备和账号安全在 App 内完成');
+    await wait(()=>!document.getElementById('alert-modal')!.classList.contains('hidden'));
+    click('#btn-alert-ok');
+    click('.billing-mobile-nav [data-billing-section-target="devices"]');
+    await wait(()=>document.getElementById('billing-device-count')!.textContent==='1');
+    assert(document.getElementById('billing-device-list')!.textContent!.includes('aabbccddeeff'),'绑定设备未映射');
+    assert(!document.getElementById('btn-billing-password')!.disabled,'路由账号安全未启用');
+    assert(!document.getElementById('btn-billing-questions')!.disabled,'密码保护问题未映射');
+    click('.billing-mobile-nav [data-billing-section-target="overview"]');
+    await wait(()=>!document.getElementById('btn-toggle-billing-mauth')!.disabled);
+    click('#btn-toggle-billing-mauth');
+    await wait(()=>!document.getElementById('confirm-modal')!.classList.contains('hidden'));
+    click('#btn-confirm-ok');
+    await wait(()=>calls.some(call=>call.cmd==='router_request' && call.payload.operation==='billing_action' && call.payload.args.operation==='setMauth'));
+    await wait(()=>!document.getElementById('alert-modal')!.classList.contains('hidden'));
+    click('#btn-alert-ok');
+    click('.billing-mobile-nav [data-billing-section-target="devices"]');
+    await wait(()=>document.getElementById('billing-device-count')!.textContent==='1');
+    click('.billing-mobile-nav [data-billing-section-target="recharge"]');
+    assert(!document.getElementById('billing-recharge-unavailable')!.hidden,'路由来源未显示充值说明');
+    assert(document.querySelector<HTMLElement>('.billing-payment-panel')!.hidden,'路由来源仍显示充值表单');
+    note('通过：路由器来源复用当前设备计费界面、记录、业务与安全设置');
+    click('#btn-billing-source-local');
+    await wait(()=>document.getElementById('billing-center-balance')!.textContent!.includes('23 元'));
+    assert(!document.getElementById('btn-billing-webvpn')!.hidden,'切回当前设备后校外访问入口未恢复');
+    assert(!document.querySelector<HTMLElement>('.billing-payment-panel')!.hidden,'切回当前设备后充值表单未恢复');
+    note('通过：计费来源切换保持同一界面，仅数据来源不同');
     click('[data-target="accounts"]');
     assert(!document.getElementById('router-accounts-panel')!.hidden && document.getElementById('router-accounts-list')!.textContent!.includes('25000002'),'账号管理未融合路由账号');
     Array.from(document.querySelectorAll<HTMLButtonElement>('#router-accounts-list button')).find(button=>button.textContent==='编辑')!.click();
@@ -391,17 +432,28 @@ button.addEventListener('click',async()=>{
     (document.getElementById('router-service-interval') as HTMLInputElement).value='30';
     (document.getElementById('router-settings-form') as HTMLFormElement).requestSubmit();
     await wait(()=>calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='save_settings'&&call.payload.args.interval==='30'));
-    note('通过：路由计费自动汇总去重、账号融合、日志与设置保存');
+    note('通过：路由计费统一界面、账号融合、日志与设置保存');
     await wait(()=>!(document.getElementById('btn-router-settings-save') as HTMLButtonElement).disabled);
     routerFailures=1;click('#btn-router-refresh');
     await wait(()=>document.getElementById('router-message')!.textContent!.includes('连接中断'));
     await wait(()=>calls.some(call=>call.cmd==='reconnect_router') && !document.getElementById('router-connected')!.hidden,7000);
-    note('通过：路由账号编辑、流量去重、账单查询和断线自动重连');
+    note('通过：路由账号编辑、统一计费界面、账单查询和断线自动重连');
     const {checkRouterDropdownLayout}=await import('./motion-regression');await checkRouterDropdownLayout(note);
+    click('#btn-open-billing');
+    await wait(()=>!(document.getElementById('btn-refresh-billing-center') as HTMLButtonElement).disabled);
+    routerBillingPollDelay=250;
+    const oldPolls=calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_poll').length;
+    click('#btn-refresh-billing-center');
+    await wait(()=>calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_poll').length>oldPolls);
+    click('[data-target="settings"]');
     routerRefreshDelay=180;
     click('#btn-router-refresh'); click('#btn-router-disconnect');
-    await new Promise(resolve => setTimeout(resolve,260));
+    await wait(()=>document.getElementById('billing-center-balance')!.textContent!.includes('23 元'));
+    await new Promise(resolve => setTimeout(resolve,350));
+    routerBillingPollDelay=0;
     assert(document.getElementById('router-connected')!.hidden,'断开后旧检测结果重新显示已连接');
+    assert(document.getElementById('billing-center-balance')!.textContent!.includes('23 元'),'断开后旧路由账单覆盖了本机数据');
+    assert(!(document.getElementById('btn-refresh-billing-center') as HTMLButtonElement).disabled,'断开后计费刷新停留在禁用状态');
     await wait(()=>document.getElementById('router-accounts-panel')!.hidden);
     assert(document.getElementById('router-accounts-panel')!.hidden && !document.querySelector<HTMLElement>('.billing-workbench')!.hidden,'断开后路由数据或查询来源未清理');
     routerRefreshDelay=0;

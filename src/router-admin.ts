@@ -1,33 +1,33 @@
 import { CustomSelect } from './custom-select';
-import { animateResize, toggleExpanded } from './layout-motion';
+import { animateResize } from './layout-motion';
 import type { RouterAccount, RouterSnapshot } from './router-model';
 
 export interface RouterConfiguration { service: Record<string,string>; uplinks: Record<string,string>[]; networks?: {id:string}[]; }
-type Field = {key:string; label:string; default?:string; min?:number; max?:number; flag?:boolean; choices?:[string,string][]};
+type Field = {key:string; label:string; hint?:string; default?:string; min?:number; max?:number; flag?:boolean; choices?:[string,string][]};
 const protocols: [string,string][] = [['auto','自动'],['bjut-sushe','bjut-sushe'],['bjut_wifi','bjut_wifi'],['lgn','lgn']];
 const transport: [string,string][] = [['auto','自动'],['ethernet','有线'],['wifi','Wi-Fi']];
 const fields: Field[] = [
-  {key:'enabled',label:'自动登录',flag:true,default:'0'},
-  {key:'interval',label:'检测间隔（秒）',default:'20',min:5,max:3600},
-  {key:'timeout',label:'请求超时（秒）',default:'3',min:1,max:30},
-  {key:'offline_confirmations',label:'离线确认次数',default:'2',min:1,max:10},
-  {key:'managed_routes',label:'固定上游出口',flag:true,default:'1'},
-  {key:'mwan3',label:'兼容 mwan3',flag:true,default:'1'},
-  {key:'max_backoff',label:'最大重试间隔（秒）',default:'300',min:5,max:86400},
-  {key:'credential_cooldown',label:'账号拒绝后等待（秒）',default:'600',min:30,max:86400},
-  {key:'post_login_delay',label:'登录后复核延迟（秒）',default:'2',min:0,max:15},
-  {key:'login_type',label:'认证方式',default:'auto',choices:protocols},
-  {key:'transport',label:'上游类型',default:'auto',choices:transport},
-  {key:'compatibility',label:'连接方式',default:'secure',choices:[['secure','HTTPS'],['legacy_http','旧式 HTTP']]},
-  {key:'strict_network',label:'核对校园网身份',flag:true,default:'1'},
-  {key:'expected_ssid',label:'指定 Wi-Fi 名称'}, {key:'expected_bssid',label:'指定 Wi-Fi 地址'},
-  {key:'online_url',label:'联网检测地址',default:'http://connect.rom.miui.com/generate_204'},
-  {key:'online_code',label:'联网成功状态码',default:'204',min:100,max:599},
-  {key:'log_target',label:'日志保存位置',default:'system',choices:[['system','系统日志'],['file','自定义目录']]},
-  {key:'log_directory',label:'日志目录',default:'/tmp/bjut-autologin-log'},
-  {key:'log_web',label:'创建网页日志链接（局域网可访问）',flag:true,default:'0'},
-  {key:'log_max_kb',label:'单个日志大小（KB）',min:64,max:4096,default:'256'},
-  {key:'log_level',label:'日志级别',default:'info',choices:[['trace','详细调试'],['debug','调试'],['info','信息'],['notice','通知'],['warning','警告'],['error','仅错误']]},
+  {key:'enabled',label:'自动登录',hint:'检测到校园网断开时自动登录',flag:true,default:'0'},
+  {key:'interval',label:'检测间隔（秒）',hint:'前台检测校园网状态的基础间隔',default:'20',min:5,max:3600},
+  {key:'timeout',label:'请求超时（秒）',hint:'单次探测与认证请求的等待上限',default:'3',min:1,max:30},
+  {key:'offline_confirmations',label:'离线确认次数',hint:'连续离线达到该次数后才切换账号或重试',default:'2',min:1,max:10},
+  {key:'managed_routes',label:'固定上游出口',hint:'将上游流量绑定到对应接口的出口路由',flag:true,default:'1'},
+  {key:'mwan3',label:'兼容 mwan3',hint:'与 mwan3 策略路由共存',flag:true,default:'1'},
+  {key:'max_backoff',label:'最大重试间隔（秒）',hint:'断网后指数退避的上限',default:'300',min:5,max:86400},
+  {key:'credential_cooldown',label:'账号拒绝后等待（秒）',hint:'账号被明确拒绝后暂停尝试的时长',default:'600',min:30,max:86400},
+  {key:'post_login_delay',label:'登录后复核延迟（秒）',hint:'登录成功后再次核对状态的延迟',default:'2',min:0,max:15},
+  {key:'login_type',label:'认证方式',hint:'自动会按当前网络选择协议',default:'auto',choices:protocols},
+  {key:'transport',label:'上游类型',hint:'上游接口的物理连接类型',default:'auto',choices:transport},
+  {key:'compatibility',label:'连接方式',hint:'HTTPS 为推荐的安全连接方式',default:'secure',choices:[['secure','HTTPS'],['legacy_http','旧式 HTTP']]},
+  {key:'strict_network',label:'核对校园网身份',hint:'校验 SSID/BSSID 与校园网身份',flag:true,default:'1'},
+  {key:'expected_ssid',label:'指定 Wi-Fi 名称',hint:'留空表示不限制 Wi-Fi 名称'}, {key:'expected_bssid',label:'指定 Wi-Fi 地址',hint:'留空表示不限制接入点'},
+  {key:'online_url',label:'联网检测地址',hint:'用于判断互联网是否可用的探测地址',default:'http://connect.rom.miui.com/generate_204'},
+  {key:'online_code',label:'联网成功状态码',hint:'探测地址返回的可接受状态码',default:'204',min:100,max:599},
+  {key:'log_target',label:'日志保存位置',hint:'系统日志或自定义目录',default:'system',choices:[['system','系统日志'],['file','自定义目录']]},
+  {key:'log_directory',label:'日志目录',hint:'自定义日志目录的绝对路径',default:'/tmp/bjut-autologin-log'},
+  {key:'log_web',label:'创建网页日志链接（局域网可访问）',hint:'在局域网内提供只读网页日志',flag:true,default:'0'},
+  {key:'log_max_kb',label:'单个日志大小（KB）',hint:'达到大小后轮换日志文件',min:64,max:4096,default:'256'},
+  {key:'log_level',label:'日志级别',hint:'记录到日志的最低级别',default:'info',choices:[['trace','详细调试'],['debug','调试'],['info','信息'],['notice','通知'],['warning','警告'],['error','仅错误']]},
 ];
 const legacy = new Set(['enabled','interval','timeout','offline_confirmations','managed_routes','mwan3','log_level']);
 const inputIds: Record<string,string> = {interval:'router-service-interval',timeout:'router-service-timeout',offline_confirmations:'router-service-offline',enabled:'router-service-enabled',managed_routes:'router-service-routes',mwan3:'router-service-mwan'};
@@ -36,21 +36,49 @@ let sequence = 0;
 const element = (tag:string,text='',className='') => { const e=document.createElement(tag);e.textContent=text;e.className=className;return e; };
 function action(text:string,click:()=>void,className='btn btn-secondary btn-sm'): HTMLButtonElement { const b=document.createElement('button');b.type='button';b.textContent=text;b.className=className;b.addEventListener('click',click);return b; }
 interface Control { read(): string; close(): void; }
-function field(parent:HTMLElement, definition:Field, value:string, id?:string): Control {
-  const label=element('label',definition.label,definition.flag?'router-setting-switch':'');
+interface FieldControl extends Control { element: HTMLElement; attach?: () => void; }
+function createFieldControl(definition:Field, value:string, id?:string): FieldControl {
   if (definition.choices) {
     const wrapper=element('div','','custom-select');wrapper.id=id || `router-editor-select-${++sequence}`;wrapper.setAttribute('aria-label',definition.label);
     wrapper.innerHTML='<div class="custom-select-trigger"><span></span><span aria-hidden="true">⌄</span></div><div class="custom-select-options"></div>';
-    label.append(wrapper);parent.append(label);
-    const select=new CustomSelect(wrapper.id);select.setOptions(definition.choices.map(([value,text])=>({value,text})));select.value=protocol(value);
-    return {read:()=>select.value,close:()=>select.setDisabled(true)};
+    let select: CustomSelect | null=null;
+    return {
+      element:wrapper,
+      attach:()=>{if(select)return;select=new CustomSelect(wrapper.id);select.setOptions(definition.choices!.map(([value,text])=>({value,text})));select.value=protocol(value);},
+      read:()=>select ? select.value : '',
+      close:()=>{select?.setDisabled(true);},
+    };
   }
   const input=document.createElement('input');input.type=definition.flag?'checkbox':definition.min!==undefined?'number':'text';
   input.id=id || `router-editor-input-${++sequence}`;
   if (definition.flag) input.checked=value==='1'; else input.value=value;
+  input.setAttribute('aria-label',definition.label);
   if (definition.min!==undefined) {input.min=String(definition.min);input.max=String(definition.max);input.required=true;}
-  label.setAttribute('for',input.id);label.prepend(input);if (!definition.flag) label.append(input);
-  parent.append(label);return {read:()=>definition.flag?(input.checked?'1':'0'):input.value.trim(),close:()=>{}};
+  return {element:input,read:()=>definition.flag?(input.checked?'1':'0'):input.value.trim(),close:()=>{}};
+}
+function field(parent:HTMLElement, definition:Field, value:string, id?:string): Control {
+  const control=createFieldControl(definition,value,id);
+  const label=element('label',definition.label,definition.flag?'router-setting-switch':'');
+  if (definition.flag) label.prepend(control.element);
+  else {
+    if (control.element instanceof HTMLInputElement) label.setAttribute('for',control.element.id);
+    label.append(control.element);
+  }
+  parent.append(label);control.attach?.();return control;
+}
+function settingField(parent:HTMLElement, definition:Field, value:string, id?:string): Control {
+  const control=createFieldControl(definition,value,id);
+  const row=element('div','','setting-item router-setting-item'),info=element('div','','setting-info');
+  info.append(element('h4',definition.label));
+  if (definition.hint) info.append(element('p',definition.hint));
+  const slot=element('div','','router-setting-control');
+  if (definition.flag) {
+    const toggle=element('label','','switch');toggle.append(control.element,element('span','','slider round'));slot.append(toggle);
+  } else {
+    control.element.classList.add(definition.choices?'router-setting-select':definition.min!==undefined?'input-inline':'router-setting-input');
+    slot.append(control.element);
+  }
+  row.append(info,slot);parent.append(row);control.attach?.();return control;
 }
 
 export class RouterAdmin {
@@ -62,7 +90,6 @@ export class RouterAdmin {
   private editor: HTMLElement | null=null;
   constructor(private options:{ request:<T>(operation:string,args?:Record<string,unknown>)=>Promise<T>; refresh:()=>Promise<void>; confirm:(message:string,title:string,label:string)=>Promise<boolean>; log:(message:string)=>void; }) {
     document.getElementById('router-settings-form')!.addEventListener('submit',event=>{event.preventDefault();void this.saveSettings();});
-    document.getElementById('btn-router-settings-advanced')!.addEventListener('click',()=>{void this.showMore();});
     document.getElementById('btn-router-add-account')!.addEventListener('click',()=>this.editAccount());
   }
   update(snapshot:RouterSnapshot) { this.snapshot=snapshot; }
@@ -86,12 +113,8 @@ export class RouterAdmin {
       if (definition.key.startsWith('log_') && definition.key!=='log_level' && !this.supports('log_settings')) continue;
       if (!this.supports('uplink_manage') && !legacy.has(definition.key)) continue;
       const target=legacy.has(definition.key)?common:more;
-      this.controls.set(definition.key,field(target,definition,this.configuration!.service[definition.key] || definition.default || '',inputIds[definition.key]));
+      this.controls.set(definition.key,settingField(target,definition,this.configuration!.service[definition.key] || definition.default || '',inputIds[definition.key]));
     }
-  }
-  private async showMore() {
-    await this.load();
-    toggleExpanded(document.getElementById('router-service-advanced') as HTMLDetailsElement);
   }
   private async saveSettings() {
     if(!this.snapshot || !this.configuration)return;
