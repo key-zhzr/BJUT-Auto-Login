@@ -5,7 +5,7 @@ import { CustomSelect } from './custom-select';
 import { animateResize, setVisible } from './layout-motion';
 import { routerPortIcon } from './router-port-icon';
 import type { DiagnosticStep } from './models';
-import { routerLabels, routerBytes, routerCounter } from './router-model';
+import { routerBytes, routerCounter, routerStatus, routerAdvice } from './router-model';
 import type { RouterSnapshot, RouterCandidate, RouterUplink } from './router-model';
 import { setBillingSource, setRouterBillingBridge } from './router-billing-bridge';
 
@@ -32,6 +32,8 @@ export class RouterWorkbench {
   private samples = new Map<string, {at: number; tx: bigint; rx: bigint}>();
   private logSnapshot = '';
   private logsBusy = false;
+  private disconnected=false;
+  private receivedAt=Date.now();
 
   constructor(private options: {
     connect: (address?: string) => void;
@@ -79,8 +81,12 @@ export class RouterWorkbench {
   }
 
   render(data: RouterSnapshot): void {
+    const reconnect=this.disconnected;
+    this.disconnected=false;this.receivedAt=Date.now();
+    this.setControlsAvailable(true);
     const firstConnection = !this.snapshot;
     this.snapshot = data; this.admin.update(data);
+    if(reconnect)this.admin.resume();
     for (const id of ['router-dashboard','router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), true);
     byId('btn-router-auto-connect').hidden = true;
     byId('btn-router-discover').hidden = true;
@@ -111,8 +117,26 @@ export class RouterWorkbench {
     byId('router-discovery-message').textContent = this.candidates[0]?.name || '';
   }
 
+  markDisconnected(reason:string):void {
+    if(!this.snapshot)return;
+    this.disconnected=true;
+    this.updatePorts();this.setControlsAvailable(false);
+    byId('router-settings-connection').textContent='连接已中断，以下为上次读取的数据。';
+    byId('router-discovery-message').textContent=reason;
+    byId('btn-router-auto-connect').hidden=false;
+  }
+  private setControlsAvailable(available:boolean) {
+    for(const id of ['router-uplink-status','router-accounts-panel','router-settings-form']) {
+      byId(id).querySelectorAll<HTMLButtonElement|HTMLInputElement>('button,input').forEach(control=>{
+        if(!available){control.dataset.wasDisabled=String(control.disabled);control.disabled=true;}
+        else if(control.dataset.wasDisabled!==undefined){control.disabled=control.dataset.wasDisabled==='true';delete control.dataset.wasDisabled;}
+      });
+    }
+  }
+
   private supports(capability: string): boolean { return this.snapshot?.capabilities?.includes(capability) || false; }
   private async request<T>(operation: string, args: Record<string,unknown> = {}): Promise<T> {
+    if(this.disconnected)throw new Error('路由连接已中断，请等待重新连接。');
     return invoke<T>('router_request',{operation,args});
   }
   private renderPorts(): void {
@@ -159,13 +183,14 @@ export class RouterWorkbench {
       const speed=Number(port?.speedMbps || 0);
       field('speed').textContent = port?.linkUp === 0 ? '已断开' : speed ? (speed>=1000 ? `${speed/1000} GbE` : `${speed} Mbps`) : item.transport==='wifi'?'Wi-Fi':'有线';
       for (const [family,value] of [['ipv4',item.internet4],['ipv6',item.internet6]]) {
-        const element=field(family!); element.textContent=`${value==='reachable'?'✓':value==='unreachable'?'×':'—'} ${family==='ipv4'?'IPv4':'IPv6'}`;
-        element.classList.toggle('success',value==='reachable'); element.classList.toggle('error',value==='unreachable');
+        const stale=routerStatus(item,this.disconnected)==='数据已过期';
+        const element=field(family!); element.textContent=`${stale?'上次 ':''}${value==='reachable'?'✓':value==='unreachable'?'×':'—'} ${family==='ipv4'?'IPv4':'IPv6'}`;
+        element.classList.toggle('success',!stale && value==='reachable'); element.classList.toggle('error',!stale && value==='unreachable');
       }
-      field('state').textContent = routerLabels[item.state] || item.state;
+      field('state').textContent = routerStatus(item,this.disconnected,(Date.now()-this.receivedAt)/1000);
       field('account').textContent = item.account ? `账号 ${item.account}` : '暂无认证账号';
-      field('progress').textContent = item.checking ? item.check_message || '正在检测…' : '';
-      field('description').textContent = [item.network,item.network6,item.ipv4,item.ipv6,item.message].filter(Boolean).join('\n');
+      field('progress').textContent = item.operation?.id ? `${item.operation.phase || ''} · ${item.operation.duration || 0} 秒` : item.checking ? item.check_message || '正在检测…' : '';
+      field('description').textContent = [item.network,item.network6,item.ipv4,item.ipv6,`认证：${item.session==='online'?'已认证':item.session==='offline'?'未认证':'待确认'}`,item.message,routerAdvice(item),item.updated_at?`检测时间：${new Date(item.updated_at*1000).toLocaleString()}`:''].filter(Boolean).join('\n');
       const now=performance.now(),tx=routerCounter(port?.txBytes),rx=routerCounter(port?.rxBytes),previous=this.samples.get(item.id);
       const elapsed=previous?(now-previous.at)/1000:0;
       const rate=(current:bigint,last:bigint)=>elapsed>.2 && current>=last ? Number(current-last)/elapsed : 0;
@@ -210,13 +235,28 @@ export class RouterWorkbench {
   private diagnosticMessage(item: RouterUplink): string {
     const family=(name:string,state?:string)=>`${name} ${state==='reachable'?'通过':state==='unreachable'?'未通过':state==='not_configured'?'未取得地址':'待检测'}`;
     const route=(value?:string)=>({managed:'固定出口',kernel:'系统路由',missing_default:'缺少默认路由',failed:'出口未就绪',not_configured:'未取得地址'}[value || ''] || '待检查');
-    return [routerLabels[item.state] || item.state,`${family('IPv4',item.internet4)} · ${family('IPv6',item.internet6)}`,`IPv4 ${route(item.route4)} · IPv6 ${route(item.route6)}`,item.message,item.updated_at?`更新于 ${new Date(item.updated_at*1000).toLocaleTimeString()}`:'尚无检测结果'].filter(Boolean).join('\n');
+    return [routerStatus(item,this.disconnected),`认证会话：${item.session==='online'?'已认证':item.session==='offline'?'未认证':'待确认'}`,`${family('IPv4',item.internet4)} · ${family('IPv6',item.internet6)}`,`IPv4 ${route(item.route4)} · IPv6 ${route(item.route6)}`,item.message,routerAdvice(item),item.updated_at?`更新于 ${new Date(item.updated_at*1000).toLocaleTimeString()}`:'尚无检测结果'].filter(Boolean).join('\n');
   }
   async diagnosticSteps(): Promise<DiagnosticStep[]> {
     if (!this.snapshot) return [];
     try { await this.options.refresh(); }
     catch { /* Keep explicitly dated last results available. */ }
-    return this.snapshot?.uplinks.map(item=>({id:`router_${item.id}`,label:`路由上游 ${item.device || item.network || item.id}`,status:item.state==='online'?'success':'warning',message:this.diagnosticMessage(item),durationMs:0})) || [];
+    return this.snapshot?.uplinks.map(item=>({id:`router_${item.id}`,label:`路由上游 ${item.device || item.network || item.id}`,status:routerStatus(item,this.disconnected)==='互联网已连接'?'success':'warning',message:this.diagnosticMessage(item),durationMs:0})) || [];
+  }
+  jointDiagnosticStep(localHealthy:boolean):DiagnosticStep|null {
+    if(!this.snapshot)return null;
+    const live=this.snapshot.uplinks.filter(item=>routerStatus(item,this.disconnected)!=='数据已过期');
+    const online=live.filter(item=>item.state==='online').length;
+    const message=!live.length?'路由器结果已过期，请恢复协作连接后重新诊断。':online && !localHealthy?'路由器存在可用上游，当前设备探测异常；请优先检查本机 VPN、DNS 和局域网连接。':!online && localHealthy?'当前设备联网正常，路由上游尚未确认可用；可能使用了其他网络出口，请检查各上游认证与路由。':online?`${online} 条路由上游可用，当前设备联网正常。`:'当前设备与路由上游均未确认联网，请先检查上游接口和校园网认证。';
+    return {id:'router_joint',label:'本机与路由器联合判断',status:online && localHealthy?'success':'warning',message,durationMs:0};
+  }
+  diagnosticBundle():unknown {
+    if(!this.snapshot)return null;
+    let logs=this.logSnapshot;
+    for(const account of this.snapshot.accounts)if(account.user)logs=logs.split(account.user).join('[账号]');
+    for(const item of this.snapshot.uplinks)for(const value of [item.ssid,item.bssid,item.ipv6])if(value)logs=logs.split(value).join('[网络标识]');
+    logs=logs.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g,'[IPv4]').replace(/\b(?:[0-9a-f]{0,4}:){3,}[0-9a-f:]{0,39}\b/gi,'[IPv6/BSSID]').replace(/\b[0-9a-f]{1,4}::[0-9a-f:]+\b/gi,'[IPv6]');
+    return {version:this.snapshot.version,disconnected:this.disconnected,recordedAt:new Date(this.receivedAt).toISOString(),uplinks:this.snapshot.uplinks.map(item=>({id:item.id,state:item.state,session:item.session,internet4:item.internet4,internet6:item.internet6,route4:item.route4,route6:item.route6,stale:item.stale,ageSeconds:item.age_seconds,updatedAt:item.updated_at,operationState:item.operation?.state,advice:routerAdvice(item)})),logs:logs.split('\n').slice(-200)};
   }
 
   async refreshLogs(): Promise<void> {

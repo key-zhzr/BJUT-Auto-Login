@@ -4258,6 +4258,10 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 #router-message:empty, #router-settings-message:empty { display: none; }
 .router-control .router-settings-form { margin-top: .25rem; }
 .router-settings-list { display: block; }
+.router-maintenance { margin-block: 1rem; padding: 1rem; border: 1px solid var(--card-border); border-radius: 1rem; min-width: 0; }
+.router-maintenance > p { margin-block: .65rem; overflow-wrap: anywhere; }
+.router-maintenance > progress { width: 100%; height: .45rem; accent-color: var(--accent-color); margin-block: .75rem; }
+.router-maintenance .router-actions { flex-wrap: wrap; gap: .5rem; }
 .router-setting-item { gap: 1.25rem; }
 .router-setting-control { display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto; min-width: 0; }
 .router-setting-select { width: 250px; max-width: 42vw; }

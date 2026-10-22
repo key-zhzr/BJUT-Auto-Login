@@ -425,7 +425,7 @@ impl Remote {
             .into_iter()
             .flatten()
             .filter_map(|item| item.as_str().map(str::to_owned))
-            .take(16)
+            .take(32)
             .collect();
         let ports = if capabilities.iter().any(|item| item == "ports") {
             let data = if let Some(data) = &combined {
@@ -975,6 +975,18 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
         "log_directory",
         "log_web",
         "log_max_kb",
+        "pushplus_enabled",
+        "pushplus_token",
+        "pushplus_topic",
+        "pushplus_online",
+        "pushplus_failure",
+        "pushplus_delay",
+        "pushplus_interval",
+        "billing_background",
+        "billing_interval",
+        "billing_alerts",
+        "balance_threshold",
+        "flow_threshold",
     ];
     let upstream = [
         "enabled",
@@ -991,10 +1003,19 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
         "expected_bssid",
     ];
     let allowed: &[&str] = match operation {
-        "logs" | "settings" => &[],
+        "logs" | "settings" | "pushplus_test" | "billing_cached" | "maintenance_info" => &[],
+        "maintenance_start" => &["action", "prepared", "backup"],
+        "maintenance_poll" => &["ticket"],
         "save_settings" => &service,
         "account_set" => &["account", "enabled"],
-        "account_save" => &["account", "username", "password", "enabled", "login_type"],
+        "account_save" => &[
+            "account",
+            "username",
+            "password",
+            "enabled",
+            "login_type",
+            "max_sessions",
+        ],
         "account_delete" => &["account"],
         "account_move" => &["account", "direction"],
         "uplink_save" => &["uplink", "payload"],
@@ -1019,6 +1040,16 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
     if !args.iter().all(|(key, value)| {
         allowed.contains(&key.as_str())
             && match key.as_str() {
+                "action" => matches!(
+                    value.as_str(),
+                    Some("check" | "prepare" | "backup" | "restore" | "upgrade" | "rollback")
+                ),
+                "prepared" => value
+                    .as_str()
+                    .is_some_and(|s| s.is_empty() || valid_token(s)),
+                "backup" => value.as_str().is_some_and(|s| {
+                    s.len() <= 80 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                }),
                 "payload" if operation == "billing_action" => value.as_str().is_some_and(|text| {
                     valid_billing_payload(
                         args.get("operation").and_then(Value::as_str).unwrap_or(""),
@@ -1053,7 +1084,9 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
                     .as_str()
                     .is_some_and(|v| v.len() <= 12 && v.bytes().all(|b| b.is_ascii_alphanumeric())),
                 "direction" => matches!(value.as_str(), Some("up" | "down")),
-                "enabled" | "managed_routes" | "mwan3" | "strict_network" | "log_web" => {
+                "enabled" | "managed_routes" | "mwan3" | "strict_network" | "log_web"
+                | "pushplus_enabled" | "pushplus_online" | "pushplus_failure"
+                | "billing_background" | "billing_alerts" => {
                     matches!(value.as_str(), Some("0" | "1"))
                 }
                 _ => value
@@ -1085,7 +1118,8 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
             .get("uplink")
             .and_then(Value::as_str)
             .is_some_and(|v| !v.is_empty()),
-        "billing_poll" | "billing_captcha" => args.contains_key("ticket"),
+        "billing_poll" | "billing_captcha" | "maintenance_poll" => args.contains_key("ticket"),
+        "maintenance_start" => args.contains_key("action"),
         "billing_action" => ["ticket", "operation", "payload"]
             .iter()
             .all(|key| args.contains_key(*key)),
@@ -1400,6 +1434,11 @@ mod tests {
             &json!({"interval":"20","enabled":"1"})
         ));
         assert!(valid_router_request(
+            "save_settings",
+            &json!({"pushplus_enabled":"1","pushplus_token":"fixture-token","pushplus_delay":"60"})
+        ));
+        assert!(valid_router_request("pushplus_test", &json!({})));
+        assert!(valid_router_request(
             "billing_start",
             &json!({"uplink":"1","account":"current"})
         ));
@@ -1407,6 +1446,8 @@ mod tests {
             ("exec", json!({"command":"reboot"})),
             ("settings", json!({"path":"/etc/shadow"})),
             ("save_settings", json!({"password":"replacement"})),
+            ("save_settings", json!({"pushplus_enabled":"true"})),
+            ("pushplus_test", json!({"url":"https://other.example"})),
             (
                 "uplink_save",
                 json!({"payload":r#"{"network":"wan14","shell":"reboot"}"#}),

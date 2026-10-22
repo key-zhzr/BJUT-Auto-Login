@@ -47,7 +47,7 @@ export function setupRouterControl(getAccounts:()=>AccountView[],log:(message:st
     setVisible(connectedPanel,true);
   }
   function unavailable(error:unknown) {
-    connected=false;snapshot=null;setVisible(connectedPanel,false);workbench.disconnect();setVisible(byId('router-dashboard'),true);
+    connected=false;snapshot=null;setVisible(connectedPanel,false);workbench.markDisconnected(String(error));setVisible(byId('router-dashboard'),true);
     if(/ROUTER_(NETWORK_MISMATCH|REPAIR_REQUIRED):/.test(String(error))) {nextRetry=Date.now()+30000;showMessage(String(error),true);}
     else if(String(error).includes('ROUTER_CERT_UNTRUSTED:') || String(error).includes('账号或密码')) {allowRetry=false;showMessage(`${String(error)}，请重新连接。`,true);}
     else {nextRetry=Date.now()+Math.min(60000,2000*2**Math.min(failures++,5));showMessage(`连接中断，${Math.round((nextRetry-Date.now())/1000)} 秒后重试。`,true);}
@@ -129,6 +129,8 @@ export function setupRouterControl(getAccounts:()=>AccountView[],log:(message:st
     if(connected && Date.now()-lastPoll>=(snapshot?.uplinks.some(item=>item.checking)?1000:5000))void refresh();
     else if(!connected && allowRetry)void retry();
   },1000);
-  window.addEventListener('online',()=>{nextRetry=0;void retry();});window.addEventListener('focus',()=>{nextRetry=0;if(!resumeInfo)void restoreSaved();else void retry();});
+  const wake=()=>{nextRetry=0;if(connected){lastPoll=0;void refresh();}else if(!resumeInfo)void restoreSaved();else void retry();};
+  window.addEventListener('online',wake);window.addEventListener('focus',wake);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)wake();});
   void restoreSaved();return workbench;
 }

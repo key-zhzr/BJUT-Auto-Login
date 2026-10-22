@@ -57,13 +57,27 @@ function records(total, page, overrides = {}) {
 }
 
 test('router records request the selected page and retain the overall total', async () => {
-  const { center, calls } = fixture((operation, _args, job) => operation === 'billing_poll' && job.operation === 'billing_records' ? records(250, Number(job.page)) : undefined);
+  const { center, calls } = fixture((operation, _args, job) => operation === 'billing_poll' && job.operation === 'billing_records' ? records(250, Number(job.page), {summary:{'使用流量(MB)':'12.5',PRIVATE:'hidden'}}) : undefined);
   const result = await center.queryRecords({ ...query, page: 2 });
   assert.equal(calls.find(call => call.operation === 'billing_records').page, '2');
   assert.equal(result.page, 2);
   assert.equal(result.table.total, 250);
   assert.equal(result.table.rows[0].loginTime, 'row-100');
   assert.equal(result.table.rows[0].flowMb, '0');
+  assert.deepEqual(result.table.summary,{'使用流量(MB)':'12.5'});
+});
+
+test('verified overview is visible before optional modules finish and retains App display values', async()=>{
+  const pending=deferred();let held=true;
+  const {center,published}=fixture((operation,_args,job)=>{
+    if(operation==='billing_poll' && job.operation==='billing_start')return {result:{state:'ready',account:'25000001',balance:'3.1218',balanceText:'3.1218 元',remainingFlow:'15250.454',remainingFlowText:'14.89 GB',accountStatus:'正常',usedFlowText:'1024 MB',billingCycle:'2026-10-01 至 2026-10-31'}};
+    if(operation==='billing_poll' && job.operation==='billing_details' && held){held=false;return pending.promise;}
+  });
+  const refresh=center.refresh();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(published.length,1);assert.equal(published[0].overview.balance,'3.1218 元');
+  assert.equal(published[0].overview.remainingFlow,'14.89 GB');assert.equal(published[0].overview.usedFlow,'1024 MB');
+  pending.resolve({result:{state:'ready',account:'25000001',module:'services'}});await refresh;
+  assert.ok(published.length>1);
 });
 
 test('full exports join every page and reject incomplete or changing results', async () => {
@@ -109,10 +123,12 @@ test('disconnect invalidates old requests and permits an immediate new refresh',
   await new Promise(resolve => setImmediate(resolve));
   center.invalidate();
   await center.refresh();
-  assert.equal(published.length, 1);
+  assert.ok(published.length >= 1);
+  assert.deepEqual([...new Set(published.map(data=>data.account))], ['25000001']);
+  const completeCount=published.length;
   pending.resolve({ result: { state: 'ready', account: '25000001', balance: '999' } });
   await rejected;
-  assert.equal(published.length, 1);
+  assert.equal(published.length, completeCount);
   assert.equal(published[0].overview.balance, '42.00 元');
 });
 
@@ -138,7 +154,7 @@ test('selecting another account cannot publish or reuse the previous account res
   await center.selectAccount('two');
   pending.resolve({ result: { state: 'ready', account: '25000001', balance: '999' } });
   await rejected;
-  assert.deepEqual(published.map(data => data.account), ['25000002']);
+  assert.deepEqual([...new Set(published.map(data => data.account))], ['25000002']);
 });
 
 test('action completion without an account field matches the router API contract', async () => {

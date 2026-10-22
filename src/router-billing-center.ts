@@ -29,6 +29,7 @@ interface RequestScope {
 const EMPTY_TABLE = (): BillingTable => ({ total: 0, rows: [], summary: {} });
 const BILLING_PAGE_SIZE = 100;
 const MAX_EXPORT_ROWS = 50_000;
+const SUMMARY_LABELS = new Set(['计费金额(元)','记录数','使用流量(MB)','使用时长(分钟)','基本月租(元)','时长/流量计费(元)','金额(元)']);
 
 // Promise.withResolvers is newer than the supported Android WebView baseline.
 function deferred<T>() {
@@ -151,6 +152,14 @@ export class RouterBillingCenter implements RouterBillingBridge {
   }
 
   private async refreshScoped(scope: RequestScope): Promise<void> {
+    if(this.snapshot()?.capabilities?.includes('billing_background')) {
+      try {
+        const cached=await this.scopedRequest<Data>(scope,'billing_cached',{});
+        const expected=scope.expectedAccount || this.snapshot()?.uplinks.find(item=>item.id===scope.uplink)?.account;
+        const item=cached.items?.find((item:Data)=>item.account===expected && item.state==='ready');
+        if(item){this.overview={...item,_cached:true};if(getBillingSource()==='router')publishRouterBillingData(this.compose());}
+      } catch { /* The foreground query remains available without a cache. */ }
+    }
     const start = await this.scopedRequest<Data>(scope, 'billing_start', {
       uplink: scope.uplink,
       account: scope.account,
@@ -162,6 +171,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
     scope.expectedAccount = String(this.overview.account);
     this.sessions = Array.isArray((overview as Data).sessions) ? (overview as Data).sessions : [];
     this.actionTicket = String(start.ticket);
+    if(getBillingSource()==='router')publishRouterBillingData(this.compose());
     for (const module of ['services', 'devices', 'security', 'history']) {
       try {
         const result = await this.loadModule(module, scope);
@@ -174,6 +184,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
         this.assertScope(scope);
         this.moduleWarnings.push(`${module === 'services' ? '账户服务' : module === 'devices' ? '设备' : module === 'security' ? '账号安全' : '近期记录'}：${String(error)}`);
       }
+      if(getBillingSource()==='router')publishRouterBillingData(this.compose());
     }
     this.assertScope(scope);
     if (getBillingSource() === 'router') publishRouterBillingData(this.compose());
@@ -184,7 +195,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
     if (!Number.isSafeInteger(query.page) || query.page < 1 || query.pageSize !== BILLING_PAGE_SIZE) {
       throw new Error('请选择有效的账单页码，路由器每页显示 100 条。');
     }
-    const fetchPage = async (page: number): Promise<{ rows: unknown[][]; columns: string[]; total: number; page: number }> => {
+    const fetchPage = async (page: number): Promise<{ rows: unknown[][]; columns: string[]; total: number; page: number; summary: Record<string,string> }> => {
       const start = await this.scopedRequest<Data>(scope, 'billing_records', {
         uplink: scope.uplink,
         account: scope.account,
@@ -212,6 +223,8 @@ export class RouterBillingCenter implements RouterBillingBridge {
         columns,
         total,
         page,
+        summary: result.summary && typeof result.summary==='object' && !Array.isArray(result.summary)
+          ? Object.fromEntries(Object.entries(result.summary).filter(([key,value])=>SUMMARY_LABELS.has(key) && (typeof value==='string' || typeof value==='number')).map(([key,value])=>[key,String(value).slice(0,128)])) : {},
       };
     };
 
@@ -237,7 +250,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
       endDate: query.endDate,
       year: query.year,
       all: Boolean(query.all),
-      table: tableRows(columns, rows, first.total),
+      table: { ...tableRows(columns, rows, first.total), summary: first.summary },
     };
   }
 
@@ -463,20 +476,20 @@ export class RouterBillingCenter implements RouterBillingBridge {
       account,
       overview: {
         account,
-        balance: money(overview.balance),
-        remainingFlow: flow(overview.remainingFlow),
-        usedFlow: flow(overview.usedFlow),
+        balance: String(overview.balanceText || money(overview.balance)),
+        remainingFlow: String(overview.remainingFlowText || flow(overview.remainingFlow)),
+        usedFlow: String(overview.usedFlowText || flow(overview.usedFlow)),
         status: String(overview.accountStatus || '--'),
-        statusReason: String(overview.message || ''),
+        statusReason: String(overview.statusReason || ''),
         package: String(overview.package || this.services?.currentPackage || ''),
-        packageDetail: '',
-        billingCycle: '',
+        packageDetail: String(overview.packageDetail || ''),
+        billingCycle: String(overview.billingCycle || ''),
         updatedAt: fetchedAt,
         loginHistory,
         onlineSessions,
         offlineTip: '注销会话会中断对应设备的校园网连接；无感认证设备可能还需要解绑 MAC。',
         mauthEnabled: this.devices?.mauth === '1' ? true : this.devices?.mauth === '0' ? false : undefined,
-        warnings: this.moduleWarnings.slice(),
+        warnings: this.moduleWarnings.concat(Array.isArray(overview.warnings)?overview.warnings.map(String):[],overview._cached?['当前显示路由器后台保存的结果，请注意数据更新时间。']:[],overview.backgroundMessage?[String(overview.backgroundMessage)]:[]),
       },
       fetchedAt,
       queryStartDate: dateValue(start),

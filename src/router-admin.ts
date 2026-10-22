@@ -1,9 +1,10 @@
 import { CustomSelect } from './custom-select';
 import { animateResize } from './layout-motion';
 import type { RouterAccount, RouterSnapshot } from './router-model';
+import { RouterMaintenance } from './router-maintenance';
 
 export interface RouterConfiguration { service: Record<string,string>; uplinks: Record<string,string>[]; networks?: {id:string}[]; }
-type Field = {key:string; label:string; hint?:string; default?:string; min?:number; max?:number; flag?:boolean; choices?:[string,string][]};
+type Field = {key:string; label:string; hint?:string; default?:string; min?:number; max?:number; flag?:boolean; secret?:boolean; choices?:[string,string][]};
 const protocols: [string,string][] = [['auto','自动'],['bjut-sushe','bjut-sushe'],['bjut_wifi','bjut_wifi'],['lgn','lgn']];
 const transport: [string,string][] = [['auto','自动'],['ethernet','有线'],['wifi','Wi-Fi']];
 const fields: Field[] = [
@@ -28,6 +29,18 @@ const fields: Field[] = [
   {key:'log_web',label:'创建网页日志链接（局域网可访问）',hint:'在局域网内提供只读网页日志',flag:true,default:'0'},
   {key:'log_max_kb',label:'单个日志大小（KB）',hint:'达到大小后轮换日志文件',min:64,max:4096,default:'256'},
   {key:'log_level',label:'日志级别',hint:'记录到日志的最低级别',default:'info',choices:[['trace','详细调试'],['debug','调试'],['info','信息'],['notice','通知'],['warning','警告'],['error','仅错误']]},
+  {key:'pushplus_enabled',label:'PushPlus 消息推送',hint:'接收登录、恢复联网和上游异常提醒',flag:true,default:'0'},
+  {key:'pushplus_token',label:'PushPlus 令牌',hint:'填写用户令牌或消息令牌；留空保留已保存的令牌',secret:true},
+  {key:'pushplus_topic',label:'群组编码（可选）',hint:'留空时仅发送给自己'},
+  {key:'pushplus_online',label:'登录与恢复提醒',flag:true,default:'1'},
+  {key:'pushplus_failure',label:'异常提醒',flag:true,default:'1'},
+  {key:'pushplus_delay',label:'异常持续时间（秒）',hint:'短暂断网不提醒；账号被拒绝等明确错误会立即提醒',min:10,max:3600,default:'60'},
+  {key:'pushplus_interval',label:'重复提醒间隔（秒）',min:60,max:86400,default:'3600'},
+  {key:'billing_background',label:'后台计费检查',hint:'App 关闭后，路由器仍定期检查各账号余额和流量',flag:true,default:'0'},
+  {key:'billing_interval',label:'计费检查间隔（秒）',min:900,max:86400,default:'21600'},
+  {key:'billing_alerts',label:'用量不足时推送',hint:'通过已配置的 PushPlus 提醒，每个账号每天最多一次',flag:true,default:'1'},
+  {key:'balance_threshold',label:'余额提醒线（元）',min:0,max:999999,default:'5'},
+  {key:'flow_threshold',label:'流量提醒线（GB）',min:0,max:999999,default:'5'},
 ];
 const legacy = new Set(['enabled','interval','timeout','offline_confirmations','managed_routes','mwan3','log_level']);
 const inputIds: Record<string,string> = {interval:'router-service-interval',timeout:'router-service-timeout',offline_confirmations:'router-service-offline',enabled:'router-service-enabled',managed_routes:'router-service-routes',mwan3:'router-service-mwan'};
@@ -49,12 +62,13 @@ function createFieldControl(definition:Field, value:string, id?:string): FieldCo
       close:()=>{select?.setDisabled(true);},
     };
   }
-  const input=document.createElement('input');input.type=definition.flag?'checkbox':definition.min!==undefined?'number':'text';
+  const input=document.createElement('input');input.type=definition.flag?'checkbox':definition.secret?'password':definition.min!==undefined?'number':'text';
   input.id=id || `router-editor-input-${++sequence}`;
   if (definition.flag) input.checked=value==='1'; else input.value=value;
   input.setAttribute('aria-label',definition.label);
+  if (definition.secret) {input.autocomplete='new-password';input.maxLength=256;}
   if (definition.min!==undefined) {input.min=String(definition.min);input.max=String(definition.max);input.required=true;}
-  return {element:input,read:()=>definition.flag?(input.checked?'1':'0'):input.value.trim(),close:()=>{}};
+  return {element:input,read:()=>definition.flag?(input.checked?'1':'0'):input.value.trim(),close:()=>{if(definition.secret)input.value='';}};
 }
 function field(parent:HTMLElement, definition:Field, value:string, id?:string): Control {
   const control=createFieldControl(definition,value,id);
@@ -88,12 +102,18 @@ export class RouterAdmin {
   private loading=false;
   private controls=new Map<string,Control>();
   private editor: HTMLElement | null=null;
+  private maintenance:RouterMaintenance;
   constructor(private options:{ request:<T>(operation:string,args?:Record<string,unknown>)=>Promise<T>; refresh:()=>Promise<void>; confirm:(message:string,title:string,label:string)=>Promise<boolean>; log:(message:string)=>void; }) {
+    this.maintenance=new RouterMaintenance(options);
     document.getElementById('router-settings-form')!.addEventListener('submit',event=>{event.preventDefault();void this.saveSettings();});
     document.getElementById('btn-router-add-account')!.addEventListener('click',()=>this.editAccount());
   }
-  update(snapshot:RouterSnapshot) { this.snapshot=snapshot; }
-  disconnect() {this.generation++;this.snapshot=null;this.configuration=null;this.controls.forEach(c=>c.close());this.controls.clear();this.closeEditor();}
+  update(snapshot:RouterSnapshot) {
+    if(this.snapshot && JSON.stringify(this.snapshot.capabilities)!==JSON.stringify(snapshot.capabilities))this.configuration=null;
+    this.snapshot=snapshot;
+  }
+  resume(){this.maintenance.resume();}
+  disconnect() {this.generation++;this.snapshot=null;this.configuration=null;this.controls.forEach(c=>c.close());this.controls.clear();this.closeEditor();this.maintenance.close();}
   private supports(capability:string) {return this.snapshot?.capabilities?.includes(capability) || false;}
   async load():Promise<void> {
     if (this.loading || !this.snapshot || this.configuration) return;
@@ -108,13 +128,30 @@ export class RouterAdmin {
   }
   private buildService() {
     const common=document.getElementById('router-service-common')!, more=document.getElementById('router-service-more')!;
-    this.controls.forEach(c=>c.close());this.controls.clear();common.replaceChildren();more.replaceChildren();
+    this.maintenance.close();this.controls.forEach(c=>c.close());this.controls.clear();common.replaceChildren();more.replaceChildren();
     for (const definition of fields) {
+      if (definition.key.startsWith('pushplus_') && !this.supports('pushplus')) continue;
+      if (/^(billing_|balance_threshold|flow_threshold)/.test(definition.key) && !this.supports('billing_background')) continue;
       if (definition.key.startsWith('log_') && definition.key!=='log_level' && !this.supports('log_settings')) continue;
       if (!this.supports('uplink_manage') && !legacy.has(definition.key)) continue;
       const target=legacy.has(definition.key)?common:more;
       this.controls.set(definition.key,settingField(target,definition,this.configuration!.service[definition.key] || definition.default || '',inputIds[definition.key]));
     }
+    if (this.supports('pushplus')) {
+      const row=element('div','','setting-item router-setting-item'),info=element('div','','setting-info');
+      info.append(element('h4','测试推送'),element('p','请先保存设置。'));
+      const button=action('发送测试消息',()=>{void this.testPushPlus(button);});
+      row.append(info,button);more.append(row);
+    }
+    if(this.supports('maintenance'))this.maintenance.mount(more);
+  }
+  private async testPushPlus(button:HTMLButtonElement) {
+    const generation=this.generation;button.disabled=true;
+    try {
+      const result=await this.options.request<{message:string}>('pushplus_test');
+      if(generation===this.generation)document.getElementById('router-settings-message')!.textContent=result.message;
+    } catch(error) {if(generation===this.generation)document.getElementById('router-settings-message')!.textContent=String(error);}
+    finally {button.disabled=false;}
   }
   private async saveSettings() {
     if(!this.snapshot || !this.configuration)return;
@@ -124,6 +161,7 @@ export class RouterAdmin {
       const args=Object.fromEntries([...this.controls].map(([key,control])=>[key,control.read()]));
       await this.options.request('save_settings',args);
       if(generation!==this.generation)return;
+      this.controls.get('pushplus_token')?.close();
       document.getElementById('router-settings-message')!.textContent='路由器设置已保存';this.options.log('路由器设置已保存');await this.options.refresh();
     } catch(error){if(generation===this.generation)document.getElementById('router-settings-message')!.textContent=String(error);}
     finally{button.disabled=false;}
@@ -136,7 +174,7 @@ export class RouterAdmin {
     (document.getElementById('btn-router-add-account') as HTMLButtonElement).disabled=!this.supports('account_manage');
     animateResize(container, () => container.replaceChildren(...accounts.map((account,index)=>{
       const row=element('article','','router-account-row router-enter');
-      const text=element('div');text.append(element('strong',account.user),element('p',`${account.enabled?'参与自动登录':'仅手动使用'} · ${protocol(account.loginType || 'auto')==='auto'?'所有认证方式':protocol(account.loginType || 'auto')}`));
+      const text=element('div');text.append(element('strong',account.user),element('p',`${account.enabled?'参与自动登录':'仅手动使用'} · ${protocol(account.loginType || 'auto')==='auto'?'所有认证方式':protocol(account.loginType || 'auto')} · 占用 ${account.onlineCount || 0}/${account.maxSessions || '不限'}`));
       const tools=element('div','','router-actions');
       tools.append(action(account.enabled?'停用自动登录':'启用自动登录',()=>{void this.mutate('account_set',{account:account.id,enabled:account.enabled?'0':'1'});}));
       if(this.supports('account_manage')) {
@@ -182,11 +220,12 @@ export class RouterAdmin {
     const label=element('label',account?'新密码（留空保留原密码）':'密码');const password=document.createElement('input');password.type='password';password.autocomplete='new-password';password.required=!account;label.append(password);body.append(label);
     const enabled=field(body,{key:'enabled',label:'参与自动登录',flag:true},String(account?.enabled ?? 1));
     const type=field(body,{key:'login_type',label:'认证方式',choices:protocols},account?.loginType || 'auto');
+    const limit=field(body,{key:'max_sessions',label:'同时在线上限（0 表示不限）',min:0,max:32},String(account?.maxSessions || 0));
     editor.modal.addEventListener('router-editor-close',()=>{password.value='';type.close();});
     const generation=this.generation;
     editor.form.addEventListener('submit',async event=>{
       event.preventDefault();editor.save.disabled=true;
-      try{await this.options.request('account_save',{account:account?.id || '',username:user.read(),password:password.value,enabled:enabled.read(),login_type:type.read()});
+      try{await this.options.request('account_save',{account:account?.id || '',username:user.read(),password:password.value,enabled:enabled.read(),login_type:type.read(),max_sessions:limit.read()});
         if(generation===this.generation){password.value='';this.closeEditor();await this.options.refresh();}}
       catch(error){if(generation===this.generation)editor.message.textContent=String(error);}
       finally{editor.save.disabled=false;}

@@ -2329,6 +2329,8 @@ async function runDiagnostics() {
     const routerSteps = routerWorkbench?.diagnosticSteps() || Promise.resolve([]);
     lastDiagnosticReport = await invoke<DiagnosticReport>('run_network_diagnostics', { runId: diagnosticRunId });
     const upstreamSteps = await routerSteps;
+    const joint=routerWorkbench?.jointDiagnosticStep(lastDiagnosticReport.overall==='healthy');
+    if(joint)upstreamSteps.unshift(joint);
     lastDiagnosticReport.steps.push(...upstreamSteps);
     if (lastDiagnosticReport.overall === 'healthy' && upstreamSteps.some(step => step.status !== 'success')) {
       lastDiagnosticReport.overall = 'partial';
@@ -3259,7 +3261,8 @@ function setupEventListeners() {
     btnDiagnosticBundle.disabled = true;
     try {
       const bundle = await invoke<string>('create_diagnostic_bundle');
-      await writeTextToClipboard(bundle);
+      const data=JSON.parse(bundle);data.router=routerWorkbench?.diagnosticBundle() || null;
+      await writeTextToClipboard(JSON.stringify(data,null,2));
       await customAlert('脱敏诊断包已复制到剪贴板。账号、密码、本地 IP 与 BSSID 不会包含在诊断包中。');
     } catch (error) {
       await customAlert(`生成诊断包失败：${String(error)}`);

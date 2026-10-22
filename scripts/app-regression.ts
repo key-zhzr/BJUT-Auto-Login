@@ -60,7 +60,7 @@ async function fixtureCaptcha(title:string) {
 }
 const routerSnapshot = {
   version: '0.1.6', managementUrl:'https://192.0.2.1/cgi-bin/luci/admin/network/bjut-autologin/billing',
-  capabilities:['ports','billing','logs','settings','account_set','account_manage','uplink_manage','billing_records','billing_actions','uplink_actions','log_settings'],
+  capabilities:['ports','billing','logs','settings','account_set','account_manage','uplink_manage','billing_records','billing_actions','uplink_actions','log_settings','operations','account_limits','pushplus','billing_background','maintenance'],
   ports:[{uplink:'dorm_a',device:'lan3',linkUp:1,speedMbps:'1000',rxBytes:'10000000000',txBytes:'2000000000'},
     {uplink:'dorm_b',device:'lan4',linkUp:1,speedMbps:'2500',rxBytes:'30000000000',txBytes:'5000000000'}],
   uplinks:[
@@ -104,6 +104,11 @@ mockIPC(async (cmd, payload: any = {}) => {
     }
     if (payload.operation === 'billing_poll') return {result:{state:'ready',message:'计费数据已更新',account:'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
     if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'},uplinks:[{id:'dorm_a',enabled:'1',network:'wan14',network6:'wan16',login_type:'bjut-sushe',accounts:'account1'},{id:'dorm_b',network:'wan24',enabled:'1'}]};
+    if (payload.operation === 'billing_cached') return {items:[]};
+    if (payload.operation === 'pushplus_test') return {state:'ready',message:'模拟测试消息已排队'};
+    if (payload.operation === 'maintenance_info') return {platform:{version:'0.1.6-r14',target:'mediatek/filogic',arch:'aarch64_cortex-a53',format:'apk'},backups:[{id:'backup-1792690000-12345678',createdAt:'2026-10-23 12:00:00',version:'0.1.6-r13'}]};
+    if (payload.operation === 'maintenance_start') return {state:'loading',ticket:'e'.repeat(32)};
+    if (payload.operation === 'maintenance_poll') return {state:'prepared',message:'模拟安装包已校验',percent:100,release:'openwrt-v0.1.6-r14'};
     if (payload.operation === 'logs') return {text:'[测试路由器] 上游 lan3 认证已确认'};
     if (payload.operation === 'account_set') {const account=routerSnapshot.accounts.find(item=>item.id===payload.args.account)!;account.enabled=Number(payload.args.enabled);return {state:'ready'};}
     if (payload.operation === 'save_settings') return {state:'ready'};
@@ -440,6 +445,9 @@ button.addEventListener('click',async()=>{
     note('通过：路由账号编辑、统一计费界面、账单查询和断线自动重连');
     const {checkRouterDropdownLayout}=await import('./motion-regression');await checkRouterDropdownLayout(note);
     click('#btn-open-billing');
+    // Reconnection preserves the user's source choice. This case exercises a
+    // pending router query explicitly rather than relying on a source reset.
+    click('#btn-billing-source-router');
     await wait(()=>!(document.getElementById('btn-refresh-billing-center') as HTMLButtonElement).disabled);
     routerBillingPollDelay=250;
     const oldPolls=calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_poll').length;

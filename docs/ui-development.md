@@ -213,3 +213,11 @@ App 路由器计费的数据映射和操作分别改 src/router-billing-center.t
 连续操作及离页清理；提供截图、改动文件和实际验证范围。
 提交、推送、部署及真实业务操作按用户在当前任务中的授权执行。
 ```
+
+### 路由协作 r14
+
+- `src/router-model.ts` 的 `routerStatus` / `routerAdvice` 统一处理过期状态与诊断建议；暂时断线保留快照，显式停止协作才移除。
+- `src/router-maintenance.ts` 管理备份和升级任务，使用 `maintenance_info` / `maintenance_start` / `maintenance_poll`；`lastJob` 可恢复任务进度。UI 不接收任意下载地址或文件路径。
+- `RouterBillingCenter` 先发布概览，再逐步加入可选模块；`billing_cached` 仅预览上次结果。导出与账号切换仍核对请求代次和真实账号，旧回复不能覆盖新选择。
+- 路由能力按 `capabilities` 显示，新增 `operations`、`account_limits`、`billing_background`、`maintenance` 和 `pushplus`。旧版路由继续可用，不强行显示不支持的设置。
+- `scripts/test-router-experience.mjs` 验证过期状态和建议，`scripts/test-router-billing.mjs` 验证渐进发布、单位和明细隔离；界面入口仍是 `scripts/app-regression.html`。
