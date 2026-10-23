@@ -258,7 +258,7 @@ export class RouterWorkbench {
     if(!this.snapshot)return null;
     let logs=this.logSnapshot;
     for(const account of this.snapshot.accounts)if(account.user)logs=logs.split(account.user).join('[账号]');
-    for(const item of this.snapshot.uplinks)for(const value of [item.ssid,item.bssid,item.ipv6])if(value)logs=logs.split(value).join('[网络标识]');
+    for(const item of this.snapshot.uplinks)for(const value of [item.account,item.ssid,item.bssid,item.ipv6])if(value)logs=logs.split(value).join('[网络标识]');
     logs=logs.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g,'[IPv4]').replace(/\b(?:[0-9a-f]{0,4}:){3,}[0-9a-f:]{0,39}\b/gi,'[IPv6/BSSID]').replace(/\b[0-9a-f]{1,4}::[0-9a-f:]+\b/gi,'[IPv6]');
     return {version:this.snapshot.version,disconnected:this.disconnected,recordedAt:new Date(this.receivedAt).toISOString(),uplinks:this.snapshot.uplinks.map(item=>({id:item.id,state:item.state,session:item.session,internet4:item.internet4,internet6:item.internet6,route4:item.route4,route6:item.route6,stale:item.stale,ageSeconds:item.age_seconds,updatedAt:item.updated_at,operationState:item.operation?.state,advice:routerAdvice(item)})),logs:logs.split('\n').slice(-200)};
   }

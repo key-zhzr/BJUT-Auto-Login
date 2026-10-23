@@ -206,7 +206,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
         page: String(page),
       });
       if (!start.ticket) throw new Error(String(start.message || '查询未开始'));
-      const response = await this.waitForTicket(String(start.ticket), scope);
+      const response = await this.waitForTicket(String(start.ticket), scope, true, 15 * 60 * 1000);
       const result = response.result || response;
       const rows: unknown[][] = result.rows;
       const columns: string[] = result.columns;
@@ -381,9 +381,10 @@ export class RouterBillingCenter implements RouterBillingBridge {
     return response.result || response;
   }
 
-  private async waitForTicket(ticket: string, scope: RequestScope, requireAccount = true): Promise<Data> {
+  private async waitForTicket(ticket: string, scope: RequestScope, requireAccount = true, timeoutMs = 120_000): Promise<Data> {
     let captchaRounds = 0;
-    for (let attempt = 0; attempt < 120; attempt++) {
+    const deadline=Date.now()+timeoutMs;
+    while (Date.now()<deadline) {
       const response = await this.scopedRequest<Data>(scope, 'billing_poll', { ticket });
       const result = response.result || response;
       if (result.account && scope.expectedAccount && String(result.account) !== scope.expectedAccount) {
