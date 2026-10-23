@@ -1,7 +1,7 @@
 import { animateResize } from './layout-motion';
 
 type Data = Record<string, any>;
-export interface BillingTarget {uplink:string;account:string;title:string;ticket:string;}
+export interface BillingTarget {uplink:string;account:string;title:string;ticket:string;expectedAccount?:string;}
 interface Job {target:BillingTarget;ticket:string;running:boolean;result:Data;card:HTMLElement;stamp:string;}
 interface Options {
   request:<T=Data>(method:string,args:Data)=>Promise<T>;
@@ -39,6 +39,7 @@ export class RouterBillingTools {
     this.busy=true;const generation=this.generation;
     try{await Promise.all(this.jobs.filter(job=>job.running && job.ticket).map(async job=>{
       try{const response=await this.options.request('billing_poll',{ticket:job.ticket});if(generation!==this.generation)return;
+        if(response.result?.state==='ready' && job.target.expectedAccount && response.result.account!==job.target.expectedAccount)throw new Error('计费账号已变化，请重新查询概览。');
         job.result={...response.result,sessions:response.sessions,sessionsAvailable:response.sessionsAvailable};job.running=job.result.state==='loading';
       }catch(error){if(generation!==this.generation)return;job.running=false;job.result={state:'error',message:String(error)};}
       this.draw(job,module);

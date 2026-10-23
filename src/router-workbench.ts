@@ -52,7 +52,7 @@ export class RouterWorkbench {
     this.admin = new RouterAdmin({request:<T>(name:string,args?:Record<string,unknown>)=>this.request<T>(name,args),refresh:options.refresh,confirm:options.confirm,log:options.log});
     this.billingCenter = new RouterBillingCenter(
       <T>(name:string,args?:Record<string,unknown>)=>this.request<T>(name,args),
-      () => this.snapshot,
+      () => this.disconnected ? null : this.snapshot,
     );
     setRouterBillingBridge(this.billingCenter);
     window.setInterval(() => {
@@ -100,6 +100,9 @@ export class RouterWorkbench {
     this.renderPorts(); this.renderDiagnostics();
     setVisible(byId('router-settings-form'), this.supports('settings'));
     if (firstConnection) this.selectBillingSource(true);
+    if(reconnect && this.billingSelected && document.querySelector('.page.active')?.id==='billing-center') {
+      void this.billingCenter.refresh().catch(error=>this.options.log(`路由计费：${String(error)}`));
+    }
     this.onPage(document.querySelector('.page.active')?.id || 'dashboard');
   }
 
@@ -119,6 +122,7 @@ export class RouterWorkbench {
 
   markDisconnected(reason:string):void {
     if(!this.snapshot)return;
+    if(!this.disconnected)this.billingCenter.invalidate();
     this.disconnected=true;
     this.updatePorts();this.setControlsAvailable(false);
     byId('router-settings-connection').textContent='连接已中断，以下为上次读取的数据。';
