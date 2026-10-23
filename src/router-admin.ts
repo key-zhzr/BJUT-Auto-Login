@@ -249,9 +249,20 @@ export class RouterAdmin {
     const body=element('div','','router-editor-grid');editor.form.insertBefore(body,editor.fields);
     const defs:Field[]=[{key:'enabled',label:'启用上游',flag:true,default:'1'}, {key:'network',label:'IPv4 接口'}, {key:'network6',label:'IPv6 接口（留空跟随）'}, {key:'device',label:'IPv4 设备（可选）'}, {key:'device6',label:'IPv6 设备（可选）'}, {key:'source4',label:'IPv4 地址（可选）'}, {key:'source6',label:'IPv6 地址（可选）'}, {key:'transport',label:'上游类型',choices:transport,default:'auto'}, {key:'login_type',label:'认证方式',choices:protocols,default:'auto'}, {key:'expected_ssid',label:'指定 Wi-Fi 名称'}, {key:'expected_bssid',label:'指定 Wi-Fi 地址'}];
     const controls=new Map(defs.map(def=>[def.key,field(body,def,uplink?.[def.key] || def.default || '')]));
-    const group=element('fieldset','','router-sync-accounts');group.append(element('legend','自动登录账号（不选则使用全部启用账号）'));
-    const selected=new Set((uplink?.accounts || '').split(/\s+/));
-    for(const account of this.snapshot?.accounts || []) {const label=element('label',account.user);const input=document.createElement('input');input.type='checkbox';input.value=account.id;input.checked=selected.has(account.id);label.prepend(input);group.append(label);}
+    const group=element('fieldset','','router-sync-accounts');group.append(element('legend','自动登录顺序'),element('p','勾选账号并用箭头调整此接口的顺序；不选则跟随账号管理。'));
+    const selectedIds=(uplink?.accounts || '').split(/\s+/).filter(Boolean),selected=new Set(selectedIds);
+    const choices=new Map((this.snapshot?.accounts || []).map(account=>[account.id,account]));
+    const list=element('div','','router-account-order');group.append(list);
+    const updateArrows=()=>[...list.children].forEach((row,index)=>{row.querySelector<HTMLButtonElement>('[data-move=up]')!.disabled=index===0;row.querySelector<HTMLButtonElement>('[data-move=down]')!.disabled=index===list.children.length-1;});
+    const move=(row:HTMLElement,direction:number)=>{const other=direction<0?row.previousElementSibling:row.nextElementSibling;if(!other)return;animateResize(list,()=>{if(direction<0)list.insertBefore(row,other);else list.insertBefore(other,row);updateArrows();});};
+    for(const id of new Set([...selectedIds,...choices.keys()])) {
+      const account=choices.get(id);if(!account)continue;
+      const row=element('div','','router-account-order-row'),label=element('label',account.user+(account.enabled?'':'（仅手动）'));
+      const input=document.createElement('input');input.type='checkbox';input.value=id;input.checked=selected.has(id);label.prepend(input);
+      const up=action('↑',()=>move(row,-1)),down=action('↓',()=>move(row,1));up.dataset.move='up';down.dataset.move='down';up.setAttribute('aria-label',`上移 ${account.user}`);down.setAttribute('aria-label',`下移 ${account.user}`);
+      row.append(label,up,down);list.append(row);
+    }
+    updateArrows();
     body.append(group);editor.modal.addEventListener('router-editor-close',()=>controls.forEach(c=>c.close()));
     const generation=this.generation;
     editor.form.addEventListener('submit',async event=>{

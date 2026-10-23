@@ -4278,6 +4278,11 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 .router-uplink-card p, #router-message { margin-block: .5rem; overflow-wrap: anywhere; }
 #router-message.error { color: var(--danger-color, #e5484d); }
 .router-sync-accounts { display: grid; gap: .75rem; margin-block: 1rem; }
+.router-account-order { display:grid;gap:.5rem; }
+.router-account-order-row { display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:.5rem;align-items:center; }
+.router-account-order-row label { display:flex;gap:.5rem;align-items:center;min-width:0;overflow-wrap:anywhere; }
+.router-account-order-row input[type=checkbox] { width:auto;flex:none; }
+.router-account-order-row .btn { min-width:2rem;padding:.35rem .55rem; }
 .router-sync-account { display: flex; gap: .75rem; align-items: center; }
 @media (max-width: 600px) {
   .router-controls-row { flex-wrap: wrap; }

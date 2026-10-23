@@ -103,7 +103,7 @@ mockIPC(async (cmd, payload: any = {}) => {
       const module=moduleTickets.get(payload.args.ticket);return {result:{state:'ready',account:'25000001',module:module==='action'?undefined:module,message:module==='action'?'操作已完成':'计费数据已更新',canStop:1,canReopen:0,canCancel:1,installmentFlag:'100',useMoney:'25',packages:[{id:'2',name:'测试校园套餐'}],questions:[{id:'1',name:'测试问题一'},{id:'2',name:'测试问题二'},{id:'3',name:'测试问题三'}],FLDMINLENGTH:8,mauth:'1',macs:{columns:['online','mac','device','lastLoginAt','lastIp'],rows:[['在线','aabbccddeeff','测试设备','2026-10-18','192.0.2.20']]},history:{columns:['loginTime','logoutTime','ip','flow'],rows:[['2026-10-18 12:00','2026-10-18 13:00','192.0.2.20','1024 MB']]}},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'aabbccddeeff',useTime:'3600'}],sessionsAvailable:true};
     }
     if (payload.operation === 'billing_poll') return {result:{state:'ready',message:'计费数据已更新',account:'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
-    if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'},uplinks:[{id:'dorm_a',enabled:'1',network:'wan14',network6:'wan16',login_type:'bjut-sushe',accounts:'account1'},{id:'dorm_b',network:'wan24',enabled:'1'}]};
+    if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'},uplinks:[{id:'dorm_a',enabled:'1',network:'wan14',network6:'wan16',login_type:'bjut-sushe',accounts:'account2 account1'},{id:'dorm_b',network:'wan24',enabled:'1'}]};
     if (payload.operation === 'billing_cached') return {items:[]};
     if (payload.operation === 'pushplus_test') return {state:'ready',message:'模拟测试消息已排队'};
     if (payload.operation === 'maintenance_info') return {platform:{version:'0.1.6-r14',target:'mediatek/filogic',arch:'aarch64_cortex-a53',format:'apk'},backups:[{id:'backup-1792690000-12345678',createdAt:'2026-10-23 12:00:00',version:'0.1.6-r13'}]};
@@ -438,6 +438,22 @@ button.addEventListener('click',async()=>{
     (document.getElementById('router-settings-form') as HTMLFormElement).requestSubmit();
     await wait(()=>calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='save_settings'&&call.payload.args.interval==='30'));
     note('通过：路由计费统一界面、账号融合、日志与设置保存');
+    (document.getElementById('router-service-advanced') as HTMLDetailsElement).open=true;
+    await wait(()=>!!document.querySelector('#router-configured-uplinks button'));
+    const editUplink=()=>Array.from(document.querySelectorAll<HTMLButtonElement>('#router-configured-uplinks button')).find(button=>button.textContent==='编辑')!.click();
+    editUplink();await wait(()=>!!document.querySelector('#router-admin-editor .router-account-order'));
+    const accountOrder=()=>[...document.querySelectorAll<HTMLInputElement>('#router-admin-editor .router-account-order input')].map(input=>input.value);
+    assert(accountOrder().join(' ')==='account2 account1','编辑上游时丢失了接口独立顺序');
+    (document.querySelector('#router-admin-editor form') as HTMLFormElement).requestSubmit();
+    await wait(()=>calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='uplink_save'&&JSON.parse(call.payload.args.payload).accounts==='account2 account1'));
+    await wait(()=>!document.getElementById('router-admin-editor'));
+    editUplink();await wait(()=>!!document.querySelector('#router-admin-editor .router-account-order'));
+    document.querySelector<HTMLButtonElement>('#router-admin-editor .router-account-order-row:nth-child(2) [data-move=up]')!.click();
+    assert(accountOrder().join(' ')==='account1 account2','接口账号顺序未调整');
+    (document.querySelector('#router-admin-editor form') as HTMLFormElement).requestSubmit();
+    await wait(()=>calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='uplink_save'&&JSON.parse(call.payload.args.payload).accounts==='account1 account2'));
+    await wait(()=>!document.getElementById('router-admin-editor'));
+    note('通过：接口独立账号顺序在编辑、排序和保存时保留');
     await wait(()=>!(document.getElementById('btn-router-settings-save') as HTMLButtonElement).disabled);
     routerFailures=1;click('#btn-router-refresh');
     await wait(()=>document.getElementById('router-message')!.textContent!.includes('连接中断'));
