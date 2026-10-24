@@ -10,10 +10,11 @@ import type {
   BillingServiceState,
   BillingTable,
 } from './models';
-import type { RouterSnapshot } from './router-model';
+import type { RouterSnapshot, RouterBillingJob } from './router-model';
 import {
   getBillingSource,
   publishRouterBillingData,
+  publishRouterBillingProgress,
   type RouterBillingBridge,
 } from './router-billing-bridge.ts';
 
@@ -99,6 +100,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
   private generation = 0;
   private refreshRequest: Promise<void> | null = null;
   private cancelCaptcha: (() => void) | null = null;
+  private captchaQueue: Promise<void> = Promise.resolve();
   private actionTicket = '';
   private overview: Data | null = null;
   private sessions: Record<string, string>[] = [];
@@ -107,10 +109,12 @@ export class RouterBillingCenter implements RouterBillingBridge {
   private security: Data | null = null;
   private history: Data | null = null;
   private moduleWarnings: string[] = [];
+  private summaryRequest: Promise<void> | null = null;
 
   constructor(
     private request: <T>(operation: string, args?: Record<string, unknown>) => Promise<T>,
     private snapshot: () => RouterSnapshot | null,
+    private summaryChanged: (jobs: RouterBillingJob[]) => void = () => {},
   ) {}
 
   accounts(): { value: string; text: string }[] {
@@ -147,11 +151,64 @@ export class RouterBillingCenter implements RouterBillingBridge {
   invalidate(): void {
     this.generation++;
     this.refreshRequest = null;
+    this.summaryRequest = null;
     this.cancelCaptcha?.();
     this.resetData();
   }
 
+  async refreshSummary(): Promise<void> {
+    if (this.summaryRequest) return this.summaryRequest;
+    const scope = this.captureScope(false), snapshot = this.snapshot()!;
+    const jobs: RouterBillingJob[] = snapshot.uplinks.map(item => ({uplink:item.id, account:'current', ticket:'', running:true, starting:true, item:{state:'loading',percent:2,message:'正在查询…'}}));
+    const changed = () => { this.assertScope(scope); this.summaryChanged(jobs); };
+    changed();
+    const running = Promise.all(jobs.map(async job => {
+      const itemScope = {...scope,uplink:job.uplink,expectedAccount:snapshot.uplinks.find(item=>item.id===job.uplink)?.account || ''};
+      try {
+        const start = await this.scopedRequest<Data>(scope,'billing_start',{uplink:job.uplink,account:'current'});
+        if (!start.ticket) throw new Error(String(start.message || '无法开始查询'));
+        job.ticket=String(start.ticket);job.starting=false;
+        await this.waitForTicket(job.ticket,itemScope,true,120_000,response=>{
+          job.item=response.result || response;job.running=job.item.state==='loading';changed();
+        });
+      } catch(error) {
+        this.assertScope(scope);job.item={state:'error',message:String(error)};
+      } finally {
+        job.running=job.starting=false;
+        if(scope.generation===this.generation && this.snapshot()?.managementUrl===scope.router)changed();
+      }
+    })).then(()=>{}).finally(()=>{if(scope.generation===this.generation)this.summaryRequest=null;});
+    this.summaryRequest=running;return running;
+  }
+
   private async refreshScoped(scope: RequestScope): Promise<void> {
+    publishRouterBillingProgress(3,'正在读取路由器计费数据…');
+    if (this.snapshot()?.capabilities?.includes('billing_center')) {
+      const start=await this.scopedRequest<Data>(scope,'billing_details',{uplink:scope.uplink,account:scope.account,module:'center'});
+      if(!start.ticket)throw new Error(String(start.message || '无法开始查询'));
+      await this.waitForTicket(String(start.ticket),scope,true,120_000,response=>{
+        const result=response.result || response;
+        publishRouterBillingProgress(Number(result.percent) || 3,String(result.message || '正在查询…'));
+        if(!result.overview?.account)return;
+        if(scope.expectedAccount && String(result.overview.account)!==scope.expectedAccount)throw new Error('计费账号与所选账号不一致，请刷新后重试。');
+        if(String(result.overview.account)!==String(result.account))throw new Error('计费账号与所选账号不一致，请刷新后重试。');
+        this.overview=result.overview;
+        scope.expectedAccount=String(this.overview!.account);
+        this.sessions=Array.isArray(response.sessions)?response.sessions:[];
+        this.actionTicket=String(start.ticket);
+        this.moduleWarnings=[];
+        for(const name of ['services','devices','security','history'] as const) {
+          const module=result.modules?.[name];
+          if(module?.account && String(module.account)!==scope.expectedAccount)throw new Error('计费模块账号与所选账号不一致，请刷新后重试。');
+          if(module?.state==='ready')this[name]=module;
+          else if(module?.state==='error')this.moduleWarnings.push(String(module.message || '部分数据暂时无法读取'));
+        }
+        if(getBillingSource()==='router')publishRouterBillingData(this.compose());
+      });
+      if(!this.overview)throw new Error('未取得计费账号，请刷新后重试。');
+      return;
+    }
+
     if(this.snapshot()?.capabilities?.includes('billing_background')) {
       try {
         const cached=await this.scopedRequest<Data>(scope,'billing_cached',{});
@@ -165,14 +222,15 @@ export class RouterBillingCenter implements RouterBillingBridge {
       account: scope.account,
     });
     if (!start.ticket) throw new Error(String(start.message || '无法开始计费查询'));
-    const overview = await this.waitForTicket(String(start.ticket), scope);
+    const overview = await this.waitForTicket(String(start.ticket), scope,true,120_000,response=>{const result=response.result || response;publishRouterBillingProgress(5+(Number(result.percent)||0)*.35,String(result.message || '正在读取账户概览…'));});
     this.overview = overview.result || overview;
     if (!this.overview?.account) throw new Error('未取得计费账号，请刷新后重试。');
     scope.expectedAccount = String(this.overview.account);
     this.sessions = Array.isArray((overview as Data).sessions) ? (overview as Data).sessions : [];
     this.actionTicket = String(start.ticket);
     if(getBillingSource()==='router')publishRouterBillingData(this.compose());
-    for (const module of ['services', 'devices', 'security', 'history']) {
+    for (const [index,module] of ['services', 'devices', 'security', 'history'].entries()) {
+      publishRouterBillingProgress(40+index*14,'正在读取'+['账户服务','设备','账号安全','近期记录'][index]+'…');
       try {
         const result = await this.loadModule(module, scope);
         if (module === 'services') {
@@ -381,7 +439,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
     return response.result || response;
   }
 
-  private async waitForTicket(ticket: string, scope: RequestScope, requireAccount = true, timeoutMs = 120_000): Promise<Data> {
+  private async waitForTicket(ticket: string, scope: RequestScope, requireAccount = true, timeoutMs = 120_000, onUpdate?: (response: Data) => void): Promise<Data> {
     let captchaRounds = 0;
     const deadline=Date.now()+timeoutMs;
     while (Date.now()<deadline) {
@@ -390,6 +448,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
       if (result.account && scope.expectedAccount && String(result.account) !== scope.expectedAccount) {
         throw new Error('计费账号与所选账号不一致，请刷新后重试。');
       }
+      onUpdate?.(response);
       if (result.state === 'loading') {
         const wait = deferred<void>();
         window.setTimeout(wait.resolve, 250);
@@ -398,7 +457,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
       }
       if (result.state === 'captcha') {
         if (++captchaRounds > 6) throw new Error('计费验证码尝试次数过多');
-        const answer = await this.askCaptcha(result);
+        const answer = await this.askCaptcha(result,scope);
         this.assertScope(scope);
         if (!answer) throw new Error('已取消计费验证码');
         const captcha = await this.scopedRequest<Data>(scope, 'billing_captcha', {
@@ -419,7 +478,13 @@ export class RouterBillingCenter implements RouterBillingBridge {
     throw new Error('计费查询超时，请稍后重试');
   }
 
-  private askCaptcha(result: Data): Promise<{ code?: string; refresh?: boolean } | null> {
+  private async askCaptcha(result: Data, scope: RequestScope): Promise<{code?:string;refresh?:boolean}|null> {
+    const previous=this.captchaQueue,turn=deferred<void>();this.captchaQueue=turn.promise;
+    try { await previous;this.assertScope(scope);return await this.showCaptcha(result); }
+    finally {turn.resolve();}
+  }
+
+  private showCaptcha(result: Data): Promise<{ code?: string; refresh?: boolean } | null> {
     const pending = deferred<{ code?: string; refresh?: boolean } | null>();
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay hidden image-captcha-overlay';
@@ -563,12 +628,13 @@ export class RouterBillingCenter implements RouterBillingBridge {
     const packages: BillingPackageOption[] = (Array.isArray(service.packages) ? service.packages : []).map((item: Data) => ({
       id: String(item.id ?? ''),
       name: String(item.name ?? ''),
-      description: '',
+      description: String(item.description ?? ''),
     }));
     const currentPackage = String(service.currentPackage || overview.package || '');
     const scheduledPackage = String(service.scheduledPackage || '');
     const normalize = (value: string) => value.replace(/\s+/g, '').toLowerCase();
-    const currentPackageId = packages.find(item => normalize(item.name) === normalize(currentPackage))?.id || '';
+    const currentPackageId = String(service.currentPackageId || packages.find(item => normalize(item.name) === normalize(currentPackage))?.id || '');
+    if(currentPackageId && currentPackage && !packages.some(item=>item.id===currentPackageId))packages.unshift({id:currentPackageId,name:currentPackage,description:String(service.packageDetail || overview.packageDetail || '')});
     const scheduledPackageId = packages.find(item => normalize(item.name) === normalize(scheduledPackage))?.id || '';
     const limit = String(service.installmentFlag ?? '');
     return {
@@ -576,11 +642,11 @@ export class RouterBillingCenter implements RouterBillingBridge {
       statusReason: String(service.message || '报停、复通、套餐预约与消费保护。'),
       currentPackageId,
       currentPackage,
-      packageDetail: '',
-      nextSettlementDate: '',
+      packageDetail: String(service.packageDetail || overview.packageDetail || ''),
+      nextSettlementDate: String(service.nextSettlementDate || ''),
       canStopNow: Boolean(Number(service.canStop)),
       canReopenNow: Boolean(Number(service.canReopen)),
-      packageScheduled: Boolean(scheduledPackage),
+      packageScheduled: Boolean(scheduledPackage) && normalize(scheduledPackage)!==normalize(currentPackage),
       scheduledPackageId,
       scheduledPackage,
       consumeLimit: limit === '999999' ? '不限制' : limit ? `${limit} 元` : '',

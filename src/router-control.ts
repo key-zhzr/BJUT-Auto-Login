@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { CustomSelect } from './custom-select';
 import type { AccountView } from './models';
-import type { RouterSnapshot } from './router-model';
+import { routerPollInterval, type RouterSnapshot } from './router-model';
 import { RouterWorkbench } from './router-workbench';
 import { setVisible, animateResize } from './layout-motion';
 
@@ -126,7 +126,7 @@ export function setupRouterControl(getAccounts:()=>AccountView[],log:(message:st
   });
   window.setInterval(()=>{
     if(document.hidden)return;
-    if(connected && Date.now()-lastPoll>=(snapshot?.uplinks.some(item=>item.checking)?1000:5000))void refresh();
+    if(connected && Date.now()-lastPoll>=routerPollInterval(snapshot))void refresh();
     else if(!connected && allowRetry)void retry();
   },1000);
   const wake=()=>{nextRetry=0;if(connected){lastPoll=0;void refresh();}else if(!resumeInfo)void restoreSaved();else void retry();};

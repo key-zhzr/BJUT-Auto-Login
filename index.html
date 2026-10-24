@@ -61,6 +61,7 @@
               </button>
               <div id="nav-billing-tree" class="nav-billing-tree" aria-label="计费系统功能" aria-hidden="true">
                 <span class="nav-tree-label">功能</span>
+                <button class="nav-tree-link nav-billing-link" type="button" data-billing-section-target="upstreams" data-router-billing-only hidden><i data-lucide="layout-dashboard"></i><span>上游总览</span></button>
                 <button class="nav-tree-link nav-billing-link active" type="button" data-billing-section-target="overview">
                   <i data-lucide="layout-dashboard"></i><span>概览</span>
                 </button>
@@ -275,11 +276,12 @@
           <div id="billing-center-message" class="billing-center-message" hidden aria-live="polite"></div>
 
           <div id="router-billing-source" class="router-source-row" hidden>
-            <span>查询来源</span><button id="btn-billing-source-router" class="btn btn-secondary btn-sm" type="button" aria-pressed="true">路由器</button><button id="btn-billing-source-local" class="btn btn-secondary btn-sm" type="button" aria-pressed="false">当前设备</button>
+            <span>查询来源</span><button id="btn-billing-source-router" class="btn btn-secondary btn-sm" type="button" aria-pressed="true">路由器</button><button id="btn-billing-source-local" class="btn btn-secondary btn-sm" type="button" aria-pressed="false">当前设备</button><span id="billing-source-current" role="status"></span>
           </div>
 
           <div class="billing-workbench">
             <nav class="billing-mobile-nav" aria-label="计费中心功能" role="tablist">
+              <button class="btn btn-secondary billing-section-nav-button" type="button" role="tab" aria-selected="false" data-billing-section-target="upstreams" data-router-billing-only hidden><i data-lucide="layout-dashboard"></i><span>上游总览</span></button>
               <button class="btn btn-secondary billing-section-nav-button active" type="button" role="tab" aria-selected="true" data-billing-section-target="overview">
                 <i data-lucide="layout-dashboard"></i><span>概览</span>
               </button>
@@ -298,6 +300,7 @@
             </nav>
 
             <div class="billing-workbench-content">
+              <section id="router-billing-summary-content" data-billing-section="upstreams" hidden></section>
           <div class="billing-center-summary" data-billing-section="overview">
             <article class="billing-summary-card glass-card">
               <span>计费账号</span>

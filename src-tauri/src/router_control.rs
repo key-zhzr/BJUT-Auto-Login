@@ -1058,7 +1058,7 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
                 }),
                 "module" => matches!(
                     value.as_str(),
-                    Some("services" | "devices" | "security" | "history")
+                    Some("services" | "devices" | "security" | "history" | "center")
                 ),
                 "payload" => value
                     .as_str()
@@ -1439,11 +1439,19 @@ mod tests {
         ));
         assert!(valid_router_request("pushplus_test", &json!({})));
         assert!(valid_router_request(
+            "billing_details",
+            &json!({"uplink":"wan1","account":"account1","module":"center"})
+        ));
+        assert!(valid_router_request(
             "billing_start",
             &json!({"uplink":"1","account":"current"})
         ));
         for (operation, args) in [
             ("exec", json!({"command":"reboot"})),
+            (
+                "billing_details",
+                json!({"uplink":"wan1","account":"account1","module":"https://foreign.invalid"}),
+            ),
             ("settings", json!({"path":"/etc/shadow"})),
             ("save_settings", json!({"password":"replacement"})),
             ("save_settings", json!({"pushplus_enabled":"true"})),

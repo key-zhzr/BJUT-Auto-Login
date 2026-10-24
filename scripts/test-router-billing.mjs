@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { setBillingSource, setRouterBillingBridge, setRouterBillingDataListener } from '../src/router-billing-bridge.ts';
+import { setBillingSource, setRouterBillingBridge, setRouterBillingDataListener, setRouterBillingProgressListener } from '../src/router-billing-bridge.ts';
 
 // Compile the real controller; Node's strip-only loader cannot lower constructor parameter properties.
 const bridgeUrl = new URL('../src/router-billing-bridge.ts', import.meta.url).href;
@@ -25,14 +25,14 @@ function fixture(respond = () => undefined) {
   };
   const calls = [];
   const jobs = new Map();
-  const published = [];
+  const published = [], summaries = [];
   const center = new RouterBillingCenter(async (operation, args = {}) => {
     calls.push({ ...args, action: args.operation, operation });
     const supplied = await respond(operation, args, jobs.get(args.ticket));
     if (supplied !== undefined) return supplied;
     if (operation === 'billing_poll') {
       const job = jobs.get(args.ticket);
-      const account = job.account === 'two' ? '25000002' : '25000001';
+      const account = job.account === 'two' || job.uplink === 'wan2' ? '25000002' : '25000001';
       return { result: { state: 'ready', account, balance: '42', updatedAt: 1792252800, accountStatus: '',
         ...(job.operation === 'billing_details' ? { module: job.module } : {}),
       }, sessions: [] };
@@ -40,12 +40,12 @@ function fixture(respond = () => undefined) {
     const ticket = String(jobs.size + 1);
     jobs.set(ticket, { ...args, operation });
     return { ticket };
-  }, () => snapshot);
+  }, () => snapshot, jobs=>summaries.push(structuredClone(jobs)));
   setBillingSource('local');
   setRouterBillingBridge(center);
   setBillingSource('router');
   setRouterBillingDataListener(data => published.push(data));
-  return { center, calls, published, setSnapshot(value) { snapshot = value; } };
+  return { center, calls, published, summaries, setCapabilities(value){snapshot.capabilities=value;}, setSnapshot(value) { snapshot = value; } };
 }
 
 const query = { kind: 'usage', page: 1, pageSize: 100, startDate: '2026-01-01', endDate: '2026-10-01' };
@@ -196,4 +196,56 @@ test('manual accounts and current session remain selectable; unknown status is n
   await center.refresh();
   assert.equal(published[0].overview.status, '--');
   assert.notEqual(published[0].fetchedAt, '1792252800');
+});
+
+
+test('bundled center publishes progress and modules using only one verified ticket',async()=>{
+  const progress=[],oldWindow=globalThis.window;
+  globalThis.window={setTimeout:done=>setImmediate(done)};
+  setRouterBillingProgressListener((percent,message)=>progress.push({percent,message}));
+  let polls=0;
+  const overview={state:'ready',account:'25000001',package:'默认套餐',packageDetail:'每月赠送30GB'};
+  const services={state:'ready',account:'25000001',module:'services',currentPackageId:'1',currentPackage:'默认套餐',packageDetail:'每月赠送30GB',scheduledPackage:'10元套餐',packages:[{id:'1',name:'默认套餐',description:'每月赠送30GB'},{id:'2',name:'10元套餐',description:'每月60GB'}]};
+  const {center,calls,published,setCapabilities}=fixture((operation,_args,job)=>{
+    if(operation==='billing_poll' && job.module==='center'){
+      polls++;
+      return {result:{state:polls<3?'loading':'ready',percent:[12,72,100][Math.min(polls-1,2)],message:'正在读取模块',account:'25000001',...(polls>1?{overview,modules:{services}}:{})}};
+    }
+  });
+  setCapabilities(['billing_center']);
+  try {
+    await center.refresh();
+    assert.equal(calls.filter(call=>call.operation==='billing_details').length,1);
+    assert.equal(calls.filter(call=>call.operation==='billing_start').length,0);
+    assert.ok(progress.some(item=>item.percent===12));assert.ok(progress.some(item=>item.percent===72));
+    assert.equal(published.at(-1).service.currentPackageId,'1');
+    assert.equal(published.at(-1).service.scheduledPackageId,'2');
+    assert.equal(published.at(-1).service.packageOptions[1].description,'每月60GB');
+    assert.ok(published.length>=2,'partial module updates should be visible before completion');
+  }finally{globalThis.window=oldWindow;setRouterBillingProgressListener(()=>{});}
+});
+
+test('router summary queries every uplink and retains independently verified accounts',async()=>{
+  const {center,calls,summaries}=fixture();await center.refreshSummary();
+  const final=summaries.at(-1);
+  assert.equal(calls.filter(call=>call.operation==='billing_start').length,2);
+  assert.deepEqual(final.map(job=>job.item.account),['25000001','25000002']);
+  assert.ok(final.every(job=>!job.running && job.item.state==='ready'));
+});
+
+test('bundled overview cannot change the verified account inside a matching wrapper',async()=>{
+  const {center,published,setCapabilities}=fixture(operation=>operation==='billing_poll'?{result:{state:'ready',account:'25000001',overview:{account:'25000002'},modules:{}}}:undefined);
+  setCapabilities(['billing_center']);await assert.rejects(center.refresh(),/账号/);assert.equal(published.length,0);
+});
+
+
+test('simultaneous uplink image challenges are presented one at a time',async()=>{
+  const seen=new Set();let active=0,maximum=0;
+  const {center,summaries}=fixture((operation,_args,job)=>{
+    if(operation==='billing_poll' && job?.operation==='billing_start' && !seen.has(job.uplink)) {
+      seen.add(job.uplink);return {result:{state:'captcha',image:'synthetic'}};
+    }
+  });
+  center.showCaptcha=async()=>{maximum=Math.max(maximum,++active);await new Promise(resolve=>setImmediate(resolve));active--;return {code:'fixture'};};
+  await center.refreshSummary();assert.equal(maximum,1);assert.ok(summaries.at(-1).every(job=>job.item.state==='ready'));
 });

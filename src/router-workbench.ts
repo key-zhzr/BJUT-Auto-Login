@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { RouterAdmin } from './router-admin';
+import { renderRouterBillingSummary } from './router-billing-summary';
 import { RouterBillingCenter } from './router-billing-center';
 import { CustomSelect } from './custom-select';
 import { animateResize, setVisible } from './layout-motion';
@@ -53,6 +54,7 @@ export class RouterWorkbench {
     this.billingCenter = new RouterBillingCenter(
       <T>(name:string,args?:Record<string,unknown>)=>this.request<T>(name,args),
       () => this.disconnected ? null : this.snapshot,
+      jobs => renderRouterBillingSummary(byId('router-billing-summary-content'),jobs,this.snapshot),
     );
     setRouterBillingBridge(this.billingCenter);
     window.setInterval(() => {
@@ -101,7 +103,8 @@ export class RouterWorkbench {
     setVisible(byId('router-settings-form'), this.supports('settings'));
     if (firstConnection) this.selectBillingSource(true);
     if(reconnect && this.billingSelected && document.querySelector('.page.active')?.id==='billing-center') {
-      void this.billingCenter.refresh().catch(error=>this.options.log(`路由计费：${String(error)}`));
+      const summary=!byId('router-billing-summary-content').hidden;
+      void (summary?this.billingCenter.refreshSummary():this.billingCenter.refresh()).catch(error=>this.options.log(`路由计费：${String(error)}`));
     }
     this.onPage(document.querySelector('.page.active')?.id || 'dashboard');
   }
@@ -124,6 +127,7 @@ export class RouterWorkbench {
     if(!this.snapshot)return;
     if(!this.disconnected)this.billingCenter.invalidate();
     this.disconnected=true;
+    if(!byId('router-billing-summary-content').hidden)byId('router-billing-summary-content').replaceChildren(node('p','路由连接已中断，请等待重新连接。'));
     this.updatePorts();this.setControlsAvailable(false);
     byId('router-settings-connection').textContent='连接已中断，以下为上次读取的数据。';
     byId('router-discovery-message').textContent=reason;
@@ -193,7 +197,7 @@ export class RouterWorkbench {
       }
       field('state').textContent = routerStatus(item,this.disconnected,(Date.now()-this.receivedAt)/1000);
       field('account').textContent = item.account ? `账号 ${item.account}` : '暂无认证账号';
-      field('progress').textContent = item.operation?.id ? `${item.operation.phase || ''} · ${item.operation.duration || 0} 秒` : item.checking ? item.check_message || '正在检测…' : '';
+      field('progress').textContent = item.checking ? item.check_message || '正在检测…' : ['queued','running'].includes(item.operation?.state || '') ? item.operation?.phase || '正在处理…' : item.message || '';
       field('description').textContent = [item.network,item.network6,item.ipv4,item.ipv6,`认证：${item.session==='online'?'已认证':item.session==='offline'?'未认证':'待确认'}`,item.message,routerAdvice(item),item.updated_at?`检测时间：${new Date(item.updated_at*1000).toLocaleString()}`:''].filter(Boolean).join('\n');
       const now=performance.now(),tx=routerCounter(port?.txBytes),rx=routerCounter(port?.rxBytes),previous=this.samples.get(item.id);
       const elapsed=previous?(now-previous.at)/1000:0;
@@ -226,6 +230,7 @@ export class RouterWorkbench {
     byId('billing-center').classList.toggle('is-router-source', this.billingSelected);
     byId('btn-billing-source-router').setAttribute('aria-pressed',String(this.billingSelected));
     byId('btn-billing-source-local').setAttribute('aria-pressed',String(!this.billingSelected));
+    byId('billing-source-current').textContent = this.billingSelected ? `当前：路由器 · ${new URL(this.snapshot!.managementUrl).host}` : '当前：本机查询';
     setBillingSource(this.billingSelected ? 'router' : 'local');
   }
 

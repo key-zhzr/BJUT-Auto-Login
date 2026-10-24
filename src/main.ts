@@ -4,10 +4,12 @@ import {
   getRouterBillingBridge,
   onBillingSourceChange,
   setRouterBillingDataListener,
+  setRouterBillingProgressListener,
   type BillingSource,
 } from './router-billing-bridge';
 import type { RouterWorkbench } from './router-workbench';
 import { chooseConfigTransfer } from './config-transfer-dialog';
+import { setupScrollLayout } from './scroll-layout';
 import { setupPageHeaders } from './page-headers';
 import { setupDisclosureMotion, setVisible, animateResize } from './layout-motion';
 import { loginBillingWebVpn } from './billing-webvpn';
@@ -1606,9 +1608,10 @@ const btnBillingPassword = document.getElementById('btn-billing-password') as HT
 const billingQuestionsForm = document.getElementById('billing-questions-form') as HTMLFormElement;
 const billingQuestionPassword = document.getElementById('billing-question-password') as HTMLInputElement;
 const btnBillingQuestions = document.getElementById('btn-billing-questions') as HTMLButtonElement;
-type BillingWorkbenchSection = 'overview' | 'records' | 'services' | 'recharge' | 'devices';
-const billingWorkbenchSections: BillingWorkbenchSection[] = ['overview', 'records', 'services', 'recharge', 'devices'];
+type BillingWorkbenchSection = 'upstreams' | 'overview' | 'records' | 'services' | 'recharge' | 'devices';
+const billingWorkbenchSections: BillingWorkbenchSection[] = ['upstreams', 'overview', 'records', 'services', 'recharge', 'devices'];
 const billingWorkbenchSectionSubtitles: Record<BillingWorkbenchSection, string> = {
+  upstreams: '各上游账号的余额与流量',
   overview: '账户状态、在线会话与近期上网记录',
   records: '用量、账单与各类业务办理记录',
   services: '停复机、消费保护与套餐预约',
@@ -2009,8 +2012,13 @@ async function init() {
   
   setupNavigation();
   setupPageHeaders();
+  setupScrollLayout();
   setupDisclosureMotion();
   onBillingSourceChange(source => applyBillingSource(source));
+  setRouterBillingProgressListener((percent,message)=>{
+    if(getBillingSource()!=='router' || !billingCenterLoading)return;
+    updateBillingRefreshProgress(percent,true);billingCenterMessage.textContent=message;syncBillingCenterMessageVisibility();
+  });
   setRouterBillingDataListener(data => {
     if (getBillingSource() === 'router') renderBillingCenterData(data);
   });
@@ -2593,9 +2601,15 @@ function syncBillingCenterMessageVisibility() {
 }
 
 function activateBillingWorkbenchSection(section: string, resetScroll = false) {
+  if(section==='upstreams' && getBillingSource()!=='router')section='overview';
   if (!billingWorkbenchSections.includes(section as BillingWorkbenchSection)) return;
   const changed = activeBillingWorkbenchSection !== section;
   activeBillingWorkbenchSection = section as BillingWorkbenchSection;
+  document.getElementById('billing-center')!.classList.toggle('is-uplink-summary',section==='upstreams');
+  if(changed && section==='upstreams') {
+    billingViewGeneration++;getRouterBillingBridge()?.invalidate();billingCenterData=null;billingCenterLoading=false;setBillingRecordQueryBusy(false);billingAccountSelect.setDisabled(false);btnRefreshBillingCenter.disabled=false;updateBillingRefreshProgress(0,false);
+    void getRouterBillingBridge()?.refreshSummary().catch(error=>{billingCenterMessage.textContent=String(error);syncBillingCenterMessageVisibility();});
+  }
   billingCenterSubtitle.textContent = getBillingSource() === 'router' && activeBillingWorkbenchSection === 'recharge'
     ? '路由器计费不包含充值'
     : billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
@@ -2794,9 +2808,9 @@ function setupEventListeners() {
     button.addEventListener('click', () => {
       if (button.closest('.nav-billing-tree')) {
         activatePage('billing-center', 'dashboard');
-        if (!billingCenterData) void refreshBillingCenterData();
       }
       activateBillingWorkbenchSection(button.dataset.billingSectionTarget || '', true);
+      if(!billingCenterData && button.dataset.billingSectionTarget!=='upstreams')void refreshBillingCenterData();
     });
     button.addEventListener('keydown', event => {
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
@@ -2804,7 +2818,7 @@ function setupEventListeners() {
       const group = button.closest('.nav-billing-tree, .billing-mobile-nav');
       const groupButtons = Array.from(
         group?.querySelectorAll<HTMLButtonElement>('[data-billing-section-target]') || [],
-      );
+      ).filter(button=>!button.hidden);
       const index = groupButtons.indexOf(button);
       if (index < 0 || groupButtons.length === 0) return;
       const backwards = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
@@ -4693,6 +4707,8 @@ function applyBillingSource(source: BillingSource) {
   btnExportBillingRecords.textContent = '导出本页';
   btnExportAllBillingRecords.textContent = '导出全部';
   const router = source === 'router';
+  document.querySelectorAll<HTMLElement>('[data-router-billing-only]').forEach(element=>element.hidden=!router);
+  if(!router && activeBillingWorkbenchSection==='upstreams')activateBillingWorkbenchSection('overview');
   const bridge = getRouterBillingBridge();
   const webvpn = document.getElementById('btn-billing-webvpn') as HTMLButtonElement | null;
   const direct = document.getElementById('btn-billing-direct') as HTMLButtonElement | null;
@@ -5243,9 +5259,9 @@ function readBillingRecordQuery(page: number, all = false): BillingRecordQuery |
 
 function setBillingRecordQueryBusy(busy: boolean) {
   billingRecordQueryBusy = busy;
+  // Source changes invalidate the old generation, so remain available during a query.
   for (const id of ['btn-billing-source-router', 'btn-billing-source-local']) {
-    const source = document.getElementById(id) as HTMLButtonElement | null;
-    if (source) source.disabled = busy;
+    (document.getElementById(id) as HTMLButtonElement).disabled = false;
   }
   (document.getElementById('btn-billing-webvpn') as HTMLButtonElement).disabled = busy;
   (document.getElementById('btn-billing-direct') as HTMLButtonElement).disabled = busy;
@@ -5762,6 +5778,9 @@ function finishBillingRefreshProgress() {
 }
 
 async function refreshBillingCenterData() {
+  if(getBillingSource()==='router' && activeBillingWorkbenchSection==='upstreams') {
+    try {await getRouterBillingBridge()?.refreshSummary();}catch(error){billingCenterMessage.textContent=String(error);syncBillingCenterMessageVisibility();}return;
+  }
   const generation = billingViewGeneration;
   if (getBillingSource() === 'router') {
     const bridge = getRouterBillingBridge();

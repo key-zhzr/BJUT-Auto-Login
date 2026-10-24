@@ -60,7 +60,7 @@ async function fixtureCaptcha(title:string) {
 }
 const routerSnapshot = {
   version: '0.1.6', managementUrl:'https://192.0.2.1/cgi-bin/luci/admin/network/bjut-autologin/billing',
-  capabilities:['ports','billing','logs','settings','account_set','account_manage','uplink_manage','billing_records','billing_actions','uplink_actions','log_settings','operations','account_limits','pushplus','billing_background','maintenance'],
+  capabilities:['ports','billing','logs','settings','account_set','account_manage','uplink_manage','billing_records','billing_actions','uplink_actions','log_settings','operations','account_limits','pushplus','billing_background','billing_center','maintenance'],
   ports:[{uplink:'dorm_a',device:'lan3',linkUp:1,speedMbps:'1000',rxBytes:'10000000000',txBytes:'2000000000'},
     {uplink:'dorm_b',device:'lan4',linkUp:1,speedMbps:'2500',rxBytes:'30000000000',txBytes:'5000000000'}],
   uplinks:[
@@ -75,6 +75,7 @@ let routerQuerySequence = 0;
 const routerTickets = new Map<string,string>();
 const recordTickets = new Map<string, any>();
 const moduleTickets=new Map<string,string>();
+const bundlePolls=new Map<string,number>();
 let savedRouterInfo:any=new URL(location.href).searchParams.has('saved')?{address:'https://192.0.2.1',username:'root',certificate:'synthetic-pem',allowHttp:false}:null,routerFailures=0;
 mockIPC(async (cmd, payload: any = {}) => {
   calls.push({cmd,payload,at:now()});
@@ -98,11 +99,18 @@ mockIPC(async (cmd, payload: any = {}) => {
       const query=recordTickets.get(payload.args.ticket),page=Number(query.page),offset=(page-1)*100;
       return {result:{state:'ready',account:'25000001',kind:query.kind,total:205,page,columns:['loginTime','flow'],rows:Array.from({length:Math.min(100,205-offset)},(_,i)=>[`2026-10-13 12:00 · ${offset+i+1}`,'1024'])}};
     }
+    if(payload.operation==='billing_poll' && moduleTickets.get(payload.args.ticket)==='center') {
+      const poll=(bundlePolls.get(payload.args.ticket) || 0)+1;bundlePolls.set(payload.args.ticket,poll);
+      const overview={state:'ready',account:'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'};
+      const services={state:'ready',module:'services',currentPackageId:'1',currentPackage:'测试套餐',installmentFlag:'100',useMoney:'25',canStop:1,packages:[{id:'1',name:'测试套餐',description:'每月赠送30GB'},{id:'2',name:'10元套餐',description:'每月60GB'}]};
+      const modules={services,devices:{state:'ready',mauth:'1',macs:{columns:['online','mac','device'],rows:[['在线','aabbccddeeff','测试设备']]}},security:{state:'ready',FLDMINLENGTH:12,questions:[{id:'1',name:'问题一'},{id:'2',name:'问题二'},{id:'3',name:'问题三'}]},history:{state:'ready',history:{columns:[],rows:[]}}};
+      return {result:{state:poll<3?'loading':'ready',percent:poll===1?12:poll===2?72:100,message:poll<3?'正在读取计费模块':'计费数据已更新',account:'25000001',...(poll>1?{overview,modules}:{})},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
+    }
     if (payload.operation === 'billing_poll' && moduleTickets.get(payload.args.ticket)==='action') return {result:{state:'ready',message:'操作已完成'}};
     if (payload.operation === 'billing_poll' && moduleTickets.has(payload.args.ticket)){
       const module=moduleTickets.get(payload.args.ticket);return {result:{state:'ready',account:'25000001',module:module==='action'?undefined:module,message:module==='action'?'操作已完成':'计费数据已更新',canStop:1,canReopen:0,canCancel:1,installmentFlag:'100',useMoney:'25',packages:[{id:'2',name:'测试校园套餐'}],questions:[{id:'1',name:'测试问题一'},{id:'2',name:'测试问题二'},{id:'3',name:'测试问题三'}],FLDMINLENGTH:8,mauth:'1',macs:{columns:['online','mac','device','lastLoginAt','lastIp'],rows:[['在线','aabbccddeeff','测试设备','2026-10-18','192.0.2.20']]},history:{columns:['loginTime','logoutTime','ip','flow'],rows:[['2026-10-18 12:00','2026-10-18 13:00','192.0.2.20','1024 MB']]}},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'aabbccddeeff',useTime:'3600'}],sessionsAvailable:true};
     }
-    if (payload.operation === 'billing_poll') return {result:{state:'ready',message:'计费数据已更新',account:'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
+    if (payload.operation === 'billing_poll') return {result:{state:'ready',message:'计费数据已更新',account:routerTickets.get(payload.args.ticket)==='dorm_b'?'25000002':'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
     if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'},uplinks:[{id:'dorm_a',enabled:'1',network:'wan14',network6:'wan16',login_type:'bjut-sushe',accounts:'account2 account1'},{id:'dorm_b',network:'wan24',enabled:'1'}]};
     if (payload.operation === 'billing_cached') return {items:[]};
     if (payload.operation === 'pushplus_test') return {state:'ready',message:'模拟测试消息已排队'};
@@ -371,7 +379,8 @@ button.addEventListener('click',async()=>{
     assert(document.getElementById('billing-center-flow')!.textContent!.includes('30.00 GB'),'剩余流量未映射');
     assert(document.getElementById('billing-mauth-badge')!.textContent==='已开启','无感认证状态未映射');
     assert(document.querySelectorAll('#billing-online-list .billing-record-card').length===1,'在线会话未映射');
-    assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_start').length===1,'路由计费未按账号查询');
+    assert(calls.filter(call=>call.cmd==='router_request'&&call.payload.operation==='billing_details'&&call.payload.args.module==='center').length===1,'路由计费未使用一次会话查询');
+    await wait(()=>!(document.getElementById('btn-refresh-billing-center') as HTMLButtonElement).disabled);
     click('.billing-mobile-nav [data-billing-section-target="records"]');
     (document.getElementById('billing-record-start-date') as HTMLInputElement).value='2026-01-01';
     (document.getElementById('billing-record-end-date') as HTMLInputElement).value='2026-10-13';
@@ -421,6 +430,16 @@ button.addEventListener('click',async()=>{
     assert(!document.getElementById('btn-billing-webvpn')!.hidden,'切回当前设备后校外访问入口未恢复');
     assert(!document.querySelector<HTMLElement>('.billing-payment-panel')!.hidden,'切回当前设备后充值表单未恢复');
     note('通过：计费来源切换保持同一界面，仅数据来源不同');
+    click('#btn-billing-source-router');
+    assert(!document.getElementById('btn-billing-source-local')!.hasAttribute('disabled'),'查询期间来源切换被锁住');
+    assert(document.getElementById('billing-source-current')!.textContent!.includes('路由器'),'当前来源未明确显示');
+    click('.billing-mobile-nav [data-billing-section-target="upstreams"]');
+    await wait(()=>document.querySelectorAll('#router-billing-summary-content .router-billing-card').length===2 && !document.querySelector('#router-billing-summary-content progress'));
+    assert(document.querySelector('#router-billing-summary-content .billing-center-summary')!.textContent!.includes('84.25'),'余额汇总未按不同账号计算');
+    note('通过：上游总览展示各接口账号并汇总余额与流量；查询中可立即切换来源');
+    click('#btn-billing-source-local');
+    await wait(()=>document.getElementById('billing-center-balance')!.textContent!.includes('23 元'));
+
     click('[data-target="accounts"]');
     assert(!document.getElementById('router-accounts-panel')!.hidden && document.getElementById('router-accounts-list')!.textContent!.includes('25000002'),'账号管理未融合路由账号');
     Array.from(document.querySelectorAll<HTMLButtonElement>('#router-accounts-list button')).find(button=>button.textContent==='编辑')!.click();
@@ -494,7 +513,7 @@ button.addEventListener('click',async()=>{
     click('#btn-cancel-add'); assert(draftPassword.value==='', '取消后未清空草稿密码');
     note('通过：切换应用保留表单，取消后清空');
     assert(!document.querySelector('.page-content'),'仍存在裁切内容的内层滚动区域');
-    assert(getComputedStyle(document.getElementById('main-content')!).overflowY==='auto','主页面未恢复整体滚动');
+    assert(['auto','scroll'].includes(getComputedStyle(document.getElementById('main-content')!).overflowY),'主页面未恢复整体滚动');
     await emit('network-state-change',{state:'BjutCampus',loginType:'lgn-wired',transport:'wifi',ssid:'测试校园路由器',ip:'192.168.1.2',systemOnline:true});
     assert(!document.getElementById('btn-login')!.hidden && document.getElementById('btn-logout-current')!.hidden,'VPN 联网覆盖了待认证 Wi-Fi 状态');
     note('通过：完整页面滚动，系统联网与 Wi-Fi 待认证分别显示');

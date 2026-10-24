@@ -1,6 +1,10 @@
 /* Keep the original full-page scroll area and room for card shadows. */
-#main-content, .modal-content, .logs-container,
-.router-table-scroll, .billing-records-table-wrap { scrollbar-gutter: stable both-edges; }
+#main-content { overflow-y:scroll; scrollbar-gutter:auto; }
+.modal-content { scrollbar-gutter:auto; }
+.logs-container, .router-table-scroll, .billing-records-table-wrap { scrollbar-gutter:stable; }
+/* Half the actual gutter offsets content to the physical scrollport center.
+   This also works in WebKit versions without stable/both-edges support. */
+#main-content > .page, .modal-content > * { translate:calc(var(--scroll-inset,0px) / 2) 0; }
 /* Only scrolling content reserves space. A root gutter exposes the native
    window background; menu gutters leave unpainted bands beside each option. */
 #main-content { isolation: isolate; }
@@ -130,3 +134,17 @@
 .router-port-actions{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;width:100%}.router-port-actions .router-port-login{grid-column:1/-1}.router-port-actions .btn{min-width:0;margin:0}.router-port-card>.custom-select{width:100%;min-width:0}
 
 :root[data-theme] :is(.logs-container,#router-logs-content){scrollbar-width:auto}
+
+:root[data-theme] .custom-select-options { overscroll-behavior: contain; }
+:root[data-theme] .router-source-row button[aria-pressed="true"] { color:var(--primary-color); background:rgba(var(--primary-rgb),.13); border:1px solid var(--primary-color); }
+#billing-source-current { font-size:.8rem; color:var(--text-muted); }
+
+.router-summary-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:1rem; }
+.router-summary-grid .router-billing-card { padding:1.3rem;min-width:0; }
+.router-summary-grid .router-billing-status { font-size:.8rem;color:var(--text-muted);margin-block:1rem; }
+.router-summary-grid .router-billing-row { display:flex;justify-content:space-between;gap:1rem;margin-block:.75rem; }
+.router-summary-grid .router-billing-row strong { overflow-wrap:anywhere;text-align:right; }
+.router-summary-grid progress { width:100%;accent-color:var(--primary-color); }
+
+:root[data-theme] #billing-center.is-uplink-summary .billing-account-picker { display:none; }
+:root[data-theme] #billing-center.is-uplink-summary .billing-header-tools { display:flex;justify-content:flex-end; }

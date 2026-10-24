@@ -91,7 +91,22 @@ export class RouterBillingTools {
         if(result.canStop)tools.append(this.button('立即报停',()=>{void this.action(job,'stopNow',{},module,'立即报停');}));
         if(result.canReopen)tools.append(this.button('立即复通',()=>{void this.action(job,'reopenNow',{},module,'立即复通');}));
         if(result.canCancel)tools.append(this.button('取消套餐预约',()=>{void this.action(job,'cancelPackage',{},module,'取消套餐预约');}));card.append(tools);
-        if(result.packages?.length)this.form(card,'预约套餐',form=>{const value=this.choice(form,'下周期套餐',result.packages.map((p:Data)=>({value:p.id,text:p.name})));return ()=>({action:'schedulePackage',payload:{packageId:value()}});},job,module);
+        if(result.packages?.length) {
+          card.append(node('h4','预约套餐'));
+          const normalize=(value:unknown)=>String(value || '').replace(/\s+/g,'').toLowerCase();
+          const current=String(result.currentPackageId || result.packages.find((p:Data)=>normalize(p.name)===normalize(result.currentPackage))?.id || '');
+          const next=String(result.packages.find((p:Data)=>normalize(p.name)===normalize(result.scheduledPackage))?.id || current);
+          let selected=next;
+          const list=node('div','','billing-package-grid bj-package-grid');list.setAttribute('role','radiogroup');list.setAttribute('aria-label','下周期套餐');
+          const submit=this.button('确认预约套餐',()=>{void this.action(job,'schedulePackage',{packageId:selected},module,'预约套餐');});
+          const sync=()=>{submit.disabled=!selected || selected===next;list.querySelectorAll<HTMLButtonElement>('button').forEach(button=>{button.setAttribute('aria-checked',String(button.dataset.package===selected));button.classList.toggle('selected',button.dataset.package===selected);});};
+          for(const p of result.packages) {
+            const choice=this.button('',()=>{selected=String(p.id);sync();});choice.className='billing-package-option bj-package-option';choice.dataset.package=String(p.id);choice.setAttribute('role','radio');
+            choice.append(node('strong',String(p.name)),node('p',String(p.description || '计费系统未提供套餐说明')));
+            const badges=node('div','','billing-package-badges');if(String(p.id)===current)badges.append(node('span','当前周期','billing-package-badge'));if(String(p.id)===next)badges.append(node('span','下一周期','billing-package-badge next'));choice.append(badges);list.append(choice);
+          }
+          sync();card.append(list,submit);
+        }
         this.form(card,'消费保护',form=>{const limit=this.field(form,'消费限额（元，999999 为不限制）','number',result.installmentFlag || '999999');limit.min='0';limit.max='999999';limit.step='0.01';return ()=>({action:'setConsumeLimit',payload:{consumeLimit:limit.value}});},job,module);
       }else if(module==='devices'){
         const sessions=result.sessions || [];card.append(node('h4','在线设备'));

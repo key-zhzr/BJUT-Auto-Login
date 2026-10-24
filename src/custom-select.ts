@@ -154,6 +154,14 @@ export class CustomSelect {
     this.optionsContainer.addEventListener('mousedown', event => {
       if ((event.target as HTMLElement).closest('.custom-option')) event.preventDefault();
     });
+    // Consume wheel momentum inside the list, including at its limits. Letting
+    // it reach the page used to scroll an ancestor and close the flyout.
+    this.optionsContainer.addEventListener('wheel', event => {
+      if (!this.element.classList.contains('open') || !event.deltaY) return;
+      event.preventDefault(); event.stopPropagation();
+      const unit = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? this.optionsContainer.clientHeight : 1;
+      this.optionsContainer.scrollTop += event.deltaY * unit;
+    }, {passive: false});
     this.optionsContainer.addEventListener('click', event => {
       const option = (event.target as HTMLElement).closest<HTMLElement>('.custom-option');
       if (this.disabled || !option || option.getAttribute('aria-disabled') === 'true') return;

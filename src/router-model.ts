@@ -10,7 +10,7 @@ export interface RouterPort { uplink: string; device?: string; linkUp?: number; 
 export interface RouterAccount { id: string; user: string; enabled: number; hasPassword: number; loginType?: string; maxSessions?:number;onlineCount?:number; }
 export interface RouterSnapshot { version: string; uplinks: RouterUplink[]; accounts: RouterAccount[]; managementUrl: string; capabilities?: string[]; ports?: RouterPort[]; }
 export interface RouterCandidate { name: string; address: string; version: string; secure: boolean; }
-export interface RouterBillingItem { state: string; message?: string; percent?: number; account?: string; balance?: string; remainingFlow?: string; totalFlow?: string; usedFlow?: string; accountStatus?: string; package?: string; image?: string; updatedAt?: number; }
+export interface RouterBillingItem { state: string; message?: string; percent?: number; account?: string; balance?: string; balanceText?:string;remainingFlowText?:string; remainingFlow?: string; totalFlow?: string; usedFlow?: string; accountStatus?: string; package?: string; image?: string; updatedAt?: number; }
 export interface RouterBillingJob { uplink: string; account: string; ticket: string; running: boolean; starting: boolean; item: RouterBillingItem; sessions?: Record<string,string>[]; sessionsAvailable?: boolean; }
 
 export const routerLabels: Record<string, string> = {
@@ -60,4 +60,9 @@ export function routerBillingSummary(jobs: RouterBillingJob[]): { accounts: numb
     return values.length && values.every(value=>Number.isFinite(value) && value>=0)?values.reduce((a,b)=>a+b,0):null;
   };
   return {accounts: unique.size, balance: balances.length && balances.every(Number.isFinite) ? balances.reduce((a,b)=>a+b,0) : null,totalFlow:sum('totalFlow'),remainingFlow:sum('remainingFlow')};
+}
+
+/** Same visible-page cadence as LuCI: one second during work, two when idle. */
+export function routerPollInterval(snapshot: RouterSnapshot | null): number {
+  return snapshot?.uplinks.some(item => item.checking || ['queued','running'].includes(item.operation?.state || '')) ? 1000 : 2000;
 }

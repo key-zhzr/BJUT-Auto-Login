@@ -14,6 +14,7 @@ export interface RouterBillingBridge {
   currentAccount(): string;
   selectAccount(value: string): Promise<void>;
   refresh(): Promise<void>;
+  refreshSummary(): Promise<void>;
   queryRecords(query: BillingRecordQuery): Promise<BillingRecordResult>;
   performAction(request: BillingActionRequest): Promise<BillingActionResult>;
   disconnectSession(sessionId: string, ip: string, mac: string): Promise<string>;
@@ -58,4 +59,10 @@ export function setRouterBillingDataListener(listener: ((data: BillingCenterData
 export function publishRouterBillingData(data: BillingCenterData): void {
   if (!dataListener) return;
   try { dataListener(data); } catch (error) { console.error('Router billing data listener failed:', error); }
+}
+
+let progressListener: ((percent: number, message: string) => void) | null = null;
+export function setRouterBillingProgressListener(listener: (percent: number, message: string) => void): void { progressListener = listener; }
+export function publishRouterBillingProgress(percent: number, message: string): void {
+  if (currentSource === 'router') progressListener?.(Math.min(99, Math.max(2, percent)), message);
 }

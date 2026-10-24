@@ -58,6 +58,15 @@ export async function runMotionRegression(note:(text:string)=>void){
       box.style.bottom='';box.style.top='56px';trigger.click();assert(!wrapper.classList.contains('opens-up'),`${value} 充足空间时未向下展开`);select.close();await until(()=>menu.hidden);box.style.top='';box.style.bottom='36px';
     }
     note('通过：三种主题的下拉方向在打开、收起和快速重开时保持稳定');
+    box.style.bottom='';box.style.top='56px';trigger.click();await frame();
+    const ancestor=document.getElementById('main-content')!,beforeScroll=ancestor.scrollTop;
+    for(const delta of [5000,5000,-5000,-5000]) {
+      menu.dispatchEvent(new WheelEvent('wheel',{deltaY:delta,bubbles:true,cancelable:true}));await frame();
+      assert(wrapper.classList.contains('open'),'菜单滚动到边界后收起');assert(ancestor.scrollTop===beforeScroll,'菜单边界滚动传递到了页面');
+    }
+    select.close();await until(()=>menu.hidden);
+    note('通过：下拉菜单在顶端、底端继续滚动时保持展开且不带动页面');
+
     document.documentElement.dataset.theme='basic';box.style.top='80px';box.style.bottom='';
     const details=document.createElement('details');details.innerHTML='<summary>展开详细信息</summary><div style="height:180px;padding:16px">测试内容</div>';box.append(details);
     const closed=details.getBoundingClientRect().height;
@@ -70,7 +79,27 @@ export async function runMotionRegression(note:(text:string)=>void){
     visibility.setVisible(true);await frame();visibility.setVisible(false);await frame();visibility.setVisible(true);await until(()=>panel.getAnimations().length===0);assert(!panel.hidden,'显隐反向时被过期动画隐藏');
     visibility.setVisible(false);await until(()=>panel.hidden);assert(!panel.classList.contains('progress-animating'),'收起后保留动画样式');
     note('通过：详细信息和状态模块可平滑反向，结束后无空白和阴影裁切');
-    const main=document.getElementById('main-content')!;assert(getComputedStyle(main).scrollbarGutter.includes('both-edges'),'滚动条未预留对称空间');
-    note('通过：滚动条使用对称预留空间');
+    const main=document.getElementById('main-content')!,previous=main.querySelector<HTMLElement>('.page.active');
+    const page=document.createElement('section');page.className='page active';page.innerHTML='<div class="glass-card">滚动布局</div>';
+    previous?.classList.remove('active');main.append(page);
+    try {
+      for(const value of ['basic','apple27','winui']) {
+        document.documentElement.dataset.theme=value;await frame();await frame();
+        const card=page.firstElementChild as HTMLElement,short=card.getBoundingClientRect(),bounds=main.getBoundingClientRect();
+        card.style.height='2400px';await frame();await frame();const tall=card.getBoundingClientRect();
+        assert(Math.abs(short.left-tall.left)<1 && Math.abs(short.width-tall.width)<1,`${value} 长短页面宽度或横向位置不同`);
+        assert(Math.abs((tall.left+tall.right-bounds.left-bounds.right)/2)<1.5,`${value} 滚动条影响内容居中`);
+        card.style.height='';
+        const overlay=document.createElement('div');overlay.className='modal-overlay';overlay.innerHTML='<div class="modal-content glass-card"><h3>弹窗</h3><div>内容</div></div>';document.body.append(overlay);
+        try {
+          for(const height of ['20px','1800px']) {
+            const content=overlay.querySelector<HTMLElement>('.modal-content')!,body=content.lastElementChild as HTMLElement;body.style.height=height;await frame();await frame();
+            const outer=content.getBoundingClientRect(),inner=body.getBoundingClientRect();
+            assert(Math.abs((inner.left-outer.left)-(outer.right-inner.right))<1.5,`${value} 弹窗左右内边距不等宽`);
+          }
+        } finally {overlay.remove();}
+      }
+    } finally {page.remove();previous?.classList.add('active');}
+    note('通过：三种主题长短页面宽度一致、内容居中，弹窗有无滚动条时边距等宽');
   }finally{select.close();box.remove();document.documentElement.dataset.theme=theme;}
 }
