@@ -2616,8 +2616,9 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
   activeBillingWorkbenchSection = section as BillingWorkbenchSection;
   document.getElementById('billing-center')!.classList.toggle('is-uplink-summary',section==='upstreams');
   if(changed && section==='upstreams') {
-    billingViewGeneration++;getRouterBillingBridge()?.invalidate();billingCenterData=null;billingCenterLoading=false;setBillingRecordQueryBusy(false);billingAccountSelect.setDisabled(false);btnRefreshBillingCenter.disabled=false;updateBillingRefreshProgress(0,false);
-    void getRouterBillingBridge()?.refreshSummary().catch(error=>{billingCenterMessage.textContent=String(error);syncBillingCenterMessageVisibility();});
+    const generation=++billingViewGeneration;getRouterBillingBridge()?.invalidate();billingCenterData=null;billingCenterLoading=false;setBillingRecordQueryBusy(false);billingAccountSelect.setDisabled(false);btnRefreshBillingCenter.disabled=false;updateBillingRefreshProgress(0,false);
+    billingCenterMessage.textContent='';
+    void getRouterBillingBridge()?.refreshSummary().catch(error=>{if(generation!==billingViewGeneration || getBillingSource()!=='router')return;billingCenterMessage.textContent=String(error);syncBillingCenterMessageVisibility();});
   }
   billingCenterSubtitle.textContent = getBillingSource() === 'router' && activeBillingWorkbenchSection === 'recharge'
     ? '路由器计费不包含充值'
@@ -5788,7 +5789,8 @@ function finishBillingRefreshProgress() {
 
 async function refreshBillingCenterData() {
   if(getBillingSource()==='router' && activeBillingWorkbenchSection==='upstreams') {
-    try {await getRouterBillingBridge()?.refreshSummary();}catch(error){billingCenterMessage.textContent=String(error);syncBillingCenterMessageVisibility();}return;
+    const generation=billingViewGeneration;billingCenterMessage.textContent='';syncBillingCenterMessageVisibility();
+    try {await getRouterBillingBridge()?.refreshSummary();}catch(error){if(generation!==billingViewGeneration || getBillingSource()!=='router')return;billingCenterMessage.textContent=String(error);syncBillingCenterMessageVisibility();}return;
   }
   const generation = billingViewGeneration;
   if (getBillingSource() === 'router') {

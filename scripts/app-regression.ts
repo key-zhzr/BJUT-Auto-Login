@@ -448,6 +448,18 @@ button.addEventListener('click',async()=>{
     note('通过：上游总览展示各接口账号并汇总余额与流量；查询中可立即切换来源');
     click('#btn-billing-source-local');
     await wait(()=>document.getElementById('billing-center-balance')!.textContent!.includes('23 元'));
+    routerBillingPollDelay=250;
+    const summaryStarts=calls.filter(call=>call.cmd==='router_request' && call.payload.operation==='billing_start').length;
+    click('#btn-billing-source-router');click('.billing-mobile-nav [data-billing-section-target="upstreams"]');
+    await wait(()=>calls.filter(call=>call.cmd==='router_request' && call.payload.operation==='billing_start').length>summaryStarts);
+    click('#btn-billing-source-local');
+    await wait(()=>document.getElementById('billing-center-balance')!.textContent!.includes('23 元'));
+    await new Promise(resolve=>setTimeout(resolve,400));routerBillingPollDelay=0;
+    assert(!/变化|取消旧查询/.test(document.getElementById('billing-center-message')!.textContent || ''),'取消的上游汇总覆盖了新来源的提示');
+    note('通过：上游总览查询期间切换来源，旧错误与结果不会污染当前设备');
+
+    click('#btn-billing-source-local');
+    await wait(()=>document.getElementById('billing-center-balance')!.textContent!.includes('23 元'));
 
     click('[data-target="accounts"]');
     assert(!document.getElementById('router-accounts-panel')!.hidden && document.getElementById('router-accounts-list')!.textContent!.includes('25000002'),'账号管理未融合路由账号');
