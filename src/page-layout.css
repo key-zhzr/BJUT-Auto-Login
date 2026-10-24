@@ -140,6 +140,12 @@
 :root[data-theme] .custom-select-options { overscroll-behavior: contain; }
 :root[data-theme] .router-source-row button[aria-pressed="true"] { color:var(--primary-color); background:rgba(var(--primary-rgb),.13); border:1px solid var(--primary-color); }
 #billing-source-current { font-size:.8rem; color:var(--text-muted); }
+/* Keep every visible billing section in the dock, including the router summary. */
+:root[data-theme] .billing-mobile-nav {
+  grid-template-columns:none!important;
+  grid-auto-flow:column;
+  grid-auto-columns:minmax(0,1fr);
+}
 
 .router-summary-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:1rem; }
 .router-summary-grid .router-billing-card { padding:1.3rem;min-width:0; }
