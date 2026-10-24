@@ -99,7 +99,7 @@ export class RouterBillingTools {
           let selected=next;
           const list=node('div','','billing-package-grid bj-package-grid');list.setAttribute('role','radiogroup');list.setAttribute('aria-label','下周期套餐');
           const submit=this.button('确认预约套餐',()=>{void this.action(job,'schedulePackage',{packageId:selected},module,'预约套餐');});
-          const sync=()=>{submit.disabled=!selected || selected===next;list.querySelectorAll<HTMLButtonElement>('button').forEach(button=>{button.setAttribute('aria-checked',String(button.dataset.package===selected));button.classList.toggle('selected',button.dataset.package===selected);});};
+          const sync=()=>{submit.disabled=!selected || selected===next || selected===current;list.querySelectorAll<HTMLButtonElement>('button').forEach(button=>{button.setAttribute('aria-checked',String(button.dataset.package===selected));button.classList.toggle('selected',button.dataset.package===selected);});};
           for(const p of result.packages) {
             const choice=this.button('',()=>{selected=String(p.id);sync();});choice.className='billing-package-option bj-package-option';choice.dataset.package=String(p.id);choice.setAttribute('role','radio');
             choice.append(node('strong',String(p.name)),node('p',String(p.description || '计费系统未提供套餐说明')));
