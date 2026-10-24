@@ -642,7 +642,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
     const limit = String(service.installmentFlag ?? '');
     return {
       accountStatus: String(overview.accountStatus || ''),
-      statusReason: String(service.message || '报停、复通、套餐预约与消费保护。'),
+      statusReason: String(service.statusReason || overview.statusReason || ''),
       currentPackageId,
       currentPackage,
       packageDetail: String(service.packageDetail || overview.packageDetail || ''),

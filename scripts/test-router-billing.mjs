@@ -204,12 +204,12 @@ test('bundled center publishes progress and modules using only one verified tick
   globalThis.window={setTimeout:done=>setImmediate(done)};
   setRouterBillingProgressListener((percent,message)=>progress.push({percent,message}));
   let polls=0;
-  const overview={state:'ready',account:'25000001',package:'默认套餐',packageDetail:'每月赠送30GB'};
+  const overview={state:'ready',account:'25000001',package:'默认套餐',packageDetail:'每月赠送30GB',statusReason:'余额不足'};
   const services={state:'ready',account:'25000001',module:'services',currentPackageId:'1',currentPackage:'默认套餐',packageDetail:'每月赠送30GB',scheduledPackage:'10元套餐',packages:[{id:'1',name:'默认套餐',description:'每月赠送30GB'},{id:'2',name:'10元套餐',description:'每月60GB'}]};
   const {center,calls,published,setCapabilities}=fixture((operation,_args,job)=>{
     if(operation==='billing_poll' && job.module==='center'){
       polls++;
-      return {result:{state:polls<3?'loading':'ready',percent:[12,72,100][Math.min(polls-1,2)],message:'正在读取模块',account:'25000001',...(polls>1?{overview,modules:{services}}:{})}};
+      return {result:{state:polls<4?'loading':'ready',percent:[12,72,72,100][Math.min(polls-1,3)],message:'正在读取模块',account:'25000001',...(polls>1?{overview,modules:{services}}:{})}};
     }
   });
   setCapabilities(['billing_center']);
@@ -221,7 +221,8 @@ test('bundled center publishes progress and modules using only one verified tick
     assert.equal(published.at(-1).service.currentPackageId,'1');
     assert.equal(published.at(-1).service.scheduledPackageId,'2');
     assert.equal(published.at(-1).service.packageOptions[1].description,'每月60GB');
-    assert.ok(published.length>=2,'partial module updates should be visible before completion');
+    assert.equal(published.length,2,'unchanged partial modules should stay mounted');
+    assert.equal(published.at(-1).service.statusReason,'余额不足');
   }finally{globalThis.window=oldWindow;setRouterBillingProgressListener(()=>{});}
 });
 
