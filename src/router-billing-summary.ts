@@ -3,8 +3,11 @@ import { routerBillingSummary } from './router-model';
 import { animateResize } from './layout-motion';
 
 const node=(tag:string,text='',className='')=>{const element=document.createElement(tag);element.textContent=text;element.className=className;return element;};
+const stamps=new WeakMap<HTMLElement,string>();
 const number=(value:number|null,unit:string,scale=1)=>value===null || !Number.isFinite(value)?'--':`${(value/scale).toFixed(2)} ${unit}`;
 export function renderRouterBillingSummary(root:HTMLElement,jobs:RouterBillingJob[],snapshot:RouterSnapshot|null):void {
+  const stamp=JSON.stringify([jobs.map(job=>[job.item,job.running,job.starting]),snapshot?.uplinks.map(item=>[item.id,item.device,item.network])]);
+  if(stamps.get(root)===stamp && root.childElementCount>0)return;stamps.set(root,stamp);
   const totals=routerBillingSummary(jobs),metrics=node('div','','billing-center-summary');
   for(const [label,value] of [['已查询账号',String(totals.accounts)],['余额合计',number(totals.balance,'元')],['总流量',number(totals.totalFlow,'GB',1024)],['剩余流量',number(totals.remainingFlow,'GB',1024)]]) {
     const card=node('article','','billing-summary-card glass-card');card.append(node('span',label),node('strong',value));metrics.append(card);

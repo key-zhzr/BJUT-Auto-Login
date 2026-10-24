@@ -184,6 +184,7 @@ export class RouterBillingCenter implements RouterBillingBridge {
   private async refreshScoped(scope: RequestScope): Promise<void> {
     publishRouterBillingProgress(3,'正在读取路由器计费数据…');
     if (this.snapshot()?.capabilities?.includes('billing_center')) {
+      let dataStamp='';
       const start=await this.scopedRequest<Data>(scope,'billing_details',{uplink:scope.uplink,account:scope.account,module:'center'});
       if(!start.ticket)throw new Error(String(start.message || '无法开始查询'));
       await this.waitForTicket(String(start.ticket),scope,true,120_000,response=>{
@@ -192,6 +193,8 @@ export class RouterBillingCenter implements RouterBillingBridge {
         if(!result.overview?.account)return;
         if(scope.expectedAccount && String(result.overview.account)!==scope.expectedAccount)throw new Error('计费账号与所选账号不一致，请刷新后重试。');
         if(String(result.overview.account)!==String(result.account))throw new Error('计费账号与所选账号不一致，请刷新后重试。');
+        const stamp=JSON.stringify([result.state,result.overview,result.modules,response.sessions]);
+        if(stamp===dataStamp)return;dataStamp=stamp;
         this.overview=result.overview;
         scope.expectedAccount=String(this.overview!.account);
         this.sessions=Array.isArray(response.sessions)?response.sessions:[];
