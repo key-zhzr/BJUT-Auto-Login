@@ -1916,9 +1916,14 @@ async function init() {
       resetBillingCenterForSelectedAccount();
       const bridge = getRouterBillingBridge();
       if (bridge) {
+        billingCenterLoading = true;
+        btnRefreshBillingCenter.disabled = true;
         billingAccountSelect.setDisabled(true);
         setBillingRecordQueryBusy(true);
+        updateBillingRefreshProgress(2, true);
+        let completed = false;
         void bridge.selectAccount(billingAccountSelect.value)
+          .then(() => { if (generation === billingViewGeneration) completed = true; })
           .catch(error => {
             if (generation !== billingViewGeneration) return;
             billingCenterMessage.textContent = `路由器计费数据读取失败：${String(error)}`;
@@ -1926,8 +1931,12 @@ async function init() {
           })
           .finally(() => {
             if (generation !== billingViewGeneration) return;
+            btnRefreshBillingCenter.disabled = false;
             billingAccountSelect.setDisabled(false);
+            if (completed) finishBillingRefreshProgress();
+            else updateBillingRefreshProgress(0, false);
             setBillingRecordQueryBusy(false);
+            billingCenterLoading = false;
           });
       }
       return;
