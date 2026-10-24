@@ -445,6 +445,10 @@ button.addEventListener('click',async()=>{
     click('.billing-mobile-nav [data-billing-section-target="upstreams"]');
     await wait(()=>document.querySelectorAll('#router-billing-summary-content .router-billing-card').length===2 && !document.querySelector('#router-billing-summary-content progress'));
     assert(document.querySelector('#router-billing-summary-content .billing-center-summary')!.textContent!.includes('84.25'),'余额汇总未按不同账号计算');
+    const billingNav=document.querySelector<HTMLElement>(mobileLayout?'.billing-mobile-nav':'.nav-billing-tree')!;
+    await wait(()=>{const rect=billingNav.getBoundingClientRect(),limit=mobileLayout?document.getElementById('nav')!.getBoundingClientRect().top:innerHeight;return rect.width>0 && rect.top>=0 && rect.bottom<=limit+1;});
+    note('通过：计费功能导航保持在桌面或移动端可见区域内');
+
     note('通过：上游总览展示各接口账号并汇总余额与流量；查询中可立即切换来源');
     click('#btn-billing-source-local');
     await wait(()=>document.getElementById('billing-center-balance')!.textContent!.includes('23 元'));

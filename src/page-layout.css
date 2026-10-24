@@ -4,7 +4,9 @@
 .logs-container, .router-table-scroll, .billing-records-table-wrap { scrollbar-gutter:stable; }
 /* Half the actual gutter offsets content to the physical scrollport center.
    This also works in WebKit versions without stable/both-edges support. */
-#main-content > .page, .modal-content > * { translate:calc(var(--scroll-inset,0px) / 2) 0; }
+/* A transform on the page would make fixed mobile navigation page-relative. */
+#main-content > .page { position:relative; inset-inline-start:calc(var(--scroll-inset,0px) / 2); }
+.modal-content > * { translate:calc(var(--scroll-inset,0px) / 2) 0; }
 /* Only scrolling content reserves space. A root gutter exposes the native
    window background; menu gutters leave unpainted bands beside each option. */
 #main-content { isolation: isolate; }
