@@ -369,6 +369,15 @@ button.addEventListener('click',async()=>{
     click('#btn-router-sync');
     await wait(()=>calls.some(call=>call.cmd==='sync_router_accounts'&&call.payload.users.length===1&&call.payload.users[0]==='25000002'));
     note('通过：路由多上游状态、手动选择停用账号、按选定范围同步与密码清理');
+    routerSnapshot.uplinks[0].checking=0;
+    const idlePollStart=now();
+    await wait(()=>calls.filter(call=>call.cmd==='get_router_status' && call.at>idlePollStart).length>=3,7500);
+    const idlePolls=calls.filter(call=>call.cmd==='get_router_status' && call.at>idlePollStart);
+    const gap=idlePolls.at(-1)!.at-idlePolls.at(-2)!.at;
+    assert(gap>=1700 && gap<2400,'路由协作的空闲刷新未保持两秒节奏');
+    routerSnapshot.uplinks[0].checking=1;
+    note('通过：路由协作与 LuCI 一样保持空闲两秒刷新，不因秒级计时漂移而变慢');
+
     await wait(()=>!(document.getElementById('btn-router-sync') as HTMLButtonElement).disabled);
     assert(!document.getElementById('router-connect-modal')!.classList.contains('hidden')===false,'连接后弹窗未关闭');
     click('#btn-open-billing');

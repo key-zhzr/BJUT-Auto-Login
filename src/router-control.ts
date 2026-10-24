@@ -124,11 +124,20 @@ export function setupRouterControl(getAccounts:()=>AccountView[],log:(message:st
     try{const result=await invoke<string>('sync_router_accounts',{users});if(current===generation){showMessage(result);log(result);const data=await invoke<RouterSnapshot>('get_router_status');if(current===generation && connected){optionsStamp='';render(data);}}}
     catch(error){if(current===generation)showMessage(String(error),true);}finally{busy=false;syncButton.disabled=false;}
   });
-  window.setInterval(()=>{
-    if(document.hidden)return;
-    if(connected && Date.now()-lastPoll>=routerPollInterval(snapshot))void refresh();
-    else if(!connected && allowRetry)void retry();
-  },1000);
+  // Like LuCI, schedule from the last request's start. A fixed one-second
+  // ticker can miss the exact deadline and turn a two-second poll into three.
+  const poll = async () => {
+    try {
+      if (!document.hidden && !busy) {
+        if (connected && Date.now()-lastPoll>=routerPollInterval(snapshot)) await refresh();
+        else if (!connected && allowRetry) await retry();
+      }
+    } finally {
+      const delay=document.hidden || !connected ? 1000 : busy ? 250 : Math.max(100,routerPollInterval(snapshot)-(Date.now()-lastPoll));
+      window.setTimeout(()=>{void poll();},delay);
+    }
+  };
+  window.setTimeout(()=>{void poll();},1000);
   const wake=()=>{nextRetry=0;if(connected){lastPoll=0;void refresh();}else if(!resumeInfo)void restoreSaved();else void retry();};
   window.addEventListener('online',wake);window.addEventListener('focus',wake);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)wake();});
