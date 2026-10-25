@@ -37,6 +37,8 @@ const fields: Field[] = [
   {key:'pushplus_delay',label:'异常持续时间（秒）',hint:'短暂断网不提醒；账号被拒绝等明确错误会立即提醒',min:10,max:3600,default:'60'},
   {key:'pushplus_interval',label:'重复提醒间隔（秒）',min:60,max:86400,default:'3600'},
   {key:'billing_background',label:'后台计费检查',hint:'App 关闭后，路由器仍定期检查各账号余额和流量',flag:true,default:'0'},
+  {key:'traffic_monitor',label:'设备流量统计',hint:'每分钟从计费系统读取各设备已用流量',flag:true,default:'1'},
+  {key:'prefer_remaining_flow',label:'优先使用余量充足的账号',hint:'使用新鲜计费数据排序，独立账号顺序优先',flag:true,default:'0'},
   {key:'billing_interval',label:'计费检查间隔（秒）',min:900,max:86400,default:'21600'},
   {key:'billing_alerts',label:'用量不足时推送',hint:'通过已配置的 PushPlus 提醒，每个账号每天最多一次',flag:true,default:'1'},
   {key:'balance_threshold',label:'余额提醒线（元）',min:0,max:999999,default:'5'},
@@ -131,6 +133,7 @@ export class RouterAdmin {
     this.maintenance.close();this.controls.forEach(c=>c.close());this.controls.clear();common.replaceChildren();more.replaceChildren();
     for (const definition of fields) {
       if (definition.key.startsWith('pushplus_') && !this.supports('pushplus')) continue;
+      if(['traffic_monitor','prefer_remaining_flow'].includes(definition.key)&&!this.supports('device_usage'))continue;
       if (/^(billing_|balance_threshold|flow_threshold)/.test(definition.key) && !this.supports('billing_background')) continue;
       if (definition.key.startsWith('log_') && definition.key!=='log_level' && !this.supports('log_settings')) continue;
       if (!this.supports('uplink_manage') && !legacy.has(definition.key)) continue;
@@ -141,6 +144,7 @@ export class RouterAdmin {
       const row=element('div','','setting-item router-setting-item'),info=element('div','','setting-info');
       info.append(element('h4','测试推送'),element('p','请先保存设置。'));
       const button=action('发送测试消息',()=>{void this.testPushPlus(button);});
+      if(this.supports('pushplus_status'))info.append(action('查看测试状态',()=>{void this.readPushPlusStatus(this.generation).catch(error=>{document.getElementById('router-settings-message')!.textContent=String(error);});}));
       row.append(info,button);more.append(row);
     }
     if(this.supports('maintenance'))this.maintenance.mount(more);
@@ -150,8 +154,19 @@ export class RouterAdmin {
     try {
       const result=await this.options.request<{message:string}>('pushplus_test');
       if(generation===this.generation)document.getElementById('router-settings-message')!.textContent=result.message;
+      if(this.supports('pushplus_status'))for(let attempt=0;attempt<8&&generation===this.generation;attempt++){
+        await new Promise(resolve=>setTimeout(resolve,1000));
+        if(generation!==this.generation)break;
+        const status=await this.readPushPlusStatus(generation);
+        if(status!=='queued')break;
+      }
     } catch(error) {if(generation===this.generation)document.getElementById('router-settings-message')!.textContent=String(error);}
     finally {button.disabled=false;}
+  }
+  private async readPushPlusStatus(generation:number):Promise<string>{
+    const status=await this.options.request<{state:string;message:string}>('pushplus_status');
+    if(generation===this.generation)document.getElementById('router-settings-message')!.textContent=status.message;
+    return status.state;
   }
   private async saveSettings() {
     if(!this.snapshot || !this.configuration)return;

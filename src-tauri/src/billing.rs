@@ -604,6 +604,32 @@ fn renewal_package(service: BillingServiceState) -> Result<(String, String), Bil
     }
 }
 
+pub(crate) async fn query_device_usage(
+    access: &BillingAccess,
+    compatibility: VpnCompatibility,
+    pool: &std::sync::Mutex<BillingSessionPool>,
+) -> Result<(BillingSnapshot, Vec<BillingOnlineSession>), BillingError> {
+    let (mut session, _) = acquire_billing_session(pool, access, compatibility).await?;
+    let overview = parse_dashboard_bounded(&session.dashboard_html, &access.account).await?;
+    let result = get_dashboard_text(
+        &mut session,
+        "/Self/dashboard/getOnlineList",
+        "application/json,*/*;q=0.8",
+    )
+    .await
+    .and_then(|text| parse_online_sessions(&text));
+    if let Some(password) = access.password.as_deref() {
+        if result.is_ok() {
+            pool.lock()
+                .unwrap()
+                .put(&access.account, password, compatibility, session);
+        } else {
+            pool.lock().unwrap().remove(&access.account);
+        }
+    }
+    result.map(|devices| (overview, devices))
+}
+
 pub(crate) async fn query_records(
     access: &BillingAccess,
     compatibility: VpnCompatibility,
@@ -4774,6 +4800,21 @@ mod tests {
             snapshot.billing_cycle.as_deref(),
             Some("2026-07-01 至 2026-07-31")
         );
+    }
+
+    #[test]
+    fn device_counter_corpus_matches_router_units() {
+        let devices =
+            parse_online_sessions(include_str!("../fixtures/billing-online.json")).unwrap();
+        assert_eq!(
+            devices
+                .iter()
+                .map(|d| d.used_flow_mb.as_str())
+                .collect::<Vec<_>>(),
+            vec!["4.000", "3.000"]
+        );
+        assert_eq!(devices[0].duration_minutes, "2");
+        assert_eq!(devices[1].duration_minutes, "1");
     }
 
     #[test]

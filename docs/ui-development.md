@@ -1,6 +1,6 @@
 # App 与 LuCI UI 开发、调试与 Agent 交接
 
-更新于 2026-10-21。本轮基于 App `5b843b2`、路由端 `dd557f1`（0.1.6-r12），已补充统一计费工作台和首屏主题入口。接手时仍应先查看各仓库的工作区、分支和适用的 `AGENTS.md`，保留其他人的改动。
+更新于 2026-10-26。本轮两端保持 0.1.6，路由包源码修订 r19（尚未发布）。接手时先查看两仓工作区与适用的 `AGENTS.md`，保留其他人的改动。
 
 ## 1. 仓库与修改范围
 
@@ -127,7 +127,7 @@ python3 -m http.server 1431 --bind 127.0.0.1 --directory openwrt
 
 打开 `http://127.0.0.1:1431/tests/luci-regression.html`，点击“检查刷新与功能”。按钮是 `#run-router-qa`，结果是 `#router-qa-results`；最终应包含“全部通过”且没有“失败”。
 
-它直接加载实际 LuCI JS 模块，注入假的 `E`、`rpc`、`request`、`L` 与 `baseclass`；目前覆盖**控制台、计费系统、网络诊断、运行日志四页**，不覆盖 LuCI 原生账号编辑、设置页和 Argon 等真实主题壳。完整 App mock 中的路由设置页也不能替代 LuCI 设置页。
+它直接加载实际 LuCI JS 模块，注入假的 `E`、`rpc`、`request`、`L`、`baseclass`、`form` 与 `uci`；目前覆盖**控制台、账号管理、计费系统、网络诊断、运行日志、设置六页**。账号和设置的表单由 mock 驱动，不包含 Argon 等真实主题壳，也不能替代真实 LuCI 的保存与权限检查。完整 App mock 中的路由设置页同样不能替代实机验收。
 
 只要两仓库仍按本机目录摆放，也可用 App 的 Vite 打开 `http://127.0.0.1:1430/openwrt-ready.local/openwrt/tests/luci-regression.html`。独立 HTTP 入口更适合只负责 LuCI 的 Agent。
 
@@ -221,3 +221,27 @@ App 路由器计费的数据映射和操作分别改 src/router-billing-center.t
 - `RouterBillingCenter` 先发布概览，再逐步加入可选模块；`billing_cached` 仅预览上次结果。导出与账号切换仍核对请求代次和真实账号，旧回复不能覆盖新选择。
 - 路由能力按 `capabilities` 显示，新增 `operations`、`account_limits`、`billing_background`、`maintenance` 和 `pushplus`。旧版路由继续可用，不强行显示不支持的设置。
 - `scripts/test-router-experience.mjs` 验证过期状态和建议，`scripts/test-router-billing.mjs` 验证渐进发布、单位和明细隔离；界面入口仍是 `scripts/app-regression.html`。
+
+
+## 新增模块与自动验收
+
+- 托盘：`src-tauri/src/desktop_tray.rs`、`tray_settings.rs` 与 `src/tray-preferences.ts`。macOS 不把菜单直接绑定到图标，左键显示窗口、右键显式弹出菜单；Windows/Linux 保留原生右键菜单。
+- 引导与新增弹窗：`src/onboarding.ts`、`src/presentation-dialog.ts`。后者处理动画、Esc、焦点恢复和 Tab 范围；动态高度复用 `layout-motion.ts`。
+- 统计：`src-tauri/src/device_usage.rs`、`usage_history.rs`，前端 `device-usage-model.ts`、`device-usage-view.ts`。只累计 jfself 在线设备计数的连续增量；路由端 `traffic.sh` 与 `traffic-history.sh` 使用相同单位。共享生成器：`node scripts/build-router-usage-ui.mjs <路由仓目录>`。
+- 后端编排：计费命令在 `billing_commands.rs`，校园服务命令在 `campus_commands.rs`。修改 Tauri 命令后检查 `lib.rs` 注册路径。
+- 网络：`native_network.rs` 补充桌面系统事件；`network-quality*.ts` 保存已完成检查的质量历史；`diagnostic_tools.rs` 只接受预设链路目标。
+- 快捷入口：`bjut-al://dashboard`、`bjut-al://check`、`bjut-al://accounts`、`bjut-al://billing`、`bjut-al://login`。不接受参数或账号密码；login 只打开确认窗口。Android Tasker 可使用 VIEW Intent。Android 另有快速设置磁贴和桌面组件。
+
+```sh
+npm run check:versions -- --router openwrt-ready.local --require-router
+npm run test:frontend
+npm run test:browser -- --project=app
+npm run site:test
+npm run site:build
+```
+
+浏览器验收用独立端口 1433，不接触真实账号、路由器或校园服务。本机若使用已安装 Edge：`BJUT_TEST_BROWSER=msedge npm run test:browser -- --project=app`；CI 安装 Chromium。不要同时运行两个 Playwright 进程写同一个结果目录。
+
+路由端六页浏览器入口和独立配置位于 `openwrt/tests/browser/`；按该目录 package.json 执行。`python3 openwrt/tests/run_all.py` 为宿主离线验证。源码包的 r19 不等于已发布安装包，发布仍需按现有工作流显式执行。
+
+本机 CLT 与 SDK 版本不同时，可用 SDKROOT 指向已安装的兼容 SDK；Swift 兼容静态库还可通过 LIBRARY_PATH 指定。不修改系统 xcode-select，也不提交本机生成路径。

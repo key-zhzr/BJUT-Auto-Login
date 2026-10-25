@@ -1,0 +1,128 @@
+{
+  "repository": "key-zhzr/BJUT-Auto-Login-OpenWrt",
+  "packageVersion": "0.1.6",
+  "sourceRevision": "18",
+  "publishedTag": "openwrt-v0.1.6-r13",
+  "releases": [
+    {
+      "version": "25.12.5",
+      "format": "apk",
+      "manager": "apk",
+      "label": "OpenWrt 25.12.5 · APK"
+    },
+    {
+      "version": "24.10.8",
+      "format": "ipk",
+      "manager": "opkg",
+      "label": "OpenWrt 24.10.8 · IPK"
+    }
+  ],
+  "platforms": [
+    {
+      "target": "x86/64",
+      "arch": "x86_64",
+      "devices": "x86 软路由"
+    },
+    {
+      "target": "mediatek/filogic",
+      "arch": "aarch64_cortex-a53",
+      "devices": "MT7981 / MT7986 / MT7988 路由器"
+    },
+    {
+      "target": "rockchip/armv8",
+      "arch": "aarch64_generic",
+      "devices": "Rockchip ARM64 设备"
+    },
+    {
+      "target": "bcm27xx/bcm2711",
+      "arch": "aarch64_cortex-a72",
+      "devices": "Raspberry Pi 4"
+    },
+    {
+      "target": "qualcommax/ipq60xx",
+      "arch": "aarch64_cortex-a53",
+      "formats": ["apk"],
+      "devices": "连我 NN6000 v2 / IPQ6000（仅 25.12 APK）"
+    },
+    {
+      "target": "ipq40xx/generic",
+      "arch": "arm_cortex-a7_neon-vfpv4",
+      "devices": "IPQ40xx 路由器"
+    },
+    {
+      "target": "mvebu/cortexa9",
+      "arch": "arm_cortex-a9_vfpv3-d16",
+      "devices": "Marvell Armada 路由器"
+    },
+    {
+      "target": "ipq806x/generic",
+      "arch": "arm_cortex-a15_neon-vfpv4",
+      "devices": "IPQ806x 路由器"
+    },
+    {
+      "target": "ramips/mt7621",
+      "arch": "mipsel_24kc",
+      "devices": "MT7621 路由器"
+    },
+    {
+      "target": "ath79/generic",
+      "arch": "mips_24kc",
+      "devices": "常见 Atheros MIPS 路由器"
+    }
+  ],
+  "verifiedBuilds": [
+    {
+      "version": "25.12.5",
+      "format": "apk",
+      "target": "mediatek/filogic",
+      "arch": "aarch64_cortex-a53",
+      "sdk": "mediatek-filogic-25.12.5",
+      "id": "openwrt-mediatek-filogic-25.12.5-apk",
+      "tag": "openwrt-v0.1.6-r13",
+      "source_commit": "bbd8f6e2fd15e4045ea41182dda90d0d04a73cae",
+      "package_version": "0.1.6",
+      "package_revision": "0.1.6-r13",
+      "sdk_container": "ghcr.io/openwrt/sdk:mediatek-filogic-25.12.5",
+      "files": [
+        {
+          "package": "bjut-autologin",
+          "name": "openwrt-mediatek-filogic-25.12.5-apk__bjut-autologin-0.1.6-r13.apk",
+          "sha256": "22c4a9d8bd15f075be71a4e50cf564463c099499f304d468c00602025879e6d7",
+          "size": 58587
+        },
+        {
+          "package": "luci-app-bjut-autologin",
+          "name": "openwrt-mediatek-filogic-25.12.5-apk__luci-app-bjut-autologin-0.1.6-r13.apk",
+          "sha256": "75da8ba3575e75b0070d775ee77b95be61f77d7263e88a5abfb0d3be4ee76ca0",
+          "size": 24884
+        }
+      ]
+    },
+    {
+      "version": "25.12.5",
+      "format": "apk",
+      "target": "mediatek/filogic",
+      "arch": "aarch64_cortex-a53",
+      "sdk": "mediatek-filogic-25.12.5",
+      "id": "openwrt-mediatek-filogic-25.12.5-apk",
+      "source_commit": "19e4e441dd13e6bc280f69a62a44325ca8a18a55",
+      "package_version": "0.1.6",
+      "package_revision": "0.1.6-r18",
+      "sdk_container": "ghcr.io/openwrt/sdk:mediatek-filogic-25.12.5",
+      "files": [
+        {
+          "package": "bjut-autologin",
+          "name": "openwrt-mediatek-filogic-25.12.5-apk__bjut-autologin-0.1.6-r18.apk",
+          "sha256": "eb955d529b31a1aeb8a694390c5fe3b1dcddc52cb6f8965201ece7f7bd2b6f06",
+          "size": 77737
+        },
+        {
+          "package": "luci-app-bjut-autologin",
+          "name": "openwrt-mediatek-filogic-25.12.5-apk__luci-app-bjut-autologin-0.1.6-r18.apk",
+          "sha256": "7375c45e716cf8e0b7897a44823ac796446e75574ed9f2da68cd70d78852954e",
+          "size": 30108
+        }
+      ]
+    }
+  ]
+}

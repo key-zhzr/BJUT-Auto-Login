@@ -29,6 +29,21 @@ import java.util.Locale
 
 class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
+  @Volatile private var pendingQuickAction: String? = null
+  private fun acceptQuickAction(intent: Intent?) {
+    val uri = intent?.dataString.orEmpty()
+    val action = if (uri.isNotEmpty()) {
+      Regex("^bjut-al://(dashboard|accounts|billing|check|login)/?$").matchEntire(uri)?.groupValues?.get(1)
+    } else intent?.getStringExtra("quick_action")?.takeIf { it in QuickAccess.actions }
+    if (action == null) return
+    pendingQuickAction = action
+    appWebView?.post { appWebView?.evaluateJavascript("window.__nativeQuickAction?.(${JSONObject.quote(action)})", null) }
+  }
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    acceptQuickAction(intent)
+  }
   private var keyboardLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
   private var resumedFromBackground = false
   private val engineHeartbeatHandler = Handler(Looper.getMainLooper())
@@ -63,6 +78,7 @@ class MainActivity : TauriActivity() {
       .putBoolean("engine_foreground", false)
       .apply()
     super.onCreate(savedInstanceState)
+    acceptQuickAction(intent)
     onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
         val webView = appWebView
@@ -416,6 +432,18 @@ class MainActivity : TauriActivity() {
    * for any Activity or UI operations.
    */
   inner class AndroidBridge(private val activity: MainActivity) {
+    @JavascriptInterface
+    fun takeQuickAction(): String? = synchronized(activity) {
+      val action = activity.pendingQuickAction
+      activity.pendingQuickAction = null
+      action
+    }
+
+    @JavascriptInterface
+    fun updateWidgetStatus(status: String) {
+      activity.getSharedPreferences("service_state", Context.MODE_PRIVATE).edit().putString("widget_status", status.take(100)).apply()
+      activity.runOnUiThread { QuickAccess.update(activity) }
+    }
     @JavascriptInterface
     fun requestForegroundPermissions() {
       activity.runOnUiThread {

@@ -42,3 +42,7 @@ src-tauri/.keys/
 /deploy/.wrangler/
 
 /website/.wrangler/
+
+# Browser regression artifacts
+/test-results/
+/playwright-report/

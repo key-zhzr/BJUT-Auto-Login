@@ -1,7 +1,7 @@
 export interface RouterUplink {
   id: string; network?: string; network6?: string; device?: string; device6?: string;
   ipv4?: string; ipv6?: string; ssid?:string;bssid?:string;state: string; message?: string; internet4?: string;
-  internet6?: string; account?: string; checking?: number; check_message?: string;
+  internet6?: string; ipv6_pd?: string; account?: string; checking?: number; check_message?: string;
   updated_at?: number; route4?: string; route6?: string; session?: string; transport?: string;
   age_seconds?: number; stale?: number; valid_for?: number;
   operation?: {id?:string;action?:string;state?:string;phase?:string;duration?:number|string;deadline?:number|string};

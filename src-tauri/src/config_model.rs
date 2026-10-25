@@ -68,6 +68,12 @@ pub(crate) struct NetworkProfile {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub(crate) struct AppConfig {
+    #[serde(default)]
+    pub(crate) tray: crate::tray_settings::TraySettings,
+    #[serde(default = "default_true")]
+    pub(crate) traffic_monitor_enabled: bool,
+    #[serde(default)]
+    pub(crate) prefer_remaining_flow: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) saved_router: Option<SavedRouter>,
     #[serde(default)]

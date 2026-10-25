@@ -57,7 +57,21 @@
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="bjut-al" />
+            </intent-filter>
         </activity>
+
+        <service android:name=".NetworkTile" android:label="BJUT-AL 检查网络" android:icon="@mipmap/ic_launcher" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE" android:exported="true">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+        <receiver android:name=".NetworkWidget" android:label="BJUT-AL 网络状态" android:exported="false">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/network_widget" />
+        </receiver>
 
         <service
             android:name=".KeepAliveService"

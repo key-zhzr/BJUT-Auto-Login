@@ -1,5 +1,6 @@
 import type { DiagnosticReport, DiagnosticStep, DualStackReport } from './models';
 import { animateResize, setVisible } from './layout-motion';
+import { diagnosticAdvice } from './network-quality-model';
 
 export function renderDiagnosticReportView(report: DiagnosticReport, options: { busy: boolean; renderHealth: (health: DualStackReport) => void; formatTime: (time: string) => string }) {
   const adapterRepairPanel = document.getElementById('diagnostic-adapter-repair')!;
@@ -26,6 +27,8 @@ export function renderDiagnosticReportView(report: DiagnosticReport, options: { 
   badge.className = `health-badge ${overallClass}`;
   badge.textContent = overallLabel;
   title.textContent = report.summary;
+  const advice = document.getElementById('diagnostic-advice');
+  if (advice) animateResize(advice, () => { advice.replaceChildren(); for (const message of diagnosticAdvice(report)) { const p = document.createElement('p'); p.textContent=message; advice.append(p); } });
   meta.textContent = `${options.formatTime(report.createdAt)} · SSID ${report.ssid || '--'} · IP ${report.ip || '--'}`;
   animateResize(diagnosticSteps,()=>{
     diagnosticSteps.innerHTML = '';

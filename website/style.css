@@ -1,53 +1,349 @@
-:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#182238;background:#f7f8fb;font-synthesis:none;line-height:1.65;--blue:#3165ee;--muted:#677389;--line:#e1e6f0}*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:25px}body{margin:0}a{color:inherit;text-decoration:none}button,a{-webkit-tap-highlight-color:transparent}a:focus-visible,summary:focus-visible{outline:3px solid #3165ee;outline-offset:6px;border-radius:4px}p,h1,h2,h3{margin:0}h1,h2,h3{line-height:1.3;letter-spacing:-.04em}a:hover{color:var(--blue)}.wrap{max-width:1184px;margin:0 auto;padding-left:32px;padding-right:32px}.skip{position:absolute;top:-80px;background:#fff;padding:12px;z-index:5}.skip:focus{top:0}.site-header{display:flex;align-items:center;justify-content:space-between;min-height:98px}.brand{display:flex;gap:11px;align-items:center;font-size:19px;font-weight:750;letter-spacing:-.04em}.brand-light{font-weight:450}.brand img{border-radius:10px}.site-header nav{display:flex;align-items:center;gap:30px;font-size:14px;font-weight:550}.github{border:1px solid #d9dfeb;border-radius:8px;padding:8px 15px}.hero{display:grid;grid-template-columns:1fr 1.05fr;align-items:center;gap:52px;padding-top:88px;padding-bottom:94px}.eyebrow{font-size:12px;font-weight:650;letter-spacing:.1em;color:var(--blue)}.hero .eyebrow{display:flex;align-items:center;gap:9px}.dot{width:7px;height:7px;background:#18ab80;display:inline-block;border-radius:50%;flex-shrink:0}.hero h1{font-size:60px;line-height:1.22;letter-spacing:-.055em;margin-top:24px}.intro{font-size:17px;line-height:1.9;color:var(--muted);margin-top:25px}.hero-actions{display:flex;gap:12px;margin-top:32px}.button{display:inline-flex;justify-content:space-between;align-items:center;gap:30px;border-radius:9px;padding:12px 20px;font-size:14px;font-weight:650;transition:transform .18s,background .18s}.button:hover{transform:translateY(-2px)}.primary{background:var(--blue);color:white;box-shadow:0 6px 15px #3165ee23}.primary:hover{color:white;background:#244fca}.secondary{border:1px solid #dce2ed;background:#fff}.platform-note{color:var(--muted);font-size:11px;margin-top:23px;letter-spacing:.02em}.compatibility{border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:15px;padding-top:23px;padding-bottom:23px}.compatibility>span{font-size:12px;color:var(--muted)}.compatibility div{font-size:16px;font-weight:650;letter-spacing:-.02em;color:#596781}.features{padding-top:92px;padding-bottom:84px}.section-heading h2{font-size:34px;margin-top:13px}.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:40px}.feature-grid article{padding:27px 25px;background:white;border:1px solid var(--line);border-radius:14px}.feature-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;font-size:24px;margin-bottom:25px}.blue{background:#edf2ff;color:#3165ee}.mint{background:#eaf8f1;color:#269b72}.violet{background:#f2edff;color:#8767c8}.feature-grid h3{font-size:18px;letter-spacing:-.02em}.feature-grid p{font-size:14px;color:var(--muted);margin:13px 0 24px;min-height:70px}.feature-grid a{font-size:12px;font-weight:600;display:flex;justify-content:space-between}.privacy{margin-top:0;margin-bottom:20px;display:grid;grid-template-columns:1fr 1fr;gap:70px;background:#edf2fd;border-radius:18px;padding:44px 54px;max-width:1120px}.privacy h2{font-size:34px;margin-top:14px}.privacy p:not(.eyebrow){font-size:14px;color:#60708d;margin-bottom:13px}.text-link{font-size:13px;color:var(--blue);font-weight:600}.downloads{padding-top:85px;padding-bottom:65px}.downloads .section-heading>p:last-child{font-size:14px;color:var(--muted);margin-top:14px}.download-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin-top:30px}.download-card{position:relative;background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px;display:flex;flex-direction:column;transition:transform .18s,border-color .18s}.download-card:hover{border-color:#9bb5f9;transform:translateY(-3px)}.platform-symbol{font-size:30px;line-height:1.1;margin-bottom:18px;color:#556b92;font-weight:500}.download-card strong{font-size:17px}.download-card small{font-size:11px;color:var(--muted);margin-top:5px}.download-arrow{position:absolute;right:20px;top:23px;color:#91a0b8;font-size:18px}.download-note{font-size:11px;color:var(--muted);margin-top:18px}.download-note a{margin-left:15px;text-decoration:underline;text-underline-offset:3px}.faq{padding-top:30px;padding-bottom:80px;max-width:900px}.faq h2{font-size:25px;margin-bottom:23px}.faq details{border-bottom:1px solid var(--line);padding:16px 0;font-size:14px}.faq summary{cursor:pointer;list-style:none;font-weight:550;display:flex;justify-content:space-between}.faq summary::after{content:'+';color:#7786a0;font-size:20px;line-height:1}.faq details[open] summary::after{content:'−'}.faq details p{color:var(--muted);padding:16px 28px 3px 0}.faq p a{color:var(--blue)}footer{border-top:1px solid var(--line);min-height:100px;display:flex;align-items:center;justify-content:space-between;gap:18px}footer .brand{font-size:15px}footer p,footer a{font-size:11px;color:var(--muted)}footer>div{display:flex;gap:20px}.guide-layout{display:grid;grid-template-columns:190px 1fr;gap:60px;padding-top:44px;padding-bottom:80px}.guide-nav{display:flex;flex-direction:column;gap:12px;font-size:14px;align-self:start;position:sticky;top:25px}.guide-nav .current{color:var(--blue);font-weight:700}.guide-content{min-width:0;max-width:770px}.guide-content h1{font-size:34px;margin-bottom:25px}.guide-content h2{font-size:23px;margin-top:35px;margin-bottom:15px}.guide-content h3{font-size:18px;margin-top:25px}.guide-content p,.guide-content ul,.guide-content ol{font-size:15px;margin:16px 0}.guide-content a{color:var(--blue);text-decoration:underline}.guide-content pre{padding:18px;border-radius:8px;background:#e9eef7;overflow:auto;font-size:13px}.guide-content code{font-size:.9em;overflow-wrap:anywhere}.guide-content table{border-collapse:collapse;width:100%;font-size:14px}.guide-content th,.guide-content td{border:1px solid var(--line);padding:10px}.guide-content blockquote{border-left:3px solid #8baaf5;padding-left:20px;color:var(--muted)}
-@media(max-width:1000px){.hero{gap:25px}.hero h1{font-size:50px}.privacy{margin-left:32px;margin-right:32px}.feature-grid{gap:15px}.feature-grid article{padding:22px}.download-card{padding:18px}.download-card small{font-size:10px}}@media(max-width:760px){.wrap{padding-left:22px;padding-right:22px}.site-header{min-height:78px}.brand{font-size:15px}.brand img{width:29px;height:29px}.site-header nav{gap:14px;font-size:12px}.site-header nav>a:first-child{display:none}.github{border:0;padding:0}.hero{grid-template-columns:1fr;padding-top:46px;padding-bottom:50px;gap:44px}.hero-copy{text-align:center}.hero .eyebrow,.hero-actions{justify-content:center}.hero h1{font-size:47px}.intro{font-size:15px;margin-top:20px}.hero-actions{margin-top:26px}.platform-note{font-size:10px}.compatibility{flex-wrap:wrap;justify-content:space-around;gap:12px;padding-top:20px;padding-bottom:20px}.compatibility>span{flex-basis:100%;text-align:center;font-size:10px}.compatibility div{font-size:13px}.features{padding-top:58px;padding-bottom:48px}.section-heading h2{font-size:29px}.feature-grid{grid-template-columns:1fr;gap:16px;margin-top:28px}.feature-grid article{padding:25px}.feature-grid p{min-height:0}.feature-icon{margin-bottom:18px}.privacy{margin-left:22px;margin-right:22px;padding:30px 26px;grid-template-columns:1fr;gap:23px}.privacy h2{font-size:29px}.downloads{padding-top:48px;padding-bottom:45px}.download-grid{grid-template-columns:1fr 1fr;gap:12px}.download-card{padding:20px 15px}.download-card strong{font-size:16px}.download-note a{display:block;margin:7px 0}.faq{padding-top:10px;padding-bottom:48px}footer{padding-top:25px;padding-bottom:25px;flex-wrap:wrap;gap:8px}footer p{width:100%;order:3}.guide-layout{grid-template-columns:1fr;gap:25px;padding-top:24px}.guide-nav{position:static;flex-direction:row;flex-wrap:wrap;font-size:12px;gap:15px;border-bottom:1px solid var(--line);padding-bottom:18px}.guide-content h1{font-size:29px}.guide-content table{display:block;overflow:auto}.guide-content p,.guide-content ul,.guide-content ol{font-size:14px}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.button,.download-card{transition:none}.button:hover,.download-card:hover{transform:none}}
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  line-height: 1.65;
+  --bg: #f7f8fb;
+  --surface: #ffffff;
+  --surface-subtle: #edf2fd;
+  --surface-code: #e9eef7;
+  --text: #182238;
+  --heading-sub: #37455e;
+  --muted: #677389;
+  --line: #e1e6f0;
+  --line-soft: #edf0f5;
+  --blue: #3165ee;
+  --blue-hover: #244fca;
+  --blue-soft: #edf3ff;
+  --blue-border: #cbdbff;
+  --blue-active-bg: #e6efff;
+  --blue-active-text: #215fcb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1322;
+    --surface: #151e32;
+    --surface-subtle: #18243d;
+    --surface-code: #11192b;
+    --text: #e6edf8;
+    --heading-sub: #c6d2e8;
+    --muted: #9aa7bf;
+    --line: #26334d;
+    --line-soft: #1f2b42;
+    --blue: #5c8aff;
+    --blue-hover: #4275f7;
+    --blue-soft: #162442;
+    --blue-border: #2c4780;
+    --blue-active-bg: #1e335c;
+    --blue-active-text: #8cb0ff;
+  }
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 25px; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+a { color: inherit; text-decoration: none; }
+button, a, select, input { -webkit-tap-highlight-color: transparent; }
+a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+p, h1, h2, h3, h4 { margin: 0; }
+h1, h2, h3, h4 { line-height: 1.3; letter-spacing: -.04em; }
+a:hover { color: var(--blue); }
+.wrap { max-width: 1184px; margin: 0 auto; padding-left: 32px; padding-right: 32px; }
+.skip { position: absolute; top: -80px; left: 16px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; z-index: 20; }
+.skip:focus { top: 12px; }
+.site-header { display: flex; align-items: center; justify-content: space-between; min-height: 98px; }
+.brand { display: flex; gap: 11px; align-items: center; font-size: 19px; font-weight: 750; letter-spacing: -.04em; }
+.brand-light { font-weight: 450; }
+.brand img { border-radius: 10px; }
+.site-header nav { display: flex; align-items: center; gap: 30px; font-size: 14px; font-weight: 550; }
+.github { border: 1px solid var(--line); border-radius: 8px; padding: 8px 15px; background: var(--surface); }
+.hero { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 44px; padding-top: 48px; padding-bottom: 64px; }
+.hero-copy { text-align: center; max-width: 880px; margin: auto; }
+.eyebrow { font-size: 12px; font-weight: 650; letter-spacing: .1em; color: var(--blue); }
+.hero .eyebrow, .hero-actions { display: flex; align-items: center; justify-content: center; gap: 9px; }
+.dot { width: 7px; height: 7px; background: #18ab80; display: inline-block; border-radius: 50%; flex-shrink: 0; }
+.hero h1 { font-size: clamp(36px, 5.1vw, 58px); line-height: 1.22; letter-spacing: -.055em; margin-top: 20px; }
+.intro { font-size: 17px; line-height: 1.9; color: var(--muted); margin-top: 20px; }
+.hero-actions { gap: 12px; margin-top: 32px; flex-wrap: wrap; }
+.phone-break { display: none; }
+.button { display: inline-flex; justify-content: space-between; align-items: center; gap: 30px; border-radius: 9px; padding: 12px 20px; font-size: 14px; font-weight: 650; transition: transform .18s, background .18s; }
+.button:hover { transform: translateY(-2px); }
+.primary { background: #3165ee; color: #ffffff; box-shadow: 0 6px 15px #3165ee23; }
+.primary:hover { color: #ffffff; background: var(--blue-hover); }
+.secondary { border: 1px solid var(--line); background: var(--surface); }
+.download-hint { margin: 15px auto 0; max-width: 650px; font-size: 12px; line-height: 1.8; color: var(--muted); min-height: 22px; }
 
 /* Showcase documents use the actual client layout at fixed device widths. */
-.hero { grid-template-columns: minmax(0,1fr); gap:44px; padding-top:48px; padding-bottom:64px; }
-.hero-copy { text-align:center; max-width:880px; margin:auto; }
-.hero .eyebrow,.hero-actions { justify-content:center; }
-.hero h1 { font-size:clamp(36px,5.1vw,58px); margin-top:20px; }
-.hero .intro { margin-top:20px; }
-.hero-actions { flex-wrap:wrap; }
-.phone-break { display:none; }
-.download-hint { margin:15px auto 0; max-width:650px; font-size:12px; line-height:1.8; color:var(--muted); min-height:22px; }
-.preview-pair { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,.3fr); align-items:start; gap:0 28px; min-width:0; }
-.preview-pair figure { margin:0; min-width:0; }
-.preview-pair figcaption { display:flex; justify-content:space-between; align-items:center; font-size:12px; margin:0 3px 12px; color:var(--muted); }
-.preview-pair figcaption>span { font-weight:650; color:#37455e; }
-.preview-pair figcaption a { font-size:11px; }
-.preview-viewport { position:relative; width:100%; overflow:hidden; background:#eef1f7; border:1px solid #dbe1ec; box-shadow:0 20px 48px -28px #28446a65,0 2px 8px #28446a10; }
-.desktop-viewport { aspect-ratio:1080/740; border-radius:13px; }
-.mobile-viewport { aspect-ratio:390/844; border-radius:24px; outline:4px solid #fff; }
-.preview-viewport iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; pointer-events:none; }
-.preview-caption { grid-column:1/-1; text-align:center; color:var(--muted); font-size:11px; margin-top:22px; }
-.recommended-download { display:flex; justify-content:space-between; align-items:center; gap:24px; padding:22px 25px; margin-top:28px; border:1px solid #cbdbff; background:#edf3ff; border-radius:13px; }
-.recommended-download strong { font-size:15px; }
-.recommended-download p { font-size:12px; color:var(--muted); margin-top:5px; }
-.recommended-download .button { flex-shrink:0; }
-.download-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:20px; }
-.download-card { padding:23px; cursor:default; }
-.download-card:hover { transform:none; border-color:var(--line); }
-.download-card.recommended { border-color:#9bb5f9; }
-.download-platform { display:flex; align-items:center; gap:13px; margin-bottom:17px; }
-.download-platform h3 { font-size:18px; letter-spacing:-.02em; }
-.platform-symbol { width:30px; height:30px; margin:0; object-fit:contain; }
-.download-options { display:flex; flex-direction:column; }
-.download-options p { font-size:13px; color:var(--muted); }
-.download-option { display:flex; justify-content:space-between; align-items:center; gap:16px; border-top:1px solid #edf0f5; padding:12px 0; font-size:13px; }
-.download-option:last-child { padding-bottom:0; }
-.download-option>span { min-width:0; overflow-wrap:anywhere; }
-.download-option small { flex-shrink:0; font-size:11px; color:var(--muted); margin:0; }
-.download-option:hover { color:var(--blue); }
-@media(max-width:760px) {
- .hero { padding-top:36px; gap:32px; }
- .phone-break { display:initial; }
- .hero-actions .button { gap:18px; padding:12px 18px; }
- .preview-pair { grid-template-columns:minmax(0,1fr); gap:28px; }
- .preview-mobile { order:0; width:min(100%,290px); justify-self:center; }
- .preview-desktop { order:1; }
- .preview-caption { order:2; margin-top:-8px; }
- .recommended-download { align-items:stretch; flex-direction:column; gap:15px; padding:20px; }
- .recommended-download .button { align-self:flex-start; }
- .download-grid { grid-template-columns:minmax(0,1fr); }
- .download-card { padding:22px; }
+.preview-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .3fr); align-items: start; gap: 0 28px; min-width: 0; }
+.preview-pair figure { margin: 0; min-width: 0; }
+.preview-pair figcaption { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin: 0 3px 12px; color: var(--muted); }
+.preview-pair figcaption > span { font-weight: 650; color: var(--heading-sub); }
+.preview-pair figcaption a { font-size: 11px; }
+.preview-viewport { position: relative; width: 100%; overflow: hidden; background: var(--surface-code); border: 1px solid var(--line); box-shadow: 0 20px 48px -28px #28446a65, 0 2px 8px #28446a10; }
+.desktop-viewport { aspect-ratio: 1080 / 740; border-radius: 13px; }
+.mobile-viewport { aspect-ratio: 390 / 844; border-radius: 24px; outline: 4px solid var(--surface); }
+.preview-viewport iframe { position: absolute; left: 0; top: 0; border: 0; transform-origin: top left; pointer-events: none; }
+.preview-caption { grid-column: 1 / -1; text-align: center; color: var(--muted); font-size: 11px; margin-top: 22px; }
+
+.compatibility { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 15px; padding-top: 23px; padding-bottom: 23px; }
+.compatibility > span { font-size: 12px; color: var(--muted); }
+.compatibility div { font-size: 16px; font-weight: 650; letter-spacing: -.02em; color: var(--heading-sub); }
+.features { padding-top: 92px; padding-bottom: 84px; }
+.section-heading h2 { font-size: 34px; margin-top: 13px; }
+.feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 40px; }
+.feature-grid article { padding: 27px 25px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.feature-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; font-size: 24px; margin-bottom: 25px; }
+.blue { background: #edf2ff; color: #3165ee; }
+.mint { background: #eaf8f1; color: #269b72; }
+.violet { background: #f2edff; color: #8767c8; }
+@media (prefers-color-scheme: dark) {
+  .blue { background: #1d2d52; color: #7aa2ff; }
+  .mint { background: #15352b; color: #4cd3a5; }
+  .violet { background: #2a2144; color: #b59aff; }
+  img.platform-symbol:not([src*="windows"]) { filter: invert(1) brightness(0.92); }
+}
+.feature-grid h3 { font-size: 18px; letter-spacing: -.02em; }
+.feature-grid p { font-size: 14px; color: var(--muted); margin: 13px 0 24px; min-height: 70px; }
+.feature-grid a { font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; }
+.privacy { margin-top: 0; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 70px; background: var(--surface-subtle); border: 1px solid var(--line); border-radius: 18px; padding: 44px 54px; max-width: 1120px; }
+.privacy h2 { font-size: 34px; margin-top: 14px; }
+.privacy p:not(.eyebrow) { font-size: 14px; color: var(--muted); margin-bottom: 13px; }
+.text-link { font-size: 13px; color: var(--blue); font-weight: 600; }
+
+.downloads { padding-top: 85px; padding-bottom: 65px; }
+.downloads .section-heading > p:last-child { font-size: 14px; color: var(--muted); margin-top: 14px; }
+.release-channel { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1.25rem 0 1rem; }
+.release-channel button, #android-arch-choice, .openwrt-format-group button, #openwrt-platform-filter, #guide-search-input {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: .6rem .9rem;
+}
+.release-channel button, .openwrt-format-group button {
+  cursor: pointer;
+  transition: background .18s, color .18s, border-color .18s;
+}
+.release-channel button[aria-pressed="true"], .openwrt-format-group button[aria-pressed="true"] {
+  background: var(--blue-active-bg);
+  border-color: var(--blue);
+  color: var(--blue-active-text);
+  font-weight: 600;
+}
+#android-architecture { font-size: .85rem; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-top: .65rem; }
+#android-architecture[hidden] { display: none; }
+#android-arch-choice { padding: .4rem .65rem; max-width: 100%; }
+
+.recommended-download { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 22px 25px; margin-top: 18px; border: 1px solid var(--blue-border); background: var(--blue-soft); border-radius: 13px; }
+.recommended-download strong { font-size: 15px; }
+.recommended-download p { font-size: 12px; color: var(--muted); margin-top: 5px; }
+.recommended-download .button { flex-shrink: 0; }
+.download-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 20px; }
+.download-card { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 23px; display: flex; flex-direction: column; cursor: default; }
+.download-card.recommended { border-color: var(--blue); }
+.download-platform { display: flex; align-items: center; gap: 13px; margin-bottom: 17px; }
+.download-platform h3 { font-size: 18px; letter-spacing: -.02em; }
+.platform-symbol { width: 30px; height: 30px; margin: 0; object-fit: contain; }
+.download-options { display: flex; flex-direction: column; }
+.download-options p { font-size: 13px; color: var(--muted); }
+.download-option { display: flex; justify-content: space-between; align-items: center; gap: 16px; border-top: 1px solid var(--line-soft); padding: 12px 0; font-size: 13px; }
+.download-option:last-child { padding-bottom: 0; }
+.download-option > span { min-width: 0; overflow-wrap: anywhere; }
+.download-option small { flex-shrink: 0; font-size: 11px; color: var(--muted); margin: 0; }
+.download-option:hover, .download-option.recommended { color: var(--blue); font-weight: 600; }
+.download-note { font-size: 12px; color: var(--muted); margin-top: 18px; }
+.download-note a { margin-left: 15px; text-decoration: underline; text-underline-offset: 3px; }
+
+/* OpenWrt APK/IPK and architecture download matrix */
+.openwrt-downloads { margin-top: 44px; padding: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; }
+.openwrt-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; flex-wrap: wrap; margin-bottom: 20px; }
+.openwrt-header h3 { font-size: 24px; margin-top: 8px; }
+.openwrt-sub { font-size: 13px; color: var(--muted); margin-top: 8px; max-width: 720px; }
+.openwrt-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.openwrt-format-group { display: flex; gap: 8px; flex-wrap: wrap; }
+.openwrt-format-group button { font-size: 12px; padding: .48rem .75rem; }
+#openwrt-platform-filter { font-size: 13px; padding: .48rem .75rem; min-width: 210px; }
+.openwrt-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+.openwrt-matrix-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+.openwrt-matrix-table th, .openwrt-matrix-table td { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+.openwrt-matrix-table thead th { background: var(--surface-subtle); font-weight: 650; font-size: 12px; color: var(--heading-sub); border-bottom: 1px solid var(--line); }
+.openwrt-matrix-table tbody tr:last-child th, .openwrt-matrix-table tbody tr:last-child td { border-bottom: 0; }
+.openwrt-target-col { min-width: 170px; }
+.openwrt-target-col strong { display: block; font-size: 13px; }
+.openwrt-devices { display: block; font-weight: 400; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.openwrt-arch-col { min-width: 150px; font-size: 12px; }
+.openwrt-format-col { min-width: 260px; }
+.openwrt-sdk-box { display: flex; flex-direction: column; gap: 8px; }
+.openwrt-sdk-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.openwrt-badge { display: inline-block; padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 650; }
+.openwrt-badge.apk { background: var(--blue-active-bg); color: var(--blue-active-text); }
+.openwrt-badge.ipk { background: #eaf8f1; color: #269b72; }
+.openwrt-badge.muted { background: var(--surface-code); color: var(--muted); }
+@media (prefers-color-scheme: dark) {
+  .openwrt-badge.ipk { background: #15352b; color: #4cd3a5; }
+}
+.openwrt-pkg-item { border-top: 1px dashed var(--line); padding-top: 7px; }
+.openwrt-pkg-link, .openwrt-pkg-meta { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-weight: 600; font-size: 12px; }
+.openwrt-pkg-link { color: var(--blue); }
+.openwrt-pkg-link small, .openwrt-pkg-meta small { color: var(--muted); font-weight: 450; flex-shrink: 0; }
+.openwrt-sha-row { margin-top: 3px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.openwrt-sha256 { font-size: 11px; user-select: all; }
+.openwrt-latest-build { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.openwrt-latest-build summary { cursor: pointer; color: var(--blue); font-weight: 550; }
+.openwrt-latest-body { margin-top: 6px; padding: 8px 10px; background: var(--surface-code); border-radius: 8px; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+.openwrt-fallback-note, .openwrt-cell-empty p { font-size: 12px; color: var(--muted); line-height: 1.55; }
+.openwrt-fallback-note a { color: var(--blue); text-decoration: underline; }
+.openwrt-empty { padding: 20px; text-align: center; color: var(--muted); font-size: 13px; }
+.openwrt-verify-bar { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1.3fr 1fr; gap: 24px; align-items: start; }
+.openwrt-verify-copy p { font-size: 12px; color: var(--muted); line-height: 1.7; }
+.openwrt-meta-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12px; font-weight: 600; }
+.openwrt-meta-links a { color: var(--blue); }
+@media (max-width: 640px) {
+  .openwrt-table-wrap { overflow: visible; border: 0; }
+  .openwrt-matrix-table, .openwrt-matrix-table tbody { display: block; }
+  .openwrt-matrix-table thead { display: none; }
+  .openwrt-matrix-table tbody tr { display: block; margin-bottom: 12px; padding: 8px 0; border: 1px solid var(--line); border-radius: 12px; }
+  .openwrt-matrix-table tbody th, .openwrt-matrix-table tbody td { display: block; min-width: 0; width: 100%; border: 0; padding: 8px 12px; }
+  .openwrt-matrix-table .openwrt-arch-col { padding-top: 0; }
+  .openwrt-arch-col::before { content: '包架构 · '; color: var(--muted); }
+  .openwrt-format-col + .openwrt-format-col { border-top: 1px solid var(--line-soft); }
+}
+
+.faq { padding-top: 30px; padding-bottom: 80px; max-width: 900px; }
+.faq h2 { font-size: 25px; margin-bottom: 23px; }
+.faq details { border-bottom: 1px solid var(--line); padding: 16px 0; font-size: 14px; }
+.faq summary { cursor: pointer; list-style: none; font-weight: 550; display: flex; justify-content: space-between; }
+.faq summary::after { content: '+'; color: var(--muted); font-size: 20px; line-height: 1; }
+.faq details[open] summary::after { content: '−'; }
+.faq details p { color: var(--muted); padding: 16px 28px 3px 0; }
+.faq p a { color: var(--blue); }
+footer { border-top: 1px solid var(--line); min-height: 100px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+footer .brand { font-size: 15px; }
+footer p, footer a { font-size: 11px; color: var(--muted); }
+footer > div { display: flex; gap: 20px; }
+
+/* Guide layout, TOC, search, heading anchors, and code copy */
+.guide-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr) 200px; gap: 44px; padding-top: 44px; padding-bottom: 80px; align-items: start; }
+.guide-nav { display: flex; flex-direction: column; gap: 14px; font-size: 14px; position: sticky; top: 25px; }
+.guide-nav-links { display: flex; flex-direction: column; gap: 11px; }
+.guide-nav .current { color: var(--blue); font-weight: 700; }
+.guide-search { position: relative; }
+#guide-search-input { width: 100%; font-size: 13px; padding: 8px 11px; }
+.guide-search-results { margin-top: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px; max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 12px 28px #00000018; }
+.guide-search-results[hidden] { display: none; }
+.guide-search-item { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border-radius: 7px; font-size: 12px; text-decoration: none !important; }
+.guide-search-item:hover { background: var(--surface-subtle); }
+.guide-search-item strong { color: var(--blue); font-size: 12px; }
+.guide-search-item span { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.guide-search-empty { font-size: 12px; color: var(--muted); padding: 6px 8px; }
+
+.guide-toc { position: sticky; top: 25px; border-left: 1px solid var(--line); padding-left: 16px; font-size: 12px; }
+.guide-toc-title { font-weight: 650; color: var(--heading-sub); margin-bottom: 10px; font-size: 12px; }
+.guide-toc ol { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.guide-toc a { color: var(--muted); text-decoration: none; display: block; line-height: 1.4; }
+.guide-toc a:hover { color: var(--blue); }
+.guide-toc .toc-level-3 { padding-left: 10px; font-size: 11.5px; }
+
+.guide-content { min-width: 0; max-width: 770px; }
+.guide-content h1 { font-size: 34px; margin-bottom: 25px; }
+.guide-content h2 { font-size: 23px; margin-top: 35px; margin-bottom: 15px; }
+.guide-content h3 { font-size: 18px; margin-top: 25px; }
+.guide-content p, .guide-content ul, .guide-content ol { font-size: 15px; margin: 16px 0; }
+.guide-content a { color: var(--blue); text-decoration: underline; }
+.guide-content a.heading-anchor { text-decoration: none; margin-left: 8px; opacity: 0; font-size: .8em; color: var(--muted); transition: opacity .15s; }
+.guide-content h1:hover .heading-anchor, .guide-content h2:hover .heading-anchor, .guide-content h3:hover .heading-anchor, .guide-content .heading-anchor:focus-visible { opacity: 1; }
+
+.code-block { margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface-code); }
+.compact-code { margin: 0; }
+.code-block-bar { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); background: var(--surface); }
+.copy-code { margin-left: auto; font: inherit; font-size: 11px; font-weight: 600; color: var(--blue); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+.copy-code:hover { background: var(--blue-soft); }
+.code-block pre, .guide-content pre { margin: 0; padding: 14px 18px; border-radius: 0; background: var(--surface-code); overflow: auto; font-size: 13px; }
+.guide-content code, .openwrt-downloads code { font-size: .9em; overflow-wrap: anywhere; }
+.guide-content table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.guide-content th, .guide-content td { border: 1px solid var(--line); padding: 10px; }
+.guide-content blockquote { border-left: 3px solid #8baaf5; padding-left: 20px; color: var(--muted); }
+
+@media (max-width: 1060px) {
+  .guide-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 36px; }
+  .guide-toc { grid-column: 2; position: static; order: -1; border-left: 0; border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: var(--surface); }
+  .openwrt-verify-bar { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 1000px) {
+  .privacy { margin-left: 32px; margin-right: 32px; }
+  .feature-grid { gap: 15px; }
+  .feature-grid article { padding: 22px; }
+}
+
+@media (max-width: 760px) {
+  .wrap { padding-left: 22px; padding-right: 22px; }
+  .site-header { min-height: 78px; }
+  .brand { font-size: 15px; }
+  .brand img { width: 29px; height: 29px; }
+  .site-header nav { gap: 14px; font-size: 12px; }
+  .site-header nav > a:first-child { display: none; }
+  .github { border: 0; padding: 0; background: transparent; }
+  .hero { padding-top: 36px; padding-bottom: 50px; gap: 32px; }
+  .phone-break { display: initial; }
+  .intro { font-size: 15px; }
+  .hero-actions { margin-top: 26px; }
+  .hero-actions .button { gap: 18px; padding: 12px 18px; }
+  .preview-pair { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .preview-mobile { order: 0; width: min(100%, 290px); justify-self: center; }
+  .preview-desktop { order: 1; }
+  .preview-caption { order: 2; margin-top: -8px; }
+  .compatibility { flex-wrap: wrap; justify-content: space-around; gap: 12px; padding-top: 20px; padding-bottom: 20px; }
+  .compatibility > span { flex-basis: 100%; text-align: center; font-size: 10px; }
+  .compatibility div { font-size: 13px; }
+  .features { padding-top: 58px; padding-bottom: 48px; }
+  .section-heading h2 { font-size: 29px; }
+  .feature-grid { grid-template-columns: 1fr; gap: 16px; margin-top: 28px; }
+  .feature-grid article { padding: 25px; }
+  .feature-grid p { min-height: 0; }
+  .feature-icon { margin-bottom: 18px; }
+  .privacy { margin-left: 22px; margin-right: 22px; padding: 30px 26px; grid-template-columns: 1fr; gap: 23px; }
+  .privacy h2 { font-size: 29px; }
+  .downloads { padding-top: 48px; padding-bottom: 45px; }
+  .recommended-download { align-items: stretch; flex-direction: column; gap: 15px; padding: 20px; }
+  .recommended-download .button { align-self: flex-start; }
+  .download-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .download-card { padding: 22px; }
+  .download-note a { display: block; margin: 7px 0; }
+  .openwrt-downloads { padding: 20px 16px; }
+  .faq { padding-top: 10px; padding-bottom: 48px; }
+  footer { padding-top: 25px; padding-bottom: 25px; flex-wrap: wrap; gap: 8px; }
+  footer p { width: 100%; order: 3; }
+  .guide-layout { grid-template-columns: 1fr; gap: 25px; padding-top: 24px; }
+  .guide-nav { position: static; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+  .guide-nav-links { flex-direction: row; flex-wrap: wrap; font-size: 12px; gap: 15px; }
+  .guide-toc { grid-column: 1; order: 0; }
+  .guide-content h1 { font-size: 29px; }
+  .guide-content table { display: block; overflow: auto; }
+  .guide-content p, .guide-content ul, .guide-content ol { font-size: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .button, .download-card, .release-channel button, .openwrt-format-group button { transition: none; }
+  .button:hover, .download-card:hover { transform: none; }
 }

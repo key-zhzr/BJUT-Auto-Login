@@ -1,4 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
+import { DeviceUsageView } from './device-usage-view';
+import { recordRouterQuality } from './network-quality';
+import type { AccountUsage,DailyUsage } from './device-usage-model';
 import { RouterAdmin } from './router-admin';
 import { renderRouterBillingSummary } from './router-billing-summary';
 import { RouterBillingCenter } from './router-billing-center';
@@ -35,6 +38,9 @@ export class RouterWorkbench {
   private logsBusy = false;
   private disconnected=false;
   private receivedAt=Date.now();
+  private trafficView=new DeviceUsageView(byId('router-device-usage-panel'),'router');
+  private trafficBusy=false;
+  private lastTraffic=0;
 
   constructor(private options: {
     connect: (address?: string) => void;
@@ -60,6 +66,7 @@ export class RouterWorkbench {
     window.setInterval(() => {
       if (document.hidden || !this.snapshot) return;
       const page = document.querySelector('.page.active')?.id;
+      if(page==='dashboard'&&!this.disconnected&&this.supports('device_usage')&&Date.now()-this.lastTraffic>=5000)void this.refreshTraffic();
       if (page === 'logs' && Date.now() - this.lastLogsPoll >= 5000) void this.refreshLogs();
     },1000);
     window.addEventListener('focus', () => { if (!this.snapshot && !this.discoveryBusy) void this.discover(); });
@@ -88,6 +95,8 @@ export class RouterWorkbench {
     this.setControlsAvailable(true);
     const firstConnection = !this.snapshot;
     this.snapshot = data; this.admin.update(data);
+    setVisible(byId('router-device-usage-panel'),this.supports('device_usage'));
+    if(firstConnection){this.lastTraffic=0;void this.refreshTraffic();}
     if(reconnect)this.admin.resume();
     for (const id of ['router-dashboard','router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), true);
     byId('btn-router-auto-connect').hidden = true;
@@ -110,6 +119,7 @@ export class RouterWorkbench {
   }
 
   disconnect(): void {
+    setVisible(byId('router-device-usage-panel'),false);this.trafficView.render([],'已断开路由器');this.lastTraffic=0;
     this.billingCenter.invalidate();
     this.generation++; this.snapshot = null;
     this.accountsStamp = ''; this.admin.disconnect(); this.logSnapshot = '';
@@ -127,6 +137,7 @@ export class RouterWorkbench {
     if(!this.snapshot)return;
     if(!this.disconnected)this.billingCenter.invalidate();
     this.disconnected=true;
+    this.trafficView.render([],'连接已中断，重新连接后恢复统计。');
     if(!byId('router-billing-summary-content').hidden)byId('router-billing-summary-content').replaceChildren(node('p','路由连接已中断，请等待重新连接。'));
     this.updatePorts();this.setControlsAvailable(false);
     byId('router-settings-connection').textContent='连接已中断，以下为上次读取的数据。';
@@ -143,6 +154,13 @@ export class RouterWorkbench {
   }
 
   private supports(capability: string): boolean { return this.snapshot?.capabilities?.includes(capability) || false; }
+  private async refreshTraffic():Promise<void> {
+    if(this.trafficBusy||!this.snapshot||this.disconnected||!this.supports('device_usage'))return;
+    this.trafficBusy=true;this.lastTraffic=Date.now();const router=this.snapshot.managementUrl;
+    try{const data=await this.request<{accounts:AccountUsage[];history?:DailyUsage[]}>('traffic');if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.render(data.accounts||[],'',data.history||[]);}
+    catch{if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.render([],'暂时无法读取路由器设备流量。');}
+    finally{this.trafficBusy=false;}
+  }
   private async request<T>(operation: string, args: Record<string,unknown> = {}): Promise<T> {
     if(this.disconnected)throw new Error('路由连接已中断，请等待重新连接。');
     return invoke<T>('router_request',{operation,args});
@@ -155,6 +173,7 @@ export class RouterWorkbench {
     const live = new Set(this.snapshot.uplinks.map(item=>item.id));
     for (const [id,card] of this.ports) if (!live.has(id)) { this.portAccounts.get(id)?.close();this.portAccounts.delete(id);card.remove(); this.ports.delete(id); this.samples.delete(id); }
     for (const item of this.snapshot.uplinks) {
+      if(!item.stale)recordRouterQuality(item.device||item.id,(item.updated_at||0)*1000,item.internet4,item.internet6);
       let card = this.ports.get(item.id);
       if (!card) {
         card = node('article','', 'router-port-card router-enter'); card.dataset.uplink = item.id;
@@ -198,7 +217,7 @@ export class RouterWorkbench {
       field('state').textContent = routerStatus(item,this.disconnected,(Date.now()-this.receivedAt)/1000);
       field('account').textContent = item.account ? `账号 ${item.account}` : '暂无认证账号';
       field('progress').textContent = item.checking ? item.check_message || '正在检测…' : ['queued','running'].includes(item.operation?.state || '') ? item.operation?.phase || '正在处理…' : item.message || '';
-      field('description').textContent = [item.network,item.network6,item.ipv4,item.ipv6,`认证：${item.session==='online'?'已认证':item.session==='offline'?'未认证':'待确认'}`,item.message,routerAdvice(item),item.updated_at?`检测时间：${new Date(item.updated_at*1000).toLocaleString()}`:''].filter(Boolean).join('\n');
+      field('description').textContent = [item.network,item.network6,item.ipv4,item.ipv6,`IPv6 前缀：${item.ipv6_pd || '未委派'}`,`认证：${item.session==='online'?'已认证':item.session==='offline'?'未认证':'待确认'}`,item.message,routerAdvice(item),item.updated_at?`检测时间：${new Date(item.updated_at*1000).toLocaleString()}`:''].filter(Boolean).join('\n');
       const now=performance.now(),tx=routerCounter(port?.txBytes),rx=routerCounter(port?.rxBytes),previous=this.samples.get(item.id);
       const elapsed=previous?(now-previous.at)/1000:0;
       const rate=(current:bigint,last:bigint)=>elapsed>.2 && current>=last ? Number(current-last)/elapsed : 0;

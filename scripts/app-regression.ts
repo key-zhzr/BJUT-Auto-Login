@@ -78,6 +78,10 @@ const moduleTickets=new Map<string,string>();
 const bundlePolls=new Map<string,number>();
 let savedRouterInfo:any=new URL(location.href).searchParams.has('saved')?{address:'https://192.0.2.1',username:'root',certificate:'synthetic-pem',allowHttp:false}:null,routerFailures=0;
 mockIPC(async (cmd, payload: any = {}) => {
+  if(cmd==='get_usage_history')return [];
+  if(cmd==='trace_network')return {target:'192.0.2.1',available:true,timedOut:false,hops:[{index:1,address:'192.0.2.1',detail:'1 192.0.2.1 1 ms'}],output:''};
+  if(cmd==='create_diagnostic_bundle')return '测试诊断包：账号和网络标识已脱敏';
+  if(cmd==='get_device_usage')return [{account:'25000001',updatedAt:Math.floor(Date.now()/1000),devices:[{loginAt:'2026-10-25 12:00',ip:'192.0.2.20',mac:'AA-BB-CC-DD-EE-FF',usedFlowMb:'1234.5'}]}];
   calls.push({cmd,payload,at:now()});
   if (cmd === 'discover_routers') return [{name:'测试路由器',address:'https://192.0.2.1/',version:'0.1.6',secure:true}];
   if (cmd === 'saved_router_connection') return savedRouterInfo;
@@ -112,6 +116,7 @@ mockIPC(async (cmd, payload: any = {}) => {
     }
     if (payload.operation === 'billing_poll') return {result:{state:'ready',message:'计费数据已更新',account:routerTickets.get(payload.args.ticket)==='dorm_b'?'25000002':'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
     if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'},uplinks:[{id:'dorm_a',enabled:'1',network:'wan14',network6:'wan16',login_type:'bjut-sushe',accounts:'account2 account1'},{id:'dorm_b',network:'wan24',enabled:'1'}]};
+    if(payload.operation==='traffic')return {accounts:[{account:'25000001',updatedAt:Math.floor(Date.now()/1000),devices:[{loginAt:'2026-10-25 12:00',ip:'192.0.2.30',mac:'AA-BB-CC-DD-EE-00',usedFlowMb:'2200'}]}]};
     if (payload.operation === 'billing_cached') return {items:[]};
     if (payload.operation === 'pushplus_test') return {state:'ready',message:'模拟测试消息已排队'};
     if (payload.operation === 'maintenance_info') return {platform:{version:'0.1.6-r14',target:'mediatek/filogic',arch:'aarch64_cortex-a53',format:'apk'},backups:[{id:'backup-1792690000-12345678',createdAt:'2026-10-23 12:00:00',version:'0.1.6-r13'}]};
@@ -359,6 +364,20 @@ button.addEventListener('click',async()=>{
     assert((document.getElementById('router-password') as HTMLInputElement).value==='','连接后仍保留管理密码');
     assert(!memory.get('bjut_router_password'),'管理密码写入了 UI 存储');
     assert(savedRouterInfo && !JSON.stringify(savedRouterInfo).includes('synthetic-router-password'),'保存信息包含明文密码');
+    click('[data-target="dashboard"]');
+    const portSelect=document.querySelector<HTMLElement>('.router-port-card .custom-select')!;
+    const portTrigger=portSelect.querySelector<HTMLElement>('.custom-select-trigger')!;
+    await new Promise(resolve=>setTimeout(resolve,260));
+    portTrigger.scrollIntoView({block:'center'});
+    await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
+    portTrigger.click();
+    await new Promise(resolve=>setTimeout(resolve,350));
+    assert(portSelect.classList.contains('open'),'路由端口账号菜单打开后被收起');
+    const option=portSelect.querySelector<HTMLElement>('.custom-option')!,rect=option.getBoundingClientRect();
+    const hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);
+    assert(!!hit&&option.contains(hit),'路由端口账号菜单被卡片裁切或遮挡');portTrigger.click();
+    click('[data-target="settings"]');
+    note('通过：路由端口账号下拉可见，选项不被卡片裁切');
     click('#router-uplink-select .custom-select-trigger'); click('#router-uplink-select [data-value="dorm_b"]');
     click('#router-account-select .custom-select-trigger'); click('#router-account-select [data-value="account2"]');
     click('#btn-router-login');

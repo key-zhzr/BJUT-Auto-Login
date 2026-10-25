@@ -1,4 +1,10 @@
 import { setupRouterControl } from './router-control';
+import { getTrayPreferences, loadTrayPreferences, setupTrayPreferences } from './tray-preferences';
+import { setupOnboarding } from './onboarding';
+import { setupDeviceUsage } from './device-usage-view';
+import { setupAdvancedDiagnostics } from './advanced-diagnostics';
+import { setupQuickActions } from './quick-actions';
+import { setupNetworkQuality } from './network-quality';
 import {
   getBillingSource,
   getRouterBillingBridge,
@@ -776,6 +782,9 @@ function syncConfigToRust(): Promise<void> {
   // Capture an immutable snapshot now. Serializing writes prevents an older,
   // slower IPC call from overwriting a newer account edit.
   const config = {
+    tray: getTrayPreferences(),
+    traffic_monitor_enabled:localStorage.getItem('bjut_traffic_monitor_enabled')!=='false',
+    prefer_remaining_flow:localStorage.getItem('bjut_prefer_remaining_flow')==='true',
     accounts: getAccounts().map(account => ({ ...account })),
     preferred_interface: localStorage.getItem('bjut_preferred_interface') || '',
     adaptive_network_checks: localStorage.getItem('bjut_adaptive_network_checks') !== 'false',
@@ -846,6 +855,11 @@ async function loadConfigFromRust(): Promise<boolean> {
       invoke<string>('get_credential_storage_status'),
     ]);
     if (!config) return false;
+    loadTrayPreferences(config.tray);
+    localStorage.setItem('bjut_traffic_monitor_enabled',String(config.traffic_monitor_enabled!==false));
+    localStorage.setItem('bjut_prefer_remaining_flow',String(config.prefer_remaining_flow===true));
+    (document.getElementById('setting-prefer-flow') as HTMLInputElement).checked=config.prefer_remaining_flow===true;
+    (document.getElementById('setting-traffic-monitor') as HTMLInputElement).checked=config.traffic_monitor_enabled!==false;
 
     const backendAccounts: AccountView[] = (config.accounts || []).map((account: Partial<AccountView>) => ({
       user: String(account.user || ''),
@@ -2033,6 +2047,17 @@ async function init() {
   });
   routerWorkbench = setupRouterControl(() => accountsCache, message => log('路由协作', message), customConfirm);
   setupEventListeners();
+  setupTrayPreferences(syncConfigToRust);
+  setupDeviceUsage();
+  setupAdvancedDiagnostics();
+  setupNetworkQuality();
+  setupQuickActions(activatePage);
+  document.getElementById('setting-prefer-flow')!.addEventListener('change',async event=>{const input=event.target as HTMLInputElement;const previous=localStorage.getItem('bjut_prefer_remaining_flow');input.disabled=true;localStorage.setItem('bjut_prefer_remaining_flow',String(input.checked));try{await syncConfigToRust();}catch{localStorage.setItem('bjut_prefer_remaining_flow',previous||'false');input.checked=previous==='true';}finally{input.disabled=false;}});
+  document.getElementById('setting-traffic-monitor')!.addEventListener('change',async event=>{
+    const input=event.target as HTMLInputElement;const previous=localStorage.getItem('bjut_traffic_monitor_enabled');input.disabled=true;
+    localStorage.setItem('bjut_traffic_monitor_enabled',String(input.checked));try{await syncConfigToRust();}catch{localStorage.setItem('bjut_traffic_monitor_enabled',previous||'true');input.checked=previous!=='false';}finally{input.disabled=false;}
+  });
+  const onboarding=setupOnboarding({accounts:()=>accountsCache.length,navigate:activatePage,android:IS_ANDROID,desktop:!IS_ANDROID});
   setupEventDrivenNetworkDetection();
   renderAccounts();
   renderNetworkProfiles();
@@ -2102,10 +2127,12 @@ async function init() {
         }
         log('系统', '应用启动');
         await showStartupFailures();
+        onboarding.start();
       } else {
         startWifiChangeCheckLoop();
         startConnectivityCheckLoop();
         log('系统', '应用启动');
+        onboarding.start();
       }
     });
     
@@ -2153,6 +2180,7 @@ async function init() {
   }
   await finishAppLaunch();
   await showStartupFailures();
+  if(tosAccepted)onboarding.start();
 }
 
 function formatHealthTime(value: string | null): string {
@@ -4944,6 +4972,7 @@ function updateNetworkStatus(state: NetworkState, type?: LoginType, loginMessage
           ? '校园网需要认证，自动登录正在处理'
           : '网络离线或不在校园网环境';
     window.AndroidBridge.updateKeepAliveStatus(notification);
+    window.AndroidBridge.updateWidgetStatus?.(notification);
   }
   renderIcons(networkIcon);
   if (isLoggingIn) btnLogin.disabled = true;

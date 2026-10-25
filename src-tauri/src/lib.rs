@@ -1,12 +1,18 @@
 mod backup_cipher;
 mod billing;
+mod billing_commands;
 mod billing_runtime;
+#[cfg(test)]
+use billing_commands::*;
+mod campus_commands;
 mod campus_dns;
 mod campus_services;
+use campus_commands::*;
 mod captcha;
 mod config_model;
 mod cookie_jar;
 mod dual_stack;
+mod log_redaction;
 mod login_progress;
 #[cfg(any(target_os = "macos", test))]
 mod macos_network;
@@ -21,17 +27,27 @@ use network_repair::AdapterRestartTarget;
 mod network_trust;
 use campus_dns::{campus_dns_servers, query_campus_dns_ipv4};
 use network_probe::{run_diagnostic_probes, NETWORK_PROBE_TIMEOUT};
+mod account_policy;
 mod connectivity;
+#[cfg(desktop)]
+mod desktop_tray;
+mod device_usage;
 mod diagnostic_paths;
+mod diagnostic_tools;
 mod internet_probe;
+#[cfg(desktop)]
+mod native_network;
 mod network_diagnostics;
 mod network_events;
 mod portal_auth;
 mod probe_transport;
+mod quick_actions;
 mod recharge_state;
 mod router_control;
+mod tray_settings;
 mod trusted_time;
 mod update_metadata;
+mod usage_history;
 #[cfg(desktop)]
 mod window_geometry;
 #[cfg(target_os = "windows")]
@@ -1598,6 +1614,9 @@ struct LogEntry {
 }
 
 struct AppState {
+    device_usage: Mutex<device_usage::Store>,
+    #[cfg(target_os = "macos")]
+    tray_menu: Mutex<Option<tauri::menu::Menu<tauri::Wry>>>,
     config: RwLock<AppConfig>,
     credential_storage_status: Mutex<String>,
     account_health: Mutex<HashMap<String, AccountHealth>>,
@@ -2013,6 +2032,25 @@ fn accounts_for_profile(accounts: Vec<Account>, profile: Option<&NetworkProfile>
         .iter()
         .filter_map(|user| active.iter().find(|account| account.user == *user).cloned())
         .collect()
+}
+
+fn automatic_accounts(
+    state: &AppState,
+    accounts: Vec<Account>,
+    profile: Option<&NetworkProfile>,
+) -> Vec<Account> {
+    let accounts = accounts_for_profile(accounts, profile);
+    if state.config.read().unwrap().prefer_remaining_flow
+        && profile.is_none_or(|p| p.account_order.is_empty())
+    {
+        account_policy::order(
+            accounts,
+            &state.device_usage.lock().unwrap().0,
+            chrono::Utc::now().timestamp(),
+        )
+    } else {
+        accounts
+    }
 }
 
 fn profile_auto_login_enabled(
@@ -3711,6 +3749,7 @@ fn decrypt_config_backup_payload(
 }
 
 fn validate_imported_config(config: &AppConfig) -> Result<(), String> {
+    config.tray.validate()?;
     use std::collections::HashSet;
 
     if config.accounts.len() > 100 {
@@ -3938,7 +3977,14 @@ fn initialize_log_history(app: &tauri::AppHandle, state: &AppState) {
 }
 
 fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &str, log_type: &str) {
-    network_events::from_log(app, state, module, message, log_type);
+    let redacted = {
+        let secrets = {
+            let cfg = state.config.read().unwrap();
+            log_redaction::collect_secrets(&cfg)
+        };
+        log_redaction::redact_message(message, &secrets)
+    };
+    network_events::from_log(app, state, module, &redacted, log_type);
     let current_level = {
         let cfg = state.config.read().unwrap();
         cfg.log_level.clone()
@@ -3953,7 +3999,7 @@ fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &st
     let entry = LogEntry {
         time: time_str,
         module: module.to_string(),
-        message: portal_auth::protocol_labels(message),
+        message: portal_auth::protocol_labels(&redacted),
         log_type: log_type.to_string(),
     };
     if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -4105,6 +4151,7 @@ fn save_config(
     state: &AppState,
     mut new_cfg: AppConfig,
 ) -> Result<(), String> {
+    new_cfg.tray.validate()?;
     if new_cfg.android_notification_mode != "separate" {
         new_cfg.android_notification_mode = default_android_notification_mode();
     }
@@ -4967,7 +5014,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                 cfg.accounts.clone()
                             };
                             let mut active_accounts = Vec::new();
-                            for account in accounts_for_profile(accounts, profile.as_ref()) {
+                            for account in automatic_accounts(&state, accounts, profile.as_ref()) {
                                 match account_attempt_allowed(&state, &account.user) {
                                     Ok(()) => active_accounts.push(account),
                                     Err(remaining) => rust_log(
@@ -5746,12 +5793,19 @@ fn get_logs(state: tauri::State<Arc<AppState>>) -> Vec<LogEntry> {
 }
 
 #[tauri::command]
-fn get_log_text(app: tauri::AppHandle) -> String {
-    portal_auth::protocol_labels(&std::fs::read_to_string(get_log_path(&app)).unwrap_or_default())
+fn get_log_text(app: tauri::AppHandle, state: tauri::State<Arc<AppState>>) -> String {
+    let secrets = log_redaction::collect_secrets(&state.config.read().unwrap());
+    portal_auth::protocol_labels(&log_redaction::redact_message(
+        &std::fs::read_to_string(get_log_path(&app)).unwrap_or_default(),
+        &secrets,
+    ))
 }
 
 #[tauri::command]
-fn export_logs(app: tauri::AppHandle) -> Result<String, String> {
+fn export_logs(
+    app: tauri::AppHandle,
+    state: tauri::State<Arc<AppState>>,
+) -> Result<String, String> {
     let source = get_log_path(&app);
     let metadata = std::fs::metadata(&source).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -5776,6 +5830,8 @@ fn export_logs(app: tauri::AppHandle) -> Result<String, String> {
     let destination = directory.join(filename);
     let text =
         std::fs::read_to_string(&source).map_err(|error| format!("读取日志失败：{error}"))?;
+    let secrets = log_redaction::collect_secrets(&state.config.read().unwrap());
+    let text = log_redaction::redact_message(&text, &secrets);
     std::fs::write(&destination, portal_auth::protocol_labels(&text))
         .map_err(|error| format!("导出日志失败：{error}"))?;
     Ok(destination.to_string_lossy().into_owned())
@@ -7424,1250 +7480,6 @@ async fn get_user_info(
     Ok(info)
 }
 
-#[tauri::command]
-async fn get_remaining_flow(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<Option<String>, String> {
-    ensure_billing_foreground(&state)?;
-    let compatibility = {
-        let config = state.config.read().unwrap();
-        effective_vpn_compatibility(&config)
-    };
-    let network = get_network_info(app, Some(false));
-    #[cfg(target_os = "android")]
-    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
-    #[cfg(target_os = "android")]
-    if wifi_route_guard.failed() {
-        return Err("无法将剩余流量请求绑定到当前校园 Wi-Fi".to_string());
-    }
-    let route_context = portal_route_context_from_network(&network)?;
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(12),
-        billing::fetch_current_remaining_flow_via_lgn(compatibility, route_context.as_ref()),
-    )
-    .await
-    {
-        Ok(Ok(flow)) => Ok(flow),
-        Ok(Err(error)) => Err(error.user_message()),
-        Err(_) => Err("剩余流量读取超过 12 秒".to_string()),
-    }
-}
-
-#[tauri::command]
-async fn get_billing_center(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    account_user: Option<String>,
-    current_session: Option<bool>,
-    webvpn: Option<bool>,
-) -> Result<billing::BillingCenterData, String> {
-    emit_billing_center_progress(&app, &state, "准备读取计费中心完整数据", 2);
-    let _fetch_guard = match state.billing_fetch_lock.try_lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            emit_billing_center_progress(&app, &state, "正在等待已有的计费刷新完成", 3);
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(50),
-                state.billing_fetch_lock.lock(),
-            )
-            .await
-            {
-                Ok(guard) => guard,
-                Err(_) => {
-                    let error = "等待已有计费刷新超过 50 秒，请稍后重试".to_string();
-                    rust_log(&app, &state, "计费", &error, "error");
-                    return Err(error);
-                }
-            }
-        }
-    };
-    let (access, compatibility) = resolve_billing_access(
-        &app,
-        &state,
-        account_user.as_deref(),
-        current_session.unwrap_or(false),
-        true,
-        webvpn.unwrap_or(false),
-    )
-    .await?;
-    let progress_app = app.clone();
-    let progress_state = state.inner().clone();
-    let emit_progress = move |message: &str, percent: u8| {
-        emit_billing_center_progress(&progress_app, &progress_state, message, percent);
-    };
-    let module_app = app.clone();
-    let module_account = if current_session.unwrap_or(false) {
-        "__current_session__".to_string()
-    } else {
-        access.account.clone()
-    };
-    let publish_module = move |update: billing::BillingCenterModuleUpdate| {
-        let mut payload = serde_json::to_value(update).unwrap_or_default();
-        if let Some(object) = payload.as_object_mut() {
-            object.insert(
-                "account".to_string(),
-                serde_json::Value::String(module_account.clone()),
-            );
-        }
-        let _ = module_app.emit("billing-center-module", payload);
-    };
-    ensure_billing_foreground(&state)?;
-    let result = run_billing_read_while_foreground(&state, async {
-        match access
-            .with_timeout(
-                std::time::Duration::from_secs(75),
-                billing::fetch_center(
-                    &access,
-                    compatibility,
-                    &state.billing_sessions,
-                    emit_progress,
-                    publish_module,
-                ),
-            )
-            .await
-        {
-            Ok(result) => result.map_err(|error| error.user_message()),
-            Err(_) => {
-                Err("计费中心完整数据读取超过 75 秒，已停止本次请求；请检查 VPN 后重试".to_string())
-            }
-        }
-    })
-    .await;
-    match &result {
-        Ok(data) => rust_log(
-            &app,
-            &state,
-            "计费",
-            &format!(
-                "计费中心完整数据已更新（{} 条警告）",
-                data.warnings.len() + data.overview.warnings.len()
-            ),
-            "debug",
-        ),
-        Err(error) => rust_log(&app, &state, "计费", error, "error"),
-    }
-    result
-}
-
-#[tauri::command]
-async fn query_billing_records(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    query: billing::BillingRecordQuery,
-    account_user: Option<String>,
-    current_session: Option<bool>,
-    webvpn: Option<bool>,
-) -> Result<billing::BillingRecordResult, String> {
-    let kind = query.kind.clone();
-    let page = query.page;
-    let all = query.all;
-    let _fetch_guard = state.billing_fetch_lock.lock().await;
-    let (access, compatibility) = resolve_billing_access(
-        &app,
-        &state,
-        account_user.as_deref(),
-        current_session.unwrap_or(false),
-        false,
-        webvpn.unwrap_or(false),
-    )
-    .await?;
-    ensure_billing_foreground(&state)?;
-    let result = run_billing_read_while_foreground(&state, async {
-        billing::query_records(&access, compatibility, &state.billing_sessions, &query)
-            .await
-            .map_err(|error| error.user_message())
-    })
-    .await;
-    match &result {
-        Ok(data) => rust_log(
-            &app,
-            &state,
-            "计费",
-            &format!(
-                "计费记录已读取（类型={kind}，页码={}，返回={}，总数={}）",
-                if all { 0 } else { page },
-                data.table.rows.len(),
-                data.table.total
-            ),
-            "debug",
-        ),
-        Err(error) => rust_log(&app, &state, "计费", error, "error"),
-    }
-    result
-}
-
-#[tauri::command]
-async fn perform_billing_action(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    request: billing::BillingActionRequest,
-    account_user: Option<String>,
-    current_session: Option<bool>,
-    webvpn: Option<bool>,
-) -> Result<billing::BillingActionResult, String> {
-    let action = request.action.clone();
-    let _billing_guard = if action == "changePassword" {
-        None
-    } else {
-        Some(state.billing_fetch_lock.lock().await)
-    };
-    let (account, access, compatibility) = if action == "changePassword" {
-        (
-            campus_service_target(&state, account_user.as_deref())?,
-            None,
-            None,
-        )
-    } else {
-        let (access, compatibility) = resolve_billing_access(
-            &app,
-            &state,
-            account_user.as_deref(),
-            current_session.unwrap_or(false),
-            false,
-            webvpn.unwrap_or(false),
-        )
-        .await?;
-        let account = Account {
-            user: access.account.clone(),
-            pass: String::new(),
-            is_default: false,
-            is_disabled: None,
-        };
-        (account, Some(access), Some(compatibility))
-    };
-    // A write may succeed even when its response is lost. Never retain a
-    // pre-write dashboard session across any mutation attempt.
-    state.billing_sessions.lock().unwrap().remove(&account.user);
-    let new_password = request.new_password.clone();
-    let mut result = if action == "changePassword" {
-        ensure_billing_foreground(&state)?;
-        let supplied_password = request
-            .old_password
-            .as_deref()
-            .ok_or_else(|| "请输入当前统一认证密码".to_string())?;
-        let replacement = request
-            .new_password
-            .as_deref()
-            .ok_or_else(|| "请输入新统一认证密码".to_string())?;
-        let _campus_guard = state.campus_service_lock.lock().await;
-        ensure_billing_foreground(&state)?;
-        rust_log(&app, &state, "计费", "正在通过统一认证修改密码", "info");
-        let changed = campus_services::change_password(
-            &account.user,
-            &account.pass,
-            supplied_password,
-            replacement,
-        )
-        .await
-        .map_err(campus_services::CampusServiceError::user_message);
-        if let Err(error) = &changed {
-            rust_log(&app, &state, "计费", error, "error");
-        }
-        let message = changed?;
-        billing::BillingActionResult {
-            message,
-            password_changed: true,
-        }
-    } else {
-        let compatibility = compatibility.ok_or_else(|| "计费操作缺少 VPN 兼容配置".to_string())?;
-        ensure_billing_foreground(&state)?;
-        run_billing_mutation_to_completion(&state, async {
-            billing::perform_action(
-                access.as_ref().ok_or("缺少计费会话")?,
-                compatibility,
-                &request,
-            )
-            .await
-            .map_err(|error| error.user_message())
-        })
-        .await?
-    };
-
-    if result.password_changed {
-        let replacement = new_password
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "统一认证密码已修改，但新密码没有返回到安全存储流程".to_string())?;
-        let mut config = state.config.read().unwrap().clone();
-        let saved = config
-            .accounts
-            .iter_mut()
-            .find(|saved| saved.user == account.user)
-            .ok_or_else(|| {
-                "统一认证密码已修改，但 App 中已找不到对应账号，请立即重新添加账号".to_string()
-            })?;
-        saved.pass = replacement;
-        save_config(&app, &state, config).map_err(|error| {
-            format!(
-                "统一认证密码已修改，但 App 安全存储同步失败：{error}。请立即在账号管理中更新密码"
-            )
-        })?;
-        result.message = format!("{}；App 中的账号密码已同步更新", result.message);
-    }
-    let action_label = match action.as_str() {
-        "stopNow" => "立即停机",
-        "reopenNow" => "立即复通",
-        "schedulePackage" => "预约套餐",
-        "cancelPackage" => "取消套餐预约",
-        "setConsumeLimit" => "修改消费保护",
-        "bindMac" => "绑定设备",
-        "unbindMac" => "解绑设备",
-        "changePassword" => "修改统一认证密码",
-        "updateQuestions" => "修改密码保护",
-        _ => "计费操作",
-    };
-    rust_log(
-        &app,
-        &state,
-        "计费",
-        &format!("用户已确认执行：{action_label}"),
-        "success",
-    );
-    Ok(result)
-}
-
-fn campus_service_target(state: &AppState, account_user: Option<&str>) -> Result<Account, String> {
-    #[cfg(target_os = "android")]
-    clear_android_network_binding()?;
-    let config = state.config.read().unwrap();
-    let account = selected_billing_account(&config, account_user).ok_or_else(|| {
-        if account_user.is_some() {
-            "所选统一认证账号不存在或缺少有效配置".to_string()
-        } else {
-            "没有可用于统一认证的已保存账号".to_string()
-        }
-    })?;
-    if account.pass.is_empty() {
-        return Err("统一认证账号缺少已保存的密码".to_string());
-    }
-    Ok(account)
-}
-
-fn campus_service_session_seed(
-    state: &AppState,
-    account: &str,
-) -> Option<campus_services::PersistedCampusSession> {
-    state
-        .config
-        .read()
-        .unwrap()
-        .campus_service_sessions
-        .iter()
-        .find(|session| session.account() == account)
-        .cloned()
-}
-
-fn persist_campus_service_session(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    session: campus_services::PersistedCampusSession,
-) {
-    let snapshot = {
-        let mut config = state.config.write().unwrap();
-        config
-            .campus_service_sessions
-            .retain(|current| current.account() != session.account());
-        config.campus_service_sessions.push(session);
-        config.clone()
-    };
-    if let Err(error) = save_secure_config_verified(app, &snapshot) {
-        rust_log(
-            app,
-            state,
-            "计费",
-            &format!("移动门户登录状态未能写入安全存储：{error}"),
-            "error",
-        );
-    } else {
-        rust_log(
-            app,
-            state,
-            "计费",
-            "已在安全存储中更新移动门户长期登录状态",
-            "debug",
-        );
-    }
-}
-
-fn persist_recharge_transaction(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    transaction: recharge_state::RechargeTransaction,
-) -> Result<(), String> {
-    let snapshot = {
-        let mut config = state.config.write().unwrap();
-        config.recharge_transactions.upsert(transaction);
-        config.clone()
-    };
-    save_recharge_snapshot_verified(app, &snapshot)
-}
-
-fn save_recharge_snapshot_verified(
-    app: &tauri::AppHandle,
-    snapshot: &AppConfig,
-) -> Result<(), String> {
-    let mut last_error = String::new();
-    for attempt in 0..3 {
-        match save_secure_config_verified(app, snapshot) {
-            Ok(()) => return Ok(()),
-            Err(error) => last_error = error,
-        }
-        if attempt < 2 {
-            std::thread::sleep(std::time::Duration::from_millis(40 * (attempt + 1)));
-        }
-    }
-    Err(format!("充值恢复记录连续写入失败：{last_error}"))
-}
-
-fn transition_recharge_transaction(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    id: &str,
-    stage: recharge_state::RechargeStage,
-    note: impl Into<String>,
-) -> Result<(), String> {
-    let snapshot = {
-        let mut config = state.config.write().unwrap();
-        config
-            .recharge_transactions
-            .transition(id, stage, chrono::Utc::now().timestamp(), note)?;
-        config.clone()
-    };
-    save_recharge_snapshot_verified(app, &snapshot)
-}
-
-fn transition_recharge_transaction_with_parent(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    id: &str,
-    stage: recharge_state::RechargeStage,
-    note: impl Into<String>,
-) -> Result<(), String> {
-    let snapshot = {
-        let mut config = state.config.write().unwrap();
-        config.recharge_transactions.transition_with_parent(
-            id,
-            stage,
-            chrono::Utc::now().timestamp(),
-            note,
-        )?;
-        config.clone()
-    };
-    save_recharge_snapshot_verified(app, &snapshot)
-}
-
-#[tauri::command]
-fn get_recoverable_recharges(
-    app: tauri::AppHandle,
-    state: tauri::State<Arc<AppState>>,
-) -> Vec<recharge_state::RechargeRecoveryView> {
-    let (views, reconciled_snapshot) = {
-        let mut config = state.config.write().unwrap();
-        let changed = config
-            .recharge_transactions
-            .reconcile_legacy_completed_transfers();
-        let expired = config
-            .recharge_transactions
-            .prune_expired(chrono::Utc::now().timestamp());
-        let views = config.recharge_transactions.recovery_views();
-        (views, (changed || expired).then(|| config.clone()))
-    };
-    if let Some(snapshot) = reconciled_snapshot {
-        if let Err(error) = save_recharge_snapshot_verified(&app, &snapshot) {
-            rust_log(
-                &app,
-                &state,
-                "计费",
-                &format!("旧版充值恢复状态已在内存修复，但持久化失败：{error}"),
-                "error",
-            );
-        }
-    }
-    views
-}
-
-#[tauri::command]
-fn finish_recharge_recovery(
-    app: tauri::AppHandle,
-    state: tauri::State<Arc<AppState>>,
-    id: String,
-    completed: bool,
-    note: Option<String>,
-) -> Result<(), String> {
-    transition_recharge_transaction(
-        &app,
-        &state,
-        &id,
-        if completed {
-            recharge_state::RechargeStage::Completed
-        } else {
-            recharge_state::RechargeStage::Unknown
-        },
-        note.unwrap_or_else(|| {
-            if completed {
-                "充值流程已完成".to_string()
-            } else {
-                "充值结果仍需核对".to_string()
-            }
-        }),
-    )
-}
-
-fn campus_recharge_open_at_hour(hour: u64) -> bool {
-    (6..23).contains(&hour)
-}
-
-fn ensure_campus_recharge_open() -> Result<(), String> {
-    let unix_seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let beijing_hour = (unix_seconds / 3600 + 8) % 24;
-    if campus_recharge_open_at_hour(beijing_hour) {
-        Ok(())
-    } else {
-        Err(
-            "充值系统仅在北京时间每日 06:00–23:00 开放；当前可查看余额，但不能创建或确认充值订单"
-                .to_string(),
-        )
-    }
-}
-
-#[tauri::command]
-async fn prepare_network_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    target_account: String,
-    amount: String,
-    account_user: Option<String>,
-    recovery_source_id: Option<String>,
-) -> Result<campus_services::RechargePreview, String> {
-    ensure_campus_recharge_open()?;
-    let account = campus_service_target(&state, account_user.as_deref())?;
-    let _service_guard = state.campus_service_lock.lock().await;
-    let session_seed = campus_service_session_seed(&state, &account.user);
-    rust_log(
-        &app,
-        &state,
-        "计费",
-        "正在通过统一认证核对校园卡与目标网费账户",
-        "info",
-    );
-    #[cfg(target_os = "android")]
-    {
-        let (transport, validated) = {
-            let network = state.last_network_state.lock().unwrap();
-            (
-                network
-                    .get("transport")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
-                network
-                    .get("validated")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false),
-            )
-        };
-        rust_log(
-            &app,
-            &state,
-            "计费",
-            &format!("统一认证网络上下文: transport={transport}, systemValidated={validated}"),
-            "debug",
-        );
-    }
-    let prepared = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        campus_services::prepare_recharge(
-            &account.user,
-            &account.pass,
-            &target_account,
-            &amount,
-            session_seed,
-        ),
-    )
-    .await
-    .map_err(|_| "充值信息核对超过 60 秒，已取消本次请求".to_string())?
-    .map_err(campus_services::CampusServiceError::user_message);
-    match prepared {
-        Ok((pending, preview, persisted)) => {
-            persist_campus_service_session(&app, &state, persisted);
-            let mut transaction = recharge_state::RechargeTransaction::prepared(
-                preview.confirmation_id.clone(),
-                "campusCard",
-                preview.payer_account.clone(),
-                preview.target_account.clone(),
-                preview.amount.clone(),
-                preview.card_balance.clone(),
-                chrono::Utc::now().timestamp(),
-            );
-            let snapshot = {
-                let mut config = state.config.write().unwrap();
-                if let Some(source_id) = recovery_source_id.as_deref() {
-                    let source = config
-                        .recharge_transactions
-                        .find(source_id)
-                        .cloned()
-                        .ok_or_else(|| {
-                            "找不到对应的支付恢复记录，请重新打开充值页面".to_string()
-                        })?;
-                    let source_amount = source.amount.parse::<f64>().unwrap_or(f64::NAN);
-                    let transfer_amount = preview.amount.parse::<f64>().unwrap_or(f64::NAN);
-                    if !matches!(source.method.as_str(), "alipay" | "wechat")
-                        || !source.stage.is_recoverable()
-                        || source.payer_account != preview.payer_account
-                        || source.target_account != preview.target_account
-                        || !source_amount.is_finite()
-                        || !transfer_amount.is_finite()
-                        || (source_amount - transfer_amount).abs() >= 0.005
-                    {
-                        return Err("支付恢复记录与本次网费转入信息不一致，已停止操作".to_string());
-                    }
-                    // Store the journal's stable transaction id instead of a
-                    // provider payment id, which is deliberately cleared once
-                    // the payment reaches a terminal stage.
-                    transaction.parent_id = source.id.clone();
-                    config.recharge_transactions.transition(
-                        source_id,
-                        recharge_state::RechargeStage::PaymentConfirmed,
-                        chrono::Utc::now().timestamp(),
-                        "已确认支付到账，等待转入目标网费账户",
-                    )?;
-                }
-                config.recharge_transactions.upsert(transaction);
-                config.clone()
-            };
-            save_recharge_snapshot_verified(&app, &snapshot)?;
-            *state.campus_recharge_pending.lock().await = Some(pending);
-            rust_log(
-                &app,
-                &state,
-                "计费",
-                "校园卡与目标网费账户核对完成，等待用户确认",
-                "debug",
-            );
-            Ok(preview)
-        }
-        Err(error) => {
-            *state.campus_recharge_pending.lock().await = None;
-            rust_log(&app, &state, "计费", &error, "error");
-            Err(error)
-        }
-    }
-}
-
-#[tauri::command]
-async fn confirm_network_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    confirmation_id: String,
-) -> Result<campus_services::RechargeResult, String> {
-    ensure_campus_recharge_open()?;
-    ensure_billing_foreground(&state)?;
-    let _service_guard = state.campus_service_lock.lock().await;
-    ensure_billing_foreground(&state)?;
-    let pending = {
-        let mut slot = state.campus_recharge_pending.lock().await;
-        let current = slot
-            .as_ref()
-            .ok_or_else(|| "没有待确认的充值，请先重新核对账户与金额".to_string())?;
-        if current.confirmation_id() != confirmation_id {
-            return Err("充值确认标识不匹配，请重新核对账户与金额".to_string());
-        }
-        if current.expired() {
-            *slot = None;
-            return Err("充值确认已过期，请重新核对账户与金额".to_string());
-        }
-        slot.take()
-            .ok_or_else(|| "待确认的充值状态已失效，请重新核对账户与金额".to_string())?
-    };
-    rust_log(
-        &app,
-        &state,
-        "计费",
-        "用户已二次确认校园卡网费充值，正在提交一次性订单",
-        "info",
-    );
-    transition_recharge_transaction_with_parent(
-        &app,
-        &state,
-        &confirmation_id,
-        recharge_state::RechargeStage::TransferSubmitted,
-        "已提交校园卡到网费账户的写操作",
-    )?;
-    let result = match tokio::time::timeout(
-        std::time::Duration::from_secs(45),
-        campus_services::execute_recharge(pending),
-    )
-    .await
-    {
-        Ok(result) => result.map_err(campus_services::CampusServiceError::user_message),
-        Err(_) => {
-            let message =
-                "充值提交超过 45 秒，结果未知；请先查询校园卡和网费记录，不要立即重复充值"
-                    .to_string();
-            let _ = transition_recharge_transaction_with_parent(
-                &app,
-                &state,
-                &confirmation_id,
-                recharge_state::RechargeStage::Unknown,
-                &message,
-            );
-            return Err(message);
-        }
-    };
-    match &result {
-        Ok(_) => {
-            let _ = transition_recharge_transaction_with_parent(
-                &app,
-                &state,
-                &confirmation_id,
-                recharge_state::RechargeStage::Completed,
-                "校园卡网费充值成功",
-            );
-            rust_log(&app, &state, "计费", "校园卡网费充值成功", "success")
-        }
-        Err(error) => {
-            let _ = transition_recharge_transaction_with_parent(
-                &app,
-                &state,
-                &confirmation_id,
-                recharge_state::RechargeStage::Unknown,
-                error,
-            );
-            rust_log(&app, &state, "计费", error, "error")
-        }
-    }
-    result
-}
-
-#[tauri::command]
-async fn get_network_recharge_balances(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    target_account: String,
-    account_user: Option<String>,
-) -> Result<campus_services::RechargeBalanceSnapshot, String> {
-    let account = campus_service_target(&state, account_user.as_deref())?;
-    let _service_guard = state.campus_service_lock.lock().await;
-    let session_seed = campus_service_session_seed(&state, &account.user);
-    rust_log(
-        &app,
-        &state,
-        "计费",
-        "正在刷新校园卡余额与目标网费余额",
-        "debug",
-    );
-    let snapshot = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        campus_services::query_recharge_balances(
-            &account.user,
-            &account.pass,
-            &target_account,
-            session_seed,
-        ),
-    )
-    .await
-    .map_err(|_| "余额刷新超过 60 秒，已停止等待".to_string())?
-    .map_err(campus_services::CampusServiceError::user_message);
-    match snapshot {
-        Ok((snapshot, persisted)) => {
-            persist_campus_service_session(&app, &state, persisted);
-            rust_log(&app, &state, "计费", "充值后余额刷新完成", "success");
-            Ok(snapshot)
-        }
-        Err(error) => {
-            rust_log(&app, &state, "计费", &error, "error");
-            Err(error)
-        }
-    }
-}
-
-#[tauri::command]
-async fn cancel_network_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    confirmation_id: String,
-) -> Result<(), String> {
-    let mut slot = state.campus_recharge_pending.lock().await;
-    if slot
-        .as_ref()
-        .is_some_and(|pending| pending.confirmation_id() == confirmation_id)
-    {
-        *slot = None;
-        let _ = transition_recharge_transaction(
-            &app,
-            &state,
-            &confirmation_id,
-            recharge_state::RechargeStage::Cancelled,
-            "用户在提交前取消",
-        );
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn prepare_alipay_card_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    target_account: String,
-    amount: String,
-    account_user: Option<String>,
-) -> Result<campus_services::AlipayRechargePreview, String> {
-    ensure_campus_recharge_open()?;
-    let account = campus_service_target(&state, account_user.as_deref())?;
-    let _service_guard = state.campus_service_lock.lock().await;
-    let session_seed = campus_service_session_seed(&state, &account.user);
-    rust_log(
-        &app,
-        &state,
-        "计费",
-        "正在通过统一认证核对支付宝充值所用校园卡",
-        "info",
-    );
-    let prepared = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        campus_services::prepare_alipay_card_recharge(
-            &account.user,
-            &account.pass,
-            &amount,
-            session_seed,
-        ),
-    )
-    .await
-    .map_err(|_| "支付宝充值信息核对超过 60 秒，已取消本次请求".to_string())?
-    .map_err(campus_services::CampusServiceError::user_message);
-    match prepared {
-        Ok((pending, preview, persisted)) => {
-            persist_campus_service_session(&app, &state, persisted);
-            persist_recharge_transaction(
-                &app,
-                &state,
-                recharge_state::RechargeTransaction::prepared(
-                    preview.confirmation_id.clone(),
-                    "alipay",
-                    preview.payer_account.clone(),
-                    target_account.clone(),
-                    preview.amount.clone(),
-                    preview.card_balance.clone(),
-                    chrono::Utc::now().timestamp(),
-                ),
-            )?;
-            *state.campus_alipay_recharge_pending.lock().await = Some(pending);
-            rust_log(
-                &app,
-                &state,
-                "计费",
-                "支付宝充值校园卡信息核对完成，等待用户确认",
-                "debug",
-            );
-            Ok(preview)
-        }
-        Err(error) => {
-            *state.campus_alipay_recharge_pending.lock().await = None;
-            rust_log(&app, &state, "计费", &error, "error");
-            Err(error)
-        }
-    }
-}
-
-#[tauri::command]
-async fn confirm_alipay_card_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    confirmation_id: String,
-) -> Result<campus_services::AlipayRechargeResult, String> {
-    ensure_campus_recharge_open()?;
-    ensure_billing_foreground(&state)?;
-    let _service_guard = state.campus_service_lock.lock().await;
-    ensure_billing_foreground(&state)?;
-    let pending = {
-        let mut slot = state.campus_alipay_recharge_pending.lock().await;
-        let current = slot
-            .as_ref()
-            .ok_or_else(|| "没有待确认的支付宝充值，请先重新核对校园卡与金额".to_string())?;
-        if current.confirmation_id() != confirmation_id {
-            return Err("支付宝充值确认标识不匹配，请重新核对校园卡与金额".to_string());
-        }
-        if current.expired() {
-            *slot = None;
-            return Err("支付宝充值确认已过期，请重新核对校园卡与金额".to_string());
-        }
-        slot.take()
-            .ok_or_else(|| "待确认的支付宝充值状态已失效，请重新核对".to_string())?
-    };
-    rust_log(
-        &app,
-        &state,
-        "计费",
-        "用户已二次确认支付宝充值校园卡，正在创建一次性支付订单",
-        "info",
-    );
-    let result = match tokio::time::timeout(
-        std::time::Duration::from_secs(45),
-        campus_services::execute_alipay_card_recharge(pending),
-    )
-    .await
-    {
-        Ok(result) => result.map_err(campus_services::CampusServiceError::user_message),
-        Err(_) => {
-            let message =
-                "支付宝订单创建超过 45 秒，结果未知；请先检查校园卡充值记录，不要立即重复操作"
-                    .to_string();
-            let _ = transition_recharge_transaction(
-                &app,
-                &state,
-                &confirmation_id,
-                recharge_state::RechargeStage::Unknown,
-                &message,
-            );
-            return Err(message);
-        }
-    };
-    match &result {
-        Ok(payment) => {
-            let snapshot = {
-                let mut config = state.config.write().unwrap();
-                if let Some(transaction) = config
-                    .recharge_transactions
-                    .0
-                    .iter_mut()
-                    .find(|item| item.id == confirmation_id)
-                {
-                    transaction.stage = recharge_state::RechargeStage::HandedOff;
-                    transaction.payment_url = payment.payment_url.clone();
-                    transaction.updated_at = chrono::Utc::now().timestamp();
-                    transaction.note = "支付宝订单已创建，等待付款".to_string();
-                }
-                config.clone()
-            };
-            if let Err(error) = save_recharge_snapshot_verified(&app, &snapshot) {
-                let message = format!(
-                    "支付宝订单可能已经创建，但恢复记录未能安全保存（{error}）。本次不会打开支付入口；请勿重复创建订单，先刷新充值恢复状态"
-                );
-                rust_log(&app, &state, "计费", &message, "error");
-                return Err(message);
-            }
-            rust_log(&app, &state, "计费", "支付宝支付入口已安全生成", "success")
-        }
-        Err(error) => {
-            let _ = transition_recharge_transaction(
-                &app,
-                &state,
-                &confirmation_id,
-                recharge_state::RechargeStage::Unknown,
-                error,
-            );
-            rust_log(&app, &state, "计费", error, "error")
-        }
-    }
-    result
-}
-
-#[tauri::command]
-async fn cancel_alipay_card_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    confirmation_id: String,
-) -> Result<(), String> {
-    let mut slot = state.campus_alipay_recharge_pending.lock().await;
-    if slot
-        .as_ref()
-        .is_some_and(|pending| pending.confirmation_id() == confirmation_id)
-    {
-        *slot = None;
-        let _ = transition_recharge_transaction(
-            &app,
-            &state,
-            &confirmation_id,
-            recharge_state::RechargeStage::Cancelled,
-            "用户在创建支付宝订单前取消",
-        );
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn prepare_wechat_card_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    target_account: String,
-    amount: String,
-    account_user: Option<String>,
-) -> Result<campus_services::WechatRechargePreview, String> {
-    ensure_campus_recharge_open()?;
-    let account = campus_service_target(&state, account_user.as_deref())?;
-    let _service_guard = state.campus_service_lock.lock().await;
-    let session_seed = campus_service_session_seed(&state, &account.user);
-    rust_log(&app, &state, "计费", "正在核对微信充值所用校园卡", "info");
-    let prepared = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        campus_services::prepare_wechat_card_recharge(
-            &account.user,
-            &account.pass,
-            &target_account,
-            &amount,
-            session_seed,
-        ),
-    )
-    .await
-    .map_err(|_| "微信充值信息核对超过 60 秒，已取消本次请求".to_string())?
-    .map_err(campus_services::CampusServiceError::user_message);
-    match prepared {
-        Ok((pending, preview, persisted)) => {
-            persist_campus_service_session(&app, &state, persisted);
-            persist_recharge_transaction(
-                &app,
-                &state,
-                recharge_state::RechargeTransaction::prepared(
-                    preview.confirmation_id.clone(),
-                    "wechat",
-                    preview.payer_account.clone(),
-                    preview.target_account.clone(),
-                    preview.amount.clone(),
-                    preview.card_balance.clone(),
-                    chrono::Utc::now().timestamp(),
-                ),
-            )?;
-            *state.campus_wechat_recharge_pending.lock().await = Some(pending);
-            rust_log(
-                &app,
-                &state,
-                "计费",
-                "微信充值校园卡信息核对完成，等待用户确认",
-                "debug",
-            );
-            Ok(preview)
-        }
-        Err(error) => {
-            *state.campus_wechat_recharge_pending.lock().await = None;
-            rust_log(&app, &state, "计费", &error, "error");
-            Err(error)
-        }
-    }
-}
-
-#[tauri::command]
-async fn confirm_wechat_card_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    confirmation_id: String,
-) -> Result<campus_services::WechatRechargeResult, String> {
-    ensure_campus_recharge_open()?;
-    ensure_billing_foreground(&state)?;
-    let _service_guard = state.campus_service_lock.lock().await;
-    ensure_billing_foreground(&state)?;
-    let pending = {
-        let mut slot = state.campus_wechat_recharge_pending.lock().await;
-        let current = slot
-            .as_ref()
-            .ok_or_else(|| "没有待确认的微信充值，请先重新核对校园卡与金额".to_string())?;
-        if current.confirmation_id() != confirmation_id {
-            return Err("微信充值确认标识不匹配，请重新核对校园卡与金额".to_string());
-        }
-        if current.expired() {
-            *slot = None;
-            return Err("微信充值确认已过期，请重新核对校园卡与金额".to_string());
-        }
-        slot.take()
-            .ok_or_else(|| "待确认的微信充值状态已失效，请重新核对".to_string())?
-    };
-    rust_log(
-        &app,
-        &state,
-        "计费",
-        "用户已确认微信充值校园卡，正在创建一次性支付订单",
-        "info",
-    );
-    let result = match tokio::time::timeout(
-        std::time::Duration::from_secs(45),
-        campus_services::execute_wechat_card_recharge(pending),
-    )
-    .await
-    {
-        Ok(result) => result.map_err(campus_services::CampusServiceError::user_message),
-        Err(_) => {
-            let message =
-                "微信订单创建超过 45 秒，结果未知；请先检查校园卡充值记录，不要立即重复操作"
-                    .to_string();
-            let _ = transition_recharge_transaction(
-                &app,
-                &state,
-                &confirmation_id,
-                recharge_state::RechargeStage::Unknown,
-                &message,
-            );
-            return Err(message);
-        }
-    };
-    match result {
-        Ok((payment, result)) => {
-            let (payer, amount, openid, partner_jour_no) = payment.recovery_fields();
-            let snapshot = {
-                let mut config = state.config.write().unwrap();
-                if let Some(transaction) = config
-                    .recharge_transactions
-                    .0
-                    .iter_mut()
-                    .find(|item| item.id == confirmation_id)
-                {
-                    transaction.stage = recharge_state::RechargeStage::HandedOff;
-                    transaction.payment_id = result.payment_id.clone();
-                    transaction.payment_url = result.launch_url.clone();
-                    transaction.payer_account = payer.to_string();
-                    transaction.amount = amount.to_string();
-                    transaction.openid = openid.to_string();
-                    transaction.partner_jour_no = partner_jour_no.to_string();
-                    transaction.updated_at = chrono::Utc::now().timestamp();
-                    transaction.note = "微信订单已创建，等待付款".to_string();
-                }
-                config.clone()
-            };
-            *state.campus_wechat_payment_pending.lock().await = Some(payment);
-            if let Err(error) = save_recharge_snapshot_verified(&app, &snapshot) {
-                let message = format!(
-                    "微信订单可能已经创建，但恢复记录未能安全保存（{error}）。本次不会唤起微信；请勿重复创建订单，先刷新充值恢复状态"
-                );
-                rust_log(&app, &state, "计费", &message, "error");
-                return Err(message);
-            }
-            rust_log(
-                &app,
-                &state,
-                "计费",
-                "Tenpay 会话已续接并取得受信任的微信唤起地址",
-                "success",
-            );
-            Ok(result)
-        }
-        Err(error) => {
-            let _ = transition_recharge_transaction(
-                &app,
-                &state,
-                &confirmation_id,
-                recharge_state::RechargeStage::Unknown,
-                &error,
-            );
-            rust_log(&app, &state, "计费", &error, "error");
-            Err(error)
-        }
-    }
-}
-
-#[tauri::command]
-async fn check_wechat_card_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    payment_id: String,
-) -> Result<campus_services::WechatPaymentStatus, String> {
-    let _service_guard = state.campus_service_lock.lock().await;
-    let needs_restore = {
-        let slot = state.campus_wechat_payment_pending.lock().await;
-        slot.as_ref()
-            .is_none_or(|pending| pending.payment_id() != payment_id || pending.expired())
-    };
-    if needs_restore {
-        let transaction = state
-            .config
-            .read()
-            .unwrap()
-            .recharge_transactions
-            .find(&payment_id)
-            .cloned()
-            .ok_or_else(|| "没有可恢复的微信支付订单".to_string())?;
-        if transaction.method != "wechat" || !transaction.stage.is_recoverable() {
-            return Err("微信支付订单已结束或不可恢复".to_string());
-        }
-        let account = campus_service_target(&state, Some(&transaction.payer_account))?;
-        let session_seed = campus_service_session_seed(&state, &account.user);
-        let (pending, persisted) = campus_services::restore_wechat_card_recharge(
-            &transaction.payment_id,
-            &account.user,
-            &account.pass,
-            &transaction.amount,
-            &transaction.partner_jour_no,
-            session_seed,
-        )
-        .await
-        .map_err(campus_services::CampusServiceError::user_message)?;
-        persist_campus_service_session(&app, &state, persisted);
-        *state.campus_wechat_payment_pending.lock().await = Some(pending);
-    }
-    let mut slot = state.campus_wechat_payment_pending.lock().await;
-    let pending = slot
-        .as_mut()
-        .ok_or_else(|| "微信支付恢复失败".to_string())?;
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        campus_services::check_wechat_card_recharge(pending),
-    )
-    .await
-    .map_err(|_| "微信支付状态查询超时，请稍后重试".to_string())?
-    .map_err(campus_services::CampusServiceError::user_message);
-    match &result {
-        Ok(status) if status.status == "paid" => {
-            let _ = transition_recharge_transaction(
-                &app,
-                &state,
-                &payment_id,
-                recharge_state::RechargeStage::PaymentConfirmed,
-                "微信支付状态已确认成功",
-            );
-            rust_log(&app, &state, "计费", "微信支付状态已确认成功", "success")
-        }
-        Ok(_) => rust_log(&app, &state, "计费", "微信支付尚未完成", "debug"),
-        Err(error) => rust_log(&app, &state, "计费", error, "error"),
-    }
-    result
-}
-
-#[tauri::command]
-async fn cancel_wechat_card_recharge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
-    confirmation_id: Option<String>,
-    payment_id: Option<String>,
-) -> Result<(), String> {
-    if let Some(confirmation_id) = confirmation_id {
-        let mut slot = state.campus_wechat_recharge_pending.lock().await;
-        if slot
-            .as_ref()
-            .is_some_and(|pending| pending.confirmation_id() == confirmation_id)
-        {
-            *slot = None;
-            let _ = transition_recharge_transaction(
-                &app,
-                &state,
-                &confirmation_id,
-                recharge_state::RechargeStage::Cancelled,
-                "用户在创建微信订单前取消",
-            );
-        }
-    }
-    if let Some(payment_id) = payment_id {
-        let mut slot = state.campus_wechat_payment_pending.lock().await;
-        if slot
-            .as_ref()
-            .is_some_and(|pending| pending.payment_id() == payment_id)
-        {
-            *slot = None;
-        }
-        let stage = state
-            .config
-            .read()
-            .unwrap()
-            .recharge_transactions
-            .find(&payment_id)
-            .map(|transaction| transaction.stage.clone());
-        let transition = stage.and_then(recharge_state::stage_after_payment_context_closed);
-        if let Some((next, note)) = transition {
-            transition_recharge_transaction(&app, &state, &payment_id, next, note)?;
-        }
-    }
-    Ok(())
-}
-
 fn billing_credential_stamp(state: &AppState) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let config = state.config.read().unwrap();
@@ -8849,6 +7661,7 @@ async fn disconnect_billing_session(
     current_session: Option<bool>,
     webvpn: Option<bool>,
 ) -> Result<String, String> {
+    device_usage::INTERACTIVE.notify_waiters();
     let _fetch_guard = state.billing_fetch_lock.lock().await;
     let (access, compatibility) = resolve_billing_access(
         &app,
@@ -8893,6 +7706,7 @@ async fn set_billing_mauth(
     current_session: Option<bool>,
     webvpn: Option<bool>,
 ) -> Result<String, String> {
+    device_usage::INTERACTIVE.notify_waiters();
     let _fetch_guard = state.billing_fetch_lock.lock().await;
     let (access, compatibility) = resolve_billing_access(
         &app,
@@ -9171,61 +7985,7 @@ fn get_current_network_state(state: tauri::State<Arc<AppState>>) -> serde_json::
 
 #[cfg(desktop)]
 fn refresh_tray_menu(app: &tauri::AppHandle, state: &AppState) {
-    use tauri::menu::{MenuBuilder, MenuItem};
-    let network_state = state.last_network_state.lock().unwrap().clone();
-    let state_name = match network_state.get("state").and_then(|value| value.as_str()) {
-        Some("Online") => "已联网",
-        Some("BjutCampus") => "校园网待认证",
-        _ => "离线",
-    };
-    let paused =
-        state.auto_login_paused_until.load(Ordering::SeqCst) > chrono::Utc::now().timestamp();
-    let config = state.config.read().unwrap().clone();
-    let status_item = match MenuItem::with_id(
-        app,
-        "status",
-        format!("状态：{state_name}"),
-        false,
-        None::<&str>,
-    ) {
-        Ok(item) => item,
-        Err(_) => return,
-    };
-    let mut builder = MenuBuilder::new(app)
-        .item(&status_item)
-        .separator()
-        .text("show", "显示主窗口")
-        .text("check", "立即检测网络")
-        .text("login", "立即登录")
-        .text(
-            "pause",
-            if paused {
-                "恢复自动登录"
-            } else {
-                "暂停自动登录 1 小时"
-            },
-        )
-        .separator();
-    for (index, account) in config
-        .accounts
-        .iter()
-        .enumerate()
-        .filter(|(_, account)| !account.is_disabled.unwrap_or(false))
-    {
-        let marker = if account.is_default { "✓" } else { " " };
-        builder = builder.text(
-            format!("account:{index}"),
-            format!("{marker} 首选账号：{}", account.user),
-        );
-    }
-    let menu = match builder.separator().text("quit", "退出").build() {
-        Ok(menu) => menu,
-        Err(_) => return,
-    };
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_menu(Some(menu));
-        let _ = tray.set_tooltip(Some(format!("BJUT-AL · {state_name}")));
-    }
+    desktop_tray::refresh(app, state);
 }
 
 #[cfg(desktop)]
@@ -9367,7 +8127,7 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         let _ = show_native_notification(&app, "校园网登录已阻止", &reason);
         return;
     }
-    let accounts = accounts_for_profile(config.accounts, profile.as_ref());
+    let accounts = automatic_accounts(&state, config.accounts, profile.as_ref());
     let account = accounts
         .iter()
         .find(|account| account.is_default)
@@ -9463,7 +8223,7 @@ pub fn run() {
     let builder = tauri::Builder::default();
     // Register first: a second Windows process must exit before creating a
     // WebView, tray icon, credential store or background authentication loop.
-    #[cfg(target_os = "windows")]
+    #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || {
@@ -9478,6 +8238,8 @@ pub fn run() {
             // first window once it exists and its saved geometry is restored.
         });
     }));
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
     let builder = builder.setup(|_app| {
         #[cfg(target_os = "android")]
         _app.handle().plugin(tauri_plugin_barcode_scanner::init())?;
@@ -9515,7 +8277,13 @@ pub fn run() {
             }
         }
         let app_state = std::sync::Arc::new(AppState {
+            device_usage: Mutex::new(Default::default()),
+            #[cfg(target_os = "macos")]
+            tray_menu: Mutex::new(None),
             config: RwLock::new(AppConfig {
+                tray: Default::default(),
+                traffic_monitor_enabled: true,
+                prefer_remaining_flow: false,
                 saved_router: None,
                 preferred_interface: String::new(),
                 adaptive_network_checks: true,
@@ -9589,6 +8357,8 @@ pub fn run() {
             pending_discovered_account: tokio::sync::Mutex::new(None),
         });
         _app.manage(app_state.clone());
+        #[cfg(desktop)]
+        quick_actions::install(_app.handle());
 
         let app_handle = _app.handle().clone();
         let state_clone = app_state.clone();
@@ -9615,6 +8385,10 @@ pub fn run() {
         }
 
         initialize_log_history(&app_handle, &state_clone);
+        #[cfg(desktop)]
+        native_network::start(app_handle.clone(), state_clone.clone());
+        *state_clone.device_usage.lock().unwrap() = device_usage::load(&app_handle);
+        tauri::async_runtime::spawn(device_usage::run(app_handle.clone(), state_clone.clone()));
 
         // Start background loop task in Rust
         let loop_handle = app_handle.clone();
@@ -9843,7 +8617,7 @@ pub fn run() {
             }
 
             // System Tray Setup
-            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+            use tauri::tray::TrayIconBuilder;
 
             let mut tray_builder = TrayIconBuilder::with_id("main-tray");
 
@@ -9865,10 +8639,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
                     if event.id == "show" {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        let _ = desktop_tray::show_window(app);
                     } else if event.id == "check" {
                         let state = app.state::<Arc<AppState>>().inner().clone();
                         let app_handle = app.clone();
@@ -9929,24 +8700,7 @@ pub fn run() {
                         app.exit(0);
                     }
                 })
-                .on_tray_icon_event(|tray_event, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray_event.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
-                            } else {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                        }
-                    }
-                })
+                .on_tray_icon_event(desktop_tray::click)
                 .build(_app)?;
 
             refresh_tray_menu(_app.handle(), &state_clone);
@@ -10033,30 +8787,34 @@ pub fn run() {
             cancel_manual_login,
             logout_current_campus_session,
             get_user_info,
-            get_remaining_flow,
+            billing_commands::get_remaining_flow,
             discover_current_campus_account,
             accept_discovered_campus_account,
             reject_discovered_campus_account,
-            get_billing_center,
+            billing_commands::get_billing_center,
+            device_usage::get_device_usage,
+            device_usage::get_usage_history,
+            diagnostic_tools::trace_network,
+            quick_actions::take_quick_action,
             begin_billing_webvpn,
             answer_image_captcha,
             verify_billing_webvpn,
             cancel_billing_webvpn,
-            query_billing_records,
-            perform_billing_action,
-            prepare_network_recharge,
-            confirm_network_recharge,
-            get_recoverable_recharges,
-            finish_recharge_recovery,
-            get_network_recharge_balances,
-            cancel_network_recharge,
-            prepare_alipay_card_recharge,
-            confirm_alipay_card_recharge,
-            cancel_alipay_card_recharge,
-            prepare_wechat_card_recharge,
-            confirm_wechat_card_recharge,
-            check_wechat_card_recharge,
-            cancel_wechat_card_recharge,
+            billing_commands::query_billing_records,
+            billing_commands::perform_billing_action,
+            campus_commands::prepare_network_recharge,
+            campus_commands::confirm_network_recharge,
+            campus_commands::get_recoverable_recharges,
+            campus_commands::finish_recharge_recovery,
+            campus_commands::get_network_recharge_balances,
+            campus_commands::cancel_network_recharge,
+            campus_commands::prepare_alipay_card_recharge,
+            campus_commands::confirm_alipay_card_recharge,
+            campus_commands::cancel_alipay_card_recharge,
+            campus_commands::prepare_wechat_card_recharge,
+            campus_commands::confirm_wechat_card_recharge,
+            campus_commands::check_wechat_card_recharge,
+            campus_commands::cancel_wechat_card_recharge,
             disconnect_billing_session,
             set_billing_mauth,
             notify_network_change,
@@ -10435,6 +9193,9 @@ mod tests {
             }))
             .unwrap();
         let config = AppConfig {
+            tray: Default::default(),
+            traffic_monitor_enabled: true,
+            prefer_remaining_flow: false,
             saved_router: Some(config_model::SavedRouter {
                 address: "http://192.168.1.1".into(),
                 username: "root".into(),

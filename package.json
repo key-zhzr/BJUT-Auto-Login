@@ -7,13 +7,15 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "tsc && vite build",
-    "test:frontend": "node --experimental-strip-types scripts/test-update-utils.mjs && node --experimental-strip-types --test scripts/test-router-billing.mjs scripts/test-router-experience.mjs",
+    "test:frontend": "node --experimental-strip-types scripts/test-update-utils.mjs && node --experimental-strip-types --test scripts/test-router-billing.mjs scripts/test-router-experience.mjs scripts/test-device-usage.mjs scripts/test-config-crypto.mjs",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "check:versions": "node scripts/check-versions.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "site:build": "node website/build.mjs",
     "site:test": "node --test website/downloads.test.mjs",
-    "site:refresh-downloads": "node website/refresh-release.mjs"
+    "site:refresh-downloads": "node website/refresh-release.mjs",
+    "test:browser": "playwright test"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -30,6 +32,7 @@
     "sortablejs": "^1.15.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@tauri-apps/cli": "^2",
     "@types/qrcode": "^1.5.5",
     "@types/sortablejs": "^1.15.9",

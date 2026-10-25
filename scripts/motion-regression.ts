@@ -85,9 +85,13 @@ export async function runMotionRegression(note:(text:string)=>void){
     try {
       for(const value of ['basic','apple27','winui']) {
         document.documentElement.dataset.theme=value;await frame();await frame();
+        // Theme changes animate navigation geometry. Measure scrollbars only
+        // after that unrelated transition has reached its final width.
+        await document.fonts.ready;
+        await until(()=>document.getElementById('nav')!.getAnimations().length===0);
         const card=page.firstElementChild as HTMLElement,short=card.getBoundingClientRect(),bounds=main.getBoundingClientRect();
         card.style.height='2400px';await frame();await frame();const tall=card.getBoundingClientRect();
-        assert(Math.abs(short.left-tall.left)<1 && Math.abs(short.width-tall.width)<1,`${value} 长短页面宽度或横向位置不同`);
+        assert(Math.abs(short.left-tall.left)<1 && Math.abs(short.width-tall.width)<1,`${value} 长短页面宽度或横向位置不同：${JSON.stringify({short:{left:short.left,width:short.width},tall:{left:tall.left,width:tall.width}})}`);
         assert(Math.abs((tall.left+tall.right-bounds.left-bounds.right)/2)<1.5,`${value} 滚动条影响内容居中`);
         card.style.height='';
         const overlay=document.createElement('div');overlay.className='modal-overlay';overlay.innerHTML='<div class="modal-content glass-card"><h3>弹窗</h3><div>内容</div></div>';document.body.append(overlay);

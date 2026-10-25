@@ -43,7 +43,7 @@ pub(crate) struct BillingLoginRecord {
     pub amount: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BillingOnlineSession {
     pub login_at: String,

@@ -1,0 +1,21 @@
+[
+  {
+    "sessionId": "fixture-private-1",
+    "loginTime": "2026-10-25 08:00:00",
+    "ip": "192.0.2.10",
+    "ipv6": "2001:db8::10",
+    "mac": "aabbccddeeff",
+    "useTime": 120,
+    "downFlow": 3072,
+    "upFlow": 1024
+  },
+  {
+    "sessionId": "fixture-private-2",
+    "loginTime": "2026-10-25 09:00:00",
+    "ip": "192.0.2.11",
+    "mac": "00:11:22:33:44:55",
+    "useTime": "60",
+    "downFlow": "2048",
+    "upFlow": "1024"
+  }
+]

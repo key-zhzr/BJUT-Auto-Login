@@ -46,6 +46,25 @@ jobs:
       - name: Run frontend regression tests
         run: npm run test:frontend
 
+      - name: Check release version sources
+        run: npm run check:versions
+
+      - name: Install browser for isolated UI regression
+        run: npx playwright install --with-deps chromium
+
+      - name: Run App browser regression
+        run: npm run test:browser -- --project=app
+
+      - name: Upload UI failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: app-ui-regression
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
       - name: Verify website downloads and build previews
         run: |
           npm run site:test

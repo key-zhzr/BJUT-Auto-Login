@@ -99,6 +99,7 @@
       <main id="main-content">
         <!-- Dashboard -->
         <section id="dashboard" class="page active">
+          <aside id="onboarding-resume" class="glass-card onboarding-resume" hidden><span>首次设置尚未完成</span><button id="btn-onboarding-continue" class="btn btn-secondary btn-sm" type="button">继续设置</button></aside>
           <header class="page-header">
             <h1>控制台</h1>
             <button id="btn-open-billing" class="btn btn-secondary btn-sm" type="button">
@@ -245,6 +246,8 @@
               </div>
             </div>
           </div>
+        <section id="device-usage-panel" class="glass-card device-usage-panel" aria-live="polite"></section>
+          <section id="router-device-usage-panel" class="glass-card device-usage-panel" hidden aria-live="polite"></section>
         </section>
 
         <!-- Billing center (opened from the dashboard to keep mobile navigation compact) -->
@@ -716,6 +719,7 @@
           </section>
             </div>
           </div>
+
         </section>
 
         <!-- Accounts -->
@@ -872,6 +876,8 @@
               <p>检查网络链路与账号健康状态</p>
             </div>
             <div class="diagnostics-actions">
+              <button id="btn-route-trace" class="btn btn-secondary btn-sm" type="button">链路检查</button>
+              <button id="btn-issue-preview" class="btn btn-secondary btn-sm" type="button">反馈问题</button>
               <button id="btn-copy-diagnostics" class="btn btn-secondary btn-sm" disabled><i data-lucide="copy"></i> 复制报告</button>
               <button id="btn-run-diagnostics" class="btn btn-primary"><i data-lucide="activity"></i> 开始诊断</button>
             </div>
@@ -929,10 +935,16 @@
                 <p>网络接口 → 校园环境 → DNS → 互联网 → 认证网关</p>
               </div>
             </div>
+            <div id="diagnostic-advice" class="transfer-note" aria-live="polite"></div>
             <div id="diagnostic-steps" class="diagnostic-steps">
               <div class="diagnostic-empty">运行诊断后将在此展示每一步结果</div>
             </div>
           </section>
+        <section id="network-quality-panel" class="glass-card">
+          <h3>网络质量 · 最近 24 小时</h3>
+          <div id="network-quality-content" class="transfer-note"></div>
+          <label><input id="quality-alerts" type="checkbox"> 持续异常与恢复时提醒</label>
+        </section>
         </section>
 
         <!-- Logs -->
@@ -1261,6 +1273,10 @@
 
             <div class="settings-group glass-card" style="margin-top: 1rem;">
               <h3>高级设置</h3>
+              <div class="setting-item"><div class="setting-info"><h4>优先使用余量充足的账号</h4><p>使用新鲜计费数据排序，单独指定的账号顺序优先。</p></div><label class="switch"><input id="setting-prefer-flow" type="checkbox"><span class="slider round"></span></label></div>
+              <div class="setting-item"><div class="setting-info"><h4>设备流量统计</h4><p>每分钟从计费系统读取各设备已用流量。Android 在前台更新。</p></div><label class="switch"><input id="setting-traffic-monitor" type="checkbox" checked><span class="slider round"></span></label></div>
+              <div class="setting-item"><div class="setting-info"><h4>首次使用引导</h4><p>查看账号、网络与后台运行的设置步骤。</p></div><button class="btn btn-secondary btn-sm" id="btn-onboarding" type="button">重新查看</button></div>
+              <div class="setting-item desktop-only"><div class="setting-info"><h4>菜单栏与托盘</h4><p>选择图标、显示内容和快捷菜单。</p></div><button class="btn btn-secondary btn-sm" id="btn-tray-preferences" type="button">自定义</button></div>
               <div class="setting-item">
                 <div class="setting-info">
                   <h4>更多控制台选项</h4>

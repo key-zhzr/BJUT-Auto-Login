@@ -4,6 +4,20 @@ export interface ConfigTransferChoice {
   passphrase: string;
 }
 
+// 备份密码强度提示：按既有产品决策保留 3 个字符的提交下限，这里只在
+// 输入过程中给出非阻断的风险提示（导出的备份文件会落在外部，短口令
+// 面对离线爆破几乎没有抵抗力）。
+export function passphraseStrengthHint(passphrase: string): string {
+  const chars=Array.from(passphrase);
+  if(chars.length===0)return '';
+  if(chars.length<3)return `仅 ${chars.length} 个字符，至少需要 3 个字符。`;
+  const onlyDigits=/^\d+$/.test(passphrase);
+  const repeated=chars.every(char=>char===chars[0]);
+  if(chars.length>=12&&!onlyDigits&&!repeated)return '强度良好：更长的密码能有效保护导出的备份文件。';
+  if(chars.length>=8&&!onlyDigits&&!repeated)return '强度中等：建议使用 12 位以上、混合字符的密码。';
+  return '强度偏低：短密码或纯数字密码无法阻止拿到备份文件的人快速尝试，建议使用 12 位以上、混合字符的密码。';
+}
+
 export function chooseConfigTransfer(mode:'import'|'export'): Promise<ConfigTransferChoice|null> {
   if(document.getElementById('config-transfer-modal'))return Promise.resolve(null);
   return new Promise(resolve => {
@@ -21,13 +35,18 @@ export function chooseConfigTransfer(mode:'import'|'export'): Promise<ConfigTran
         <label><input type="radio" name="method" value="qr">${exporting?'二维码':'扫描二维码'}</label>
       </div></fieldset>
       <div class="form-group"><label for="transfer-password">备份密码</label><input id="transfer-password" type="password" autocomplete="off" data-sensitive-password required></div>
-      ${exporting?'<div class="form-group"><label for="transfer-confirm">确认密码</label><input id="transfer-confirm" type="password" autocomplete="off" data-sensitive-password required></div><p class="transfer-note">至少 3 个字符，建议使用更长的密码。</p>':'<p class="transfer-note">填写导出时设置的备份密码。</p>'}
+      ${exporting?'<div class="form-group"><label for="transfer-confirm">确认密码</label><input id="transfer-confirm" type="password" autocomplete="off" data-sensitive-password required></div><p class="transfer-note">至少 3 个字符，建议使用更长的密码。</p><p class="transfer-note transfer-strength" role="status" aria-live="polite"></p>':'<p class="transfer-note">填写导出时设置的备份密码。</p>'}
       <p class="transfer-error" role="alert"></p>
       <div class="modal-actions"><button class="btn btn-secondary" type="button" data-cancel>取消</button><button class="btn btn-primary" type="submit">${exporting?'导出':'导入'}</button></div>
     </form>`;
     const form=overlay.querySelector('form')!;
     const password=overlay.querySelector<HTMLInputElement>('#transfer-password')!;
     const confirm=overlay.querySelector<HTMLInputElement>('#transfer-confirm');
+    const strength=overlay.querySelector<HTMLParagraphElement>('.transfer-strength');
+    if(strength) {
+      const updateStrength=()=> { strength.textContent=passphraseStrengthHint(password.value); };
+      password.addEventListener('input',updateStrength);
+    }
     let closing=false;
     let enterFrame=0;
     const finish=(result:ConfigTransferChoice|null)=> {

@@ -1,4 +1,6 @@
 interface AndroidBridgeApi {
+  takeQuickAction?(): string | null;
+  updateWidgetStatus?(status: string): void;
   setClipboardText(text: string): boolean;
   getClipboardText(): string;
   refreshNotificationSettings?(): void;
@@ -29,6 +31,7 @@ interface Navigator {
 }
 
 interface Window {
+  __nativeQuickAction?: (action: string) => void;
   __TAURI__?: unknown;
   AndroidBridge?: AndroidBridgeApi;
   __showResumeMask?: (hiddenForMs?: number) => void;

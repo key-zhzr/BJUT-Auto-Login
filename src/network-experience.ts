@@ -144,6 +144,7 @@ export class NetworkExperience {
     if (this.health && generation === this.health.generation && probeId === this.health.probeId && Date.parse(health.checkedAt) < Date.parse(this.health.checkedAt)) return;
     this.generation = generation; this.probeId = probeId;
     this.health = health;
+    window.dispatchEvent(new CustomEvent('network-quality-sample',{detail:health}));
     for (const [id, family] of [['ipv4-health', health.ipv4], ['ipv6-health', health.ipv6]] as const) {
       const node = element(id); node.className = `family-status ${family.status}`;
       node.querySelector('strong')!.textContent = compactFamilyLabel(family);

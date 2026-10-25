@@ -983,6 +983,8 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
         "pushplus_delay",
         "pushplus_interval",
         "billing_background",
+        "traffic_monitor",
+        "prefer_remaining_flow",
         "billing_interval",
         "billing_alerts",
         "balance_threshold",
@@ -1003,7 +1005,8 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
         "expected_bssid",
     ];
     let allowed: &[&str] = match operation {
-        "logs" | "settings" | "pushplus_test" | "billing_cached" | "maintenance_info" => &[],
+        "logs" | "settings" | "pushplus_test" | "pushplus_status" | "billing_cached"
+        | "traffic" | "maintenance_info" => &[],
         "maintenance_start" => &["action", "prepared", "backup"],
         "maintenance_poll" => &["ticket"],
         "save_settings" => &service,
