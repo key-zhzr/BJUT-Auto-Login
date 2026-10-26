@@ -302,9 +302,22 @@ async fn sample_account(
             sample_at,
         )),
     );
-    let result = match futures_util::future::select(interrupted, Box::pin(query)).await {
-        futures_util::future::Either::Left(_) => None,
-        futures_util::future::Either::Right((result, _)) => {
+    let foreground_query = async {
+        if cfg!(target_os = "android") {
+            crate::billing_runtime::run_read_while_foreground(&state.is_in_background, async {
+                Ok(query.await)
+            })
+            .await
+            .ok()
+        } else {
+            Some(query.await)
+        }
+    };
+    let result = match futures_util::future::select(interrupted, Box::pin(foreground_query)).await {
+        futures_util::future::Either::Left(_) | futures_util::future::Either::Right((None, _)) => {
+            None
+        }
+        futures_util::future::Either::Right((Some(result), _)) => {
             Some((account, chrono::Utc::now().timestamp(), result))
         }
     };
