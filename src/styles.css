@@ -4381,19 +4381,6 @@ body.is-android .desktop-only { display:none; }
 .device-usage-panel { padding:1.25rem;margin-block:1rem;min-width:0; }
 .device-usage-panel[hidden] { display:none; }
 .device-usage-panel h3 { margin:0 0 .6rem;font-size:1rem; }
-.device-usage-account h4 { margin:1rem 0 .35rem;overflow-wrap:anywhere; }
-.device-usage-note { font-size:.8rem;color:var(--text-muted);margin:.4rem 0;overflow-wrap:anywhere; }
-.device-usage-list { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:.6rem; }
-.device-usage-row { padding:.8rem;border:1px solid var(--card-border);border-radius:12px;display:flex;gap:.75rem;justify-content:space-between;min-width:0; }
-.device-usage-row > div { min-width:0; }
-.device-usage-row > div:last-child { text-align:right;flex-shrink:0; }
-.device-usage-row strong,.device-usage-row small { display:block;font-size:.85rem;overflow-wrap:anywhere; }
-.device-usage-row small { font-size:.75rem;color:var(--text-muted);margin-top:.35rem; }
-.device-usage-filters { display:flex;gap:.4rem;flex-wrap:wrap;margin-top:1rem; }
-.usage-history-chart { display:grid;gap:.35rem;max-height:260px;overflow:auto; }
-.usage-history-bar { display:grid;grid-template-columns:3.5rem minmax(0,1fr) 6rem;align-items:center;gap:.6rem;font-size:.75rem; }
-.usage-history-bar > span:nth-child(2) { height:.4rem;border-radius:8px;background:linear-gradient(to right,var(--primary-color) var(--usage-width),var(--card-border) var(--usage-width)); }
-.usage-history-bar > strong { text-align:right; }
 .trace-hop { display:grid;grid-template-columns:2rem minmax(0,1fr);gap:.35rem .5rem;padding:.65rem;border-bottom:1px solid var(--card-border); }
 .trace-hop strong { grid-row:span 2;align-self:center;width:1.5rem;height:1.5rem;border-radius:50%;background:var(--primary-color);color:white;text-align:center;line-height:1.5rem; }
 .trace-hop span,.trace-hop small { overflow-wrap:anywhere; }

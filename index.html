@@ -1273,8 +1273,9 @@
 
             <div class="settings-group glass-card" style="margin-top: 1rem;">
               <h3>高级设置</h3>
-              <div class="setting-item"><div class="setting-info"><h4>优先使用余量充足的账号</h4><p>使用新鲜计费数据排序，单独指定的账号顺序优先。</p></div><label class="switch"><input id="setting-prefer-flow" type="checkbox"><span class="slider round"></span></label></div>
-              <div class="setting-item"><div class="setting-info"><h4>设备流量统计</h4><p>每分钟从计费系统读取各设备已用流量。Android 在前台更新。</p></div><label class="switch"><input id="setting-traffic-monitor" type="checkbox" checked><span class="slider round"></span></label></div>
+              <div class="setting-item"><div class="setting-info"><h4>优先使用余量充足的账号</h4><p>依据已开启统计取得的新鲜计费数据排序，独立账号顺序优先。</p></div><label class="switch"><input id="setting-prefer-flow" type="checkbox"><span class="slider round"></span></label></div>
+              <div class="setting-item"><div class="setting-info"><h4>设备流量统计</h4><p>开启后每分钟记录计费流量并绘制曲线。Android 在前台更新。</p></div><label class="switch"><input id="setting-traffic-monitor" type="checkbox"><span class="slider round"></span></label></div>
+              <div class="setting-item"><div class="setting-info"><h4>流量统计范围</h4></div><div class="traffic-scope"><label><input type="radio" name="setting-traffic-scope" value="local" checked>仅本机设备</label><label><input type="radio" name="setting-traffic-scope" value="all">全部在线设备</label></div></div>
               <div class="setting-item"><div class="setting-info"><h4>首次使用引导</h4><p>查看账号、网络与后台运行的设置步骤。</p></div><button class="btn btn-secondary btn-sm" id="btn-onboarding" type="button">重新查看</button></div>
               <div class="setting-item desktop-only"><div class="setting-info"><h4>菜单栏与托盘</h4><p>选择图标、显示内容和快捷菜单。</p></div><button class="btn btn-secondary btn-sm" id="btn-tray-preferences" type="button">自定义</button></div>
               <div class="setting-item">

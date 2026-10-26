@@ -14,7 +14,7 @@ fn credential_stamp(password: &str) -> [u8; 32] {
 pub(crate) struct AccountUsage {
     pub account: String,
     pub updated_at: i64,
-    pub devices: Vec<crate::billing::BillingOnlineSession>,
+    pub devices: Vec<UsageDevice>,
     pub error: Option<String>,
     #[serde(default)]
     pub balance: String,
@@ -26,6 +26,125 @@ pub(crate) struct AccountUsage {
     pub(crate) next_attempt: i64,
     #[serde(skip)]
     pub(crate) credential_stamp: [u8; 32],
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsageDevice {
+    #[serde(flatten)]
+    pub device: crate::billing::BillingOnlineSession,
+    #[serde(default)]
+    pub interface_id: String,
+    #[serde(default)]
+    pub interface_name: String,
+    #[serde(default)]
+    pub local: bool,
+}
+fn classify(
+    device: crate::billing::BillingOnlineSession,
+    adapters: &[crate::network_inventory::NetworkAdapter],
+) -> UsageDevice {
+    let matches = |address: &str, known: &str| {
+        address
+            .parse::<std::net::IpAddr>()
+            .ok()
+            .zip(known.parse::<std::net::IpAddr>().ok())
+            .is_some_and(|(a, b)| a == b)
+    };
+    let adapter = adapters.iter().find(|adapter| {
+        adapter.connected
+            && matches!(
+                adapter.transport.as_str(),
+                "wifi" | "ethernet" | "cellular" | "mobile"
+            )
+            && adapter
+                .ipv4
+                .iter()
+                .chain(&adapter.ipv6)
+                .any(|ip| matches(&device.ip, ip) || matches(&device.ipv6, ip))
+    });
+    let identity = if device.mac.is_empty() {
+        device.ip.clone()
+    } else {
+        device.mac.replace([':', '-'], "").to_ascii_lowercase()
+    };
+    let interface_id = adapter.map_or_else(|| format!("device:{identity}"), |a| a.id.clone());
+    let interface_name = adapter.map_or_else(
+        || {
+            format!(
+                "其他设备 {}",
+                if device.mac.is_empty() {
+                    &device.ip
+                } else {
+                    &device.mac
+                }
+            )
+        },
+        |a| {
+            if a.name == a.interface_name {
+                a.name.clone()
+            } else {
+                format!("{} ({})", a.name, a.interface_name)
+            }
+        },
+    );
+    UsageDevice {
+        device,
+        interface_id,
+        interface_name,
+        local: adapter.is_some(),
+    }
+}
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsageReport {
+    enabled: bool,
+    scope: String,
+    accounts: Vec<AccountUsage>,
+    history: Vec<crate::usage_history::DailyUsage>,
+    series: Vec<crate::usage_history::UsagePoint>,
+}
+#[tauri::command]
+pub(crate) fn get_usage_report(state: tauri::State<'_, Arc<crate::AppState>>) -> UsageReport {
+    let config = state.config.read().unwrap();
+    if !config.traffic_monitor_enabled {
+        return UsageReport {
+            enabled: false,
+            scope: config.traffic_monitor_scope.clone(),
+            accounts: vec![],
+            history: vec![],
+            series: vec![],
+        };
+    }
+    let store = state.device_usage.lock().unwrap();
+    let all = config.traffic_monitor_scope == "all";
+    let accounts = config
+        .accounts
+        .iter()
+        .filter_map(|a| store.0.get(&a.user))
+        .cloned()
+        .map(|mut a| {
+            a.devices.retain(|d| all || d.local);
+            a
+        })
+        .collect();
+    let saved = |account: &str| config.accounts.iter().any(|a| a.user == account);
+    UsageReport {
+        enabled: config.traffic_monitor_enabled,
+        scope: config.traffic_monitor_scope.clone(),
+        accounts,
+        history: store
+            .1
+            .rows()
+            .into_iter()
+            .filter(|r| saved(&r.account) && (all || r.local))
+            .collect(),
+        series: store
+            .1
+            .points()
+            .into_iter()
+            .filter(|r| saved(&r.account) && (all || r.local))
+            .collect(),
+    }
 }
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Store(
@@ -42,13 +161,13 @@ fn path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 }
 pub(crate) fn load(app: &tauri::AppHandle) -> Store {
     path(app)
-        .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.len() < 8 * 1024 * 1024))
+        .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.len() < 16 * 1024 * 1024))
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|bytes| serde_json::from_slice::<Store>(&bytes).ok())
         .map(|mut store| {
             for item in store.0.values_mut() {
                 for device in &mut item.devices {
-                    device.session_id.clear();
+                    device.device.session_id.clear();
                 }
             }
             store
@@ -93,6 +212,7 @@ pub(crate) fn get_usage_history(
                 .accounts
                 .iter()
                 .any(|account| account.user == row.account)
+                && (config.traffic_monitor_scope == "all" || row.local)
         })
         .collect()
 }
@@ -105,10 +225,17 @@ pub(crate) fn get_device_usage(state: tauri::State<'_, Arc<crate::AppState>>) ->
         .accounts
         .iter()
         .filter_map(|a| store.0.get(&a.user).cloned())
+        .map(|mut a| {
+            a.devices
+                .retain(|d| config.traffic_monitor_scope == "all" || d.local);
+            a
+        })
         .collect()
 }
 
 pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
+    let mut previous_scope = String::new();
+    let mut paused = true;
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         // Android foreground policy also applies to silent billing reads.
@@ -116,8 +243,16 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
             continue;
         }
         let config = state.config.read().unwrap().clone();
-        if !config.traffic_monitor_enabled {
-            continue;
+        if !config.traffic_monitor_enabled
+            || previous_scope != config.traffic_monitor_scope
+            || paused
+        {
+            state.device_usage.lock().unwrap().1.pause();
+            previous_scope = config.traffic_monitor_scope.clone();
+            paused = !config.traffic_monitor_enabled;
+            if paused {
+                continue;
+            }
         }
         let now = chrono::Utc::now().timestamp();
         let account = {
@@ -171,13 +306,27 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
             futures_util::future::Either::Right((result, _)) => result,
         };
         // Do not publish a response for credentials removed/changed in flight.
-        if !state
-            .config
-            .read()
-            .unwrap()
-            .accounts
-            .iter()
-            .any(|a| a.user == account.user && a.pass == account.pass)
+        if !{
+            let current = state.config.read().unwrap();
+            current.traffic_monitor_enabled
+                && current.traffic_monitor_scope == config.traffic_monitor_scope
+                && current
+                    .accounts
+                    .iter()
+                    .any(|a| a.user == account.user && a.pass == account.pass)
+        } {
+            continue;
+        }
+        let adapters = tokio::task::spawn_blocking(crate::network_inventory::adapters)
+            .await
+            .unwrap_or_default();
+        let current = state.config.read().unwrap();
+        if !current.traffic_monitor_enabled
+            || current.traffic_monitor_scope != config.traffic_monitor_scope
+            || !current
+                .accounts
+                .iter()
+                .any(|a| a.user == account.user && a.pass == account.pass)
         {
             continue;
         }
@@ -197,9 +346,13 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
         }
         match result {
             Ok(Ok((overview, devices))) => {
-                item.devices = devices;
+                item.devices = devices
+                    .into_iter()
+                    .map(|device| classify(device, &adapters))
+                    .filter(|device| config.traffic_monitor_scope == "all" || device.local)
+                    .collect();
                 for device in &mut item.devices {
-                    device.session_id.clear();
+                    device.device.session_id.clear();
                 }
                 item.balance = overview.balance;
                 item.remaining_flow = overview.remaining_flow;
@@ -241,3 +394,45 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
     }
 }
 use tauri::Emitter;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn local_identity_uses_physical_addresses_and_normalizes_ipv6() {
+        let adapters = vec![
+            crate::network_inventory::NetworkAdapter {
+                id: "en7".into(),
+                name: "USB LAN".into(),
+                interface_name: "en7".into(),
+                transport: "ethernet".into(),
+                ipv4: vec!["172.26.1.10".into()],
+                ipv6: vec!["2001:da8:216::a".into()],
+                connected: true,
+                ..Default::default()
+            },
+            crate::network_inventory::NetworkAdapter {
+                id: "tun0".into(),
+                transport: "vpn".into(),
+                ipv4: vec!["198.18.0.1".into()],
+                connected: true,
+                ..Default::default()
+            },
+        ];
+        let device = crate::billing::BillingOnlineSession {
+            login_at: "one".into(),
+            ip: "2001:da8:216:0:0:0:0:a".into(),
+            ipv6: String::new(),
+            mac: String::new(),
+            duration_minutes: "1".into(),
+            used_flow_mb: "10".into(),
+            session_id: String::new(),
+        };
+        let local = classify(device.clone(), &adapters);
+        assert!(local.local);
+        assert_eq!(local.interface_id, "en7");
+        let mut other = device;
+        other.ip = "198.18.0.1".into();
+        assert!(!classify(other, &adapters).local);
+    }
+}

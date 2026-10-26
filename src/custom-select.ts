@@ -14,6 +14,7 @@ export class CustomSelect {
   private highlightedOption: HTMLElement | null = null;
   private scrollFrame: number | null = null;
   private closeTimer: number | null = null;
+  private scrollPositions = new WeakMap<Element, {top: number; left: number}>();
   onChangeCallbacks: ((value: string) => void)[] = [];
 
   private options() { return this.allOptions.filter(option => option.getAttribute('aria-disabled') !== 'true'); }
@@ -95,6 +96,10 @@ export class CustomSelect {
     this.optionsContainer.getBoundingClientRect();
     this.element.classList.remove('menu-positioning');
     this.element.classList.add('open'); this.trigger.setAttribute('aria-expanded', 'true');
+    this.scrollPositions = new WeakMap();
+    for (let parent = this.element.parentElement; parent; parent = parent.parentElement) {
+      this.scrollPositions.set(parent, {top: parent.scrollTop, left: parent.scrollLeft});
+    }
     this.highlight(Math.max(0, this.options().findIndex(option => option.dataset.value === this._value)), keyboard);
   }
   private prepareOptions() {
@@ -173,7 +178,12 @@ export class CustomSelect {
       document.addEventListener('scroll', event => {
         const current = CustomSelect.openInstance;
         if (current && event.target instanceof Element && !current.optionsContainer.contains(event.target)
-          && event.target.contains(current.element)) current.close();
+          && event.target.contains(current.element)) {
+          const before = current.scrollPositions.get(event.target);
+          // Focusing a trigger can queue a scroll event before it opens. Its
+          // offset is already captured above; it must not close the new menu.
+          if (!before || Math.abs(before.top-event.target.scrollTop) > .5 || Math.abs(before.left-event.target.scrollLeft) > .5) current.close();
+        }
       }, {capture:true,passive:true});
       CustomSelect.outsideHandlerInstalled = true;
     }

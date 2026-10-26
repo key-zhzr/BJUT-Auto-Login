@@ -37,8 +37,9 @@ const fields: Field[] = [
   {key:'pushplus_delay',label:'异常持续时间（秒）',hint:'短暂断网不提醒；账号被拒绝等明确错误会立即提醒',min:10,max:3600,default:'60'},
   {key:'pushplus_interval',label:'重复提醒间隔（秒）',min:60,max:86400,default:'3600'},
   {key:'billing_background',label:'后台计费检查',hint:'App 关闭后，路由器仍定期检查各账号余额和流量',flag:true,default:'0'},
-  {key:'traffic_monitor',label:'设备流量统计',hint:'每分钟从计费系统读取各设备已用流量',flag:true,default:'1'},
-  {key:'prefer_remaining_flow',label:'优先使用余量充足的账号',hint:'使用新鲜计费数据排序，独立账号顺序优先',flag:true,default:'0'},
+  {key:'traffic_monitor',label:'设备流量统计',hint:'每分钟从计费系统读取各设备已用流量',flag:true,default:'0'},
+  {key:'traffic_scope',label:'流量统计范围',default:'local',choices:[['local','仅路由器上游'],['all','全部在线设备']]},
+  {key:'prefer_remaining_flow',label:'优先使用余量充足的账号',hint:'依据已开启统计取得的新鲜计费数据排序，独立账号顺序优先',flag:true,default:'0'},
   {key:'billing_interval',label:'计费检查间隔（秒）',min:900,max:86400,default:'21600'},
   {key:'billing_alerts',label:'用量不足时推送',hint:'通过已配置的 PushPlus 提醒，每个账号每天最多一次',flag:true,default:'1'},
   {key:'balance_threshold',label:'余额提醒线（元）',min:0,max:999999,default:'5'},
@@ -114,6 +115,7 @@ export class RouterAdmin {
     if(this.snapshot && JSON.stringify(this.snapshot.capabilities)!==JSON.stringify(snapshot.capabilities))this.configuration=null;
     this.snapshot=snapshot;
   }
+  invalidateSettings(){this.configuration=null;}
   resume(){this.maintenance.resume();}
   disconnect() {this.generation++;this.snapshot=null;this.configuration=null;this.controls.forEach(c=>c.close());this.controls.clear();this.closeEditor();this.maintenance.close();}
   private supports(capability:string) {return this.snapshot?.capabilities?.includes(capability) || false;}
@@ -132,8 +134,9 @@ export class RouterAdmin {
     const common=document.getElementById('router-service-common')!, more=document.getElementById('router-service-more')!;
     this.maintenance.close();this.controls.forEach(c=>c.close());this.controls.clear();common.replaceChildren();more.replaceChildren();
     for (const definition of fields) {
+      if(definition.key==='traffic_scope'&&!this.supports('traffic_charts'))continue;
       if (definition.key.startsWith('pushplus_') && !this.supports('pushplus')) continue;
-      if(['traffic_monitor','prefer_remaining_flow'].includes(definition.key)&&!this.supports('device_usage'))continue;
+      if(['traffic_monitor','traffic_scope','prefer_remaining_flow'].includes(definition.key)&&!this.supports('device_usage'))continue;
       if (/^(billing_|balance_threshold|flow_threshold)/.test(definition.key) && !this.supports('billing_background')) continue;
       if (definition.key.startsWith('log_') && definition.key!=='log_level' && !this.supports('log_settings')) continue;
       if (!this.supports('uplink_manage') && !legacy.has(definition.key)) continue;

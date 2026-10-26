@@ -35,3 +35,54 @@ test('first-use guide and tray settings keep reversible drafts',async({page})=>{
   await expect(page.locator('#tray-preferences-dialog')).toHaveCount(0);
   await expect(page.locator('#settings .page-header')).toBeVisible();
 });
+for(const [platform,width,height] of [['macos',1280,900],['android',390,844]] as const){
+  test(`${platform}: opt-in billing traffic curves, interfaces and scope`,async({page})=>{
+    await page.setViewportSize({width,height});
+    await page.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());
+    await page.goto(`http://127.0.0.1:1433/scripts/app-regression.html?platform=${platform}`);
+    await expect(page.locator('#qa-run')).toBeVisible();
+    await page.getByRole('button',{name:'隐藏验收面板',exact:true}).click();
+    const panel=page.locator('#device-usage-panel');
+    await expect(panel.getByRole('button',{name:'开启统计',exact:true})).toBeVisible();
+    await expect(panel.locator('.traffic-content')).toBeHidden();
+    await panel.getByRole('button',{name:'开启统计',exact:true}).click();
+    await expect(panel.locator('.traffic-line')).toHaveCount(1);
+    const choose=async(name:string,value:string)=>{
+      await panel.evaluate(async root=>{await Promise.all(root.getAnimations().map(animation=>animation.finished.catch(()=>{})));});
+      await panel.getByRole('combobox',{name,exact:true}).click();
+      await page.locator('main').dispatchEvent('scroll');
+      await panel.locator(`.custom-select.open [data-value="${value}"]`).click({timeout:5000});
+    };
+    await choose('曲线','interfaces');await expect(panel.locator('.traffic-line')).toHaveCount(2);
+    await panel.getByText('USB LAN (en7)',{exact:true}).first().click();
+    await expect(panel.locator('.traffic-line')).toHaveCount(1);
+    await choose('流量显示','cumulative');
+    await panel.getByRole('button',{name:'全部在线设备',exact:true}).click();
+    await expect(panel.locator('.traffic-interfaces')).toContainText('其他设备');
+    await page.waitForTimeout(5500);
+    await expect(panel.getByRole('combobox',{name:'流量显示',exact:true})).toContainText('所选范围累计');
+    await expect(panel.locator('.traffic-line')).toHaveCount(1);
+    await panel.locator('.traffic-plot').focus();await page.keyboard.press('End');
+    await expect(panel.locator('.traffic-tooltip')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await choose('统计尺度','month');
+    await expect(panel.locator('.traffic-line')).toHaveCount(1);
+    await expect(panel.locator('.traffic-content')).toContainText('2.00 GB');
+    await choose('统计尺度','minute');
+    await panel.screenshot({path:`artifacts.local/traffic-${platform}.png`});
+    if(platform==='macos'){
+      const before=await panel.evaluate(node=>getComputedStyle(node).color);
+      await page.locator('[data-target=settings]').first().click();
+      await page.locator('#setting-color-mode .custom-select-trigger').click();
+      await page.locator('#setting-color-mode .custom-option[data-value=dark]').click();
+      await page.locator('[data-target=dashboard]').first().click();
+      expect(await panel.evaluate(node=>getComputedStyle(node).color)).not.toBe(before);
+      const selected=await panel.getByRole('button',{name:'全部在线设备',exact:true}).evaluate(node=>getComputedStyle(node).backgroundColor);
+      const unselected=await panel.getByRole('button',{name:'仅本机设备',exact:true}).evaluate(node=>getComputedStyle(node).backgroundColor);
+      expect(selected).not.toBe(unselected);
+      await panel.screenshot({path:'artifacts.local/traffic-macos-dark.png'});
+    }
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth)).toBeLessThanOrEqual(1);
+    await panel.getByRole('button',{name:'暂停统计',exact:true}).click();await expect(panel.locator('.traffic-content')).toBeHidden();
+  });
+}

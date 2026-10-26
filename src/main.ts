@@ -775,6 +775,12 @@ function scheduleVpnMaximumRollback() {
   }, Math.min(delay, 2_147_000_000));
 }
 
+function updateUsagePreferences() {
+  const enabled=localStorage.getItem('bjut_traffic_monitor_enabled')==='true';
+  (document.getElementById('setting-traffic-monitor') as HTMLInputElement).checked=enabled;
+  document.querySelectorAll<HTMLInputElement>('input[name="setting-traffic-scope"]').forEach(input=>{input.checked=input.value===(localStorage.getItem('bjut_traffic_monitor_scope')||'local');});
+}
+
 function syncConfigToRust(): Promise<void> {
   if (!window.__TAURI__) return Promise.resolve();
   const balanceThreshold = parseFloat(localStorage.getItem('bjut_balance_alert_threshold') || '10');
@@ -783,7 +789,8 @@ function syncConfigToRust(): Promise<void> {
   // slower IPC call from overwriting a newer account edit.
   const config = {
     tray: getTrayPreferences(),
-    traffic_monitor_enabled:localStorage.getItem('bjut_traffic_monitor_enabled')!=='false',
+    traffic_monitor_enabled:localStorage.getItem('bjut_traffic_monitor_enabled')==='true',
+    traffic_monitor_scope:localStorage.getItem('bjut_traffic_monitor_scope') || 'local',
     prefer_remaining_flow:localStorage.getItem('bjut_prefer_remaining_flow')==='true',
     accounts: getAccounts().map(account => ({ ...account })),
     preferred_interface: localStorage.getItem('bjut_preferred_interface') || '',
@@ -856,10 +863,12 @@ async function loadConfigFromRust(): Promise<boolean> {
     ]);
     if (!config) return false;
     loadTrayPreferences(config.tray);
-    localStorage.setItem('bjut_traffic_monitor_enabled',String(config.traffic_monitor_enabled!==false));
+    localStorage.setItem('bjut_traffic_monitor_scope',config.traffic_monitor_scope==='all'?'all':'local');
+    updateUsagePreferences();
+    localStorage.setItem('bjut_traffic_monitor_enabled',String(config.traffic_monitor_enabled===true));
     localStorage.setItem('bjut_prefer_remaining_flow',String(config.prefer_remaining_flow===true));
     (document.getElementById('setting-prefer-flow') as HTMLInputElement).checked=config.prefer_remaining_flow===true;
-    (document.getElementById('setting-traffic-monitor') as HTMLInputElement).checked=config.traffic_monitor_enabled!==false;
+    (document.getElementById('setting-traffic-monitor') as HTMLInputElement).checked=config.traffic_monitor_enabled===true;
 
     const backendAccounts: AccountView[] = (config.accounts || []).map((account: Partial<AccountView>) => ({
       user: String(account.user || ''),
@@ -2048,15 +2057,26 @@ async function init() {
   routerWorkbench = setupRouterControl(() => accountsCache, message => log('路由协作', message), customConfirm);
   setupEventListeners();
   setupTrayPreferences(syncConfigToRust);
-  setupDeviceUsage();
+  setupDeviceUsage(syncConfigToRust);
   setupAdvancedDiagnostics();
   setupNetworkQuality();
   setupQuickActions(activatePage);
   document.getElementById('setting-prefer-flow')!.addEventListener('change',async event=>{const input=event.target as HTMLInputElement;const previous=localStorage.getItem('bjut_prefer_remaining_flow');input.disabled=true;localStorage.setItem('bjut_prefer_remaining_flow',String(input.checked));try{await syncConfigToRust();}catch{localStorage.setItem('bjut_prefer_remaining_flow',previous||'false');input.checked=previous==='true';}finally{input.disabled=false;}});
+  window.addEventListener('usage-preferences', updateUsagePreferences);
+  updateUsagePreferences();
   document.getElementById('setting-traffic-monitor')!.addEventListener('change',async event=>{
-    const input=event.target as HTMLInputElement;const previous=localStorage.getItem('bjut_traffic_monitor_enabled');input.disabled=true;
-    localStorage.setItem('bjut_traffic_monitor_enabled',String(input.checked));try{await syncConfigToRust();}catch{localStorage.setItem('bjut_traffic_monitor_enabled',previous||'true');input.checked=previous!=='false';}finally{input.disabled=false;}
+    const input=event.target as HTMLInputElement, previous=localStorage.getItem('bjut_traffic_monitor_enabled'); input.disabled=true;
+    localStorage.setItem('bjut_traffic_monitor_enabled',String(input.checked));
+    try{await syncConfigToRust();window.dispatchEvent(new Event('usage-preferences'));}
+    catch{localStorage.setItem('bjut_traffic_monitor_enabled',previous||'false');input.checked=previous==='true';}
+    finally{input.disabled=false;}
   });
+  document.querySelectorAll<HTMLInputElement>('input[name="setting-traffic-scope"]').forEach(input=>input.addEventListener('change',async()=>{
+    const previous=localStorage.getItem('bjut_traffic_monitor_scope')||'local';
+    localStorage.setItem('bjut_traffic_monitor_scope',input.value);
+    try{await syncConfigToRust();window.dispatchEvent(new Event('usage-preferences'));}
+    catch{localStorage.setItem('bjut_traffic_monitor_scope',previous);updateUsagePreferences();}
+  }));
   const onboarding=setupOnboarding({accounts:()=>accountsCache.length,navigate:activatePage,android:IS_ANDROID,desktop:!IS_ANDROID});
   setupEventDrivenNetworkDetection();
   renderAccounts();

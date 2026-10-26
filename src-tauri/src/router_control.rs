@@ -984,6 +984,7 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
         "pushplus_interval",
         "billing_background",
         "traffic_monitor",
+        "traffic_scope",
         "prefer_remaining_flow",
         "billing_interval",
         "billing_alerts",
@@ -1078,6 +1079,7 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
                                 })
                         })
                     }),
+                "traffic_scope" => matches!(value.as_str(), Some("local" | "all")),
                 "refresh" => value.is_boolean(),
                 "ticket" => value.as_str().is_some_and(valid_token),
                 "account" | "uplink" => value
@@ -1087,9 +1089,18 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
                     .as_str()
                     .is_some_and(|v| v.len() <= 12 && v.bytes().all(|b| b.is_ascii_alphanumeric())),
                 "direction" => matches!(value.as_str(), Some("up" | "down")),
-                "enabled" | "managed_routes" | "mwan3" | "strict_network" | "log_web"
-                | "pushplus_enabled" | "pushplus_online" | "pushplus_failure"
-                | "billing_background" | "billing_alerts" => {
+                "enabled"
+                | "managed_routes"
+                | "mwan3"
+                | "strict_network"
+                | "log_web"
+                | "pushplus_enabled"
+                | "pushplus_online"
+                | "pushplus_failure"
+                | "billing_background"
+                | "billing_alerts"
+                | "traffic_monitor"
+                | "prefer_remaining_flow" => {
                     matches!(value.as_str(), Some("0" | "1"))
                 }
                 _ => value

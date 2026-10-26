@@ -33,7 +33,7 @@ const cfg = { accounts: [
   { user: '25000001', hasPassword: true, isDefault: true, isDisabled: false },
   { user: '25000002', hasPassword: true, isDefault: false, isDisabled: true },
   ...Array.from({length:6}, (_, i) => ({user:`2500000${i+3}`,hasPassword:true,isDefault:false,isDisabled:false})),
-], auto_login:false, check_interval:15, check_interval_bg:60, wifi_change_detect:true, log_level:'debug', theme:'basic', accent_color:'blue', color_mode:'light', vpn_compatibility:'high', whitelist:[], blacklist:[], network_profiles:[], preferred_interface:'', adaptive_network_checks:true, usage_alerts:false };
+], traffic_monitor_enabled:false, traffic_monitor_scope:'local', auto_login:false, check_interval:15, check_interval_bg:60, wifi_change_detect:true, log_level:'debug', theme:'basic', accent_color:'blue', color_mode:'light', vpn_compatibility:'high', whitelist:[], blacklist:[], network_profiles:[], preferred_interface:'', adaptive_network_checks:true, usage_alerts:false };
 function center(account: string) {
   return { account, overview:{account,balance:'23 元',remainingFlow:'18 GB',status:'正常',updatedAt:'测试数据',loginHistory:[],onlineSessions:[],warnings:[]},
     fetchedAt:'2026-09-15',queryStartDate:'2026-08-01',queryEndDate:'2026-09-15',queryYear:'2026',
@@ -60,7 +60,7 @@ async function fixtureCaptcha(title:string) {
 }
 const routerSnapshot = {
   version: '0.1.6', managementUrl:'https://192.0.2.1/cgi-bin/luci/admin/network/bjut-autologin/billing',
-  capabilities:['ports','billing','logs','settings','account_set','account_manage','uplink_manage','billing_records','billing_actions','uplink_actions','log_settings','operations','account_limits','pushplus','billing_background','billing_center','maintenance'],
+  capabilities:['ports','billing','logs','settings','account_set','account_manage','uplink_manage','billing_records','billing_actions','uplink_actions','log_settings','operations','account_limits','device_usage','traffic_charts','pushplus','billing_background','billing_center','maintenance'],
   ports:[{uplink:'dorm_a',device:'lan3',linkUp:1,speedMbps:'1000',rxBytes:'10000000000',txBytes:'2000000000'},
     {uplink:'dorm_b',device:'lan4',linkUp:1,speedMbps:'2500',rxBytes:'30000000000',txBytes:'5000000000'}],
   uplinks:[
@@ -77,7 +77,15 @@ const recordTickets = new Map<string, any>();
 const moduleTickets=new Map<string,string>();
 const bundlePolls=new Map<string,number>();
 let savedRouterInfo:any=new URL(location.href).searchParams.has('saved')?{address:'https://192.0.2.1',username:'root',certificate:'synthetic-pem',allowHttp:false}:null,routerFailures=0;
+function usageFixture(enabled:boolean,scope:string) {
+  const at=Math.floor(Date.now()/60000)*60;
+  const channels=[{account:'25000001',device:'a',interfaceId:'en7',interfaceName:'USB LAN (en7)',local:true},{account:'25000001',device:'b',interfaceId:'en0',interfaceName:'Wi-Fi (en0)',local:true},{account:'25000001',device:'c',interfaceId:'device:other',interfaceName:'其他设备 AA:BB:CC:00:11:22',local:false}];
+  return {enabled,scope,accounts:[{account:'25000001',updatedAt:at,devices:channels.filter(c=>scope==='all'||c.local).map((c,i)=>({...c,ip:`192.0.2.${20+i}`,usedFlowMb:'1234.5'}))}],history:[],series:channels.filter(c=>scope==='all'||c.local).flatMap((c,i)=>Array.from({length:90},(_,j)=>({...c,at:at-(89-j)*60,resolution:60,usedMb:Math.max(0,(Math.sin(j/8)+.5)*(i+1)*3+(j>55?j%9:0)),sampledSeconds:60})).concat([{...c,at:at-at%86400,resolution:86400,usedMb:(i+1)*1024,sampledSeconds:3600}]))};
+}
+let routerTrafficEnabled=false,routerTrafficScope='local';
 mockIPC(async (cmd, payload: any = {}) => {
+  if(cmd==='get_usage_report')return usageFixture(cfg.traffic_monitor_enabled,cfg.traffic_monitor_scope);
+  if(cmd==='sync_config'){cfg.traffic_monitor_enabled=payload.config.traffic_monitor_enabled===true;cfg.traffic_monitor_scope=payload.config.traffic_monitor_scope||'local';return;}
   if(cmd==='get_usage_history')return [];
   if(cmd==='trace_network')return {target:'192.0.2.1',available:true,timedOut:false,hops:[{index:1,address:'192.0.2.1',detail:'1 192.0.2.1 1 ms'}],output:''};
   if(cmd==='create_diagnostic_bundle')return '测试诊断包：账号和网络标识已脱敏';
@@ -116,7 +124,8 @@ mockIPC(async (cmd, payload: any = {}) => {
     }
     if (payload.operation === 'billing_poll') return {result:{state:'ready',message:'计费数据已更新',account:routerTickets.get(payload.args.ticket)==='dorm_b'?'25000002':'25000001',balance:'42.125',totalFlow:'40960',remainingFlow:'30720',accountStatus:'正常',package:'测试套餐'},sessions:[{sessionIndex:'0',ip:'192.0.2.20',mac:'00:00:00:00:00:01'}],sessionsAvailable:true};
     if (payload.operation === 'settings') return {service:{enabled:'1',interval:'20',timeout:'3',offline_confirmations:'2',managed_routes:'1',mwan3:'1'},uplinks:[{id:'dorm_a',enabled:'1',network:'wan14',network6:'wan16',login_type:'bjut-sushe',accounts:'account2 account1'},{id:'dorm_b',network:'wan24',enabled:'1'}]};
-    if(payload.operation==='traffic')return {accounts:[{account:'25000001',updatedAt:Math.floor(Date.now()/1000),devices:[{loginAt:'2026-10-25 12:00',ip:'192.0.2.30',mac:'AA-BB-CC-DD-EE-00',usedFlowMb:'2200'}]}]};
+    if(payload.operation==='save_settings'){if(payload.args.traffic_monitor!==undefined)routerTrafficEnabled=payload.args.traffic_monitor==='1';if(payload.args.traffic_scope)routerTrafficScope=payload.args.traffic_scope;return {state:'ready'};}
+    if(payload.operation==='traffic')return usageFixture(routerTrafficEnabled,routerTrafficScope);
     if (payload.operation === 'billing_cached') return {items:[]};
     if (payload.operation === 'pushplus_test') return {state:'ready',message:'模拟测试消息已排队'};
     if (payload.operation === 'maintenance_info') return {platform:{version:'0.1.6-r14',target:'mediatek/filogic',arch:'aarch64_cortex-a53',format:'apk'},backups:[{id:'backup-1792690000-12345678',createdAt:'2026-10-23 12:00:00',version:'0.1.6-r13'}]};

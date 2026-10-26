@@ -70,8 +70,11 @@ pub(crate) struct NetworkProfile {
 pub(crate) struct AppConfig {
     #[serde(default)]
     pub(crate) tray: crate::tray_settings::TraySettings,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub(crate) traffic_monitor_enabled: bool,
+    // Empty on installations predating explicit opt-in. Normalize once on load.
+    #[serde(default)]
+    pub(crate) traffic_monitor_scope: String,
     #[serde(default)]
     pub(crate) prefer_remaining_flow: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,4 +202,13 @@ pub(crate) fn default_flow_alert_threshold() -> f64 {
 
 pub(crate) fn default_android_notification_mode() -> String {
     "combined".to_string()
+}
+
+/// Earlier builds enabled collection by default. A missing scope requires a
+/// fresh explicit opt-in, rather than treating that old default as consent.
+pub(crate) fn normalize_traffic_monitor(config: &mut AppConfig) {
+    if !matches!(config.traffic_monitor_scope.as_str(), "local" | "all") {
+        config.traffic_monitor_enabled = false;
+        config.traffic_monitor_scope = "local".into();
+    }
 }

@@ -4079,10 +4079,15 @@ fn load_config(app: &tauri::AppHandle, state: &AppState) {
     let p = get_config_path(app);
     let disk_config = std::fs::read_to_string(p)
         .ok()
-        .and_then(|content| serde_json::from_str::<AppConfig>(&content).ok());
+        .and_then(|content| serde_json::from_str::<AppConfig>(&content).ok())
+        .map(|mut config| {
+            config_model::normalize_traffic_monitor(&mut config);
+            config
+        });
 
     match load_secure_config(app) {
         Ok(Some(mut config)) => {
+            config_model::normalize_traffic_monitor(&mut config);
             let migrated = disk_config
                 .as_ref()
                 .map(|legacy| merge_legacy_credentials(&mut config, legacy))
@@ -4151,6 +4156,7 @@ fn save_config(
     state: &AppState,
     mut new_cfg: AppConfig,
 ) -> Result<(), String> {
+    config_model::normalize_traffic_monitor(&mut new_cfg);
     new_cfg.tray.validate()?;
     if new_cfg.android_notification_mode != "separate" {
         new_cfg.android_notification_mode = default_android_notification_mode();
@@ -4234,6 +4240,16 @@ fn save_config(
     {
         let mut state_cfg = state.config.write().unwrap();
         *state_cfg = new_cfg.clone();
+    }
+    if previous_cfg.traffic_monitor_enabled != new_cfg.traffic_monitor_enabled
+        || previous_cfg.traffic_monitor_scope != new_cfg.traffic_monitor_scope
+    {
+        device_usage::INTERACTIVE.notify_waiters();
+        let mut store = state.device_usage.lock().unwrap();
+        store.1.pause();
+        for item in store.0.values_mut() {
+            item.next_attempt = 0;
+        }
     }
     if billing_credentials_changed {
         state.billing_sessions.lock().unwrap().clear();
@@ -8282,7 +8298,8 @@ pub fn run() {
             tray_menu: Mutex::new(None),
             config: RwLock::new(AppConfig {
                 tray: Default::default(),
-                traffic_monitor_enabled: true,
+                traffic_monitor_enabled: false,
+                traffic_monitor_scope: "local".into(),
                 prefer_remaining_flow: false,
                 saved_router: None,
                 preferred_interface: String::new(),
@@ -8793,6 +8810,7 @@ pub fn run() {
             reject_discovered_campus_account,
             billing_commands::get_billing_center,
             device_usage::get_device_usage,
+            device_usage::get_usage_report,
             device_usage::get_usage_history,
             diagnostic_tools::trace_network,
             quick_actions::take_quick_action,
@@ -8857,6 +8875,20 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn traffic_collection_requires_explicit_scope_and_opt_in() {
+        let mut config: AppConfig = serde_json::from_value(serde_json::json!({
+            "accounts":[],"auto_login":false,"check_interval":15,"check_interval_bg":60,"wifi_change_detect":true,"log_level":"info","whitelist":[],"blacklist":[],"usage_alerts":false,"traffic_monitor_enabled":true
+        })).unwrap();
+        config_model::normalize_traffic_monitor(&mut config);
+        assert!(!config.traffic_monitor_enabled);
+        assert_eq!(config.traffic_monitor_scope, "local");
+        config.traffic_monitor_enabled = true;
+        config.traffic_monitor_scope = "all".into();
+        config_model::normalize_traffic_monitor(&mut config);
+        assert!(config.traffic_monitor_enabled);
+    }
 
     #[test]
     fn billing_command_future_fits_stack_budget() {
@@ -9194,7 +9226,8 @@ mod tests {
             .unwrap();
         let config = AppConfig {
             tray: Default::default(),
-            traffic_monitor_enabled: true,
+            traffic_monitor_enabled: false,
+            traffic_monitor_scope: "local".into(),
             prefer_remaining_flow: false,
             saved_router: Some(config_model::SavedRouter {
                 address: "http://192.168.1.1".into(),

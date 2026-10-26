@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { DeviceUsageView } from './device-usage-view';
 import { recordRouterQuality } from './network-quality';
-import type { AccountUsage,DailyUsage } from './device-usage-model';
+import type { UsageReport } from './device-usage-model';
 import { RouterAdmin } from './router-admin';
 import { renderRouterBillingSummary } from './router-billing-summary';
 import { RouterBillingCenter } from './router-billing-center';
@@ -38,7 +38,7 @@ export class RouterWorkbench {
   private logsBusy = false;
   private disconnected=false;
   private receivedAt=Date.now();
-  private trafficView=new DeviceUsageView(byId('router-device-usage-panel'),'router');
+  private trafficView=new DeviceUsageView(byId('router-device-usage-panel'),'router',async(enabled,scope)=>{await this.request('save_settings',{traffic_monitor:enabled?'1':'0',traffic_scope:scope});this.admin.invalidateSettings();await this.refreshTraffic();});
   private trafficBusy=false;
   private lastTraffic=0;
 
@@ -66,7 +66,7 @@ export class RouterWorkbench {
     window.setInterval(() => {
       if (document.hidden || !this.snapshot) return;
       const page = document.querySelector('.page.active')?.id;
-      if(page==='dashboard'&&!this.disconnected&&this.supports('device_usage')&&Date.now()-this.lastTraffic>=5000)void this.refreshTraffic();
+      if(page==='dashboard'&&!this.disconnected&&this.supports('traffic_charts')&&Date.now()-this.lastTraffic>=5000)void this.refreshTraffic();
       if (page === 'logs' && Date.now() - this.lastLogsPoll >= 5000) void this.refreshLogs();
     },1000);
     window.addEventListener('focus', () => { if (!this.snapshot && !this.discoveryBusy) void this.discover(); });
@@ -95,7 +95,7 @@ export class RouterWorkbench {
     this.setControlsAvailable(true);
     const firstConnection = !this.snapshot;
     this.snapshot = data; this.admin.update(data);
-    setVisible(byId('router-device-usage-panel'),this.supports('device_usage'));
+    setVisible(byId('router-device-usage-panel'),this.supports('traffic_charts'));
     if(firstConnection){this.lastTraffic=0;void this.refreshTraffic();}
     if(reconnect)this.admin.resume();
     for (const id of ['router-dashboard','router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), true);
@@ -155,10 +155,10 @@ export class RouterWorkbench {
 
   private supports(capability: string): boolean { return this.snapshot?.capabilities?.includes(capability) || false; }
   private async refreshTraffic():Promise<void> {
-    if(this.trafficBusy||!this.snapshot||this.disconnected||!this.supports('device_usage'))return;
+    if(this.trafficBusy||!this.snapshot||this.disconnected||!this.supports('traffic_charts'))return;
     this.trafficBusy=true;this.lastTraffic=Date.now();const router=this.snapshot.managementUrl;
-    try{const data=await this.request<{accounts:AccountUsage[];history?:DailyUsage[]}>('traffic');if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.render(data.accounts||[],'',data.history||[]);}
-    catch{if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.render([],'暂时无法读取路由器设备流量。');}
+    try{const data=await this.request<UsageReport>('traffic');if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.update(data);}
+    catch{if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.showError('暂时无法读取路由器设备流量。');}
     finally{this.trafficBusy=false;}
   }
   private async request<T>(operation: string, args: Record<string,unknown> = {}): Promise<T> {
