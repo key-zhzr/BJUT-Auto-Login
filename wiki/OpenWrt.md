@@ -96,9 +96,11 @@ ls -l /etc/uhttpd.crt /etc/uhttpd.key
 详见[安装与配置](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/README.md)、[测试说明](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/TESTING.md)和[上游同步说明](https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/blob/main/openwrt/UPSTREAM.md)。路由端提供 LuCI 计费查询，充值等完整校园服务继续使用 App；SDK 编译通过不代表已经完成各设备的安装和校园网实测。
 
 
-## r21 源码新增内容
+## r21 / r22 源码新增内容
 
 本节描述 r21 源码（是否已发布以 Releases 为准）。流量统计默认关闭，需手动开启；旧版默认开启的配置也会暂停，直到重新选择范围并开启。每分钟从 jfself 读取，按上游接口或全部在线设备记录连续采样新增量，绘制分钟到月的曲线；支持新增/范围累计、接口合计/多曲线对比和 CSV 导出。分钟明细最多保留 48 小时，小时汇总 90 天，每日汇总 366 天；同时受设备数量和总行数上限约束。路由器上游流量包含经该出口转发的流量，无法据此拆分 NAT 后的各台局域网设备。历史每 15 分钟保存一次，正常停止服务时立即保存，突然断电可能丢失尚未保存的区间。
+
+r22 修复了通过 LuCI 或 App 保存统计开关、范围等路由设置时出现“设置项无效”的问题。已手动开启并保存范围的设备保持开启。
 
 可选余量优先只使用三分钟内成功取得的数据；上游单独指定的账号顺序仍优先。IPv6 单栈 lgn 仍需校园地址、指定接口和正常 TLS/门户验证，前缀委派只展示 netifd 实际收到的结果，认证不会保证获得 PD。
 
