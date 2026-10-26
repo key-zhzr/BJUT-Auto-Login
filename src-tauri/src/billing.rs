@@ -608,9 +608,11 @@ pub(crate) async fn query_device_usage(
     access: &BillingAccess,
     compatibility: VpnCompatibility,
     pool: &std::sync::Mutex<BillingSessionPool>,
+    sample_at: Option<tokio::time::Instant>,
 ) -> Result<(BillingSnapshot, Vec<BillingOnlineSession>), BillingError> {
     let (mut session, _) = acquire_billing_session(pool, access, compatibility).await?;
     let overview = parse_dashboard_bounded(&session.dashboard_html, &access.account).await?;
+    crate::device_usage::sample_barrier(sample_at).await;
     let result = get_dashboard_text(
         &mut session,
         "/Self/dashboard/getOnlineList",

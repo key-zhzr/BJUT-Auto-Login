@@ -269,10 +269,17 @@ type SampleResult = Result<
     tokio::time::error::Elapsed,
 >;
 
+pub(crate) async fn sample_barrier(at: Option<tokio::time::Instant>) {
+    if let Some(at) = at {
+        tokio::time::sleep_until(at).await;
+    }
+}
+
 async fn sample_account(
     state: &crate::AppState,
     config: &crate::AppConfig,
     account: crate::Account,
+    sample_at: Option<tokio::time::Instant>,
 ) -> Option<(crate::Account, i64, SampleResult)> {
     let interrupted = INTERACTIVE.notified();
     tokio::pin!(interrupted);
@@ -287,11 +294,12 @@ async fn sample_account(
         access = access.via_webvpn(vpn);
     }
     let query = tokio::time::timeout(
-        std::time::Duration::from_secs(20),
+        std::time::Duration::from_secs(35),
         Box::pin(crate::billing::query_device_usage(
             &access,
             crate::effective_vpn_compatibility(config),
             &state.billing_sessions,
+            sample_at,
         )),
     );
     let result = match futures_util::future::select(interrupted, Box::pin(query)).await {
@@ -307,7 +315,7 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
     use futures_util::{stream::FuturesUnordered, StreamExt};
     let mut previous_scope = String::new();
     let mut paused = true;
-    let mut next_round = tokio::time::Instant::now();
+    let mut next_round = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         if cfg!(target_os = "android") && state.is_in_background.load(Ordering::SeqCst) {
@@ -321,15 +329,16 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
             state.device_usage.lock().unwrap().1.pause();
             previous_scope = config.traffic_monitor_scope.clone();
             paused = !config.traffic_monitor_enabled;
-            next_round = tokio::time::Instant::now();
+            next_round = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
             if paused {
                 continue;
             }
         }
         let now = chrono::Utc::now().timestamp();
-        let round = tokio::time::Instant::now() >= next_round;
+        let round = tokio::time::Instant::now() + std::time::Duration::from_secs(15) >= next_round;
+        let sample_at = round.then_some(next_round);
         if round {
-            while next_round <= tokio::time::Instant::now() {
+            while next_round <= tokio::time::Instant::now() + std::time::Duration::from_secs(15) {
                 next_round += std::time::Duration::from_secs(60);
             }
         }
@@ -368,7 +377,7 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
             .unwrap_or_default();
         let mut queries = accounts
             .into_iter()
-            .map(|account| sample_account(&state, &config, account))
+            .map(|account| sample_account(&state, &config, account, sample_at))
             .collect::<FuturesUnordered<_>>();
         let mut changed = false;
         let mut completed = Vec::new();
@@ -485,6 +494,32 @@ use tauri::Emitter;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prepared_accounts_read_counters_at_the_same_boundary() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                use futures_util::future::join_all;
+                let boundary = tokio::time::Instant::now() + std::time::Duration::from_millis(120);
+                let times = join_all([10, 40, 75].into_iter().map(|preparation| async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(preparation)).await;
+                    sample_barrier(Some(boundary)).await;
+                    tokio::time::Instant::now()
+                }))
+                .await;
+                assert!(times.iter().all(|at| *at >= boundary));
+                assert!(
+                    times
+                        .iter()
+                        .max()
+                        .unwrap()
+                        .duration_since(*times.iter().min().unwrap())
+                        < std::time::Duration::from_millis(40)
+                );
+            });
+    }
     #[test]
     fn cohort_realigns_successes_without_overriding_error_backoff() {
         let mut item = AccountUsage {
