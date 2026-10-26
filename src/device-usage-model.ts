@@ -38,13 +38,26 @@ export interface UsagePoint {
     local: boolean;
     usedMb: number;
     sampledSeconds: number;
+    startedAt?: number;
+    endedAt?: number;
 }
+export interface UsageRetention { minuteHours: number; hourDays: number; dayDays: number; storageMb?: number; }
+export const defaultUsageRetention: UsageRetention = {minuteHours: 48, hourDays: 90, dayDays: 366,storageMb:64};
+export function usageStorageEstimate(devices: number, retention: UsageRetention): number {
+    // Includes the minute/hour/day rows and an atomic checkpoint copy.
+    return Math.ceil(Math.max(1, devices) * (retention.minuteHours * 60 + retention.hourDays * 24 + retention.dayDays) * 180 * 2);
+}
+export interface UsageSwitch { at: number; interfaceId: string; interfaceName: string; from: string; to: string; }
+export interface UsageQuery {start:number;end:number;resolution:number;monthly:boolean;}
 export interface UsageReport {
     enabled: boolean;
     scope: UsageScope;
     accounts: AccountUsage[];
     history: DailyUsage[];
     series: UsagePoint[];
+    metric?: string;
+    retention?: UsageRetention;
+    switches?: UsageSwitch[];
     timeline?: {
         channels: Omit<UsagePoint, 'at' | 'resolution' | 'usedMb' | 'sampledSeconds'>[];
         buckets: number[][];
@@ -54,8 +67,8 @@ export function normalizeUsageReport(report: UsageReport): UsageReport {
     const series = [...(report.series || [])];
     for (const row of report.timeline?.buckets || []) {
         const channel = report.timeline?.channels[row[0]];
-        if (!channel || row.length !== 5 || !row.every(Number.isFinite) || ![60, 3600, 86400].includes(row[1]) || row[3] < 0 || row[4] <= 0) continue;
-        series.push({...channel, resolution: row[1], at: row[2], usedMb: row[3], sampledSeconds: row[4]});
+        if (!channel || ![5,7].includes(row.length) || !row.every(Number.isFinite) || ![60, 3600, 86400].includes(row[1]) || row[3] < 0 || row[4] <= 0) continue;
+        series.push({...channel, resolution: row[1], at: row[2], usedMb: row[3], sampledSeconds: row[4], ...(row.length === 7 ? {startedAt:row[5],endedAt:row[6]} : {})});
     }
     // Scope is enforced by the sampler/API and again here for cached data from
     // an earlier all-device session. Unclassified legacy rows are not local.
@@ -74,13 +87,15 @@ export type UsageScale = typeof usageScales[number]['value'];
 export interface UsageChartOptions {
     scale: UsageScale;
     range: number;
-    mode: 'delta' | 'cumulative';
+    mode: 'delta' | 'cumulative' | 'monthly';
     presentation: 'sum' | 'interfaces';
     interfaces: string[] | null;
     account: string;
     now?: number;
+    start?: number;
+    end?: number;
 }
-export interface UsageCurve { id: string; name: string; points: (number | null)[]; totalMb: number; }
+export interface UsageCurve { id: string; name: string; points: (number | null)[]; totalMb: number; joinPrevious?: boolean[]; }
 export function usageBucket(at: number, scale: UsageScale): number {
     if (scale === 'month') {
         const date = new Date((at + 28800) * 1000);
@@ -97,41 +112,71 @@ export function usageInterfaces(points: UsagePoint[], account = ''): {id: string
     for (const point of points) if (!account || point.account === account) interfaces.set(point.interfaceId, point.interfaceName);
     return [...interfaces].map(([id, name]) => ({id, name})).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
 }
-export function buildUsageChart(rows: UsagePoint[], options: UsageChartOptions): { times: number[]; curves: UsageCurve[]; samples: number; totalMb: number } {
+export function usageMonthStart(at: number): number {return usageBucket(at,'month');}
+export function usageZoom(start: number, end: number, anchor: number, factor: number): [number, number] {
+    const width = Math.max(60, Math.min(3660*86400, (end-start)*factor));
+    const ratio = end > start ? Math.max(0,Math.min(1,(anchor-start)/(end-start))) : .5;
+    return [anchor-width*ratio,anchor+width*(1-ratio)];
+}
+export function buildUsageChart(rows: UsagePoint[], options: UsageChartOptions): { times: number[]; curves: UsageCurve[]; samples: number; totalMb: number; scale: UsageScale } {
     const now = options.now ?? Date.now() / 1000;
-    const scale = usageScales.find(item => item.value === options.scale)!;
-    const resolution = options.scale === 'month' || scale.seconds >= 86400 ? 86400 : scale.seconds >= 3600 ? 3600 : 60;
-    const start = usageBucket(now - options.range, options.scale), end = usageBucket(now, options.scale);
+    const requestedStart = options.start ?? now-options.range, requestedEnd = Math.min(now,options.end ?? now);
+    let scale = usageScales.find(item => item.value === options.scale)!;
+    while (scale.seconds && (requestedEnd-requestedStart)/scale.seconds>4500) scale=usageScales[Math.min(usageScales.indexOf(scale)+1,usageScales.length-1)];
+    const resolution = scale.value === 'month' || scale.seconds >= 86400 ? 86400 : scale.seconds >= 3600 ? 3600 : 60;
+    const start = usageBucket(requestedStart, scale.value), end = usageBucket(requestedEnd, scale.value);
     const times: number[] = [];
     for (let at = start; at <= end && times.length < 5000;) {
         times.push(at);
-        if (options.scale === 'month') {
+        if (scale.value === 'month') {
             const date = new Date((at + 28800) * 1000);
             at = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) / 1000 - 28800;
         } else at += scale.seconds;
     }
     const index = new Map(times.map((at, i) => [at, i])), curves = new Map<string, UsageCurve>();
+    const starts = new Map<string,number[]>(), ends = new Map<string,number[]>();
+    const accepted = rows.filter(row=>Number.isFinite(row.at)&&row.at<=now&&Number.isFinite(row.usedMb)&&row.usedMb>=0&&row.sampledSeconds>0&&Number.isFinite(row.sampledSeconds)&&(!options.account||row.account===options.account)&&(options.presentation!=='interfaces'||options.interfaces===null||options.interfaces.includes(row.interfaceId)));
     let samples = 0, totalMb = 0;
-    for (const row of rows) {
-        if (row.resolution !== resolution || !Number.isFinite(row.at) || row.at > now || !Number.isFinite(row.usedMb) || row.usedMb < 0 || row.sampledSeconds <= 0 || !Number.isFinite(row.sampledSeconds) || (options.account && row.account !== options.account)) continue;
-        if (options.presentation === 'interfaces' && options.interfaces !== null && !options.interfaces.includes(row.interfaceId)) continue;
-        const i = index.get(usageBucket(row.at, options.scale));
+    for (const row of accepted) {
+        if (row.resolution !== resolution || (row.endedAt ?? row.at)>requestedEnd) continue;
+        const i = index.get(usageBucket(row.at, scale.value));
         if (i === undefined) continue;
         const id = options.presentation === 'sum' ? 'sum' : row.interfaceId;
         const curve = curves.get(id) || { id, name: options.presentation === 'sum' ? '所有接口合计' : row.interfaceName, points: Array<number | null>(times.length).fill(null), totalMb: 0 };
         curve.points[i] = (curve.points[i] ?? 0) + row.usedMb;
         curve.totalMb += row.usedMb;
+        const left=starts.get(id)||Array<number>(times.length).fill(Infinity),right=ends.get(id)||Array<number>(times.length).fill(-Infinity);
+        if (Number.isFinite(row.startedAt)&&Number.isFinite(row.endedAt)&&row.endedAt!>=row.startedAt!) {left[i]=Math.min(left[i],row.startedAt!);right[i]=Math.max(right[i],row.endedAt!);}
+        starts.set(id,left);ends.set(id,right);
         curves.set(id, curve); totalMb += row.usedMb; samples++;
     }
     const ordered = [...curves.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
-    if (options.mode === 'cumulative') for (const curve of ordered) {
-        let sum = 0;
-        curve.points = curve.points.map(point => point === null ? null : (sum += point));
+    for (const curve of ordered) {
+        let previous=-1, sum=0, month=-1;
+        curve.joinPrevious=curve.points.map((point,i)=>{
+            if(point===null)return false;
+            const join=previous>=0&&(i===previous+1||(resolution===60&&starts.get(curve.id)![i]<=ends.get(curve.id)![previous]+1));
+            previous=i;return join;
+        });
+        if (options.mode === 'delta') continue;
+        curve.points = curve.points.map((point,i) => {
+            if(point===null)return null;
+            const currentMonth=usageMonthStart(times[i]);
+            if(options.mode==='monthly'&&month!==currentMonth){
+                month=currentMonth;sum=0;
+                const stop=times[i],day=usageBucket(stop,'day'),hour=usageBucket(stop,'hour');
+                for(const row of accepted){
+                    if((options.presentation==='interfaces'&&row.interfaceId!==curve.id)||row.at<month||row.at>=stop)continue;
+                    if((row.resolution===86400&&row.at<day)||(row.resolution===3600&&row.at>=day&&row.at<hour)||(row.resolution===60&&row.at>=hour))sum+=row.usedMb;
+                }
+            }
+            sum+=point;return sum;
+        });
     }
-    return { times, curves: ordered, samples, totalMb };
+    return { times, curves: ordered, samples, totalMb, scale:scale.value };
 }
 export function usageChartCsv(chart: ReturnType<typeof buildUsageChart>, mode: UsageChartOptions['mode']): string {
-    const rows: (string | number)[][] = [['时间（北京时间）', '接口', mode === 'delta' ? '采样新增流量（MB）' : '所选范围累计流量（MB）']];
+    const rows: (string | number)[][] = [['时间（北京时间）', '接口', mode === 'delta' ? '采样新增下载量（MB）' : mode==='monthly'?'当月累计下载量（MB）':'所选范围累计下载量（MB）']];
     chart.times.forEach((at, i) => chart.curves.forEach(curve => {
         if (curve.points[i] !== null) rows.push([new Date((at + 28800) * 1000).toISOString().slice(0, 19).replace('T', ' '), curve.name, curve.points[i]!.toFixed(3)]);
     }));

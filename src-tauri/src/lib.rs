@@ -3433,6 +3433,7 @@ fn emit_account_health(app: &tauri::AppHandle, state: &AppState) {
 }
 
 fn record_account_success(app: &tauri::AppHandle, state: &AppState, user: &str) {
+    device_usage::account_changed(state, user);
     let snapshot = {
         let mut health = state.account_health.lock().unwrap();
         let item = health.entry(user.to_string()).or_default();
@@ -8300,6 +8301,7 @@ pub fn run() {
                 tray: Default::default(),
                 traffic_monitor_enabled: false,
                 traffic_monitor_scope: "local".into(),
+                traffic_retention: crate::usage_history::Retention::default(),
                 prefer_remaining_flow: false,
                 saved_router: None,
                 preferred_interface: String::new(),
@@ -9228,6 +9230,7 @@ mod tests {
             tray: Default::default(),
             traffic_monitor_enabled: false,
             traffic_monitor_scope: "local".into(),
+            traffic_retention: crate::usage_history::Retention::default(),
             prefer_remaining_flow: false,
             saved_router: Some(config_model::SavedRouter {
                 address: "http://192.168.1.1".into(),

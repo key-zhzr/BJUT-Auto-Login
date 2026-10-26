@@ -16,7 +16,12 @@ export function presentationDialog(id: string, title: string) {
     overlay.append(form);
     let closed = false;
     const close = () => { if (closed)
-        return; closed = true; document.removeEventListener('keydown', keyboard); form.dispatchEvent(new Event('presentation-close')); overlay.classList.add('hidden'); window.setTimeout(() => { overlay.remove(); previous?.focus({ preventScroll: true }); }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 300); };
+        return; closed = true; document.removeEventListener('keydown', keyboard); form.dispatchEvent(new Event('presentation-close')); overlay.classList.add('hidden'); window.setTimeout(() => {
+            // A completed action can reveal the next control before this exit
+            // animation ends. Do not steal focus from that control afterwards.
+            const restore = overlay.contains(document.activeElement) || document.activeElement === document.body;
+            overlay.remove(); if (restore && previous?.isConnected) previous.focus({ preventScroll: true });
+        }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 300); };
     const keyboard = (event: KeyboardEvent) => {
         const overlays = Array.from(document.querySelectorAll('.modal-overlay:not(.hidden)'));
         if (overlays[overlays.length - 1] !== overlay)

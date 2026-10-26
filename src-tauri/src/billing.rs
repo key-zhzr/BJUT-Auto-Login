@@ -3697,11 +3697,8 @@ fn parse_online_sessions(text: &str) -> Result<Vec<BillingOnlineSession>, Billin
                 .and_then(value_as_f64)
                 .map(|value| format!("{:.0}", value / 60.0))
                 .unwrap_or_else(|| "--".to_string());
-            let used_flow_mb = match (
-                object.get("downFlow").and_then(value_as_f64),
-                object.get("upFlow").and_then(value_as_f64),
-            ) {
-                (Some(down), Some(up)) => format!("{:.3}", (down + up) / 1024.0),
+            let used_flow_mb = match object.get("downFlow").and_then(value_as_f64) {
+                Some(down) if down.is_finite() && down >= 0. => format!("{:.3}", down / 1024.0),
                 _ => "--".to_string(),
             };
             Ok(BillingOnlineSession {
@@ -4811,7 +4808,7 @@ mod tests {
                 .iter()
                 .map(|d| d.used_flow_mb.as_str())
                 .collect::<Vec<_>>(),
-            vec!["4.000", "3.000"]
+            vec!["3.000", "2.000"]
         );
         assert_eq!(devices[0].duration_minutes, "2");
         assert_eq!(devices[1].duration_minutes, "1");
@@ -4912,7 +4909,7 @@ mod tests {
         .unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].duration_minutes, "2");
-        assert_eq!(records[0].used_flow_mb, "1.500");
+        assert_eq!(records[0].used_flow_mb, "1.000");
         assert_eq!(records[0].session_id, "session-1");
     }
 

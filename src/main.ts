@@ -2,6 +2,7 @@ import { setupRouterControl } from './router-control';
 import { getTrayPreferences, loadTrayPreferences, setupTrayPreferences } from './tray-preferences';
 import { setupOnboarding } from './onboarding';
 import { setupDeviceUsage } from './device-usage-view';
+import {defaultUsageRetention,usageStorageEstimate,type UsageRetention} from './device-usage-model';
 import { setupAdvancedDiagnostics } from './advanced-diagnostics';
 import { setupQuickActions } from './quick-actions';
 import { setupNetworkQuality } from './network-quality';
@@ -779,7 +780,11 @@ function updateUsagePreferences() {
   const enabled=localStorage.getItem('bjut_traffic_monitor_enabled')==='true';
   (document.getElementById('setting-traffic-monitor') as HTMLInputElement).checked=enabled;
   document.querySelectorAll<HTMLInputElement>('input[name="setting-traffic-scope"]').forEach(input=>{input.checked=input.value===(localStorage.getItem('bjut_traffic_monitor_scope')||'local');});
+  const retention=getUsageRetention();
+  for(const [key,value] of Object.entries(retention)){const input=document.querySelector<HTMLInputElement>(`[data-usage-retention="${key}"]`);if(input)input.value=String(value);}
+  const estimate=document.getElementById('usage-storage-estimate');if(estimate)estimate.textContent=`每台设备预计约 ${(usageStorageEstimate(1,retention)/1048576).toFixed(1)} MB（含保存时临时空间）。存储上限 ${retention.storageMb} MB，达到上限时优先保留较新记录。`;
 }
+function getUsageRetention():UsageRetention{try{return {...defaultUsageRetention,...JSON.parse(localStorage.getItem('bjut_traffic_retention')||'{}')};}catch{return {...defaultUsageRetention};}}
 
 function syncConfigToRust(): Promise<void> {
   if (!window.__TAURI__) return Promise.resolve();
@@ -791,6 +796,7 @@ function syncConfigToRust(): Promise<void> {
     tray: getTrayPreferences(),
     traffic_monitor_enabled:localStorage.getItem('bjut_traffic_monitor_enabled')==='true',
     traffic_monitor_scope:localStorage.getItem('bjut_traffic_monitor_scope') || 'local',
+    traffic_retention:getUsageRetention(),
     prefer_remaining_flow:localStorage.getItem('bjut_prefer_remaining_flow')==='true',
     accounts: getAccounts().map(account => ({ ...account })),
     preferred_interface: localStorage.getItem('bjut_preferred_interface') || '',
@@ -864,6 +870,7 @@ async function loadConfigFromRust(): Promise<boolean> {
     if (!config) return false;
     loadTrayPreferences(config.tray);
     localStorage.setItem('bjut_traffic_monitor_scope',config.traffic_monitor_scope==='all'?'all':'local');
+    localStorage.setItem('bjut_traffic_retention',JSON.stringify(config.traffic_retention||defaultUsageRetention));
     updateUsagePreferences();
     localStorage.setItem('bjut_traffic_monitor_enabled',String(config.traffic_monitor_enabled===true));
     localStorage.setItem('bjut_prefer_remaining_flow',String(config.prefer_remaining_flow===true));
@@ -2076,6 +2083,11 @@ async function init() {
     localStorage.setItem('bjut_traffic_monitor_scope',input.value);
     try{await syncConfigToRust();window.dispatchEvent(new Event('usage-preferences'));}
     catch{localStorage.setItem('bjut_traffic_monitor_scope',previous);updateUsagePreferences();}
+  }));
+  document.querySelectorAll<HTMLInputElement>('[data-usage-retention]').forEach(input=>input.addEventListener('change',async()=>{
+    if(!input.reportValidity())return;const previous=getUsageRetention(),next={...previous,[input.dataset.usageRetention!]:Number(input.value)};
+    localStorage.setItem('bjut_traffic_retention',JSON.stringify(next));
+    try{await syncConfigToRust();window.dispatchEvent(new Event('usage-preferences'));}catch{localStorage.setItem('bjut_traffic_retention',JSON.stringify(previous));}updateUsagePreferences();
   }));
   const onboarding=setupOnboarding({accounts:()=>accountsCache.length,navigate:activatePage,android:IS_ANDROID,desktop:!IS_ANDROID});
   setupEventDrivenNetworkDetection();

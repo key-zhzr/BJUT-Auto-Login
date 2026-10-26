@@ -61,3 +61,23 @@ test('packed router samples decode without exposing other devices in local scope
  const local=normalizeUsageReport(report);assert.equal(local.series.length,1);assert.equal(local.series[0].usedMb,2);assert.equal(local.accounts[0].devices.length,1);assert.equal(local.history.length,1);
  assert.equal(normalizeUsageReport({...report,scope:'all'}).series.length,2);
 });
+test('real 61-second intervals join across a minute boundary, genuine gaps stay broken',async()=>{
+ const {buildUsageChart}=await import('../src/device-usage-model.ts');const t=1792886400;
+ const row={at:t,resolution:60,account:'one',device:'a',interfaceId:'lan3',interfaceName:'lan3',local:true,usedMb:2,sampledSeconds:60,startedAt:t-1,endedAt:t+59};
+ const chart=buildUsageChart([row,{...row,at:t+120,startedAt:t+59,endedAt:t+120,sampledSeconds:61},{...row,at:t+300,startedAt:t+240,endedAt:t+300}],{scale:'minute',range:600,mode:'delta',presentation:'sum',interfaces:null,account:'',now:t+360});
+ const c=chart.curves[0],i=chart.times.indexOf(t);assert.equal(c.points[i+1],null);assert.equal(c.joinPrevious[i+2],true);assert.equal(c.joinPrevious[i+5],false);assert.equal(chart.totalMb,6);
+});
+test('month cumulative includes prefix before the selected window without mixing rollup tiers',async()=>{
+ const {buildUsageChart}=await import('../src/device-usage-model.ts');const t=Date.parse('2026-10-26T13:00:00+08:00')/1000;
+ const row={at:t,resolution:60,account:'one',device:'a',interfaceId:'lan3',interfaceName:'lan3',local:true,usedMb:2,sampledSeconds:60};
+ const rows=[{...row,at:t-13*3600-86400,resolution:86400,usedMb:100},{...row,at:t-3600,resolution:3600,usedMb:20},{...row,at:t-3600,usedMb:999},{...row,at:t-13*3600,resolution:86400,usedMb:999},row,{...row,at:t+60,usedMb:3}];
+ const opts={scale:'minute',range:3600,start:t,end:t+120,mode:'monthly',presentation:'sum',interfaces:null,account:'',now:t+120};
+ const c=buildUsageChart(rows,opts);assert.deepEqual(c.curves[0].points.slice(0,2),[122,125]);assert.equal(c.totalMb,5);
+ const ordinary=buildUsageChart(rows,{...opts,mode:'cumulative'});assert.deepEqual(ordinary.curves[0].points.slice(0,2),[2,5]);
+});
+test('arbitrary year-to-minute windows adapt scale and zoom stays anchored',async()=>{
+ const {buildUsageChart,usageZoom,usageStorageEstimate,defaultUsageRetention}=await import('../src/device-usage-model.ts');
+ const start=Date.parse('2025-01-01T00:00:00+08:00')/1000,end=Date.parse('2026-01-01T00:00:00+08:00')/1000;
+ const c=buildUsageChart([],{scale:'minute',range:end-start,start,end,mode:'delta',presentation:'sum',interfaces:null,account:'',now:end});assert.equal(c.scale,'day');assert.ok(c.times.length<5000);
+ assert.deepEqual(usageZoom(0,1000,250,.5),[125,625]);assert.equal(usageStorageEstimate(4,defaultUsageRetention),usageStorageEstimate(1,defaultUsageRetention)*4);
+});

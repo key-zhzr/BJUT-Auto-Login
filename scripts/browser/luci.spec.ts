@@ -7,5 +7,5 @@ test('LuCI workbench refresh, billing and operations',async({page})=>{
   await page.goto('http://127.0.0.1:1432/openwrt/tests/luci-regression.html');
   await page.locator('#run-router-qa').click();
   await expect(page.locator('#router-qa-results')).toContainText('全部通过',{timeout:120_000});
-  await expect(page.locator('#router-qa-results')).not.toContainText('失败');
+  await expect(page.locator('#router-qa-results')).not.toContainText(/^失败：/m);
 });

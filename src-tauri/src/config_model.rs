@@ -76,6 +76,8 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     pub(crate) traffic_monitor_scope: String,
     #[serde(default)]
+    pub(crate) traffic_retention: crate::usage_history::Retention,
+    #[serde(default)]
     pub(crate) prefer_remaining_flow: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) saved_router: Option<SavedRouter>,
@@ -207,6 +209,7 @@ pub(crate) fn default_android_notification_mode() -> String {
 /// Earlier builds enabled collection by default. A missing scope requires a
 /// fresh explicit opt-in, rather than treating that old default as consent.
 pub(crate) fn normalize_traffic_monitor(config: &mut AppConfig) {
+    config.traffic_retention.normalize();
     if !matches!(config.traffic_monitor_scope.as_str(), "local" | "all") {
         config.traffic_monitor_enabled = false;
         config.traffic_monitor_scope = "local".into();

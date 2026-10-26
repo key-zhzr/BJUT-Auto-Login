@@ -5,15 +5,25 @@ import { type AccountUsage, type DailyUsage, type UsageReport, type UsageScope }
 import { UsageChart, type UsageSelect } from './usage-chart';
 import { presentationDialog } from './presentation-dialog';
 import './usage-chart.css';
+function confirmUsage(enabled:boolean):Promise<boolean>{
+    return new Promise(resolve=>{const {form,close}=presentationDialog('usage-confirm-dialog',enabled?'开启流量统计':'暂停流量统计');let accepted=false;
+        const text=document.createElement('p');text.textContent=enabled?'按设置中的统计范围记录设备下载量。是否开启？':'暂停采集，已有历史会保留。是否继续？';
+        const actions=document.createElement('div');actions.className='modal-actions';
+        for(const [label,yes] of [['取消',false],[enabled?'开启统计':'暂停统计',true]] as const){const button=document.createElement('button');button.type='button';button.className=yes?'btn btn-primary':'btn btn-secondary';button.textContent=label;button.onclick=()=>{accepted=yes;close();};actions.append(button);}
+        form.addEventListener('presentation-close',()=>resolve(accepted),{once:true});form.append(text,actions);
+    });
+}
 let sequence = 0;
 export class DeviceUsageView {
     private chart: UsageChart;
-    constructor(root: HTMLElement, source: string, configure: (enabled: boolean, scope: UsageScope) => Promise<void> = async () => {}) {
+    constructor(root: HTMLElement, source: string, configure: (enabled: boolean, scope: UsageScope) => Promise<void> = async () => {}, windowChanged?:()=>void) {
         this.chart = new UsageChart(root, {
             title: source === 'router' ? '路由器流量趋势' : '流量趋势',
             localLabel: source === 'router' ? '仅路由器上游' : '仅本机设备',
             resize: animateResize,
             configure,
+            confirm:confirmUsage,
+            windowChanged,
             select: (label, choices, change): UsageSelect => {
                 const wrapper = document.createElement('div'); wrapper.className = 'custom-select'; wrapper.id = `usage-select-${++sequence}`; wrapper.setAttribute('aria-label', label);
                 wrapper.innerHTML = '<div class="custom-select-trigger"><span></span><span aria-hidden="true">⌄</span></div><div class="custom-select-options"></div>';
@@ -36,6 +46,7 @@ export class DeviceUsageView {
         });
     }
     update(data: UsageReport) {this.chart.update(data);}
+    query(){return this.chart.query();}
     render(accounts: AccountUsage[], message = '', history: DailyUsage[] = []) {this.chart.update({enabled: false, scope: 'local', accounts, history, series: []}, message);}
     showError(message: string) {this.chart.showError(message);}
 }
@@ -45,12 +56,12 @@ export function setupDeviceUsage(save: () => Promise<void>) {
         localStorage.setItem('bjut_traffic_monitor_enabled', String(enabled)); localStorage.setItem('bjut_traffic_monitor_scope', scope);
         try {await save(); window.dispatchEvent(new Event('usage-preferences')); await refresh();}
         catch (error) {localStorage.setItem('bjut_traffic_monitor_enabled', previous[0] || 'false'); localStorage.setItem('bjut_traffic_monitor_scope', previous[1] || 'local'); throw error;}
-    });
+    },()=>{void refresh();});
     let busy = false;
     const refresh = async () => {
         if (busy || document.hidden) return;
         busy = true;
-        try {view.update(await invoke<UsageReport>('get_usage_report'));}
+        try {view.update(await invoke<UsageReport>('get_usage_report',{query:view.query()}));}
         catch {view.showError('暂时无法读取流量统计。');}
         finally {busy = false;}
     };

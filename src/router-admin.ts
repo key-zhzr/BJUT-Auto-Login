@@ -1,3 +1,4 @@
+import {usageStorageEstimate} from './device-usage-model';
 import { CustomSelect } from './custom-select';
 import { animateResize } from './layout-motion';
 import type { RouterAccount, RouterSnapshot } from './router-model';
@@ -39,6 +40,10 @@ const fields: Field[] = [
   {key:'billing_background',label:'后台计费检查',hint:'App 关闭后，路由器仍定期检查各账号余额和流量',flag:true,default:'0'},
   {key:'traffic_monitor',label:'设备流量统计',hint:'每分钟从计费系统读取各设备已用流量',flag:true,default:'0'},
   {key:'traffic_scope',label:'流量统计范围',default:'local',choices:[['local','仅路由器上游'],['all','全部在线设备']]},
+  {key:'traffic_minute_hours',label:'分钟明细保留（小时）',default:'48',min:1,max:8760},
+  {key:'traffic_hour_days',label:'小时汇总保留（天）',default:'90',min:1,max:3660},
+  {key:'traffic_day_days',label:'每日汇总保留（天）',default:'366',min:1,max:36600},
+  {key:'traffic_storage_mb',label:'统计存储上限（MB）',default:'2',min:1,max:128,hint:'达到上限时优先保留较新记录；保存时还需临时空间'},
   {key:'prefer_remaining_flow',label:'优先使用余量充足的账号',hint:'依据已开启统计取得的新鲜计费数据排序，独立账号顺序优先',flag:true,default:'0'},
   {key:'billing_interval',label:'计费检查间隔（秒）',min:900,max:86400,default:'21600'},
   {key:'billing_alerts',label:'用量不足时推送',hint:'通过已配置的 PushPlus 提醒，每个账号每天最多一次',flag:true,default:'1'},
@@ -143,6 +148,12 @@ export class RouterAdmin {
       const target=legacy.has(definition.key)?common:more;
       this.controls.set(definition.key,settingField(target,definition,this.configuration!.service[definition.key] || definition.default || '',inputIds[definition.key]));
     }
+    if(this.supports('traffic_charts')){
+      const estimate=element('p','','traffic-note');more.append(estimate);
+      const update=()=>{const read=(key:string,fallback:number)=>Number(this.controls.get(key)?.read()||fallback),n=Math.max(1,this.snapshot?.uplinks.length||1),retention={minuteHours:read('traffic_minute_hours',48),hourDays:read('traffic_hour_days',90),dayDays:read('traffic_day_days',366)};
+        estimate.textContent=`按 ${n} 条上游预计约 ${(usageStorageEstimate(n,retention)/1048576).toFixed(1)} MB（含保存时临时空间）。当前存储上限 ${read('traffic_storage_mb',2)} MB，空间不足时优先保留较新记录。全部设备的占用会更多。`;};
+      more.addEventListener('input',update);update();
+    }
     if (this.supports('pushplus')) {
       const row=element('div','','setting-item router-setting-item'),info=element('div','','setting-info');
       info.append(element('h4','测试推送'),element('p','请先保存设置。'));
@@ -238,7 +249,7 @@ export class RouterAdmin {
     const label=element('label',account?'新密码（留空保留原密码）':'密码');const password=document.createElement('input');password.type='password';password.autocomplete='new-password';password.required=!account;label.append(password);body.append(label);
     const enabled=field(body,{key:'enabled',label:'参与自动登录',flag:true},String(account?.enabled ?? 1));
     const type=field(body,{key:'login_type',label:'认证方式',choices:protocols},account?.loginType || 'auto');
-    const limit=field(body,{key:'max_sessions',label:'同时在线上限（0 表示不限）',min:0,max:32},String(account?.maxSessions || 0));
+    const limit=field(body,{key:'max_sessions',label:'同时在线上限（0 自动：普通 3 / VIP 5）',min:0,max:32},String(account?.configuredMaxSessions || 0));
     editor.modal.addEventListener('router-editor-close',()=>{password.value='';type.close();});
     const generation=this.generation;
     editor.form.addEventListener('submit',async event=>{

@@ -7,7 +7,7 @@ export interface RouterUplink {
   operation?: {id?:string;action?:string;state?:string;phase?:string;duration?:number|string;deadline?:number|string};
 }
 export interface RouterPort { uplink: string; device?: string; linkUp?: number; speedMbps?: string; rxBytes?: string; txBytes?: string; }
-export interface RouterAccount { id: string; user: string; enabled: number; hasPassword: number; loginType?: string; maxSessions?:number;onlineCount?:number; }
+export interface RouterAccount { id: string; user: string; enabled: number; hasPassword: number; loginType?: string; maxSessions?:number;configuredMaxSessions?:number;onlineCount?:number; }
 export interface RouterSnapshot { version: string; uplinks: RouterUplink[]; accounts: RouterAccount[]; managementUrl: string; capabilities?: string[]; ports?: RouterPort[]; }
 export interface RouterCandidate { name: string; address: string; version: string; secure: boolean; }
 export interface RouterBillingItem { state: string; message?: string; percent?: number; account?: string; balance?: string; balanceText?:string;remainingFlowText?:string; remainingFlow?: string; totalFlow?: string; usedFlow?: string; accountStatus?: string; package?: string; image?: string; updatedAt?: number; }

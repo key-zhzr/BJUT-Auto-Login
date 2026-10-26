@@ -38,7 +38,7 @@ export class RouterWorkbench {
   private logsBusy = false;
   private disconnected=false;
   private receivedAt=Date.now();
-  private trafficView=new DeviceUsageView(byId('router-device-usage-panel'),'router',async(enabled,scope)=>{await this.request('save_settings',{traffic_monitor:enabled?'1':'0',traffic_scope:scope});this.admin.invalidateSettings();await this.refreshTraffic();});
+  private trafficView=new DeviceUsageView(byId('router-device-usage-panel'),'router',async(enabled)=>{await this.request('save_settings',{traffic_monitor:enabled?'1':'0'});this.admin.invalidateSettings();await this.refreshTraffic();},()=>{void this.refreshTraffic();});
   private trafficBusy=false;
   private lastTraffic=0;
 
@@ -157,7 +157,7 @@ export class RouterWorkbench {
   private async refreshTraffic():Promise<void> {
     if(this.trafficBusy||!this.snapshot||this.disconnected||!this.supports('traffic_charts'))return;
     this.trafficBusy=true;this.lastTraffic=Date.now();const router=this.snapshot.managementUrl;
-    try{const data=await this.request<UsageReport>('traffic');if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.update(data);}
+    try{const data=await this.request<UsageReport>('traffic',{...this.trafficView.query()});if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.update(data);}
     catch{if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.showError('暂时无法读取路由器设备流量。');}
     finally{this.trafficBusy=false;}
   }

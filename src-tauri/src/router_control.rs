@@ -985,6 +985,10 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
         "billing_background",
         "traffic_monitor",
         "traffic_scope",
+        "traffic_minute_hours",
+        "traffic_hour_days",
+        "traffic_day_days",
+        "traffic_storage_mb",
         "prefer_remaining_flow",
         "billing_interval",
         "billing_alerts",
@@ -1007,7 +1011,8 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
     ];
     let allowed: &[&str] = match operation {
         "logs" | "settings" | "pushplus_test" | "pushplus_status" | "billing_cached"
-        | "traffic" | "maintenance_info" => &[],
+        | "maintenance_info" => &[],
+        "traffic" => &["start", "end", "resolution", "monthly"],
         "maintenance_start" => &["action", "prepared", "backup"],
         "maintenance_poll" => &["ticket"],
         "save_settings" => &service,
@@ -1079,6 +1084,11 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
                                 })
                         })
                     }),
+                "start" | "end" => value
+                    .as_i64()
+                    .is_some_and(|v| (0..=41024448000).contains(&v)),
+                "resolution" => matches!(value.as_i64(), Some(60 | 3600 | 86400)),
+                "monthly" => value.is_boolean(),
                 "traffic_scope" => matches!(value.as_str(), Some("local" | "all")),
                 "refresh" => value.is_boolean(),
                 "ticket" => value.as_str().is_some_and(valid_token),

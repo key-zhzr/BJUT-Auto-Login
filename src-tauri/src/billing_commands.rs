@@ -196,6 +196,7 @@ pub(crate) async fn perform_billing_action(
     current_session: Option<bool>,
     webvpn: Option<bool>,
 ) -> Result<billing::BillingActionResult, String> {
+    device_usage::INTERACTIVE.notify_waiters();
     let action = request.action.clone();
     let _billing_guard = if action == "changePassword" {
         None

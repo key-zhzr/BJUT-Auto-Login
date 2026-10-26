@@ -4,6 +4,16 @@ use std::{
     sync::{atomic::Ordering, Arc},
 };
 pub(crate) static INTERACTIVE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+pub(crate) fn account_changed(state: &crate::AppState, user: &str) {
+    if !state.config.read().unwrap().traffic_monitor_enabled {
+        return;
+    }
+    INTERACTIVE.notify_waiters();
+    if let Some(item) = state.device_usage.lock().unwrap().0.get_mut(user) {
+        item.next_attempt = 0;
+        item.error = None;
+    }
+}
 fn credential_stamp(password: &str) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     Sha256::digest(password.as_bytes()).into()
@@ -102,9 +112,13 @@ pub(crate) struct UsageReport {
     accounts: Vec<AccountUsage>,
     history: Vec<crate::usage_history::DailyUsage>,
     series: Vec<crate::usage_history::UsagePoint>,
+    retention: crate::usage_history::Retention,
 }
 #[tauri::command]
-pub(crate) fn get_usage_report(state: tauri::State<'_, Arc<crate::AppState>>) -> UsageReport {
+pub(crate) fn get_usage_report(
+    state: tauri::State<'_, Arc<crate::AppState>>,
+    query: Option<crate::usage_history::Query>,
+) -> UsageReport {
     let config = state.config.read().unwrap();
     if !config.traffic_monitor_enabled {
         return UsageReport {
@@ -113,6 +127,7 @@ pub(crate) fn get_usage_report(state: tauri::State<'_, Arc<crate::AppState>>) ->
             accounts: vec![],
             history: vec![],
             series: vec![],
+            retention: config.traffic_retention.clone(),
         };
     }
     let store = state.device_usage.lock().unwrap();
@@ -142,8 +157,13 @@ pub(crate) fn get_usage_report(state: tauri::State<'_, Arc<crate::AppState>>) ->
             .1
             .points()
             .into_iter()
-            .filter(|r| saved(&r.account) && (all || r.local))
+            .filter(|r| {
+                saved(&r.account)
+                    && (all || r.local)
+                    && query.as_ref().is_none_or(|query| query.accepts(r))
+            })
             .collect(),
+        retention: config.traffic_retention.clone(),
     }
 }
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -161,7 +181,7 @@ fn path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 }
 pub(crate) fn load(app: &tauri::AppHandle) -> Store {
     path(app)
-        .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.len() < 16 * 1024 * 1024))
+        .filter(|p| std::fs::metadata(p).is_ok_and(|m| m.len() < 256 * 1024 * 1024))
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|bytes| serde_json::from_slice::<Store>(&bytes).ok())
         .map(|mut store| {
@@ -233,12 +253,63 @@ pub(crate) fn get_device_usage(state: tauri::State<'_, Arc<crate::AppState>>) ->
         .collect()
 }
 
+// Successful accounts share one minute deadline. Error backoffs stay per account.
+fn due(item: Option<&AccountUsage>, now: i64, round: bool) -> bool {
+    item.is_none_or(|item| item.next_attempt <= now || (round && item.error.is_none()))
+}
+
+type SampleResult = Result<
+    Result<
+        (
+            crate::billing::BillingSnapshot,
+            Vec<crate::billing::BillingOnlineSession>,
+        ),
+        crate::billing::BillingError,
+    >,
+    tokio::time::error::Elapsed,
+>;
+
+async fn sample_account(
+    state: &crate::AppState,
+    config: &crate::AppConfig,
+    account: crate::Account,
+) -> Option<(crate::Account, i64, SampleResult)> {
+    let interrupted = INTERACTIVE.notified();
+    tokio::pin!(interrupted);
+    interrupted.as_mut().enable();
+    // Only interactive requests own this gate. Independent read sessions can run
+    // together; a user operation cancels them before acquiring the same gate.
+    let gate = state.billing_fetch_lock.try_lock().ok()?;
+    drop(gate);
+    let mut access =
+        crate::billing::BillingAccess::saved(account.user.clone(), account.pass.clone());
+    if let Ok(vpn) = state.billing_webvpn.lock().await.session() {
+        access = access.via_webvpn(vpn);
+    }
+    let query = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        Box::pin(crate::billing::query_device_usage(
+            &access,
+            crate::effective_vpn_compatibility(config),
+            &state.billing_sessions,
+        )),
+    );
+    let result = match futures_util::future::select(interrupted, Box::pin(query)).await {
+        futures_util::future::Either::Left(_) => None,
+        futures_util::future::Either::Right((result, _)) => {
+            Some((account, chrono::Utc::now().timestamp(), result))
+        }
+    };
+    result
+}
+
 pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
+    use futures_util::{stream::FuturesUnordered, StreamExt};
     let mut previous_scope = String::new();
     let mut paused = true;
+    let mut next_round = tokio::time::Instant::now();
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        // Android foreground policy also applies to silent billing reads.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         if cfg!(target_os = "android") && state.is_in_background.load(Ordering::SeqCst) {
             continue;
         }
@@ -250,12 +321,23 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
             state.device_usage.lock().unwrap().1.pause();
             previous_scope = config.traffic_monitor_scope.clone();
             paused = !config.traffic_monitor_enabled;
+            next_round = tokio::time::Instant::now();
             if paused {
                 continue;
             }
         }
         let now = chrono::Utc::now().timestamp();
-        let account = {
+        let round = tokio::time::Instant::now() >= next_round;
+        if round {
+            while next_round <= tokio::time::Instant::now() {
+                next_round += std::time::Duration::from_secs(60);
+            }
+        }
+        let deadline = now
+            + next_round
+                .saturating_duration_since(tokio::time::Instant::now())
+                .as_secs() as i64;
+        let accounts = {
             let mut store = state.device_usage.lock().unwrap();
             store
                 .0
@@ -273,131 +355,150 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
             config
                 .accounts
                 .iter()
-                .filter(|a| !a.pass.is_empty())
-                .filter(|a| store.0.get(&a.user).is_none_or(|v| v.next_attempt <= now))
-                .min_by_key(|a| store.0.get(&a.user).map_or(0, |v| v.next_attempt))
+                .filter(|a| !a.pass.is_empty() && due(store.0.get(&a.user), now, round))
                 .cloned()
+                .collect::<Vec<_>>()
         };
-        let Some(account) = account else { continue };
-        // Interactive operations always take priority; do not build a queue.
-        let interrupted = INTERACTIVE.notified();
-        tokio::pin!(interrupted);
-        interrupted.as_mut().enable();
-        let Ok(_guard) = state.billing_fetch_lock.try_lock() else {
+        if accounts.is_empty() {
             continue;
-        };
-        let mut access =
-            crate::billing::BillingAccess::saved(account.user.clone(), account.pass.clone());
-        if let Ok(vpn) = state.billing_webvpn.lock().await.session() {
-            access = access.via_webvpn(vpn);
         }
-        let compatibility = crate::effective_vpn_compatibility(&config);
         let generation = state.network_change_generation.load(Ordering::SeqCst);
-        let query = tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            Box::pin(crate::billing::query_device_usage(
-                &access,
-                compatibility,
-                &state.billing_sessions,
-            )),
-        );
-        let result = match futures_util::future::select(interrupted, Box::pin(query)).await {
-            futures_util::future::Either::Left(_) => continue,
-            futures_util::future::Either::Right((result, _)) => result,
-        };
-        // Do not publish a response for credentials removed/changed in flight.
-        if !{
-            let current = state.config.read().unwrap();
-            current.traffic_monitor_enabled
-                && current.traffic_monitor_scope == config.traffic_monitor_scope
-                && current
-                    .accounts
-                    .iter()
-                    .any(|a| a.user == account.user && a.pass == account.pass)
-        } {
-            continue;
-        }
         let adapters = tokio::task::spawn_blocking(crate::network_inventory::adapters)
             .await
             .unwrap_or_default();
-        let current = state.config.read().unwrap();
-        if !current.traffic_monitor_enabled
-            || current.traffic_monitor_scope != config.traffic_monitor_scope
-            || !current
-                .accounts
-                .iter()
-                .any(|a| a.user == account.user && a.pass == account.pass)
-        {
-            continue;
-        }
-        let mut store = state.device_usage.lock().unwrap();
-        let item = store
-            .0
-            .entry(account.user.clone())
-            .or_insert_with(|| AccountUsage {
-                account: account.user.clone(),
-                ..Default::default()
-            });
-        item.credential_stamp = credential_stamp(&account.pass);
-        if generation != state.network_change_generation.load(Ordering::SeqCst) {
-            item.error = Some("网络已变化，等待重新查询".into());
-            item.next_attempt = now + 60;
-            continue;
-        }
-        match result {
-            Ok(Ok((overview, devices))) => {
-                item.devices = devices
-                    .into_iter()
-                    .map(|device| classify(device, &adapters))
-                    .filter(|device| config.traffic_monitor_scope == "all" || device.local)
-                    .collect();
-                for device in &mut item.devices {
-                    device.device.session_id.clear();
+        let mut queries = accounts
+            .into_iter()
+            .map(|account| sample_account(&state, &config, account))
+            .collect::<FuturesUnordered<_>>();
+        let mut changed = false;
+        let mut completed = Vec::new();
+        while let Some(result) = queries.next().await {
+            let Some((account, at, result)) = result else {
+                continue;
+            };
+            {
+                let current = state.config.read().unwrap();
+                if !current.traffic_monitor_enabled
+                    || current.traffic_monitor_scope != config.traffic_monitor_scope
+                    || !current
+                        .accounts
+                        .iter()
+                        .any(|a| a.user == account.user && a.pass == account.pass)
+                {
+                    continue;
                 }
-                item.balance = overview.balance;
-                item.remaining_flow = overview.remaining_flow;
-                item.monthly_fee = crate::month_end::monthly_fee(
-                    overview.package.as_deref().unwrap_or_default(),
-                    overview.package_detail.as_deref().unwrap_or_default(),
-                )
-                .map(|fee| fee as f64 / 10000.);
-                item.updated_at = chrono::Utc::now().timestamp();
-                item.error = None;
-                item.next_attempt = now + 60;
             }
-            Ok(Err(error)) => {
-                item.error = Some(error.user_message());
-                item.next_attempt = if matches!(
-                    error,
-                    crate::billing::BillingError::CaptchaRequired
-                        | crate::billing::BillingError::AuthenticationRejected
-                ) {
-                    i64::MAX
+            let data = {
+                let mut store = state.device_usage.lock().unwrap();
+                let item = store
+                    .0
+                    .entry(account.user.clone())
+                    .or_insert_with(|| AccountUsage {
+                        account: account.user.clone(),
+                        ..Default::default()
+                    });
+                item.credential_stamp = credential_stamp(&account.pass);
+                if generation != state.network_change_generation.load(Ordering::SeqCst) {
+                    item.error = Some("网络已变化，等待重新查询".into());
+                    item.next_attempt = at + 5;
                 } else {
-                    now + 300
-                };
-            }
-            Err(_) => {
-                item.error = Some("设备流量查询超时".into());
-                item.next_attempt = now + 300;
-            }
+                    match result {
+                        Ok(Ok((overview, devices))) => {
+                            item.devices = devices
+                                .into_iter()
+                                .map(|device| classify(device, &adapters))
+                                .filter(|device| {
+                                    config.traffic_monitor_scope == "all" || device.local
+                                })
+                                .collect();
+                            for device in &mut item.devices {
+                                device.device.session_id.clear();
+                            }
+                            item.balance = overview.balance;
+                            item.remaining_flow = overview.remaining_flow;
+                            item.monthly_fee = crate::month_end::monthly_fee(
+                                overview.package.as_deref().unwrap_or_default(),
+                                overview.package_detail.as_deref().unwrap_or_default(),
+                            )
+                            .map(|fee| fee as f64 / 10000.);
+                            item.updated_at = at;
+                            item.error = None;
+                            item.next_attempt = deadline;
+                            while item.next_attempt <= at {
+                                item.next_attempt += 60;
+                            }
+                            completed.push(at);
+                        }
+                        Ok(Err(error)) => {
+                            item.error = Some(error.user_message());
+                            item.next_attempt = if matches!(
+                                error,
+                                crate::billing::BillingError::CaptchaRequired
+                                    | crate::billing::BillingError::AuthenticationRejected
+                            ) {
+                                i64::MAX
+                            } else {
+                                at + 300
+                            };
+                        }
+                        Err(_) => {
+                            item.error = Some("设备流量查询超时".into());
+                            item.next_attempt = at + 300;
+                        }
+                    }
+                }
+                let data = item.clone();
+                if data.error.is_none() {
+                    store.1.observe_with_retention(
+                        &data.account,
+                        data.updated_at,
+                        &data.devices,
+                        &config.traffic_retention,
+                    );
+                }
+                changed = true;
+                data
+            };
+            let _ = app.emit("device-usage", data);
         }
-        let data = item.clone();
-        if data.error.is_none() {
-            store
-                .1
-                .observe(&data.account, data.updated_at, &data.devices);
+        if changed {
+            save(&app, &state.device_usage.lock().unwrap());
         }
-        save(&app, &store);
-        drop(store);
-        let _ = app.emit("device-usage", data);
+        if let (Some(first), Some(last)) = (completed.iter().min(), completed.iter().max()) {
+            crate::rust_log(
+                &app,
+                &state,
+                "流量统计",
+                &format!(
+                    "本轮完成 {} 个账号，更新时间差 {} 秒",
+                    completed.len(),
+                    last - first
+                ),
+                if last - first > 5 { "warning" } else { "debug" },
+            );
+        }
     }
 }
+
 use tauri::Emitter;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cohort_realigns_successes_without_overriding_error_backoff() {
+        let mut item = AccountUsage {
+            next_attempt: 1040,
+            ..Default::default()
+        };
+        assert!(!due(Some(&item), 1000, false));
+        assert!(due(Some(&item), 1000, true));
+        item.error = Some("查询失败".into());
+        assert!(!due(Some(&item), 1000, true));
+        assert!(due(Some(&item), 1040, false));
+        item.next_attempt = 0;
+        assert!(due(Some(&item), 1000, false));
+    }
     #[test]
     fn local_identity_uses_physical_addresses_and_normalizes_ipv6() {
         let adapters = vec![
