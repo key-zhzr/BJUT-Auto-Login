@@ -47,7 +47,14 @@ export function usageStorageEstimate(devices: number, retention: UsageRetention)
     // Includes the minute/hour/day rows and an atomic checkpoint copy.
     return Math.ceil(Math.max(1, devices) * (retention.minuteHours * 60 + retention.hourDays * 24 + retention.dayDays) * 180 * 2);
 }
-export interface UsageSwitch { at: number; interfaceId: string; interfaceName: string; from: string; to: string; }
+export interface UsageSwitch { at: number; interfaceId: string; interfaceName: string; from: string; to: string; reason?: string; }
+export function usageTooltipPosition(width:number,height:number,boxWidth:number,boxHeight:number,x:number,y:number) {
+    const gap=32,pad=8,clamp=(value:number,maximum:number)=>Math.max(pad,Math.min(Math.max(pad,maximum-pad),value));
+    // Prefer a side that leaves the pointer's whole column unobstructed.
+    const left=x+gap+boxWidth<=width-pad?x+gap:x-gap-boxWidth>=pad?x-gap-boxWidth:clamp(x-boxWidth/2,width-boxWidth);
+    const top=y+gap+boxHeight<=height-pad?y+gap:y-gap-boxHeight>=pad?y-gap-boxHeight:clamp(y-boxHeight/2,height-boxHeight);
+    return {left,top};
+}
 export interface UsageQuery {start:number;end:number;resolution:number;monthly:boolean;}
 export interface UsageReport {
     enabled: boolean;

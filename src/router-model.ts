@@ -66,3 +66,10 @@ export function routerBillingSummary(jobs: RouterBillingJob[]): { accounts: numb
 export function routerPollInterval(snapshot: RouterSnapshot | null): number {
   return snapshot?.uplinks.some(item => item.checking || ['queued','running'].includes(item.operation?.state || '')) ? 1000 : 2000;
 }
+/** Match LuCI's conditional settings; hidden drafts are kept but not submitted. */
+export function routerSettingVisible(key:string,read:(key:string)=>string):boolean {
+  if(['log_directory','log_web','log_max_kb'].includes(key))return read('log_target')==='file';
+  if((key.startsWith('pushplus_')&&key!=='pushplus_enabled')||key==='_pushplus_test')return read('pushplus_enabled')==='1';
+  if(['billing_interval','billing_alerts','balance_threshold','flow_threshold'].includes(key))return read('billing_background')==='1';
+  return true;
+}

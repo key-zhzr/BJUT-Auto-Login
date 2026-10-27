@@ -2,6 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {usageDelta,usageIdentity,forecastUsage,usageCsv} from '../src/device-usage-model.ts';
 import {qualitySummary,diagnosticAdvice} from '../src/network-quality-model.ts';
+import {usageTooltipPosition} from '../src/device-usage-model.ts';
+test('chart tooltips leave space around the pointer and stay in the plot',()=>{
+ for(const [width,height,bw,bh,x,y] of [[1000,270,220,110,500,200],[1000,270,220,110,980,40],[310,270,280,130,160,230]]){
+  const p=usageTooltipPosition(width,height,bw,bh,x,y);
+  assert.ok(p.left>=8&&p.left+bw<=width-8&&p.top>=8&&p.top+bh<=height-8);
+  assert.ok(p.left>=x+32||p.left+bw<=x-32||p.top>=y+32||p.top+bh<=y-32);
+ }
+});
 test('device samples distinguish accounts, sources, sessions and MAC spelling',()=>{
  const row={mac:'AA-BB-CC-DD-EE-FF',ip:'192.0.2.1',loginAt:'2026-10-25 12:00',usedFlowMb:'100'};
  assert.equal(usageIdentity('local','one',row),usageIdentity('local','one',{...row,mac:'aa:bb:cc:dd:ee:ff'}));

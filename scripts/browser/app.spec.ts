@@ -51,6 +51,17 @@ for(const [platform,width,height] of [['macos',1280,900],['android',390,844]] as
     await panel.getByRole('button',{name:'开启统计',exact:true}).click();
     await page.locator('#usage-confirm-dialog').getByRole('button',{name:'开启统计',exact:true}).click();
     await expect(panel.locator('.traffic-line')).toHaveCount(1);
+    await expect(panel.locator('.traffic-gap')).toHaveCount(1);
+    await panel.locator('.traffic-plot').scrollIntoViewIfNeeded();
+    const marker=await panel.locator('.traffic-switch').boundingBox();
+    const pointer={x:marker!.x,y:marker!.y+marker!.height*.9};
+    await page.mouse.move(pointer.x,pointer.y);
+    await expect(panel.locator('.traffic-tooltip')).toContainText('25000002 → 25000001');
+    await expect(panel.locator('.traffic-tooltip')).toContainText('原账号流量耗尽');
+    const tip=await panel.locator('.traffic-tooltip').boundingBox();
+    expect(tip!.x>=pointer.x+28||tip!.x+tip!.width<=pointer.x-28||tip!.y>=pointer.y+28||tip!.y+tip!.height<=pointer.y-28).toBeTruthy();
+    await expect(panel.locator('.traffic-tooltip')).toBeVisible();
+    await page.screenshot({path:`artifacts.local/traffic-hover-${platform}.png`});
     const choose=async(name:string,value:string)=>{
       await panel.evaluate(async root=>{await Promise.all(root.getAnimations().map(animation=>animation.finished.catch(()=>{})));});
       await panel.getByRole('combobox',{name,exact:true}).click();

@@ -28,9 +28,12 @@
 .traffic-grid { stroke:var(--traffic-border);stroke-width:.7;opacity:.55; }
 .traffic-axis { fill:var(--traffic-muted);font:10px system-ui,sans-serif; }
 .traffic-line { animation:traffic-fade .25s ease both; }
+.traffic-gap { stroke-dasharray:5 5;opacity:.65; }
 .traffic-cursor { stroke:var(--traffic-muted);stroke-dasharray:3 3;stroke-width:1; }
 .traffic-tooltip { position:absolute;top:12px;max-width:calc(100% - 16px);max-height:210px;overflow:auto;z-index:2;background:var(--traffic-surface);border:1px solid var(--traffic-border);border-radius:8px;box-shadow:0 5px 18px #0002;padding:.65rem .8rem;pointer-events:none;font-size:.75rem; }
 .traffic-tooltip > div { display:flex;justify-content:space-between;gap:.8rem;margin-top:.3rem; }
+.traffic-change { margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--traffic-border);overflow-wrap:anywhere; }
+.traffic-change small { display:block;color:var(--traffic-muted);margin-top:.25rem; }
 .traffic-empty { position:absolute;inset:0;display:grid;place-items:center;color:var(--traffic-muted);font-size:.85rem;pointer-events:none; }
 .traffic-devices { margin-top:1rem;font-size:.8rem; }
 .traffic-devices > summary { cursor:pointer;color:var(--traffic-muted); }

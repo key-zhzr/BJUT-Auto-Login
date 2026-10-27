@@ -80,7 +80,7 @@ let savedRouterInfo:any=new URL(location.href).searchParams.has('saved')?{addres
 function usageFixture(enabled:boolean,scope:string) {
   const at=Math.floor(Date.now()/60000)*60;
   const channels=[{account:'25000001',device:'a',interfaceId:'en7',interfaceName:'USB LAN (en7)',local:true},{account:'25000001',device:'b',interfaceId:'en0',interfaceName:'Wi-Fi (en0)',local:true},{account:'25000001',device:'c',interfaceId:'device:other',interfaceName:'其他设备 AA:BB:CC:00:11:22',local:false}];
-  return {enabled,scope,accounts:[{account:'25000001',updatedAt:at,devices:channels.filter(c=>scope==='all'||c.local).map((c,i)=>({...c,ip:`192.0.2.${20+i}`,usedFlowMb:'1234.5'}))}],history:[],series:channels.filter(c=>scope==='all'||c.local).flatMap((c,i)=>Array.from({length:90},(_,j)=>({...c,at:at-(89-j)*60,resolution:60,usedMb:Math.max(0,(Math.sin(j/8)+.5)*(i+1)*3+(j>55?j%9:0)),sampledSeconds:60})).concat([{...c,at:at-at%86400,resolution:86400,usedMb:(i+1)*1024,sampledSeconds:3600}]))};
+  return {enabled,scope,accounts:[{account:'25000001',updatedAt:at,devices:channels.filter(c=>scope==='all'||c.local).map((c,i)=>({...c,ip:`192.0.2.${20+i}`,usedFlowMb:'1234.5'}))}],history:[],switches:[{at:at-45*60,interfaceId:'en7',interfaceName:'USB LAN (en7)',from:'25000002',to:'25000001',reason:'自动轮换：原账号流量耗尽'}],series:channels.filter(c=>scope==='all'||c.local).flatMap((c,i)=>Array.from({length:90},(_,j)=>({...c,at:at-(89-j)*60,resolution:60,usedMb:Math.max(0,(Math.sin(j/8)+.5)*(i+1)*3+(j>55?j%9:0)),sampledSeconds:60})).filter((_,j)=>j!==52&&j!==53).concat([{...c,at:at-at%86400,resolution:86400,usedMb:(i+1)*1024,sampledSeconds:3600}]))};
 }
 let routerTrafficEnabled=false,routerTrafficScope='local';
 mockIPC(async (cmd, payload: any = {}) => {
@@ -525,6 +525,14 @@ button.addEventListener('click',async()=>{
     await wait(()=>calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='save_settings'&&call.payload.args.interval==='30'));
     note('通过：路由计费统一界面、账号融合、日志与设置保存');
     (document.getElementById('router-service-advanced') as HTMLDetailsElement).open=true;
+    const logDirectory=document.querySelector<HTMLInputElement>('#router-service-more input[aria-label="日志目录"]')!;
+    assert(logDirectory.closest<HTMLElement>('.router-setting-item')!.hidden,'系统日志仍显示自定义目录');
+    const chooseLog=(value:string)=>{click('#router-service-more [aria-label="日志保存位置"] .custom-select-trigger');click(`#router-service-more .custom-select.open [data-value="${value}"]`);};
+    chooseLog('file');await wait(()=>!logDirectory.closest<HTMLElement>('.router-setting-item')!.hidden);
+    logDirectory.value='/tmp/qa-draft-log';chooseLog('system');await wait(()=>logDirectory.disabled);
+    chooseLog('file');await wait(()=>!logDirectory.disabled);assert(logDirectory.value==='/tmp/qa-draft-log','切换日志位置丢失目录草稿');
+    chooseLog('system');await wait(()=>logDirectory.disabled);
+    note('通过：系统日志隐藏目录选项，自定义目录草稿切换后保留');
     await wait(()=>!!document.querySelector('#router-configured-uplinks button'));
     const editUplink=()=>Array.from(document.querySelectorAll<HTMLButtonElement>('#router-configured-uplinks button')).find(button=>button.textContent==='编辑')!.click();
     editUplink();await wait(()=>!!document.querySelector('#router-admin-editor .router-account-order'));

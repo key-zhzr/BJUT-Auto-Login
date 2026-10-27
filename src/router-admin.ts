@@ -2,6 +2,7 @@ import {usageStorageEstimate} from './device-usage-model';
 import { CustomSelect } from './custom-select';
 import { animateResize } from './layout-motion';
 import type { RouterAccount, RouterSnapshot } from './router-model';
+import {routerSettingVisible} from './router-model';
 import { RouterMaintenance } from './router-maintenance';
 
 export interface RouterConfiguration { service: Record<string,string>; uplinks: Record<string,string>[]; networks?: {id:string}[]; }
@@ -56,7 +57,7 @@ const protocol = (value:string) => ({type1:'bjut-sushe',type2:'bjut_wifi',type3:
 let sequence = 0;
 const element = (tag:string,text='',className='') => { const e=document.createElement(tag);e.textContent=text;e.className=className;return e; };
 function action(text:string,click:()=>void,className='btn btn-secondary btn-sm'): HTMLButtonElement { const b=document.createElement('button');b.type='button';b.textContent=text;b.className=className;b.addEventListener('click',click);return b; }
-interface Control { read(): string; close(): void; }
+interface Control { read(): string; close(): void; row?:HTMLElement; onChange?:(callback:()=>void)=>void; setActive?:(active:boolean)=>void; }
 interface FieldControl extends Control { element: HTMLElement; attach?: () => void; }
 function createFieldControl(definition:Field, value:string, id?:string): FieldControl {
   if (definition.choices) {
@@ -67,6 +68,8 @@ function createFieldControl(definition:Field, value:string, id?:string): FieldCo
       element:wrapper,
       attach:()=>{if(select)return;select=new CustomSelect(wrapper.id);select.setOptions(definition.choices!.map(([value,text])=>({value,text})));select.value=protocol(value);},
       read:()=>select ? select.value : '',
+      onChange:callback=>select?.addEventListener('change',callback),
+      setActive:active=>select?.setDisabled(!active),
       close:()=>{select?.setDisabled(true);},
     };
   }
@@ -76,7 +79,7 @@ function createFieldControl(definition:Field, value:string, id?:string): FieldCo
   input.setAttribute('aria-label',definition.label);
   if (definition.secret) {input.autocomplete='new-password';input.maxLength=256;}
   if (definition.min!==undefined) {input.min=String(definition.min);input.max=String(definition.max);input.required=true;}
-  return {element:input,read:()=>definition.flag?(input.checked?'1':'0'):input.value.trim(),close:()=>{if(definition.secret)input.value='';}};
+  return {element:input,read:()=>definition.flag?(input.checked?'1':'0'):input.value.trim(),close:()=>{if(definition.secret)input.value='';},onChange:callback=>input.addEventListener('change',callback),setActive:active=>{input.disabled=!active;}};
 }
 function field(parent:HTMLElement, definition:Field, value:string, id?:string): Control {
   const control=createFieldControl(definition,value,id);
@@ -100,7 +103,7 @@ function settingField(parent:HTMLElement, definition:Field, value:string, id?:st
     control.element.classList.add(definition.choices?'router-setting-select':definition.min!==undefined?'input-inline':'router-setting-input');
     slot.append(control.element);
   }
-  row.append(info,slot);parent.append(row);control.attach?.();return control;
+  row.append(info,slot);parent.append(row);control.attach?.();return {...control,row};
 }
 
 export class RouterAdmin {
@@ -151,17 +154,27 @@ export class RouterAdmin {
     if(this.supports('traffic_charts')){
       const estimate=element('p','','traffic-note');more.append(estimate);
       const update=()=>{const read=(key:string,fallback:number)=>Number(this.controls.get(key)?.read()||fallback),n=Math.max(1,this.snapshot?.uplinks.length||1),retention={minuteHours:read('traffic_minute_hours',48),hourDays:read('traffic_hour_days',90),dayDays:read('traffic_day_days',366)};
-        estimate.textContent=`按 ${n} 条上游预计约 ${(usageStorageEstimate(n,retention)/1048576).toFixed(1)} MB（含保存时临时空间）。当前存储上限 ${read('traffic_storage_mb',2)} MB，空间不足时优先保留较新记录。全部设备的占用会更多。`;};
-      more.addEventListener('input',update);update();
+        estimate.textContent=`按 ${n} 条上游预计约 ${(usageStorageEstimate(n,retention)/1048576).toFixed(1)} MB（含临时空间${this.supports('traffic_compression')?'；文件压缩保存':''}）。当前容量上限 ${read('traffic_storage_mb',2)} MB，按压缩前估算。全部设备的占用会更多。`;};
+      more.oninput=update;update();
     }
     if (this.supports('pushplus')) {
       const row=element('div','','setting-item router-setting-item'),info=element('div','','setting-info');
       info.append(element('h4','测试推送'),element('p','请先保存设置。'));
       const button=action('发送测试消息',()=>{void this.testPushPlus(button);});
       if(this.supports('pushplus_status'))info.append(action('查看测试状态',()=>{void this.readPushPlusStatus(this.generation).catch(error=>{document.getElementById('router-settings-message')!.textContent=String(error);});}));
-      row.append(info,button);more.append(row);
+      row.append(info,button);row.dataset.routerDependency='_pushplus_test';more.append(row);
     }
     if(this.supports('maintenance'))this.maintenance.mount(more);
+    const updateVisibility=(animate=false)=>{
+      const read=(key:string)=>this.controls.get(key)?.read()||this.configuration?.service[key]||'';
+      const changes=[...this.controls].filter(([key,control])=>control.row&&control.row.hidden===routerSettingVisible(key,read));
+      const test=more.querySelector<HTMLElement>('[data-router-dependency]');
+      const changeTest=test&&test.hidden===routerSettingVisible('_pushplus_test',read);
+      const change=()=>{for(const [key,control] of changes){const visible=routerSettingVisible(key,read);control.row!.hidden=!visible;control.setActive?.(visible);}if(test)test.hidden=!routerSettingVisible('_pushplus_test',read);};
+      if(animate&&(changes.length||changeTest))animateResize(more,change);else change();
+    };
+    updateVisibility();
+    for(const key of ['log_target','pushplus_enabled','billing_background'])this.controls.get(key)?.onChange?.(()=>updateVisibility(true));
   }
   private async testPushPlus(button:HTMLButtonElement) {
     const generation=this.generation;button.disabled=true;
@@ -187,7 +200,7 @@ export class RouterAdmin {
     const button=document.getElementById('btn-router-settings-save') as HTMLButtonElement;
     const generation=this.generation;button.disabled=true;
     try {
-      const args=Object.fromEntries([...this.controls].map(([key,control])=>[key,control.read()]));
+      const args=Object.fromEntries([...this.controls].filter(([,control])=>!control.row?.hidden).map(([key,control])=>[key,control.read()]));
       await this.options.request('save_settings',args);
       if(generation!==this.generation)return;
       this.controls.get('pushplus_token')?.close();
