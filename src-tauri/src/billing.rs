@@ -609,10 +609,13 @@ pub(crate) async fn query_device_usage(
     compatibility: VpnCompatibility,
     pool: &std::sync::Mutex<BillingSessionPool>,
     sample_at: Option<tokio::time::Instant>,
-) -> Result<(BillingSnapshot, Vec<BillingOnlineSession>), BillingError> {
+) -> Result<(BillingSnapshot, Vec<BillingOnlineSession>, i64), BillingError> {
     let (mut session, _) = acquire_billing_session(pool, access, compatibility).await?;
     let overview = parse_dashboard_bounded(&session.dashboard_html, &access.account).await?;
     crate::device_usage::sample_barrier(sample_at).await;
+    // Record the actual request start, never the planned deadline. Response
+    // latency must not shift an otherwise continuous minute observation.
+    let observed_at = chrono::Utc::now().timestamp();
     let result = get_dashboard_text(
         &mut session,
         "/Self/dashboard/getOnlineList",
@@ -629,7 +632,7 @@ pub(crate) async fn query_device_usage(
             pool.lock().unwrap().remove(&access.account);
         }
     }
-    result.map(|devices| (overview, devices))
+    result.map(|devices| (overview, devices, observed_at))
 }
 
 pub(crate) async fn query_records(

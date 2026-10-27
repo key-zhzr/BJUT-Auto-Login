@@ -263,6 +263,7 @@ type SampleResult = Result<
         (
             crate::billing::BillingSnapshot,
             Vec<crate::billing::BillingOnlineSession>,
+            i64,
         ),
         crate::billing::BillingError,
     >,
@@ -398,6 +399,10 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
             let Some((account, at, result)) = result else {
                 continue;
             };
+            let at = match &result {
+                Ok(Ok((_, _, observed_at))) => *observed_at,
+                _ => at,
+            };
             {
                 let current = state.config.read().unwrap();
                 if !current.traffic_monitor_enabled
@@ -425,7 +430,7 @@ pub(crate) async fn run(app: tauri::AppHandle, state: Arc<crate::AppState>) {
                     item.next_attempt = at + 5;
                 } else {
                     match result {
-                        Ok(Ok((overview, devices))) => {
+                        Ok(Ok((overview, devices, _))) => {
                             item.devices = devices
                                 .into_iter()
                                 .map(|device| classify(device, &adapters))
