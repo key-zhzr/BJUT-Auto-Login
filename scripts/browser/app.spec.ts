@@ -50,6 +50,7 @@ for(const [platform,width,height] of [['macos',1280,900],['android',390,844]] as
     await expect(panel.locator('.traffic-content')).toBeHidden();
     await panel.getByRole('button',{name:'开启统计',exact:true}).click();
     await page.locator('#usage-confirm-dialog').getByRole('button',{name:'开启统计',exact:true}).click();
+    await expect(page.locator('#usage-confirm-dialog')).toHaveCount(0);
     await expect(panel.locator('.traffic-line')).toHaveCount(1);
     await expect(panel.locator('.traffic-gap')).toHaveCount(1);
     await panel.locator('.traffic-plot').scrollIntoViewIfNeeded();

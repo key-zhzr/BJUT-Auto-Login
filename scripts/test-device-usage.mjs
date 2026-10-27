@@ -9,6 +9,7 @@ test('chart tooltips leave space around the pointer and stay in the plot',()=>{
   assert.ok(p.left>=8&&p.left+bw<=width-8&&p.top>=8&&p.top+bh<=height-8);
   assert.ok(p.left>=x+32||p.left+bw<=x-32||p.top>=y+32||p.top+bh<=y-32);
  }
+ const narrow=usageTooltipPosition(310,270,280,210,160,135);assert.ok(narrow.top+210<=135-32);
 });
 test('device samples distinguish accounts, sources, sessions and MAC spelling',()=>{
  const row={mac:'AA-BB-CC-DD-EE-FF',ip:'192.0.2.1',loginAt:'2026-10-25 12:00',usedFlowMb:'100'};
