@@ -1,0 +1,190 @@
+%% 第一批设计（P0-01/P0-02/P0-03/P0-04/P1-01/P1-04/P1-05）类图
+%% 基线：feat/robustness-ipv6 @ c90a187
+%% 标注 NEW 的为本次新增；标注 test-only 的只存在于 #[cfg(test)]
+classDiagram
+    direction LR
+
+    class AppState {
+        +config: RwLock~AppConfig~
+        +link_health: Mutex~Option~DualStackReport~~
+        +connectivity: ProbePool
+        +network_schedule: Mutex~NetworkSchedule~
+        +last_known_ip: Mutex~Option~String~~
+        +last_network_state: Mutex~Value~
+    }
+
+    class ProbePool {
+        -0: Mutex~PoolState~
+        +invalidate() u64
+        -subscribe(key: String) tuple
+        -update(id: u64, change: FnOnce) bool
+        -cancel(id: u64)
+        -current(id: u64) bool
+    }
+
+    class PoolState {
+        +next: u64
+        +run: Option~Run~
+    }
+
+    class Run {
+        +id: u64
+        +key: String
+        +started: Instant
+        +sender: Sender~Snapshot~
+    }
+
+    class Snapshot {
+        +health: Option~DualStackReport~
+        +physical: Option~DualStackReport~
+        +require_physical: bool
+        +internet: Vec~InternetProbeOutcome~
+        +internet_duration_ms: u128
+        +complete: bool
+        +cancelled: bool
+        +require_session: bool
+        +session_checked: bool
+        +session_online: Option~bool~
+        +session_duration_ms: u128
+        +online() bool
+        +access_online() bool
+        +authenticated_online() bool
+    }
+
+    class Observation {
+        -receiver: Receiver~Snapshot~
+        +wait_with_updates(update) Snapshot
+        +wait(full: bool) Snapshot
+        +wait_for_login() Snapshot
+        -wait_inner(full: bool, respect_session: bool) Snapshot
+    }
+
+    class PortalRouteContext {
+        -interface_name: String
+        -physical_ipv4: Ipv4Addr
+        +new(iface: &str, ipv4: &str) Result~Self, String~
+        +interface_name() &str
+        +physical_ipv4() Ipv4Addr
+    }
+
+    class LoginType {
+        <<enum>>
+        Type1
+        Type2
+        Type3
+        Unknown
+        +as_str() &str
+        +display_name() &str
+    }
+
+    class LoginTypeDetection {
+        +login_type: LoginType
+        +portal_detected: bool
+        +login_ready: bool
+        +timed_out: bool
+        -not_detected() Self
+        -from_probe(login_type, result) Self
+    }
+
+    class PortalProbeResult {
+        <<enum>>
+        NotDetected
+        PortalDetected
+        LoginReady
+    }
+
+    class PortalLoginFailureDisposition {
+        <<enum>>
+        CredentialRejected
+        SessionAlreadyOnline
+        StopTraversal
+    }
+
+    class endpoints {
+        <<module NEW>>
+        +DORM_GATEWAY_IPV4: Ipv4Addr
+        +DORM_HTTP_LOGIN: &str
+        +DORM_HTTP_AUTHORITY: &str
+        +DORM_HTTP_REFERER: &str
+        +DORM_HTTPS_AUTHORITY: &str
+        +DORM_HTTPS_REFERER: &str
+        +WIFI_GATEWAY_IPV4: Ipv4Addr
+        +WIFI_ROUTE_PROBE: &str
+        +WLGN_HOST: &str
+        +WIFI_HTTP_LOGIN: &str
+        +WIFI_HTTP_LOGOUT: &str
+        +WIFI_HTTP_CHKSTATUS: &str
+        +WIFI_HTTP_REFERER: &str
+        +WIFI_HTTPS_LOGIN: &str
+        +WIFI_HTTPS_LOGOUT: &str
+        +WIFI_HTTPS_CHKSTATUS: &str
+        +WIFI_HTTPS_REFERER: &str
+        +LGN_HOST: &str
+        +LGN6_HOST: &str
+        +LGN_IPV4_PRIMARY: &str
+        +LGN_IPV4_GATEWAYS: Ipv4Addr[2]
+        +LGN6_GATEWAY_IPV6: Ipv6Addr[2]
+        +LGN_HTTPS_AUTHORITY: &str
+        +LGN_HTTPS_LOGIN: &str
+        +LGN_HTTPS_LOGOUT: &str
+        +LGN_HTTP_USER_INFO: &str
+        +LGN_HTTPS_USER_INFO: &str
+        +LGN6_OBSERVED_IPV6: &str
+        +LGN_REFERER: &str
+        +LGN_ROOT: &str
+        +LGN6_ROOT: &str
+        +TLS_HOST_CANDIDATES: &str[2]
+    }
+
+    class TimeoutBudget {
+        <<module-level constants NEW>>
+        +LGN_IPV6_DISCOVERY_BUDGET: Duration = 5s
+        +LGN_IPV6_ATTEMPT_RESERVE: Duration = 1s
+        +attempt_timeout_for(budget) Duration
+    }
+
+    class DormCertificateVerifier {
+        -standard: Arc~WebPkiServerVerifier~
+        +pinned_leaf_matches(cert) bool
+        +pinned_name_matches(name) bool
+        +is_expiry_error(error) bool
+        +pin_exception_applies(error, cert, name) bool
+        +verify_server_cert(...) Result
+        +verify_tls12_signature(...) Result
+        +verify_tls13_signature(...) Result
+        +supported_verify_schemes() Vec~SignatureScheme~
+    }
+
+    class DormTlsConstants {
+        <<module constants, unchanged this batch>>
+        -EXPIRED_DORM_CERT_SHA256: u8[32]
+        -PINNED_VALIDATION_TIME: UnixTime
+    }
+
+    class GatewayStub {
+        <<test-only NEW>>
+        -port: u16
+        -hits: Arc~AtomicUsize~
+        +start(respond: Fn) Self
+        +url(path_and_query: &str) Url
+        +hits() usize
+    }
+
+    AppState *-- ProbePool : connectivity
+    ProbePool *-- PoolState
+    PoolState o-- Run
+    Run --> Snapshot : watch Sender
+    Observation --> Snapshot : watch Receiver
+    AppState ..> Observation : observe() produces
+    Observation ..> ProbePool : subscribes
+
+    DormCertificateVerifier ..> endpoints : TLS_HOST_CANDIDATES
+    DormCertificateVerifier ..> DormTlsConstants : pin + validation time
+    PortalRouteContext ..> endpoints : gateway IPs
+    LoginTypeDetection ..> PortalProbeResult
+    LoginTypeDetection ..> LoginType
+    PortalLoginFailureDisposition ..> LoginType
+
+    TimeoutBudget ..> endpoints : sibling module-level constants
+    GatewayStub ..> PortalLoginFailureDisposition : drives get_jsonp_login()
+    GatewayStub ..> LoginType : one stub run per protocol label

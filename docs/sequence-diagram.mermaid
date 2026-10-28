@@ -1,0 +1,110 @@
+%% 第一批设计（P0-01/P0-02/P0-03/P0-04/P1-01/P1-04/P1-05）调用时序
+%% 基线：feat/robustness-ipv6 @ c90a187
+%% 源文件对应 docs/development-plan.md 第 5 节。
+%% 本文件含 2 个图：① 后台轮询与锁中毒恢复（P0-01）
+%%                 ② lgn 登录：超时分层与歧义短路（P0-02 + P0-03 + P0-04）
+%% 另 2 个图（端点单一来源、前端测试入口守卫）见文档第 5.3 / 5.4 节。
+
+%% ============================================================
+%% ① P0-01 后台轮询与锁中毒恢复
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant Loop as lib.rs 后台 loop 任务
+    participant State as AppState
+    participant Pool as ProbePool
+    participant DS as dual_stack
+    participant UI as 前端 get_link_health
+
+    Loop->>State: network_schedule.lock() 恢复式获取
+    alt 锁已中毒
+        State-->>Loop: PoisonError::into_inner() 接管数据
+        Note over Loop: 不 panic、不退出 loop，继续本轮检测
+    else 锁健康
+        State-->>Loop: MutexGuard
+    end
+    Loop->>State: last_network_state / last_known_ip / config 恢复式获取
+    Loop->>Pool: subscribe(key)
+    Pool->>Pool: self.0.lock() 恢复式获取
+    Pool-->>Loop: (id, receiver, start)
+    Loop->>DS: probe_with_updates(network, on_update)
+    DS-->>Loop: DualStackReport 分帧回调
+    Loop->>Pool: update(id, set health)
+    Pool->>State: link_health.lock() 恢复式获取
+    Pool-->>UI: app.emit("link-health", health)
+    UI->>State: get_link_health 命令
+    State->>State: link_health.lock() 恢复式获取（原为裸 unwrap）
+    State-->>UI: Option DualStackReport
+    Note over Loop,UI: 任一线程曾 panic 导致中毒后，读写两侧都能继续工作
+
+%% ============================================================
+%% ② P0-02 超时分层 + P0-03 歧义短路 + P0-04 错误语义
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant L as lib.rs 自动登录编排
+    participant P as portal_auth
+    participant C as portal_client (ePortal)
+    participant D as discover_lgn_ipv6
+    participant G6 as lgn6 网关 (::2 / ::a)
+    participant GW as ePortal 登录网关
+    participant Stub as GatewayStub (test-only)
+
+    L->>P: login_with_submission_guard(Type3, ...)
+    P->>C: portal_client(compat, Type3, 5s, route)
+    C-->>P: Client（local_address = physical_ipv4）
+    P->>P: login_lgn_once(client, user, pass, ...)
+    P->>P: login_source_ipv4(route) -> local_ipv4
+
+    rect rgba(80,160,255,0.12)
+    Note over P,G6: P0-02 超时预算分层（唯一语义改动）
+    P->>D: discover_lgn_ipv6(compat, LGN_IPV6_DISCOVERY_BUDGET = 5s)
+    D->>D: attempt_timeout = attempt_timeout_for(5s) = 4s
+    D->>D: tokio::time::timeout(5s, ...)  ← 外层预算不变
+    loop 每个 IPv6 网关 × TLS 模式（Windows 额外 rustls 模式）
+        D->>G6: GET /drcom/getipv6（内层 timeout=4s, connect_timeout=4s）
+    end
+    alt 某网关在 4s 内成功
+        G6-->>D: dr1004({"result":1,"ip":"2001:da8:..."})
+        D-->>P: Ok((ipv6, "getipv6 JSONP"))
+    else 全部失败（4s 内收口，外层仍有 1s 余量）
+        G6-->>D: 逐地址错误
+        D-->>P: Err("getipv6 接口失败：…；lgn6 登录页回退失败：…")
+        Note over P: 逐地址明细保留，不再被外层 map_err 覆盖
+    end
+    end
+
+    P->>P: before_submit()?（网络身份复核，失败则不提交）
+    P->>P: lgn_login_url(user, pass, local_ipv4, observed_ipv6)
+    P->>GW: get_jsonp_login(login_url)  ← 该协议唯一的凭据提交点
+
+    rect rgba(255,180,80,0.12)
+    Note over P,L: P0-03 歧义短路（提交后响应不可解析）
+    GW-->>P: 200 + 不可解析 body
+    P->>P: parse_dr_response -> Err("认证结果暂无法确认：…")
+    P->>P: login_result_is_ambiguous(&error) == true
+    P-->>L: Err(带 AMBIGUOUS_LOGIN_RESULT 前缀)
+    Note over P: 绝不重试、绝不切换第二套协议
+    L->>L: break 账号遍历；auto_login_paused_until = now + 60s
+    L-->>L: 通知「登录请求已发送，但结果无法确认；请勿立即重试」
+    end
+
+    rect rgba(120,200,120,0.12)
+    Note over P,GW: P0-04 错误语义三分法
+    GW-->>P: 超时 / 拒连 / TLS 失败
+    P->>P: portal_request_error -> 「请求超时」/「连接或 TLS 握手失败」
+    Note over P: 传输层失败 = 网关未受理凭据<br/>不带 AMBIGUOUS 前缀，允许按既有策略继续
+    GW-->>P: 503
+    P->>P: Err("网关返回 HTTP 503")
+    Note over P: HTTP 非 200 同样不带 AMBIGUOUS 前缀
+    GW-->>P: 200 + 空 body / 坏 JSONP / 未知 result
+    P->>P: parse_dr_response -> Err(带 AMBIGUOUS 前缀)
+    Note over P: 提交后不可解析 = 可能已受理<br/>禁止重试 / 换协议 / 换账号
+    end
+
+    Note over Stub: 单测以 GatewayStub 离线复现上述分支
+    P->>Stub: get_jsonp_login(stub.url(...))（三类协议各一次）
+    Stub-->>P: 200 + 不可解析 body
+    P-->>P: Err(歧义)
+    P->>Stub: 无第二次请求
+    Note over Stub: assert_eq!(stub.hits(), 1)
