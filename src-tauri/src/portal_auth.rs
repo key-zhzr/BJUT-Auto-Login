@@ -86,6 +86,16 @@ const LGN_PROGRAM_INDEX: &str = "o4OBee1755497815";
 const LGN_PAGE_INDEX: &str = "cHAmjX1755497856";
 const LGN_JS_VERSION: &str = "4.2.2";
 const EPORTAL_XOR_KEY: u16 = 0x16;
+/// Total budget for discovering the IPv6 address used by the combined login.
+const LGN_IPV6_DISCOVERY_BUDGET: Duration = Duration::from_secs(5);
+/// Slack kept for reporting per-address failures instead of a bare timeout.
+const LGN_IPV6_ATTEMPT_RESERVE: Duration = Duration::from_secs(1);
+
+/// Per-attempt timeout that always leaves room inside the enclosing budget, so
+/// the collected per-address reasons can still be reported to the user.
+fn attempt_timeout_for(budget: Duration) -> Duration {
+    budget.saturating_sub((budget / 5).min(LGN_IPV6_ATTEMPT_RESERVE))
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum LoginType {
@@ -1092,7 +1102,7 @@ async fn login_lgn_once(
     // one encrypted ePortal login with both addresses. /V6 and legacy form
     // posts are not part of this protocol and can create a separate session.
     let (observed_ipv6, diagnostic) =
-        match discover_lgn_ipv6(compatibility, Duration::from_secs(5), route_context).await {
+        match discover_lgn_ipv6(compatibility, LGN_IPV6_DISCOVERY_BUDGET, route_context).await {
             Ok((address, source)) => (address, format!("已提交 IPv4+IPv6 联动认证（{source}）")),
             Err(error) => (
                 String::new(),
@@ -1138,6 +1148,9 @@ async fn discover_lgn_ipv6(
     } else {
         &[true]
     };
+    // Every attempt must finish strictly inside the outer budget, otherwise the
+    // outer timeout fires first and the joined per-address reasons are lost.
+    let attempt_timeout = attempt_timeout_for(timeout);
     tokio::time::timeout(timeout, async {
         let mut attempts = FuturesUnordered::new();
         for address in addresses {
@@ -1145,7 +1158,7 @@ async fn discover_lgn_ipv6(
                 attempts.push(async move {
                     let client = lgn_ipv6_client_for(
                         compatibility,
-                        timeout,
+                        attempt_timeout,
                         route_context,
                         address,
                         *native_tls,
@@ -1644,7 +1657,8 @@ pub(crate) async fn logout_from_campus_network_rust(
         LoginType::Type3 => {
             let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn")?;
             let (observed_ipv6, diagnostic) =
-                match discover_lgn_ipv6(compatibility, Duration::from_secs(5), route_context).await
+                match discover_lgn_ipv6(compatibility, LGN_IPV6_DISCOVERY_BUDGET, route_context)
+                    .await
                 {
                     Ok((address, _)) => (address, "已提交 IPv4+IPv6 联动注销".to_string()),
                     Err(error) => (
@@ -2338,5 +2352,28 @@ mod tests {
             "http://10.21.221.98:801/eportal/portal/login",
             "generic reverse proxy error page",
         ));
+    }
+
+    #[test]
+    fn ipv6_discovery_inner_timeout_stays_below_the_outer_budget() {
+        // The inner attempt timeout must expire first, otherwise the outer
+        // timeout replaces the joined per-address failure reasons.
+        for budget in [LGN_IPV6_DISCOVERY_BUDGET, NETWORK_PROBE_TIMEOUT] {
+            let inner = attempt_timeout_for(budget);
+            assert!(
+                inner < budget,
+                "per-attempt timeout {inner:?} must stay below the {budget:?} budget"
+            );
+            assert!(!inner.is_zero(), "per-attempt timeout must not be zero");
+        }
+        assert_eq!(
+            attempt_timeout_for(Duration::from_secs(5)),
+            Duration::from_secs(4)
+        );
+        assert_eq!(
+            attempt_timeout_for(Duration::from_secs(3)),
+            Duration::from_millis(2400)
+        );
+        assert_eq!(LGN_IPV6_DISCOVERY_BUDGET, Duration::from_secs(5));
     }
 }
