@@ -542,7 +542,11 @@ fn preferred_interface_for_app(app: &tauri::AppHandle) -> String {
 
 #[tauri::command]
 fn get_link_health(state: tauri::State<Arc<AppState>>) -> Option<dual_stack::DualStackReport> {
-    state.link_health.lock().unwrap().clone()
+    state
+        .link_health
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
 }
 
 #[tauri::command]
@@ -7767,8 +7771,15 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
         "change",
         "网络变化或网卡选择已更新，正在等待地址稳定并重新检测",
     );
-    state.network_schedule.lock().unwrap().reset();
-    *state.link_health.lock().unwrap() = None;
+    state
+        .network_schedule
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .reset();
+    *state
+        .link_health
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
     let generation = state
         .network_change_generation
         .fetch_add(1, Ordering::SeqCst)
@@ -8420,7 +8431,7 @@ pub fn run() {
                     && loop_state
                         .network_schedule
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|poison| poison.into_inner())
                         .plan
                         .interface_poll_seconds
                         >= 15;
@@ -8461,28 +8472,38 @@ pub fn run() {
                 // 1. Local interface change check. Android NetworkCallback is the
                 // primary signal on mobile data, so polling can be much slower there.
                 wifi_check_counter += tick_seconds as i32;
-                let mobile_data_active =
-                    is_mobile_data_network(&loop_state.last_network_state.lock().unwrap());
+                let mobile_data_active = is_mobile_data_network(
+                    &loop_state
+                        .last_network_state
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner()),
+                );
                 let interface_poll_interval = if mobile_data_active {
                     30
                 } else {
                     loop_state
                         .network_schedule
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|poison| poison.into_inner())
                         .plan
                         .interface_poll_seconds
                 };
                 if wifi_check_counter >= interface_poll_interval {
                     wifi_check_counter = 0;
                     let wifi_change_detect = {
-                        let cfg = loop_state.config.read().unwrap();
+                        let cfg = loop_state
+                            .config
+                            .read()
+                            .unwrap_or_else(|poison| poison.into_inner());
                         cfg.wifi_change_detect
                     };
                     if wifi_change_detect {
                         let (ip_changed, current_ip, last_ip) = {
                             let current_ip = get_local_ip(loop_handle.clone());
-                            let mut last_ip_lock = loop_state.last_known_ip.lock().unwrap();
+                            let mut last_ip_lock = loop_state
+                                .last_known_ip
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner());
                             let last_ip = last_ip_lock.clone();
                             let changed =
                                 network_ip_observation_changed(last_ip.as_deref(), &current_ip);

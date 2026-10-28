@@ -77,7 +77,7 @@ pub(crate) struct ProbePool(Mutex<PoolState>);
 
 impl ProbePool {
     pub(crate) fn invalidate(&self) -> u64 {
-        let mut pool = self.0.lock().unwrap();
+        let mut pool = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
         pool.next = pool.next.wrapping_add(1);
         if let Some(run) = pool.run.take() {
             run.sender.send_modify(|value| {
@@ -88,7 +88,7 @@ impl ProbePool {
         pool.next
     }
     fn subscribe(&self, key: String) -> (u64, watch::Receiver<Snapshot>, bool) {
-        let mut pool = self.0.lock().unwrap();
+        let mut pool = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
         if let Some(run) = &pool.run {
             // Only share running work or a very recent successful result.
             let value = run.sender.borrow();
@@ -120,7 +120,7 @@ impl ProbePool {
         (id, receiver, true)
     }
     fn update(&self, id: u64, change: impl FnOnce(&mut Snapshot)) -> bool {
-        let pool = self.0.lock().unwrap();
+        let pool = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
         let Some(run) = pool.run.as_ref().filter(|run| run.id == id) else {
             return false;
         };
@@ -139,7 +139,7 @@ impl ProbePool {
     fn current(&self, id: u64) -> bool {
         self.0
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poison| poison.into_inner())
             .run
             .as_ref()
             .is_some_and(|run| run.id == id)
@@ -197,7 +197,10 @@ impl Observation {
 
 pub(crate) fn invalidate(app: &tauri::AppHandle, state: &AppState) {
     let probe_id = state.connectivity.invalidate();
-    *state.link_health.lock().unwrap() = None;
+    *state
+        .link_health
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
     let generation = state
         .network_change_generation
         .load(std::sync::atomic::Ordering::SeqCst);
@@ -214,7 +217,12 @@ pub(crate) fn observe(
 ) -> Observation {
     use std::sync::atomic::Ordering;
     let generation = state.network_change_generation.load(Ordering::SeqCst);
-    let compatibility = crate::effective_vpn_compatibility(&state.config.read().unwrap());
+    let compatibility = crate::effective_vpn_compatibility(
+        &state
+            .config
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner()),
+    );
     let require_physical = requires_physical_probe(network);
     let adapters = crate::network_inventory::adapters();
     let require_session = network["lgnWiredHint"].as_bool().unwrap_or(false)
@@ -302,7 +310,11 @@ pub(crate) fn observe(
                         health.probe_id = id;
                         state.connectivity.update(id, |value| {
                             value.health = Some(health.clone());
-                            *state.link_health.lock().unwrap() = Some(health.clone());
+                            *state
+                                .link_health
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner()) =
+                                Some(health.clone());
                             if health.online() {
                                 state.system_online.store(true, Ordering::SeqCst);
                             }
@@ -612,5 +624,29 @@ mod tests {
         assert!(value.online());
         value.cancelled = true;
         assert!(!value.online());
+    }
+    #[test]
+    fn poisoned_lock_does_not_panic() {
+        // A panicking holder poisons the pool mutex. Background paths must keep
+        // serving probes instead of panicking a second time while re-locking it.
+        let pool = Arc::new(ProbePool::default());
+        let poisoner = Arc::clone(&pool);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = poisoner.0.lock().unwrap();
+            panic!("poison the probe pool on purpose");
+        })
+        .join();
+        assert!(poisoned.is_err(), "the holder thread must have panicked");
+        assert_eq!(pool.invalidate(), 1, "invalidate still bumps the id");
+        let (id, _receiver, started) = pool.subscribe("poisoned".into());
+        assert!(started, "a poisoned pool still starts a fresh run");
+        assert!(
+            pool.update(id, |value| value.complete = true),
+            "a poisoned pool still accepts updates for the live run"
+        );
+        assert!(
+            pool.current(id),
+            "the live run is still reported as current"
+        );
     }
 }
