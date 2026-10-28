@@ -2376,4 +2376,125 @@ mod tests {
         );
         assert_eq!(LGN_IPV6_DISCOVERY_BUDGET, Duration::from_secs(5));
     }
+
+    /// Single-connection, programmable local HTTP stub: it counts how often the
+    /// gateway was actually contacted, so tests can prove that credentials are
+    /// submitted exactly once. Test-only, never compiled into production code.
+    mod gateway_stub {
+        use reqwest::{Client, Url};
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        pub(super) struct GatewayStub {
+            port: u16,
+            hits: Arc<AtomicUsize>,
+        }
+
+        impl GatewayStub {
+            /// `respond` returns the complete HTTP response bytes to write back.
+            pub(super) fn start(respond: impl Fn() -> Vec<u8> + Send + 'static) -> Self {
+                let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let hits = Arc::new(AtomicUsize::new(0));
+                let counter = Arc::clone(&hits);
+                std::thread::spawn(move || {
+                    for stream in listener.incoming() {
+                        let Ok(mut stream) = stream else { break };
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        // Drain the request headers so the client never blocks
+                        // while writing its body.
+                        let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        let mut line = String::new();
+                        while reader.read_line(&mut line).unwrap_or(0) > 0 && line != "\r\n" {
+                            line.clear();
+                        }
+                        let _ = stream.write_all(&respond());
+                        let _ = stream.flush();
+                    }
+                });
+                Self { port, hits }
+            }
+
+            pub(super) fn url(&self, path_and_query: &str) -> Url {
+                Url::parse(&format!("http://127.0.0.1:{}{path_and_query}", self.port)).unwrap()
+            }
+
+            pub(super) fn hits(&self) -> usize {
+                self.hits.load(Ordering::SeqCst)
+            }
+        }
+
+        /// Direct client for `get_jsonp_login`: no interface binding, no proxy.
+        pub(super) fn client(timeout: Duration) -> Client {
+            Client::builder()
+                .timeout(timeout)
+                .redirect(reqwest::redirect::Policy::none())
+                .no_proxy()
+                .use_rustls_tls()
+                .build()
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn ambiguous_gateway_response_submits_credentials_exactly_once() {
+        use gateway_stub::{client, GatewayStub};
+        // All three protocols parse the same unparsable response: the gateway
+        // answers 200 but the body is not JSONP.
+        for label in ["bjut-sushe 登录", "bjut_wifi 登录", "lgn 有线登录"] {
+            let body = "<html>gateway fault</html>";
+            let stub = GatewayStub::start(move || {
+                // The declared length must match the body, otherwise hyper
+                // reports a transport error instead of a parse error.
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .into_bytes()
+            });
+            let url = stub.url("/eportal/portal/login?callback=dr1003");
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let error = runtime
+                .block_on(get_jsonp_login(
+                    &client(Duration::from_secs(2)),
+                    url,
+                    "http://127.0.0.1/",
+                    label,
+                    None,
+                    None,
+                ))
+                .expect_err("an unparsable gateway response must not be treated as success");
+            assert!(login_result_is_ambiguous(&error), "{label}: {error}");
+            assert_eq!(
+                stub.hits(),
+                1,
+                "{label} must submit credentials exactly once"
+            );
+        }
+    }
+
+    #[test]
+    fn ambiguous_login_errors_never_trigger_a_protocol_switch() {
+        // Every failure exit of `parse_dr_response` must be recognised by
+        // `login_result_is_ambiguous`, otherwise the short-circuit in
+        // `login_lgn_once` stops working and a protocol switch becomes possible.
+        for body in [
+            "",                          // empty response
+            "OK",                        // no JSONP parentheses
+            "dr1003({\"result\":1",      // truncated JSONP
+            "dr1003(not-json);",         // unparsable payload
+            "dr1003({\"msg\":\"ok\"});", // missing result field
+            "dr1003({\"result\":7});",   // unknown result value
+        ] {
+            let error = parse_dr_response(body).expect_err("must not parse as a login result");
+            assert!(login_result_is_ambiguous(&error), "{body:?} -> {error}");
+        }
+        // Reverse direction: a real business failure is not ambiguous, so the
+        // existing policy may still traverse the next account.
+        let (success, _) = parse_dr_response(r#"dr1002({"result":0,"msga":"密码错误"});"#).unwrap();
+        assert!(!success);
+    }
 }
