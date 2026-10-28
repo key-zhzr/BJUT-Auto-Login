@@ -2497,4 +2497,178 @@ mod tests {
         let (success, _) = parse_dr_response(r#"dr1002({"result":0,"msga":"密码错误"});"#).unwrap();
         assert!(!success);
     }
+
+    #[test]
+    fn gateway_connect_timeout_is_reported_as_a_timeout() {
+        use gateway_stub::{client, GatewayStub};
+        // The stub drains the request headers but never answers, so the client
+        // deadline is the only thing that can end the exchange. The closure runs
+        // while the accepted socket is still open, which is what keeps the
+        // connection alive: returning immediately would close it and surface as
+        // a send failure instead of a timeout.
+        let stub = GatewayStub::start(|| {
+            std::thread::sleep(Duration::from_secs(2));
+            Vec::new()
+        });
+        let url = stub.url("/eportal/portal/login?callback=dr1003");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime
+            .block_on(get_jsonp_login(
+                &client(Duration::from_millis(300)),
+                url,
+                "http://127.0.0.1/",
+                "bjut-sushe 登录",
+                None,
+                None,
+            ))
+            .expect_err("a silent gateway must not be treated as success");
+        assert!(error.contains("请求超时"), "{error}");
+        assert!(
+            !login_result_is_ambiguous(&error),
+            "a timeout is not an ambiguous credential submission: {error}"
+        );
+    }
+
+    #[test]
+    fn gateway_connection_refused_is_reported_as_a_connect_failure() {
+        use gateway_stub::client;
+        use std::net::TcpListener;
+        // Bind and drop immediately to obtain a port nobody is listening on.
+        let port = {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let url = Url::parse(&format!(
+            "http://127.0.0.1:{port}/eportal/portal/login?callback=dr1003"
+        ))
+        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime
+            .block_on(get_jsonp_login(
+                // A refused loopback connect can take seconds on this platform,
+                // so the deadline must stay well above that to observe it.
+                &client(Duration::from_secs(5)),
+                url,
+                "http://127.0.0.1/",
+                "bjut-sushe 登录",
+                None,
+                None,
+            ))
+            .expect_err("a refused connection must not be treated as success");
+        assert!(error.contains("连接或 TLS 握手失败"), "{error}");
+        assert!(!login_result_is_ambiguous(&error), "{error}");
+    }
+
+    #[test]
+    fn gateway_tls_handshake_failure_is_reported_as_a_connect_failure() {
+        use gateway_stub::client;
+        use std::io::Write;
+        use std::net::TcpListener;
+        // Deliberately not a GatewayStub: a TLS ClientHello has no HTTP header
+        // line, so the stub's header drain would turn this into a timeout.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+                let _ = stream.flush();
+            }
+        });
+        let url = Url::parse(&format!(
+            "https://127.0.0.1:{port}/eportal/portal/login?callback=dr1003"
+        ))
+        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime
+            .block_on(get_jsonp_login(
+                &client(Duration::from_secs(2)),
+                url,
+                "https://127.0.0.1/",
+                "bjut-sushe 登录",
+                None,
+                None,
+            ))
+            .expect_err("a plaintext answer to a TLS handshake must not succeed");
+        assert!(error.contains("连接或 TLS 握手失败"), "{error}");
+        assert!(!login_result_is_ambiguous(&error), "{error}");
+    }
+
+    #[test]
+    fn gateway_unparsable_jsonp_is_reported_as_ambiguous() {
+        use gateway_stub::{client, GatewayStub};
+        let body = "dr1003(not-json);";
+        let stub = GatewayStub::start(move || {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes()
+        });
+        let url = stub.url("/eportal/portal/login?callback=dr1003");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime
+            .block_on(get_jsonp_login(
+                &client(Duration::from_secs(2)),
+                url,
+                "http://127.0.0.1/",
+                "lgn 有线登录",
+                None,
+                None,
+            ))
+            .expect_err("an unparsable JSONP body must not be treated as success");
+        assert!(error.contains("响应无法解析"), "{error}");
+        assert!(login_result_is_ambiguous(&error), "{error}");
+    }
+
+    #[test]
+    fn gateway_empty_body_is_reported_as_ambiguous() {
+        use gateway_stub::{client, GatewayStub};
+        let stub = GatewayStub::start(|| {
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec()
+        });
+        let url = stub.url("/eportal/portal/login?callback=dr1003");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime
+            .block_on(get_jsonp_login(
+                &client(Duration::from_secs(2)),
+                url,
+                "http://127.0.0.1/",
+                "bjut_wifi 登录",
+                None,
+                None,
+            ))
+            .expect_err("an empty gateway body must not be treated as success");
+        assert!(error.contains("未返回预期 JSONP 响应"), "{error}");
+        assert!(login_result_is_ambiguous(&error), "{error}");
+    }
+
+    #[test]
+    fn gateway_non_success_status_is_reported_with_its_code() {
+        use gateway_stub::{client, GatewayStub};
+        let body = "gateway unavailable";
+        let stub = GatewayStub::start(move || {
+            format!(
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes()
+        });
+        let url = stub.url("/eportal/portal/login?callback=dr1003");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime
+            .block_on(get_jsonp_login(
+                &client(Duration::from_secs(2)),
+                url,
+                "http://127.0.0.1/",
+                "bjut-sushe 登录",
+                None,
+                None,
+            ))
+            .expect_err("a 503 answer must not be treated as success");
+        assert!(error.contains("HTTP 503"), "{error}");
+        // The gateway rejected the request before accepting the credentials, so
+        // this must not be treated as an ambiguous credential submission.
+        assert!(!login_result_is_ambiguous(&error), "{error}");
+    }
 }
