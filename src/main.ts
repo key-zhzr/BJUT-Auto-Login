@@ -820,6 +820,7 @@ function syncConfigToRust(): Promise<void> {
     macos_dock_visible: localStorage.getItem('bjut_macos_dock') !== 'false',
     vpn_compatibility: localStorage.getItem('bjut_vpn_compatibility') || 'high',
     vpn_maximum_until: vpnMaximumUntil || null,
+    prefer_ipv6_egress: localStorage.getItem('bjut_prefer_ipv6_egress') === 'true',
     endpoint_overrides: getEndpointOverrides(),
     dorm_cert_sha256: getDormCertSha256(),
     whitelist: [...whitelistCache],
@@ -887,6 +888,8 @@ async function loadConfigFromRust(): Promise<boolean> {
     localStorage.setItem('bjut_traffic_monitor_enabled',String(config.traffic_monitor_enabled===true));
     localStorage.setItem('bjut_prefer_remaining_flow',String(config.prefer_remaining_flow===true));
     (document.getElementById('setting-prefer-flow') as HTMLInputElement).checked=config.prefer_remaining_flow===true;
+    localStorage.setItem('bjut_prefer_ipv6_egress',String(config.prefer_ipv6_egress===true));
+    (document.getElementById('setting-prefer-ipv6-egress') as HTMLInputElement).checked=config.prefer_ipv6_egress===true;
     (document.getElementById('setting-traffic-monitor') as HTMLInputElement).checked=config.traffic_monitor_enabled===true;
 
     const backendAccounts: AccountView[] = (config.accounts || []).map((account: Partial<AccountView>) => ({
@@ -2083,6 +2086,7 @@ async function init() {
   setupNetworkQuality();
   setupQuickActions(activatePage);
   document.getElementById('setting-prefer-flow')!.addEventListener('change',async event=>{const input=event.target as HTMLInputElement;const previous=localStorage.getItem('bjut_prefer_remaining_flow');input.disabled=true;localStorage.setItem('bjut_prefer_remaining_flow',String(input.checked));try{await syncConfigToRust();}catch{localStorage.setItem('bjut_prefer_remaining_flow',previous||'false');input.checked=previous==='true';}finally{input.disabled=false;}});
+  document.getElementById('setting-prefer-ipv6-egress')!.addEventListener('change',async event=>{const input=event.target as HTMLInputElement;const previous=localStorage.getItem('bjut_prefer_ipv6_egress');input.disabled=true;localStorage.setItem('bjut_prefer_ipv6_egress',String(input.checked));try{await syncConfigToRust();}catch{localStorage.setItem('bjut_prefer_ipv6_egress',previous||'false');input.checked=previous==='true';}finally{input.disabled=false;}});
   window.addEventListener('usage-preferences', updateUsagePreferences);
   updateUsagePreferences();
   document.getElementById('setting-traffic-monitor')!.addEventListener('change',async event=>{

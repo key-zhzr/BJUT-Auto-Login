@@ -30,6 +30,9 @@ pub(crate) const AMBIGUOUS_LOGIN_RESULT: &str = "认证结果暂无法确认";
 pub(crate) struct PortalSettings {
     pub(crate) endpoints: endpoints::GatewayEndpoints,
     pub(crate) dorm_cert_pin: dorm_tls::DormCertPin,
+    /// 实验开关：Type3 的只读探测优先走 IPv6 客户端，失败自动回退 IPv4。
+    /// 认证路径（`login_lgn_once` / `lgn_login_url`）不受影响。
+    pub(crate) prefer_ipv6_egress: bool,
 }
 
 impl PortalSettings {
@@ -37,8 +40,15 @@ impl PortalSettings {
         Self {
             endpoints: endpoints::GatewayEndpoints::resolve(&config.endpoint_overrides),
             dorm_cert_pin: dorm_tls::DormCertPin::from_config(&config.dorm_cert_sha256),
+            prefer_ipv6_egress: config.prefer_ipv6_egress,
         }
     }
+}
+
+/// 是否让本次探测优先走 IPv6 出口。只有 lgn 有线（Type3）才有 IPv6 网关，
+/// 其余登录方式即使开关打开也保持原有 IPv4 探测路径。
+fn prefer_ipv6_probe(settings: &PortalSettings, login_type: &LoginType) -> bool {
+    settings.prefer_ipv6_egress && *login_type == LoginType::Type3
 }
 
 /// Validate the user-replaceable dorm certificate fingerprint. Empty means the
@@ -677,6 +687,26 @@ async fn probe_primary_portal(
         } else {
             compatibility
         };
+    // 实验开关：IPv6 出口优先。只读探测先走 IPv6 客户端，任何失败
+    // （无 IPv6 源地址、连接失败、响应不匹配）都回退到下面的 IPv4 路径，
+    // 因此开关打开也不会让原本可达的网关变得不可用。
+    if prefer_ipv6_probe(settings, login_type) {
+        if let Ok(ipv6_client) = lgn_ipv6_client(
+            compatibility,
+            NETWORK_PROBE_TIMEOUT,
+            route_context,
+            settings,
+        ) {
+            let mut urls = vec![LGN6_ROOT.to_string()];
+            if let Ok(url) = lgn_observed_ipv6_url(settings) {
+                urls.insert(0, url.to_string());
+            }
+            let result = probe_portal_urls(&ipv6_client, login_type, urls, LGN_REFERER, None).await;
+            if result != PortalProbeResult::NotDetected {
+                return result;
+            }
+        }
+    }
     let Ok(client) = portal_client(
         client_compatibility,
         login_type,
@@ -2877,5 +2907,44 @@ mod tests {
         );
         assert!(urls[0].starts_with(LGN_HTTP_USER_INFO));
         assert!(urls[1].contains(&LGN_IPV4_GATEWAYS[1].to_string()));
+    }
+
+    #[test]
+    fn prefer_ipv6_probe_is_off_by_default_and_limited_to_lgn_wired() {
+        let default_settings = PortalSettings::default();
+        assert!(!default_settings.prefer_ipv6_egress);
+        for login_type in [
+            LoginType::Type1,
+            LoginType::Type2,
+            LoginType::Type3,
+            LoginType::Unknown,
+        ] {
+            assert!(
+                !prefer_ipv6_probe(&default_settings, &login_type),
+                "{login_type:?} must keep the IPv4 probe path by default"
+            );
+        }
+
+        let enabled = PortalSettings {
+            prefer_ipv6_egress: true,
+            ..PortalSettings::default()
+        };
+        assert!(prefer_ipv6_probe(&enabled, &LoginType::Type3));
+        // 只有 lgn 有线有 IPv6 网关，其余登录方式即使开关打开也不改路径。
+        assert!(!prefer_ipv6_probe(&enabled, &LoginType::Type1));
+        assert!(!prefer_ipv6_probe(&enabled, &LoginType::Type2));
+        assert!(!prefer_ipv6_probe(&enabled, &LoginType::Unknown));
+    }
+
+    #[test]
+    fn prefer_ipv6_egress_is_read_from_the_persisted_config() {
+        let disabled: crate::config_model::AppConfig =
+            serde_json::from_value(serde_json::json!({})).expect("empty config must deserialize");
+        assert!(!PortalSettings::from_config(&disabled).prefer_ipv6_egress);
+
+        let enabled: crate::config_model::AppConfig =
+            serde_json::from_value(serde_json::json!({ "preferIpv6Egress": true }))
+                .expect("camelCase alias must deserialize");
+        assert!(PortalSettings::from_config(&enabled).prefer_ipv6_egress);
     }
 }

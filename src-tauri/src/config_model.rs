@@ -132,6 +132,10 @@ pub(crate) struct AppConfig {
     pub(crate) vpn_compatibility: String,
     #[serde(default, alias = "vpnMaximumUntil")]
     pub(crate) vpn_maximum_until: Option<i64>,
+    /// IPv6 出口优先（实验）。默认关闭；开启后仅影响 App 自身的 Type3
+    /// 只读探测，认证路径仍走 IPv4 ePortal 并携带真实 IPv6 地址。
+    #[serde(default, alias = "preferIpv6Egress")]
+    pub(crate) prefer_ipv6_egress: bool,
     /// 网关地址覆盖。缺省/全空 = 完全使用内置值，行为与之前逐字节一致。
     #[serde(
         default,
@@ -320,5 +324,41 @@ mod tests {
         .unwrap();
         assert_eq!(config.endpoint_overrides.dorm_gateway, "10.0.0.9");
         assert_eq!(config.dorm_cert_sha256, "aa");
+    }
+
+    #[test]
+    fn prefer_ipv6_egress_defaults_to_off() {
+        // 缺省必须为 false：开关是实验性的，旧配置与全新安装都保持现有行为。
+        let config = legacy_config();
+        assert!(!config.prefer_ipv6_egress);
+
+        let decoded: AppConfig = serde_json::from_value(serde_json::json!({}))
+            .expect("an empty object must fall back to every default");
+        assert!(!decoded.prefer_ipv6_egress);
+    }
+
+    #[test]
+    fn prefer_ipv6_egress_accepts_the_camel_case_alias() {
+        let config: AppConfig =
+            serde_json::from_value(serde_json::json!({ "preferIpv6Egress": true })).unwrap();
+        assert!(config.prefer_ipv6_egress);
+
+        let config: AppConfig =
+            serde_json::from_value(serde_json::json!({ "prefer_ipv6_egress": true })).unwrap();
+        assert!(config.prefer_ipv6_egress);
+    }
+
+    #[test]
+    fn prefer_ipv6_egress_round_trips_through_serde() {
+        let config: AppConfig =
+            serde_json::from_value(serde_json::json!({ "preferIpv6Egress": true })).unwrap();
+        let encoded = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            encoded.get("prefer_ipv6_egress"),
+            Some(&serde_json::json!(true))
+        );
+        let decoded: AppConfig = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.prefer_ipv6_egress, config.prefer_ipv6_egress);
+        assert_eq!(decoded, config);
     }
 }

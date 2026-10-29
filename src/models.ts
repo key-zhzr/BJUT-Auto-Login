@@ -42,6 +42,7 @@ export interface BackendConfig {
   macos_dock_visible?: boolean | null;
   vpn_compatibility?: string;
   vpn_maximum_until?: number | null;
+  prefer_ipv6_egress?: boolean;
   endpoint_overrides?: {
     dorm_gateway?: string;
     wifi_gateway?: string;

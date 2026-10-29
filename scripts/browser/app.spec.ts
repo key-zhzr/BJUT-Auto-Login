@@ -156,3 +156,33 @@ test('dorm cert pin dialog only replaces the fingerprint',async({page})=>{
   await page.locator('#btn-dorm-cert-pin').click();
   await expect(page.locator('#dorm-cert-pin-dialog input[name=dorm_cert_sha256]')).toHaveValue('a'.repeat(64));
 });
+
+test('IPv6 出口优先开关默认关闭并写入本地偏好',async({page})=>{
+  await page.setViewportSize({width:1280,height:900});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.locator('[data-target=settings]').first().click();
+  const toggle=page.locator('#setting-prefer-ipv6-egress');
+  await expect(toggle).toHaveCount(1);
+  // 实验开关，默认必须关闭：不改变既有探测/认证行为。
+  await expect(toggle).not.toBeChecked();
+  await expect(page.locator('.setting-item:has(#setting-prefer-ipv6-egress)')).toContainText('IPv6 出口优先');
+  await expect(page.locator('.setting-item:has(#setting-prefer-ipv6-egress)')).toContainText('不改变系统');
+  // 开关的 input 被样式隐藏（opacity:0; width:0），点击滑块由 label 转发。
+  await page.locator('label.switch:has(#setting-prefer-ipv6-egress) .slider').click();
+  await expect(toggle).toBeChecked();
+  await expect.poll(()=>page.evaluate(()=>localStorage.getItem('bjut_prefer_ipv6_egress'))).toBe('true');
+});
+
+test('IPv6 egress preference is off by default and persists locally',async({page})=>{
+  await page.setViewportSize({width:1280,height:900});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.locator('[data-target=settings]').first().click();
+  const toggle=page.locator('#setting-prefer-ipv6-egress');
+  await expect(toggle).not.toBeChecked();
+  await expect(page.locator('#settings')).toContainText('不改变系统或其他应用的流量出口');
+  await toggle.check();
+  await expect(toggle).toBeChecked();
+  expect(await page.evaluate(()=>localStorage.getItem('bjut_prefer_ipv6_egress'))).toBe('true');
+});
