@@ -449,9 +449,9 @@ fn bind_interface(
     // Windows requires network byte order for IP_UNICAST_IF, host order for IPv6.
     let value = if ipv6 { index } else { index.to_be() }.to_ne_bytes();
     let (level, option) = if ipv6 {
-        (IPPROTO_IPV6.0, IPV6_UNICAST_IF as i32)
+        (IPPROTO_IPV6.0, IPV6_UNICAST_IF)
     } else {
-        (IPPROTO_IP.0, IP_UNICAST_IF as i32)
+        (IPPROTO_IP.0, IP_UNICAST_IF)
     };
     // SAFETY: socket is open; setsockopt copies the four-byte index synchronously.
     if unsafe {

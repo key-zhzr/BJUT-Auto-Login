@@ -69,6 +69,7 @@ impl Family {
 enum ResponseCheck {
     NoContent,
     #[cfg(test)]
+    #[allow(dead_code)] // constructed only by the unix loopback test
     Address,
     Apple,
     Microsoft,

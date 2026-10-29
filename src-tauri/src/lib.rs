@@ -461,14 +461,12 @@ fn windows_network_identity(include_wifi_details: bool, preferred: &str) -> Wind
     // WlanEnumInterfaces still supplies the interface GUID. The native IP
     // Helper match above therefore retains a coherent Wi-Fi adapter/IP while
     // automatic credential submission fails closed on the missing identity.
-    if identity.ip.is_empty() {
-        if include_wifi_details && identity.wifi_identity_error.is_empty() {
-            identity.wifi_identity_error = observations
-                .first()
-                .map(|observation| observation.error.clone())
-                .filter(|error| !error.is_empty())
-                .unwrap_or_else(|| "wlanInterfaceNotMatched".to_string());
-        }
+    if identity.ip.is_empty() && include_wifi_details && identity.wifi_identity_error.is_empty() {
+        identity.wifi_identity_error = observations
+            .first()
+            .map(|observation| observation.error.clone())
+            .filter(|error| !error.is_empty())
+            .unwrap_or_else(|| "wlanInterfaceNotMatched".to_string());
     }
 
     // Prefer the physical Ethernet adapter Windows would actually use for the
@@ -680,6 +678,7 @@ fn get_network_info(
     }
 
     #[cfg(not(target_os = "android"))]
+    #[allow(unused_assignments)] // platform blocks assign the same fallbacks
     {
         let mut ssid = String::new();
         let mut bssid = String::new();
@@ -1307,12 +1306,12 @@ fn get_local_ip(app: tauri::AppHandle) -> String {
     let _ = &preferred;
     #[cfg(target_os = "windows")]
     {
-        return windows_network_identity(false, &preferred).ip;
+        windows_network_identity(false, &preferred).ip
     }
 
     #[cfg(target_os = "android")]
     {
-        return call_android_network_helper_string("getPhysicalNetworkIp");
+        call_android_network_helper_string("getPhysicalNetworkIp")
     }
 
     #[cfg(target_os = "macos")]
