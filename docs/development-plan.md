@@ -434,7 +434,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml ambiguous
 # 结构门禁：每协议登录恰好一个凭据提交点
-grep -c "get_jsonp_login(" src-tauri/src/portal_auth.rs          # 期望 7（1 定义 + 6 调用）
+awk '/^mod tests/{exit} 1' src-tauri/src/portal_auth.rs | grep -c "get_jsonp_login("  # 期望 7（生产段：1 定义 + 6 调用；测试段不计）
 grep -c "login_result_is_ambiguous(" src-tauri/src/lib.rs        # 期望 4
 # 纯测试改动门禁：生产代码零改动
 git diff --stat -- src-tauri/src/portal_auth.rs src-tauri/src/lib.rs   # 只应有 tests 模块内的行
@@ -1265,6 +1265,8 @@ sequenceDiagram
 ---
 
 ## 7. 任务分解（Part B）
+
+> 执行修正：实际按“一项一提交”执行，P0-03 与 P0-04、P1-04 与 P1-05 各自独立 commit；任务边界与验收不变。
 
 ### 7.1 所需包（不新增任何依赖）
 
