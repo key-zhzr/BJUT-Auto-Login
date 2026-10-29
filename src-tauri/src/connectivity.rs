@@ -353,12 +353,14 @@ pub(crate) fn observe(
                             .ok()
                             .flatten();
                         if route.is_some() {
+                            let settings = crate::portal_settings(state.as_ref());
                             tokio::time::timeout(
                                 crate::NETWORK_PROBE_TIMEOUT,
                                 crate::fetch_portal_user_info(
                                     network["ip"].as_str(),
                                     compatibility,
                                     route.as_ref(),
+                                    &settings,
                                 ),
                             )
                             .await

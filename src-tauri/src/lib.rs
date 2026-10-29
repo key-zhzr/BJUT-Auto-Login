@@ -1765,6 +1765,16 @@ fn effective_vpn_compatibility(config: &AppConfig) -> VpnCompatibility {
     }
 }
 
+/// Resolve per-operation portal settings once. The config read lock is released
+/// before the caller awaits anything; never hold it across `.await`.
+fn portal_settings(state: &AppState) -> portal_auth::PortalSettings {
+    let config = state
+        .config
+        .read()
+        .unwrap_or_else(|poison| poison.into_inner());
+    portal_auth::PortalSettings::from_config(&config)
+}
+
 const TYPE1_MAXIMUM_MODE_REQUIRED_MESSAGE: &str =
     "已定位 bjut-sushe 认证网关，但未找到可通过证书与协议校验的 HTTPS:802 域名入口。应用不会忽略证书错误或静默发送明文密码；请确认 Wi-Fi 可信后，在设置中临时启用“最高兼容（HTTP + IP）”。";
 
@@ -2173,6 +2183,7 @@ async fn run_headless_network_check(
 ) -> serde_json::Value {
     let mut logs = Vec::new();
     let compatibility = effective_vpn_compatibility(&config);
+    let settings = portal_auth::PortalSettings::from_config(&config);
     let transport = network_transport(&network).to_string();
     let validated = network
         .get("validated")
@@ -2292,6 +2303,7 @@ async fn run_headless_network_check(
         &ssid,
         &transport,
         portal_route_context.as_ref(),
+        &settings,
     )
     .await;
     if type1_portal_requires_maximum(&detection, compatibility) {
@@ -2450,6 +2462,7 @@ async fn run_headless_network_check(
             &account.pass,
             compatibility,
             portal_route_context.as_ref(),
+            &settings,
         )
         .await
         {
@@ -2633,6 +2646,7 @@ async fn fetch_portal_user_info(
     _local_ip: Option<&str>,
     compatibility: VpnCompatibility,
     route_context: Option<&PortalRouteContext>,
+    settings: &portal_auth::PortalSettings,
 ) -> Option<UserInfo> {
     // This is a credential-free, read-only current-session endpoint. Do not
     // suppress it merely because SSID/IP heuristics say "non-campus": users
@@ -2643,10 +2657,11 @@ async fn fetch_portal_user_info(
         &LoginType::Type3,
         std::time::Duration::from_secs(3),
         route_context,
+        settings,
     )
     .await
     .ok()?;
-    let url = lgn_user_info_url(compatibility);
+    let url = lgn_user_info_url(compatibility, settings);
     let text = client.get(url).send().await.ok()?.text().await.ok()?;
     let start = text.find('(')?;
     let end = text.rfind(')')?;
@@ -3753,6 +3768,7 @@ fn decrypt_config_backup_payload(
 
 fn validate_imported_config(config: &AppConfig) -> Result<(), String> {
     config.tray.validate()?;
+    config_model::validate_endpoint_config(config)?;
     use std::collections::HashSet;
 
     if config.accounts.len() > 100 {
@@ -4161,6 +4177,7 @@ fn save_config(
 ) -> Result<(), String> {
     config_model::normalize_traffic_monitor(&mut new_cfg);
     new_cfg.tray.validate()?;
+    config_model::validate_endpoint_config(&new_cfg)?;
     if new_cfg.android_notification_mode != "separate" {
         new_cfg.android_notification_mode = default_android_notification_mode();
     }
@@ -4743,11 +4760,13 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
             "debug",
         );
         progress.phase("正在探测校园认证网关，确认登录类型", 65);
+        let settings = portal_settings(&state);
         let detection = detect_login_type_details_rust(
             compatibility,
             &current_ssid,
             &transport,
             portal_route_context.as_ref(),
+            &settings,
         )
         .await;
         if network_check_login_operation_superseded(&state, login_operation_generation) {
@@ -5120,12 +5139,14 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                         break;
                                     }
                                     connectivity::invalidate(&app, &state);
+                                    let settings = portal_settings(&state);
                                     let login_result = login_to_campus_network_rust(
                                         login_type.clone(),
                                         &acc.user,
                                         &acc.pass,
                                         compatibility,
                                         portal_route_context.as_ref(),
+                                        &settings,
                                     )
                                     .await;
                                     drop(login_guard);
@@ -5749,6 +5770,7 @@ async fn restart_lgn_adapter(
         network_repair::validate_target(&target, &network)?;
         let route = portal_route_context_from_network(&network)?;
         let compatibility = effective_vpn_compatibility(&state.config.read().unwrap());
+        let settings = portal_settings(&state);
         let configuration_issue = serde_json::from_value::<macos_network::LgnLinkConfiguration>(
             network
                 .get("lgnLinkConfiguration")
@@ -5756,7 +5778,7 @@ async fn restart_lgn_adapter(
                 .unwrap_or_default(),
         )
         .is_ok_and(|configuration| configuration.resembles_reported_ipv6_failure());
-        if diagnose_lgn_ipv6_rust(compatibility, route.as_ref())
+        if diagnose_lgn_ipv6_rust(compatibility, route.as_ref(), &settings)
             .await
             .is_ok()
             && !configuration_issue
@@ -5990,11 +6012,13 @@ async fn evaluate_manual_network_trust(
     // this read-only request may safely fall back to the system route so a VPN
     // connected to the accounting network can still expose session data.
     let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
+    let settings = portal_auth::PortalSettings::from_config(&config);
     let detection = detect_login_type_details_rust(
         compatibility,
         ssid,
         transport,
         portal_route_context.as_ref(),
+        &settings,
     )
     .await;
     let detected = if detection.login_ready {
@@ -6175,6 +6199,7 @@ async fn portal_logout_attempt(
     account: Option<&Account>,
     compatibility: VpnCompatibility,
     route_context: Option<&PortalRouteContext>,
+    settings: &portal_auth::PortalSettings,
 ) -> Result<String, String> {
     let label = method.display_name();
     match tokio::time::timeout(
@@ -6185,6 +6210,7 @@ async fn portal_logout_attempt(
             account.map(|value| value.pass.as_str()),
             compatibility,
             route_context,
+            settings,
         ),
     )
     .await
@@ -6227,6 +6253,7 @@ async fn logout_current_session_by_type(
     compatibility: VpnCompatibility,
     current_ip: &str,
     route_context: Option<&PortalRouteContext>,
+    settings: &portal_auth::PortalSettings,
 ) -> Result<String, String> {
     let mut failures = Vec::new();
     macro_rules! attempt {
@@ -6248,13 +6275,15 @@ async fn logout_current_session_by_type(
                 LoginType::Type3,
                 None,
                 compatibility,
-                route_context
+                route_context,
+                settings
             ));
             attempt!(portal_logout_attempt(
                 LoginType::Type1,
                 current_account,
                 compatibility,
-                route_context
+                route_context,
+                settings
             ));
         }
         LoginType::Type2 => {
@@ -6262,13 +6291,15 @@ async fn logout_current_session_by_type(
                 LoginType::Type3,
                 None,
                 compatibility,
-                route_context
+                route_context,
+                settings
             ));
             attempt!(portal_logout_attempt(
                 LoginType::Type2,
                 None,
                 compatibility,
-                route_context
+                route_context,
+                settings
             ));
             attempt!(billing_logout_attempt(
                 current_account,
@@ -6281,7 +6312,8 @@ async fn logout_current_session_by_type(
                 LoginType::Type3,
                 None,
                 compatibility,
-                route_context
+                route_context,
+                settings
             ));
             attempt!(billing_logout_attempt(
                 current_account,
@@ -6334,6 +6366,7 @@ async fn current_or_detected_login_type(
     if let Some(cached) = cached {
         return cached;
     }
+    let settings = portal_settings(state);
     let detection = detect_login_type_details_rust(
         compatibility,
         network
@@ -6342,6 +6375,7 @@ async fn current_or_detected_login_type(
             .unwrap_or(""),
         network_transport(network),
         route_context,
+        &settings,
     )
     .await;
     if detection.login_ready || detection.portal_detected {
@@ -6388,6 +6422,7 @@ async fn logout_current_campus_session(
         .get("ip")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
+    let settings = portal_settings(&state);
     let message = run_billing_mutation_to_completion(&state, async {
         logout_current_session_by_type(
             &login_type,
@@ -6395,6 +6430,7 @@ async fn logout_current_campus_session(
             compatibility,
             current_ip,
             route_context.as_ref(),
+            &settings,
         )
         .await
     })
@@ -6530,6 +6566,7 @@ async fn manual_login_inner(
     let compatibility = effective_vpn_compatibility(&config);
     let probe_route_context = portal_route_context_from_network(&network_before_probe)?;
     progress.phase("gateway", "正在确认校园认证网关")?;
+    let settings = portal_auth::PortalSettings::from_config(&config);
     let detection = detect_login_type_details_rust(
         compatibility,
         network_before_probe
@@ -6538,6 +6575,7 @@ async fn manual_login_inner(
             .unwrap_or(""),
         network_transport(&network_before_probe),
         probe_route_context.as_ref(),
+        &settings,
     )
     .await;
     let detected_type = if detection.login_ready {
@@ -6693,12 +6731,14 @@ async fn manual_login_inner(
         }
         if login_type != LoginType::Type2 {
             progress.submitting("logout", "正在注销旧账号，完成后将切换到所选账号")?;
+            let settings = portal_settings(&state);
             let logout_message = logout_current_session_by_type(
                 &login_type,
                 current_account.as_ref(),
                 compatibility,
                 ip,
                 portal_route_context.as_ref(),
+                &settings,
             )
             .await
             .map_err(|error| format!("切换账号前注销当前会话失败：{error}"))?;
@@ -6783,6 +6823,7 @@ async fn manual_login_inner(
             connectivity::invalidate(&app, &state);
             progress.submitting("authenticating", "正在提交认证，随后核对联网结果")
         };
+        let settings = portal_settings(&state);
         match portal_auth::login_with_submission_guard(
             login_type.clone(),
             &account.user,
@@ -6790,6 +6831,7 @@ async fn manual_login_inner(
             compatibility,
             portal_route_context.as_ref(),
             &before_submit,
+            &settings,
         )
         .await
         {
@@ -7490,8 +7532,14 @@ async fn get_user_info(
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .or(local_ip.as_deref());
-    let info =
-        fetch_portal_user_info(effective_ip, compatibility, portal_route_context.as_ref()).await;
+    let settings = portal_settings(state.inner());
+    let info = fetch_portal_user_info(
+        effective_ip,
+        compatibility,
+        portal_route_context.as_ref(),
+        &settings,
+    )
+    .await;
     if let Some(info) = info.as_ref() {
         evaluate_usage_alerts(&app, &state, info);
         schedule_month_end_check(&app, state.inner(), &info.account);
@@ -8044,11 +8092,13 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
             return;
         }
     };
+    let settings = portal_settings(&state);
     let detection = detect_login_type_details_rust(
         compatibility,
         &ssid,
         &transport,
         portal_route_context.as_ref(),
+        &settings,
     )
     .await;
     if type1_portal_requires_maximum(&detection, compatibility) {
@@ -8177,12 +8227,14 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         &format!("使用首选账号 {} 执行快捷登录", account.user),
         "info",
     );
+    let settings = portal_settings(&state);
     match login_to_campus_network_rust(
         login_type,
         &account.user,
         &account.pass,
         compatibility,
         portal_route_context.as_ref(),
+        &settings,
     )
     .await
     {
@@ -8327,6 +8379,8 @@ pub fn run() {
                 macos_dock_visible: None,
                 vpn_compatibility: default_vpn_compatibility(),
                 vpn_maximum_until: None,
+                endpoint_overrides: Default::default(),
+                dorm_cert_sha256: String::new(),
                 whitelist: Vec::new(),
                 blacklist: Vec::new(),
                 network_profiles: Vec::new(),
@@ -9278,6 +9332,8 @@ mod tests {
             macos_dock_visible: Some(false),
             vpn_compatibility: default_vpn_compatibility(),
             vpn_maximum_until: None,
+            endpoint_overrides: Default::default(),
+            dorm_cert_sha256: String::new(),
             whitelist: vec!["campus|trusted".to_string()],
             blacklist: vec!["guest|blocked".to_string()],
             network_profiles: vec![],
@@ -9779,7 +9835,11 @@ mod tests {
 
     #[test]
     fn vpn_compatibility_selects_secure_or_direct_probe_endpoints() {
-        let dorm = portal_probe_urls(VpnCompatibility::Minimum, &LoginType::Type1);
+        let dorm = portal_probe_urls(
+            VpnCompatibility::Minimum,
+            &LoginType::Type1,
+            &portal_auth::PortalSettings::default(),
+        );
         assert_eq!(dorm.len(), 2);
         assert!(dorm.iter().all(|url| {
             let url = reqwest::Url::parse(url).unwrap();
@@ -9790,13 +9850,25 @@ mod tests {
                     .is_some_and(|host| host == WLGN_HOST || host == LGN_HOST)
                 && url.path() == "/eportal/portal/page/loadConfig"
         }));
-        let wifi = portal_probe_urls(VpnCompatibility::High, &LoginType::Type2);
+        let wifi = portal_probe_urls(
+            VpnCompatibility::High,
+            &LoginType::Type2,
+            &portal_auth::PortalSettings::default(),
+        );
         assert_eq!(wifi.len(), 1);
         assert!(wifi[0].starts_with("https://wlgn.bjut.edu.cn/drcom/chkstatus?"));
-        let wifi_direct = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type2);
+        let wifi_direct = portal_probe_urls(
+            VpnCompatibility::Maximum,
+            &LoginType::Type2,
+            &portal_auth::PortalSettings::default(),
+        );
         assert_eq!(wifi_direct.len(), 1);
         assert!(wifi_direct[0].starts_with("http://10.21.251.3/drcom/chkstatus?"));
-        let wired = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3);
+        let wired = portal_probe_urls(
+            VpnCompatibility::Maximum,
+            &LoginType::Type3,
+            &portal_auth::PortalSettings::default(),
+        );
         assert_eq!(wired.len(), 2);
         assert!(wired[0].starts_with("http://172.30.201.2:801/eportal/portal/page/loadUserInfo?"));
         assert!(wired[1].starts_with("http://172.30.201.10:801/eportal/portal/page/loadUserInfo?"));
@@ -9804,15 +9876,41 @@ mod tests {
 
     #[test]
     fn dashboard_user_info_uses_the_correct_protocol_for_vpn_mode() {
-        let url = reqwest::Url::parse(&lgn_user_info_url(VpnCompatibility::Minimum)).unwrap();
+        let url = reqwest::Url::parse(&lgn_user_info_url(
+            VpnCompatibility::Minimum,
+            &portal_auth::PortalSettings::default(),
+        ))
+        .unwrap();
         assert_eq!(url.scheme(), "https");
         assert_eq!(url.host_str(), Some("lgn.bjut.edu.cn"));
         assert_eq!(url.port(), Some(802));
 
-        let direct = reqwest::Url::parse(&lgn_user_info_url(VpnCompatibility::Maximum)).unwrap();
+        let direct = reqwest::Url::parse(&lgn_user_info_url(
+            VpnCompatibility::Maximum,
+            &portal_auth::PortalSettings::default(),
+        ))
+        .unwrap();
         assert_eq!(direct.scheme(), "http");
         assert_eq!(direct.host_str(), Some("172.30.201.2"));
         assert_eq!(direct.port(), Some(801));
+    }
+
+    #[test]
+    fn save_config_rejects_invalid_gateway_override() {
+        let mut config: AppConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        config.endpoint_overrides.dorm_gateway = "http://10.0.0.1".into();
+        assert!(config_model::validate_endpoint_config(&config).is_err());
+        config.endpoint_overrides.dorm_gateway = "10.0.0.1".into();
+        assert!(config_model::validate_endpoint_config(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_imported_config_rejects_invalid_gateway_override() {
+        let mut config: AppConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        config.endpoint_overrides.wifi_gateway = "wlgn.bjut.edu.cn".into();
+        assert!(validate_imported_config(&config).is_err());
+        config.endpoint_overrides.wifi_gateway = "10.0.0.2".into();
+        assert!(validate_imported_config(&config).is_ok());
     }
 
     #[test]

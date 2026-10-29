@@ -358,6 +358,10 @@ pub(super) async fn run_network_diagnostics(
             connection.require_physical && !connection.access_online(),
         )
     };
+    let settings = app
+        .try_state::<Arc<AppState>>()
+        .map(|state| crate::portal_settings(&state))
+        .unwrap_or_default();
     let gateway_probe = async {
         let started = std::time::Instant::now();
         let result = if wifi_route_failed || portal_route_context.is_none() {
@@ -369,12 +373,17 @@ pub(super) async fn run_network_diagnostics(
                     &ssid,
                     network_transport(&network),
                     portal_route_context.as_ref(),
+                    &settings,
                 ),
                 async {
                     if lgn_wired_hint {
                         Some(
-                            diagnose_lgn_ipv6_rust(compatibility, portal_route_context.as_ref())
-                                .await,
+                            diagnose_lgn_ipv6_rust(
+                                compatibility,
+                                portal_route_context.as_ref(),
+                                &settings,
+                            )
+                            .await,
                         )
                     } else {
                         None

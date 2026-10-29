@@ -12,6 +12,20 @@ use std::time::Duration;
 /// are used as TLS SNI/Host aliases while DNS is pinned to the dorm gateway.
 pub(super) use super::endpoints::TLS_HOST_CANDIDATES;
 
+/// 宿舍网关证书指纹。P1-02 only needs the default variant; P1-03 adds the
+/// user-replaceable fingerprint. There is deliberately no "disabled" state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DormCertPin {
+    #[default]
+    BuiltIn,
+}
+
+impl DormCertPin {
+    pub(crate) fn from_config(_value: &str) -> Self {
+        Self::BuiltIn
+    }
+}
+
 /// SHA-256 fingerprint of the leaf certificate supplied by 10.21.221.98:802:
 /// CN=*.bjut.edu.cn, SAN=*.bjut.edu.cn/bjut.edu.cn,
 /// valid 2024-08-08 through 2025-09-09.
