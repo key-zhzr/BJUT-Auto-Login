@@ -92,3 +92,46 @@ export function setupGatewayOverrides(persist: () => Promise<void>) {
     });
   });
 }
+
+/**
+ * Register the dorm-certificate fingerprint row. The pin is a replacement, not
+ * an off switch: the dialog only edits the SHA-256, and Rust still enforces the
+ * expiry-only exception plus the SNI allowlist.
+ */
+export function setupDormCertPin(persist: () => Promise<void>) {
+  document.getElementById('btn-dorm-cert-pin')?.addEventListener('click', () => {
+    const { form, close } = presentationDialog('dorm-cert-pin-dialog', '宿舍网关证书指纹');
+    const content = document.createElement('div');
+    content.innerHTML = `
+      <label class="form-group">SHA-256 指纹<input name="dorm_cert_sha256" placeholder="64 位十六进制，可带冒号或短横线" autocomplete="off" spellcheck="false"></label>
+      <p class="transfer-note">只替换指纹，不能关闭证书校验。当前有效的证书无需替换；若学校换发的证书已过期，它必须仍覆盖 2025-08-20 才能通过内置校验时间点。留空表示使用内置指纹。</p>
+      <p class="transfer-error" role="alert"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-reset>恢复内置指纹</button>
+        <button type="button" class="btn btn-secondary" data-cancel>取消</button>
+        <button class="btn btn-primary" type="submit">保存</button>
+      </div>`;
+    form.append(content);
+    const input = content.querySelector<HTMLInputElement>('input[name="dorm_cert_sha256"]')!;
+    const error = content.querySelector<HTMLElement>('.transfer-error')!;
+    input.value = certPin;
+    content.querySelector('[data-cancel]')?.addEventListener('click', close);
+    content.querySelector('[data-reset]')?.addEventListener('click', () => {
+      input.value = '';
+      error.textContent = '';
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const previous = certPin;
+      certPin = input.value.trim();
+      error.textContent = '';
+      try {
+        await persist();
+        close();
+      } catch (failure) {
+        certPin = previous;
+        error.textContent = failure instanceof Error ? failure.message : String(failure);
+      }
+    });
+  });
+}

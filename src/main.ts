@@ -6,6 +6,7 @@ import {
   getEndpointOverrides,
   loadDormCertSha256,
   loadEndpointOverrides,
+  setupDormCertPin,
   setupGatewayOverrides,
 } from './portal-gateway-settings';
 import { setupDeviceUsage } from './device-usage-view';
@@ -2076,6 +2077,7 @@ async function init() {
   setupEventListeners();
   setupTrayPreferences(syncConfigToRust);
   setupGatewayOverrides(syncConfigToRust);
+  setupDormCertPin(syncConfigToRust);
   setupDeviceUsage(syncConfigToRust);
   setupAdvancedDiagnostics();
   setupNetworkQuality();

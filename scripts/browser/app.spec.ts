@@ -140,3 +140,19 @@ test('gateway override dialog keeps a reversible draft',async({page})=>{
   await page.locator('#btn-gateway-overrides').click();
   await expect(page.locator('#gateway-overrides-dialog input[name=dorm_gateway]')).toHaveValue('10.0.0.9');
 });
+
+test('dorm cert pin dialog only replaces the fingerprint',async({page})=>{
+  await page.setViewportSize({width:1280,height:900});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.locator('[data-target=settings]').first().click();
+  await page.locator('#btn-dorm-cert-pin').click();
+  const dialog=page.locator('#dorm-cert-pin-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('不能关闭证书校验');
+  await dialog.locator('input[name=dorm_cert_sha256]').fill('a'.repeat(64));
+  await dialog.getByRole('button',{name:'保存',exact:true}).click();
+  await expect(page.locator('#dorm-cert-pin-dialog')).toHaveCount(0);
+  await page.locator('#btn-dorm-cert-pin').click();
+  await expect(page.locator('#dorm-cert-pin-dialog input[name=dorm_cert_sha256]')).toHaveValue('a'.repeat(64));
+});
