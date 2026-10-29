@@ -1,4 +1,4 @@
-name: Release Multi-Platform App
+name: Release Windows App
 
 on:
   push:
@@ -15,12 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04'
-            args: ''
           - platform: 'windows-latest'
             args: '--target x86_64-pc-windows-msvc'
           - platform: 'windows-latest'
@@ -33,12 +27,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -48,7 +36,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.platform == 'windows-latest' && 'aarch64-pc-windows-msvc,x86_64-pc-windows-msvc' || '' }}
+          targets: aarch64-pc-windows-msvc,x86_64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -69,27 +57,9 @@ jobs:
 
       - name: Build Tauri App
         env:
-          APPLE_SIGNING_IDENTITY: "-"
-          # Tauri otherwise passes create-dmg --skip-jenkins whenever CI=true,
-          # which copies the background but deliberately omits Finder layout
-          # metadata (.DS_Store) and icon positions.
-          TAURI_BUNDLER_DMG_IGNORE_CI: ${{ matrix.platform == 'macos-latest' && 'true' || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- ${{ matrix.args }}
-
-      - name: Verify macOS DMG layout
-        if: matrix.platform == 'macos-latest'
-        shell: bash
-        run: |
-          dmg_path="$(find src-tauri/target -type f -path '*/bundle/dmg/*.dmg' -print -quit)"
-          test -n "$dmg_path"
-          mount_dir="$(mktemp -d)"
-          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg_path"
-          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true; rmdir "$mount_dir" 2>/dev/null || true' EXIT
-          test -f "$mount_dir/.DS_Store"
-          test -f "$mount_dir/.background/dmg-background.tiff"
-          test -L "$mount_dir/Applications"
 
       - name: Rename and Prepare Assets
         shell: python
@@ -107,7 +77,7 @@ jobs:
           version = os.environ.get("VERSION", "")
 
           os.makedirs("release-artifacts", exist_ok=True)
-          print("Searching for artifacts on platform={}, args={}, version={}...".format(platform, args, version))
+          print("Searching for Windows artifacts on platform={}, args={}, version={}...".format(platform, args, version))
 
           copied = False
           for root, dirs, files in os.walk("src-tauri/target"):
@@ -116,60 +86,22 @@ jobs:
               for file in files:
                   file_path = os.path.join(root, file)
 
-                  # macOS
-                  if platform == "macos-latest" and file.endswith(".dmg"):
-                      if "aarch64" in args:
-                          dest = "release-artifacts/BJUT-Auto-Login_{}_macOS_arm64.dmg".format(version)
-                      else:
-                          dest = "release-artifacts/BJUT-Auto-Login_{}_macOS_x64.dmg".format(version)
-                      print("Found macOS DMG: {} -> {}".format(file_path, dest))
-                      shutil.copy2(file_path, dest)
-                      copied = True
-                  elif platform == "macos-latest" and file.endswith(".app.tar.gz"):
-                      arch = "arm64" if "aarch64" in args else "x64"
-                      dest = "release-artifacts/BJUT-Auto-Login_{}_macOS_{}.tar.gz".format(version, arch)
-                      print("Found macOS updater bundle: {} -> {}".format(file_path, dest))
-                      shutil.copy2(file_path, dest)
-                      copied = True
-                  elif platform == "macos-latest" and file.endswith(".app.tar.gz.sig"):
-                      arch = "arm64" if "aarch64" in args else "x64"
-                      dest = "release-artifacts/BJUT-Auto-Login_{}_macOS_{}.tar.gz.sig".format(version, arch)
-                      shutil.copy2(file_path, dest)
-                      copied = True
-
-                  # Windows
-                  elif platform == "windows-latest" and file.endswith(".exe") and "bundle" in file_path:
+                  if file.endswith(".exe") and "bundle" in file_path:
                       arch = "arm64" if "aarch64" in args else "x64"
                       suffix = "_Offline" if "tauri.offline.conf.json" in args else ""
                       dest = "release-artifacts/BJUT-Auto-Login_{}_Windows_{}{}.exe".format(version, arch, suffix)
                       print("Found Windows EXE: {} -> {}".format(file_path, dest))
                       shutil.copy2(file_path, dest)
                       copied = True
-                  elif platform == "windows-latest" and file.endswith(".exe.sig") and "bundle" in file_path and "tauri.offline.conf.json" not in args:
+                  elif file.endswith(".exe.sig") and "bundle" in file_path and "tauri.offline.conf.json" not in args:
                       arch = "arm64" if "aarch64" in args else "x64"
                       dest = "release-artifacts/BJUT-Auto-Login_{}_Windows_{}.exe.sig".format(version, arch)
+                      print("Found Windows EXE signature: {} -> {}".format(file_path, dest))
                       shutil.copy2(file_path, dest)
                       copied = True
 
-                  # Linux
-                  elif platform == "ubuntu-22.04" and "bundle" in file_path:
-                      if file.endswith(".deb"):
-                          dest = "release-artifacts/BJUT-Auto-Login_{}_Linux_x64.deb".format(version)
-                          print("Found Linux DEB: {} -> {}".format(file_path, dest))
-                          shutil.copy2(file_path, dest)
-                          copied = True
-                      elif file.endswith(".AppImage"):
-                          dest = "release-artifacts/BJUT-Auto-Login_{}_Linux_x64.AppImage".format(version)
-                          print("Found Linux AppImage: {} -> {}".format(file_path, dest))
-                          shutil.copy2(file_path, dest)
-                          copied = True
-                      elif file.endswith(".AppImage.sig"):
-                          dest = "release-artifacts/BJUT-Auto-Login_{}_Linux_x64.AppImage.sig".format(version)
-                          shutil.copy2(file_path, dest)
-                          copied = True
-
           if not copied:
-              print("Error: No artifacts were found!")
+              print("Error: No Windows artifacts were found!")
               sys.exit(1)
           else:
               print("Successfully copied all artifacts.")
@@ -181,232 +113,8 @@ jobs:
           path: release-artifacts/*
           if-no-files-found: error
 
-  build-android-arm64:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Setup Java
-        uses: actions/setup-java@v6
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: platform-tools
-
-      - name: Install Android SDK packages and NDK
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
-
-      - name: Install NPM dependencies
-        run: npm ci
-
-      - name: Build Tauri Android App
-        env:
-          NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
-          CC_aarch64_linux_android: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-          AR_aarch64_linux_android: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-          RANLIB_aarch64_linux_android: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
-        run: npm run tauri android build -- --target aarch64 --apk
-
-      - name: Prepare APKs for signing
-        run: |
-          mkdir -p apk-to-sign
-          find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
-
-      - name: Sign Android Release
-        shell: bash
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > release.keystore
-          trap 'rm -f release.keystore' EXIT
-          shopt -s nullglob
-          apks=(apk-to-sign/*-unsigned.apk)
-          test "${#apks[@]}" -gt 0
-          for apk in "${apks[@]}"; do
-            output="${apk%-unsigned.apk}-signed.apk"
-            "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
-              --ks release.keystore --ks-key-alias key0 \
-              --ks-pass "pass:$ANDROID_KEYSTORE_PASSWORD" \
-              --key-pass "pass:$ANDROID_KEY_PASSWORD" \
-              --out "$output" "$apk"
-            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$output"
-          done
-
-      - name: Get version
-        id: package-version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-
-      - name: Rename and Prepare Android Assets
-        shell: python
-        env:
-          VERSION: ${{ steps.package-version.outputs.version }}
-        run: |
-          import os
-          import shutil
-          import sys
-
-          version = os.environ.get("VERSION", "")
-          os.makedirs("android-release", exist_ok=True)
-
-          found = False
-          for file in os.listdir("apk-to-sign"):
-              if file.endswith("-signed.apk") or (file.endswith(".apk") and "unsigned" not in file):
-                  src = os.path.join("apk-to-sign", file)
-                  dest = "android-release/BJUT-Auto-Login_{}_Android_arm64.apk".format(version)
-                  print("Found signed APK: {} -> {}".format(src, dest))
-                  shutil.copy2(src, dest)
-                  found = True
-                  break
-
-          if not found:
-              print("Error: No signed APK found!")
-              sys.exit(1)
-
-      - name: Upload Local Artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-arm64-artifact
-          path: android-release/*.apk
-          if-no-files-found: error
-
-  build-android-x86_64:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Setup Java
-        uses: actions/setup-java@v6
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: platform-tools
-
-      - name: Install Android SDK packages and NDK
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
-
-      - name: Install NPM dependencies
-        run: npm ci
-
-      - name: Build Tauri Android App
-        env:
-          NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.12077973
-          CC_x86_64_linux_android: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang
-          AR_x86_64_linux_android: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-          RANLIB_x86_64_linux_android: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
-        run: npm run tauri android build -- --target x86_64 --apk
-
-      - name: Prepare APKs for signing
-        run: |
-          mkdir -p apk-to-sign
-          find src-tauri/gen/android/app/build/outputs/apk -name "*-unsigned.apk" -exec cp {} apk-to-sign/ \;
-
-      - name: Sign Android Release
-        shell: bash
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > release.keystore
-          trap 'rm -f release.keystore' EXIT
-          shopt -s nullglob
-          apks=(apk-to-sign/*-unsigned.apk)
-          test "${#apks[@]}" -gt 0
-          for apk in "${apks[@]}"; do
-            output="${apk%-unsigned.apk}-signed.apk"
-            "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
-              --ks release.keystore --ks-key-alias key0 \
-              --ks-pass "pass:$ANDROID_KEYSTORE_PASSWORD" \
-              --key-pass "pass:$ANDROID_KEY_PASSWORD" \
-              --out "$output" "$apk"
-            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$output"
-          done
-
-      - name: Get version
-        id: package-version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-
-      - name: Rename and Prepare Android Assets
-        shell: python
-        env:
-          VERSION: ${{ steps.package-version.outputs.version }}
-        run: |
-          import os
-          import shutil
-          import sys
-
-          version = os.environ.get("VERSION", "")
-          os.makedirs("android-release", exist_ok=True)
-
-          found = False
-          for file in os.listdir("apk-to-sign"):
-              if file.endswith("-signed.apk") or (file.endswith(".apk") and "unsigned" not in file):
-                  src = os.path.join("apk-to-sign", file)
-                  dest = "android-release/BJUT-Auto-Login_{}_Android_x86_64.apk".format(version)
-                  print("Found signed APK: {} -> {}".format(src, dest))
-                  shutil.copy2(src, dest)
-                  found = True
-                  break
-
-          if not found:
-              print("Error: No signed APK found!")
-              sys.exit(1)
-
-      - name: Upload Local Artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-x86_64-artifact
-          path: android-release/*.apk
-          if-no-files-found: error
-
   publish-release:
-    needs: [build-desktop, build-android-arm64, build-android-x86_64]
+    needs: [build-desktop]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
@@ -468,11 +176,8 @@ jobs:
           base = "https://github.com/{}/releases/download/v{}".format(repository, version)
           release_dir = "release-files"
           targets = {
-              "darwin-aarch64": "BJUT-Auto-Login_{}_macOS_arm64.tar.gz".format(version),
-              "darwin-x86_64": "BJUT-Auto-Login_{}_macOS_x64.tar.gz".format(version),
               "windows-aarch64": "BJUT-Auto-Login_{}_Windows_arm64.exe".format(version),
               "windows-x86_64": "BJUT-Auto-Login_{}_Windows_x64.exe".format(version),
-              "linux-x86_64": "BJUT-Auto-Login_{}_Linux_x64.AppImage".format(version),
           }
           platforms = {}
           for target, filename in targets.items():
@@ -496,7 +201,7 @@ jobs:
                   {"name": filename, "browser_download_url": "{}/{}".format(base, filename),
                    "size": os.path.getsize(os.path.join(release_dir, filename))}
                   for filename in sorted(os.listdir(release_dir))
-                  if filename.endswith((".exe", ".dmg", ".AppImage", ".deb", ".apk", ".tar.gz"))
+                  if filename.endswith((".exe", ".exe.sig"))
               ],
           }
           with open(os.path.join(release_dir, "latest.json"), "w", encoding="utf-8") as handle:
