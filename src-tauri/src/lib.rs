@@ -691,7 +691,7 @@ fn get_network_info(
         let wifi_identity_error: String;
         #[cfg(not(target_os = "windows"))]
         let wifi_identity_error = String::new();
-        let route_ip = route_source_ipv4("10.21.251.3:80");
+        let route_ip = route_source_ipv4(portal_auth::endpoints::WIFI_ROUTE_PROBE);
         #[cfg(target_os = "macos")]
         let mut lgn_wired_features = Vec::new();
         #[cfg(not(target_os = "macos"))]
@@ -792,7 +792,7 @@ fn get_network_info(
                 }
             }
 
-            let route_identity = linux_route_identity("172.30.201.2");
+            let route_identity = linux_route_identity(portal_auth::endpoints::LGN_IPV4_PRIMARY);
             if let Some((route_interface, route_ip)) =
                 route_identity.filter(|(route_interface, route_ip)| {
                     route_interface != &interface_name
@@ -2139,9 +2139,7 @@ where
     billing_runtime::run_mutation_to_completion(&state.is_in_background, future)
 }
 
-const WLGN_HOST: &str = "wlgn.bjut.edu.cn";
-const LGN_HOST: &str = "lgn.bjut.edu.cn";
-const LGN6_HOST: &str = "lgn6.bjut.edu.cn";
+pub(crate) use portal_auth::endpoints::{LGN6_HOST, LGN_HOST, WLGN_HOST};
 
 #[cfg(target_os = "android")]
 #[derive(serde::Serialize)]

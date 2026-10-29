@@ -10,7 +10,7 @@ use std::time::Duration;
 
 /// Official BJUT hostnames already present in captured portal traffic.  They
 /// are used as TLS SNI/Host aliases while DNS is pinned to the dorm gateway.
-pub(super) const TLS_HOST_CANDIDATES: [&str; 2] = ["wlgn.bjut.edu.cn", "lgn.bjut.edu.cn"];
+pub(super) use super::endpoints::TLS_HOST_CANDIDATES;
 
 /// SHA-256 fingerprint of the leaf certificate supplied by 10.21.221.98:802:
 /// CN=*.bjut.edu.cn, SAN=*.bjut.edu.cn/bjut.edu.cn,

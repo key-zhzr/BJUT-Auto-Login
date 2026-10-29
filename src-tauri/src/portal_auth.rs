@@ -1,10 +1,16 @@
-use super::{
-    query_campus_dns_ipv4, redact_request_error, usable_physical_ipv4, VpnCompatibility, LGN6_HOST,
-    LGN_HOST, WLGN_HOST,
-};
+use super::{query_campus_dns_ipv4, redact_request_error, usable_physical_ipv4, VpnCompatibility};
 use crate::network_probe::NETWORK_PROBE_TIMEOUT;
 use crate::network_trust::{campus_wifi_kind, CampusWifiKind};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use endpoints::{
+    DORM_GATEWAY_IPV4, DORM_HTTPS_AUTHORITY, DORM_HTTPS_REFERER, DORM_HTTP_AUTHORITY,
+    DORM_HTTP_LOGIN, DORM_HTTP_REFERER, LGN6_GATEWAY_IPV6, LGN6_HOST, LGN6_OBSERVED_IPV6,
+    LGN6_ROOT, LGN_HOST, LGN_HTTPS_AUTHORITY, LGN_HTTPS_LOGIN, LGN_HTTPS_LOGOUT,
+    LGN_HTTPS_USER_INFO, LGN_HTTP_USER_INFO, LGN_IPV4_GATEWAYS, LGN_REFERER, LGN_ROOT,
+    WIFI_GATEWAY_IPV4, WIFI_HTTPS_CHKSTATUS, WIFI_HTTPS_LOGIN, WIFI_HTTPS_LOGOUT,
+    WIFI_HTTPS_REFERER, WIFI_HTTP_CHKSTATUS, WIFI_HTTP_LOGIN, WIFI_HTTP_LOGOUT, WIFI_HTTP_REFERER,
+    WLGN_HOST,
+};
 use futures_util::{
     future::BoxFuture,
     stream::{FuturesOrdered, FuturesUnordered},
@@ -18,6 +24,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod dorm_tls;
+pub(crate) mod endpoints;
 #[cfg(target_os = "windows")]
 mod lgn_ipv6_windows;
 
@@ -57,31 +64,6 @@ impl PortalRouteContext {
     }
 }
 
-const DORM_HTTP_LOGIN: &str = "http://10.21.221.98:801/eportal/portal/login";
-const DORM_HTTP_REFERER: &str = "http://10.21.221.98/";
-const DORM_HTTPS_AUTHORITY: &str = "10.21.221.98:802";
-const DORM_HTTPS_REFERER: &str = "https://10.21.221.98:802/";
-// The dormitory gateway only exposes an IP address to users, while its TLS
-// certificate is issued for BJUT hostnames.  Keep this list limited to
-// hostnames already used by the captured official portal flows.  The client
-// resolves them directly to the dormitory gateway and uses a narrowly scoped
-// certificate-expiry pin while retaining chain, name and handshake checks.
-// The HTTP Host still matches the captured IP endpoint, and a read-only Type 1
-// response must be confirmed before any credential is sent.
-const DORM_GATEWAY_IPV4: Ipv4Addr = Ipv4Addr::new(10, 21, 221, 98);
-const LGN6_GATEWAY_IPV6: [Ipv6Addr; 2] = [
-    Ipv6Addr::new(0x2001, 0x0da8, 0x0216, 0x30c9, 0, 0, 0, 0x0002),
-    Ipv6Addr::new(0x2001, 0x0da8, 0x0216, 0x30c9, 0, 0, 0, 0x000a),
-];
-const WIFI_HTTP_LOGIN: &str = "http://10.21.251.3/drcom/login";
-const WIFI_HTTPS_LOGIN: &str = "https://wlgn.bjut.edu.cn/drcom/login";
-const WIFI_HTTP_LOGOUT: &str = "http://10.21.251.3/drcom/logout";
-const WIFI_HTTPS_LOGOUT: &str = "https://wlgn.bjut.edu.cn/drcom/logout";
-const WIFI_HTTP_REFERER: &str = "http://10.21.251.3/";
-const WIFI_HTTPS_REFERER: &str = "https://wlgn.bjut.edu.cn/";
-const LGN_REFERER: &str = "https://lgn.bjut.edu.cn/";
-const LGN_ROOT: &str = "https://lgn.bjut.edu.cn/";
-const LGN6_ROOT: &str = "https://lgn6.bjut.edu.cn/";
 const LGN_PROGRAM_INDEX: &str = "o4OBee1755497815";
 const LGN_PAGE_INDEX: &str = "cHAmjX1755497856";
 const LGN_JS_VERSION: &str = "4.2.2";
@@ -253,13 +235,13 @@ pub(crate) async fn portal_client(
                 .map(|host| (*host, vec![IpAddr::V4(DORM_GATEWAY_IPV4)]))
                 .collect()
         }
-        LoginType::Type2 => vec![(WLGN_HOST, vec![IpAddr::V4(Ipv4Addr::new(10, 21, 251, 3))])],
+        LoginType::Type2 => vec![(WLGN_HOST, vec![IpAddr::V4(WIFI_GATEWAY_IPV4)])],
         LoginType::Type3 => vec![
             (
                 LGN_HOST,
                 vec![
-                    IpAddr::V4(Ipv4Addr::new(172, 30, 201, 2)),
-                    IpAddr::V4(Ipv4Addr::new(172, 30, 201, 10)),
+                    IpAddr::V4(LGN_IPV4_GATEWAYS[0]),
+                    IpAddr::V4(LGN_IPV4_GATEWAYS[1]),
                 ],
             ),
             (
@@ -415,7 +397,11 @@ fn portal_probe_urls_for_route(
         LoginType::Type2 => vec![type2_probe_url(compatibility)],
         LoginType::Type3 if compatibility == VpnCompatibility::Maximum => {
             let primary = lgn_user_info_url(compatibility);
-            let secondary = primary.replacen("172.30.201.2", "172.30.201.10", 1);
+            let secondary = primary.replacen(
+                &LGN_IPV4_GATEWAYS[0].to_string(),
+                &LGN_IPV4_GATEWAYS[1].to_string(),
+                1,
+            );
             vec![primary, secondary]
         }
         LoginType::Type3 => {
@@ -460,9 +446,9 @@ fn type1_probe_url(login_base: &str, physical_ipv4: Option<Ipv4Addr>) -> String 
 
 fn type2_probe_url(compatibility: VpnCompatibility) -> String {
     let base = if compatibility == VpnCompatibility::Maximum {
-        "http://10.21.251.3/drcom/chkstatus"
+        WIFI_HTTP_CHKSTATUS
     } else {
-        "https://wlgn.bjut.edu.cn/drcom/chkstatus"
+        WIFI_HTTPS_CHKSTATUS
     };
     let mut url = Url::parse(base).expect("static Type 2 probe URL must be valid");
     url.query_pairs_mut()
@@ -811,7 +797,7 @@ fn probe_body_matches(login_type: &LoginType, url: &str, body: &str) -> bool {
                 && normalized.contains("ddddd"))
                 || normalized.contains("name=\"v6ip\"")
                 || normalized.contains("name='v6ip'")
-                || normalized.contains("lgn.bjut.edu.cn")
+                || normalized.contains(LGN_HOST)
         }
         LoginType::Unknown => false,
     }
@@ -956,8 +942,7 @@ fn parse_observed_ip(text: &str, expect_ipv6: bool) -> Result<String, String> {
 }
 
 fn lgn_observed_ipv6_url() -> Result<Url, String> {
-    let mut url =
-        Url::parse("https://lgn6.bjut.edu.cn/drcom/getipv6").map_err(|error| error.to_string())?;
+    let mut url = Url::parse(LGN6_OBSERVED_IPV6).map_err(|error| error.to_string())?;
     url.query_pairs_mut()
         .append_pair("callback", "dr1004")
         .append_pair("program_index", LGN_PROGRAM_INDEX)
@@ -974,8 +959,7 @@ fn lgn_login_url(
     local_ipv4: &str,
     observed_ipv6: &str,
 ) -> Result<Url, String> {
-    let mut url = Url::parse("https://lgn.bjut.edu.cn:802/eportal/portal/login")
-        .map_err(|error| error.to_string())?;
+    let mut url = Url::parse(LGN_HTTPS_LOGIN).map_err(|error| error.to_string())?;
     let account = if user.starts_with(",0,") {
         user.to_string()
     } else {
@@ -1014,8 +998,7 @@ fn lgn_login_url(
 }
 
 fn lgn_logout_url(local_ipv4: &str, observed_ipv6: &str) -> Result<Url, String> {
-    let mut url = Url::parse("https://lgn.bjut.edu.cn:802/eportal/portal/logout")
-        .map_err(|error| error.to_string())?;
+    let mut url = Url::parse(LGN_HTTPS_LOGOUT).map_err(|error| error.to_string())?;
     let fields = [
         ("callback", "dr1008"),
         ("login_method", "1"),
@@ -1053,9 +1036,9 @@ pub(crate) fn lgn_user_info_url(compatibility: VpnCompatibility) -> String {
         random_request_id()
     );
     if compatibility == VpnCompatibility::Maximum {
-        format!("http://172.30.201.2:801/eportal/portal/page/loadUserInfo?{query}")
+        format!("{LGN_HTTP_USER_INFO}?{query}")
     } else {
-        format!("https://lgn.bjut.edu.cn:802/eportal/portal/page/loadUserInfo?{query}")
+        format!("{LGN_HTTPS_USER_INFO}?{query}")
     }
 }
 
@@ -1097,7 +1080,7 @@ async fn login_lgn_once(
     route_context: Option<&PortalRouteContext>,
     before_submit: &(dyn Fn() -> Result<(), String> + Sync),
 ) -> Result<(bool, String), String> {
-    let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn 有线")?;
+    let local_ipv4 = login_source_ipv4(route_context, LGN_HTTPS_AUTHORITY, "lgn 有线")?;
     // The captured browser performs a read-only getipv6 request, then exactly
     // one encrypted ePortal login with both addresses. /V6 and legacy form
     // posts are not part of this protocol and can create a separate session.
@@ -1513,9 +1496,9 @@ pub(crate) async fn login_with_submission_guard(
     match login_type {
         LoginType::Type1 => {
             let destination = if compatibility == VpnCompatibility::Maximum {
-                "10.21.221.98:801"
+                DORM_HTTP_AUTHORITY
             } else {
-                "10.21.221.98:802"
+                DORM_HTTPS_AUTHORITY
             };
             let local_ip = login_source_ipv4(route_context, destination, "bjut-sushe")?;
             let (login_base, referer, hint, host_override) =
@@ -1612,9 +1595,9 @@ pub(crate) async fn logout_from_campus_network_rust(
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| "bjut-sushe 注销需要当前账号的已保存凭据".to_string())?;
             let destination = if compatibility == VpnCompatibility::Maximum {
-                "10.21.221.98:801"
+                DORM_HTTP_AUTHORITY
             } else {
-                "10.21.221.98:802"
+                DORM_HTTPS_AUTHORITY
             };
             let local_ip = login_source_ipv4(route_context, destination, "bjut-sushe")?;
             let (login_base, referer, host_override) = if compatibility == VpnCompatibility::Maximum
@@ -1655,7 +1638,7 @@ pub(crate) async fn logout_from_campus_network_rust(
             .await
         }
         LoginType::Type3 => {
-            let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn")?;
+            let local_ipv4 = login_source_ipv4(route_context, LGN_HTTPS_AUTHORITY, "lgn")?;
             let (observed_ipv6, diagnostic) =
                 match discover_lgn_ipv6(compatibility, LGN_IPV6_DISCOVERY_BUDGET, route_context)
                     .await
@@ -2670,5 +2653,32 @@ mod tests {
         // The gateway rejected the request before accepting the credentials, so
         // this must not be treated as an ambiguous credential submission.
         assert!(!login_result_is_ambiguous(&error), "{error}");
+    }
+
+    #[test]
+    fn url_builders_start_from_the_shared_endpoint_constants() {
+        assert_eq!(
+            type1_https_login_base(WLGN_HOST),
+            format!("https://{WLGN_HOST}:802/eportal/portal/login")
+        );
+        assert!(type1_probe_url(DORM_HTTP_LOGIN, None)
+            .starts_with("http://10.21.221.98:801/eportal/portal/page/loadConfig?"));
+        assert!(type2_probe_url(VpnCompatibility::Maximum).starts_with(WIFI_HTTP_CHKSTATUS));
+        assert!(type2_probe_url(VpnCompatibility::High).starts_with(WIFI_HTTPS_CHKSTATUS));
+        assert_eq!(
+            lgn_observed_ipv6_url()
+                .unwrap()
+                .origin()
+                .ascii_serialization(),
+            Url::parse(LGN6_OBSERVED_IPV6)
+                .unwrap()
+                .origin()
+                .ascii_serialization()
+        );
+        assert!(lgn_user_info_url(VpnCompatibility::Maximum).starts_with(LGN_HTTP_USER_INFO));
+        assert!(lgn_user_info_url(VpnCompatibility::High).starts_with(LGN_HTTPS_USER_INFO));
+        let urls = portal_probe_urls(VpnCompatibility::Maximum, &LoginType::Type3);
+        assert!(urls[0].starts_with(LGN_HTTP_USER_INFO));
+        assert!(urls[1].contains(&LGN_IPV4_GATEWAYS[1].to_string()));
     }
 }

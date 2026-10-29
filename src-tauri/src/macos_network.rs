@@ -65,7 +65,7 @@ pub(crate) fn physical_identity_for(preferred: &str) -> Option<PhysicalIdentity>
         });
     }
     let wifi_ip = macos_ipv4_for_interface(&wifi_interface);
-    let route_interface = macos_route_interface("172.30.201.2");
+    let route_interface = macos_route_interface(crate::portal_auth::endpoints::LGN_IPV4_PRIMARY);
     let routed_wired = if route_interface != wifi_interface
         && macos_is_physical_ethernet_interface(&route_interface)
     {
