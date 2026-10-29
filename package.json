@@ -7,7 +7,7 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "tsc && vite build",
-    "test:frontend": "node --experimental-strip-types scripts/test-update-utils.mjs && node --experimental-strip-types --test scripts/test-router-billing.mjs scripts/test-router-experience.mjs scripts/test-device-usage.mjs scripts/test-config-crypto.mjs",
+    "test:frontend": "node --experimental-strip-types scripts/test-update-utils.mjs && node --experimental-strip-types --test scripts/test-router-billing.mjs scripts/test-router-experience.mjs scripts/test-device-usage.mjs scripts/test-config-crypto.mjs scripts/test-ui-copy-fallback.mjs",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
     "check:versions": "node scripts/check-versions.mjs",
     "check:test-coverage": "node scripts/check-test-coverage.mjs",
