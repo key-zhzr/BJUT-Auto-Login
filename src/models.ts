@@ -42,6 +42,13 @@ export interface BackendConfig {
   macos_dock_visible?: boolean | null;
   vpn_compatibility?: string;
   vpn_maximum_until?: number | null;
+  endpoint_overrides?: {
+    dorm_gateway?: string;
+    wifi_gateway?: string;
+    lgn_gateway?: string;
+    lgn6_gateway?: string;
+  };
+  dorm_cert_sha256?: string;
   whitelist?: string[];
   blacklist?: string[];
   network_profiles?: NetworkProfile[];

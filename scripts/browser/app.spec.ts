@@ -118,3 +118,25 @@ for(const [platform,width,height] of [['macos',1280,900],['android',390,844]] as
     await panel.getByRole('button',{name:'暂停统计',exact:true}).click();await page.locator('#usage-confirm-dialog').getByRole('button',{name:'暂停统计',exact:true}).click();await expect(panel.locator('.traffic-content')).toBeHidden();
   });
 }
+
+test('gateway override dialog keeps a reversible draft',async({page})=>{
+  await page.setViewportSize({width:1280,height:900});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.locator('[data-target=settings]').first().click();
+  await page.locator('#btn-gateway-overrides').click();
+  const dialog=page.locator('#gateway-overrides-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('input[name=dorm_gateway]')).toHaveCount(1);
+  await expect(dialog).toContainText('IP 地址');
+  await dialog.locator('input[name=dorm_gateway]').fill('10.0.0.9');
+  await dialog.getByRole('button',{name:'取消',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  await page.locator('#btn-gateway-overrides').click();
+  await expect(page.locator('#gateway-overrides-dialog input[name=dorm_gateway]')).toHaveValue('');
+  await page.locator('#gateway-overrides-dialog input[name=dorm_gateway]').fill('10.0.0.9');
+  await page.locator('#gateway-overrides-dialog').getByRole('button',{name:'保存',exact:true}).click();
+  await expect(page.locator('#gateway-overrides-dialog')).toHaveCount(0);
+  await page.locator('#btn-gateway-overrides').click();
+  await expect(page.locator('#gateway-overrides-dialog input[name=dorm_gateway]')).toHaveValue('10.0.0.9');
+});

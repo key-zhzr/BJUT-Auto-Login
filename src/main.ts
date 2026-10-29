@@ -1,6 +1,13 @@
 import { setupRouterControl } from './router-control';
 import { getTrayPreferences, loadTrayPreferences, setupTrayPreferences } from './tray-preferences';
 import { setupOnboarding } from './onboarding';
+import {
+  getDormCertSha256,
+  getEndpointOverrides,
+  loadDormCertSha256,
+  loadEndpointOverrides,
+  setupGatewayOverrides,
+} from './portal-gateway-settings';
 import { setupDeviceUsage } from './device-usage-view';
 import {defaultUsageRetention,usageStorageEstimate,type UsageRetention} from './device-usage-model';
 import { setupAdvancedDiagnostics } from './advanced-diagnostics';
@@ -812,6 +819,8 @@ function syncConfigToRust(): Promise<void> {
     macos_dock_visible: localStorage.getItem('bjut_macos_dock') !== 'false',
     vpn_compatibility: localStorage.getItem('bjut_vpn_compatibility') || 'high',
     vpn_maximum_until: vpnMaximumUntil || null,
+    endpoint_overrides: getEndpointOverrides(),
+    dorm_cert_sha256: getDormCertSha256(),
     whitelist: [...whitelistCache],
     blacklist: [...blacklistCache],
     network_profiles: networkProfilesCache.map(profile => ({ ...profile, account_order: [...profile.account_order] })),
@@ -869,6 +878,8 @@ async function loadConfigFromRust(): Promise<boolean> {
     ]);
     if (!config) return false;
     loadTrayPreferences(config.tray);
+    loadEndpointOverrides(config.endpoint_overrides);
+    loadDormCertSha256(config.dorm_cert_sha256);
     localStorage.setItem('bjut_traffic_monitor_scope',config.traffic_monitor_scope==='all'?'all':'local');
     localStorage.setItem('bjut_traffic_retention',JSON.stringify(config.traffic_retention||defaultUsageRetention));
     updateUsagePreferences();
@@ -2064,6 +2075,7 @@ async function init() {
   routerWorkbench = setupRouterControl(() => accountsCache, message => log('路由协作', message), customConfirm);
   setupEventListeners();
   setupTrayPreferences(syncConfigToRust);
+  setupGatewayOverrides(syncConfigToRust);
   setupDeviceUsage(syncConfigToRust);
   setupAdvancedDiagnostics();
   setupNetworkQuality();
