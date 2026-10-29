@@ -19,9 +19,10 @@
 | P2-02 `md5` 升级 | 已完成 | `652a2d9`，0.7.0 → 0.8.1，调用点 5 处不变 |
 | P1-02 端点覆盖配置 | 已完成 | `0658b24` 后端 + `1581d5f` UI；4 网关 IP 覆盖、校验、表单与浏览器用例 |
 | P1-03 证书指纹替换 | 已完成 | `fba8864` 后端 + `b84e1f1` UI；只替换指纹、不提供关闭开关；已知限制见验证记录 |
-| P1-06 之后的 P2-01/P2-03 | 未开始 | 跨平台 TLS 后端改动，建议 Actions 启用后做 |
+| P1-06 之后的 P2-01/P2-03 | 未开始 | 仅保留 Windows 后可按 Windows Schannel 定稿，建议 Actions 启用后做 |
 | P2-04 clippy 基线 | 已完成 | `e445a15`；`clippy -D warnings` 退出码 0 |
-| IPv6 免流 | 未开始 | 仅完成调研；配置骨架/只读展示未实现，行为改动需真实计费数据 Gate |
+| 仅保留 Windows 构建/发布/CI | 已完成 | `9f5392f`；`tauri.conf.json` targets=`nsis`，CI/Release 仅 Windows；跨平台源码保留 |
+| IPv6 出口优先 v1 | 已完成（受限） | `89ecc7c`；默认关闭，Type3 只读探测优先 IPv6 + 回退，认证仍 IPv4 ePortal；系统级出口/免流仍需计费数据 |
 
 > 第一批验证记录见 `docs/verification-2026-10-28.md`。当前 fork 的 GitHub Actions 为 0 次运行，本地 Rust stable 1.99 + VS BuildTools 2026 是实际门禁；全量测试 284 passed / 2 failed（均为既有环境失败），`clippy -D warnings` 已通过，前端 34 项与浏览器 9 项通过。
 

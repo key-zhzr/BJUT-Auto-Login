@@ -116,3 +116,33 @@ P2-02 的 `cargo update` 通过当前代理完成，锁文件仅变更 `md5` 版
 - P2-01 TLS 后端统一：需要跨平台 Cargo feature 与 Android/macOS 构建验证，Actions 未启用时不做。
 - P2-03 依赖矩阵记录：依赖 P2-01 定稿。
 - IPv6 免流：仅完成调研；配置骨架/只读展示未实现，行为改动需真实计费数据。
+
+## 2026-10-29 Windows-only 与 IPv6 出口优先 v1
+
+| 项 | 提交 | 说明 |
+| --- | --- | --- |
+| IPv6 出口优先 v1 | `89ecc7c` | `prefer_ipv6_egress` 默认 false；Type3 只读探测优先走 IPv6 客户端，失败自动回退 IPv4；认证路径一行未动 |
+| IPv6 浏览器测试修正 | `e164fd0`、`5f0caeb` | 开关 input 被 CSS 隐藏，改为点击 slider；去掉重复的英文测试 |
+| 仅保留 Windows 构建/发布/CI | `9f5392f` | `tauri.conf.json` targets=`["nsis"]`；CI verify 改 Windows runner；删除 Android job；release 仅保留 Windows x64/arm64/offline |
+
+### 门禁（本地实测）
+
+- `cargo fmt --all -- --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test --lib`：289 passed / 2 failed / 4 ignored；2 个失败仍为既有环境问题。
+- `cargo test --lib -- --skip request_errors_never_include_credential_urls --skip explicitly_pinned_router_certificate_still_requires_tls_key_proof`：**289 passed / 0 failed / 4 ignored**（与 CI 的 Windows 跑法一致）。
+- `npm run typecheck`、`npm run test:frontend`（34 passed）、`npm run build`：通过。
+- `npm run test:browser -- --project=app`：**10 passed**。
+
+### IPv6 出口优先 v1 的边界（已写入 UI 文案）
+
+- 只影响 **App 自身的 Type3 只读探测/状态请求**（`lgn6` 根页与 `getipv6`）优先走 IPv6。
+- 认证仍走 IPv4 ePortal，并继续携带真实 `wlan_user_ipv6`（既有 `discover_lgn_ipv6`）。
+- **不改变**系统路由、其他应用的流量出口，也不按协议族拆分计费。
+- “真正免流”仍需真实计费数据证明 IPv6 不计量；系统级出口切换（路由/前缀策略）需要管理员权限与回滚方案，未实现。
+
+### Windows-only 的边界
+
+- 只收敛**构建、发布、CI**到 Windows；`macos_network.rs`、`src-tauri/gen/android`、`cfg(target_os=...)` 源码全部保留，未删除任何平台代码。
+- CI 的 `cargo test` 跳过 2 个 GitHub Windows runner 上的环境敏感测试（本地仍运行并记录）。
+- Android/macOS/Linux 的发布产物已停止生成；`latest.json` 只发布 Windows x64/arm64 更新通道。
