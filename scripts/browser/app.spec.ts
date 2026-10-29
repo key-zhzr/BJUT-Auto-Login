@@ -182,7 +182,7 @@ test('IPv6 egress preference is off by default and persists locally',async({page
   const toggle=page.locator('#setting-prefer-ipv6-egress');
   await expect(toggle).not.toBeChecked();
   await expect(page.locator('#settings')).toContainText('不改变系统或其他应用的流量出口');
-  await toggle.check();
+  await page.locator('#setting-prefer-ipv6-egress + .slider').click();
   await expect(toggle).toBeChecked();
   expect(await page.evaluate(()=>localStorage.getItem('bjut_prefer_ipv6_egress'))).toBe('true');
 });
