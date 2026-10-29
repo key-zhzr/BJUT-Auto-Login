@@ -173,16 +173,3 @@ test('IPv6 出口优先开关默认关闭并写入本地偏好',async({page})=>{
   await expect(toggle).toBeChecked();
   await expect.poll(()=>page.evaluate(()=>localStorage.getItem('bjut_prefer_ipv6_egress'))).toBe('true');
 });
-
-test('IPv6 egress preference is off by default and persists locally',async({page})=>{
-  await page.setViewportSize({width:1280,height:900});
-  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
-  await expect(page.locator('#qa-run')).toBeVisible();
-  await page.locator('[data-target=settings]').first().click();
-  const toggle=page.locator('#setting-prefer-ipv6-egress');
-  await expect(toggle).not.toBeChecked();
-  await expect(page.locator('#settings')).toContainText('不改变系统或其他应用的流量出口');
-  await page.locator('#setting-prefer-ipv6-egress + .slider').click();
-  await expect(toggle).toBeChecked();
-  expect(await page.evaluate(()=>localStorage.getItem('bjut_prefer_ipv6_egress'))).toBe('true');
-});
