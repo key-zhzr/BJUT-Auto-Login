@@ -113,6 +113,11 @@ jobs:
       - name: Check platform Rust integration
         run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 
+      - name: Verify portal authentication and dual-stack tests
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --locked portal_auth
+          cargo test --manifest-path src-tauri/Cargo.toml --locked dual_stack
+
       - name: Verify router HTTPS connection diagnostics
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked router_control::tests::closed_https_port
 
