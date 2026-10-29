@@ -46,6 +46,9 @@ jobs:
       - name: Run frontend regression tests
         run: npm run test:frontend
 
+      - name: Check frontend test entry coverage
+        run: npm run check:test-coverage
+
       - name: Check release version sources
         run: npm run check:versions
 
