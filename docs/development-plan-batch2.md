@@ -51,6 +51,12 @@
 
 ---
 
+## 0.4 执行修正（2026-10-29）
+
+- T01a/T01b 合并为一个后端提交：T01a 单独提交时 `GatewayEndpoints` 尚未被生产代码消费，`clippy --all-targets -D warnings` 会因 dead_code 变红。UI 仍单独提交。
+- 前端 wire format 使用 snake_case（`dorm_gateway` 等），与既有 `BackendConfig` 风格一致；Rust serde 同时保留 camelCase 输入别名。设计稿 §2.5.3 的 `dormGateway` 仅作为输入别名，不作为序列化键。
+- P1-03 采用方案 A（只替换指纹 + UI 明示限制），不提供“关闭校验”开关，也不增加校验时间点配置。
+
 ## 1. 现状核对（实测，作为设计前提）
 
 ### 1.1 端点常量现状

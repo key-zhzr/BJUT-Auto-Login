@@ -74,3 +74,45 @@ git revert b0e6ba2  # P1-05
 | P2-02 `md5` 升级 | `652a2d9` | 0.7.0 → 0.8.1；`cargo test campus_services` 16 passed / 1 ignored；全量仍 262 passed / 2 failed / 4 ignored；clippy 仍为同一组 10 个既有错误；`md5::compute` 调用点仍为 5 |
 
 P2-02 的 `cargo update` 通过当前代理完成，锁文件仅变更 `md5` 版本与校验和。
+
+## 后续更新（2026-10-29）
+
+| 项 | 提交 | 验证 |
+| --- | --- | --- |
+| P1-02 网关覆盖后端 | `0658b24` | 全量 275 passed / 2 failed / 4 ignored（+13 新增）；`portal_auth` 既有 URL 测试全绿；默认配置序列化逐字节不变 |
+| P1-02 网关覆盖 UI | `1581d5f` | 34 项前端测试通过；浏览器 7/7；新增对话框可逆草稿用例 |
+| P1-03 证书 pin 后端 | `fba8864` | `dorm_tls` 16 passed；全量 284 passed / 2 failed / 4 ignored（+9 新增）；默认 pin 行为不变 |
+| P1-03 证书 pin UI | `b84e1f1` | 浏览器 9/9；新增“只替换指纹、不能关闭校验”对话框用例 |
+| P2-04 clippy 基线 | `e445a15` | `cargo clippy --all-targets -- -D warnings` 退出码 0；全量测试仍 284 / 2 / 4 |
+
+### P1-02 实现说明
+
+- 覆盖单位是 4 个逻辑网关的拨号 IP：宿舍、Wi-Fi、有线 IPv4、有线 IPv6；scheme/port/path/域名不覆盖。
+- `GatewayEndpoints` 在操作边界解析一次，按引用传入 26 个 `portal_auth` 函数；配置读锁不跨 `.await`。
+- 保存与备份导入共用 `config_model::validate_endpoint_config`；非法值整次拒绝。
+- 前端 wire format 使用 snake_case（`dorm_gateway` 等），与既有 `BackendConfig` 风格一致；serde 同时保留 camelCase 输入别名。
+- 既有测试有 5 行 `assert!` 因函数新增 `&PortalSettings` 参数而改写为多行；断言条件与期望值未变。
+
+### P1-03 实现说明
+
+- `DormCertPin` 只有 `BuiltIn` / `Custom([u8;32])`，类型上不存在“关闭”。
+- 自定义指纹只接受逐字节匹配；内置指纹不再被接受（替换而非追加）。
+- 仍只放宽过期错误；SNI 白名单、证书链、握手签名校验不变。
+- 已知限制（方案 A）：pin 例外用 2025-08-20 这个历史时间点重校验。新证书当前有效时走正常 PKI；已过期且有效期不覆盖 2025-08-20 时，替换指纹无效。UI 已明示。
+- `pinned_leaf_matches` / `pin_exception_applies` 加 `#[cfg(test)]`，仅保留给既有 9 个测试，生产走 `_with` 变体。
+
+### 当前门禁
+
+- `cargo fmt --all -- --check`：通过。
+- `cargo test --lib`：284 passed / 2 failed / 4 ignored；2 个失败仍为既有环境问题（`request_errors_never_include_credential_urls`、`router_control::...tls_key_proof`）。
+- `cargo clippy --all-targets -- -D warnings`：通过（P2-04 后）。
+- `npm run test:frontend`：34 passed。
+- `npm run typecheck`、`npm run build`：通过。
+- `npm run test:browser -- --project=app`：9 passed。
+- GitHub Actions：仍未启用（0 runs），P1-06 的 CI 步骤尚未实际执行。
+
+### 尚未开始
+
+- P2-01 TLS 后端统一：需要跨平台 Cargo feature 与 Android/macOS 构建验证，Actions 未启用时不做。
+- P2-03 依赖矩阵记录：依赖 P2-01 定稿。
+- IPv6 免流：仅完成调研；配置骨架/只读展示未实现，行为改动需真实计费数据。
