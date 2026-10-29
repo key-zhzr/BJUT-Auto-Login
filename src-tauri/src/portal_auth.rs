@@ -41,6 +41,12 @@ impl PortalSettings {
     }
 }
 
+/// Validate the user-replaceable dorm certificate fingerprint. Empty means the
+/// built-in pin; there is deliberately no way to disable verification.
+pub(crate) fn validate_dorm_cert_sha256(value: &str) -> Result<(), String> {
+    dorm_tls::DormCertPin::validate(value)
+}
+
 /// The physical route that was observed together with the current network
 /// identity. Portal probes and credential-bearing requests must share this
 /// context so a VPN/TUN route cannot take over between detection and login.
@@ -217,7 +223,7 @@ pub(crate) async fn portal_client(
         // request separate from the allowlisted TLS SNI alias.
         builder = builder
             .http1_only()
-            .use_preconfigured_tls(dorm_tls::client_config()?);
+            .use_preconfigured_tls(dorm_tls::client_config(settings.dorm_cert_pin)?);
     }
 
     // Android binds the whole process to the exact ConnectivityManager

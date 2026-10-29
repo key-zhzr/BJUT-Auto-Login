@@ -9914,6 +9914,24 @@ mod tests {
     }
 
     #[test]
+    fn save_config_rejects_invalid_dorm_cert_fingerprint() {
+        let mut config: AppConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        config.dorm_cert_sha256 = "not-a-fingerprint".into();
+        assert!(config_model::validate_endpoint_config(&config).is_err());
+        config.dorm_cert_sha256 = "a".repeat(64);
+        assert!(config_model::validate_endpoint_config(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_imported_config_rejects_invalid_dorm_cert_fingerprint() {
+        let mut config: AppConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        config.dorm_cert_sha256 = "aa:bb".into();
+        assert!(validate_imported_config(&config).is_err());
+        config.dorm_cert_sha256.clear();
+        assert!(validate_imported_config(&config).is_ok());
+    }
+
+    #[test]
     fn lgn_protocol_is_wired_only_unless_explicitly_trusted() {
         assert!(automatic_login_network_allowed(NetworkTrustInput {
             login_type: &LoginType::Type3,

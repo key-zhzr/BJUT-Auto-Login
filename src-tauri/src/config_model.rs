@@ -257,7 +257,8 @@ pub(crate) fn normalize_traffic_monitor(config: &mut AppConfig) {
 /// Validate the user-editable network endpoints before a config is persisted
 /// or imported. The same pure function backs both paths so they cannot drift.
 pub(crate) fn validate_endpoint_config(config: &AppConfig) -> Result<(), String> {
-    crate::portal_auth::endpoints::validate_endpoint_overrides(&config.endpoint_overrides)
+    crate::portal_auth::endpoints::validate_endpoint_overrides(&config.endpoint_overrides)?;
+    crate::portal_auth::validate_dorm_cert_sha256(&config.dorm_cert_sha256)
 }
 
 #[cfg(test)]
