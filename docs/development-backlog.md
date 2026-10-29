@@ -4,6 +4,26 @@
 > 状态：待评审。本文档只定义待办与验收标准，**不含任何源代码改动**。
 > 约束：保持现有功能与兼容性，最小变更，不做无关重构；每项独立验收，验证通过后才进入下一项。
 
+## 0. 执行状态（2026-10-29）
+
+| 项 | 状态 | 提交 / 说明 |
+| --- | --- | --- |
+| P0-01 锁中毒收敛 | 已完成 | `65d7e63`，本地测试与基线对比通过 |
+| P0-02 超时预算分层 | 已完成 | `57f8671`，`portal_auth` 41 项通过；实机日志待补 |
+| P0-03 歧义认证测试 | 已完成 | `ea43f00`，纯测试，2 个用例 |
+| P0-04 错误分支测试 | 已完成 | `3a4e376`，纯测试，6 个用例 |
+| P1-01 端点单一来源 | 已完成 | `80b1109`，新增 `endpoints.rs` 与 2 个 golden 测试 |
+| P1-04 测试入口守卫 | 已完成 | `943197f`，6 个前端脚本全注册 |
+| P1-05 首帧文案守卫 | 已完成 | `b0e6ba2`，34 项前端测试通过 |
+| P1-06 平台 CI 子集 | 已完成（待 CI 验证） | `23f5774`；GitHub Actions 未启用，尚无法实际跑 |
+| P2-02 `md5` 升级 | 已完成 | `652a2d9`，0.7.0 → 0.8.1，调用点 5 处不变 |
+| P1-02 端点覆盖配置 | 未开始 | 需先定稿覆盖数据模型与配置传入链路 |
+| P1-03 证书指纹替换 | 未开始 | 需先定稿 TLS 校验链与安全边界 |
+| P1-06 之后的 P2-01/P2-03 | 未开始 | 跨平台 TLS 后端改动，建议 Actions 启用后做 |
+| IPv6 免流 | 未开始 | 仅完成调研；行为改动需真实计费数据 Gate |
+
+> 第一批验证记录见 `docs/verification-2026-10-28.md`。当前 fork 的 GitHub Actions 为 0 次运行，本地 Rust stable 1.99 + VS BuildTools 2026 是实际门禁；全量测试 262 passed / 2 failed（均为既有环境失败），clippy 10 个既有错误、零新增。
+
 ## 1. 项目信息
 
 | 项 | 内容 |
@@ -81,6 +101,7 @@
 | P2-01 | P2 | reqwest TLS 后端统一 | 去掉 vendored OpenSSL，缩短构建时间与产物体积；Windows 保留系统 TLS（Schannel） | `src-tauri/Cargo.toml`（行 28 当前同时启用 `native-tls-vendored` 与 `rustls-tls`）；`src-tauri/src/campus_services.rs`（行 992 `use_native_tls()`）；`src-tauri/src/portal_auth.rs`（行 348–356 native_tls 回退分支） | 1) `Cargo.toml` 不再出现 `native-tls-vendored`，Windows 改走 `native-tls`（Schannel）；2) `cargo tree -i openssl-sys` 无输出；3) CI 四平台（ubuntu / macos / windows / android）全绿；4) Android APK 体积变化写入 `docs/dependency-health.md` | 无 | 现有 Windows native_tls 回退是为规避 Schannel 证书链卡顿，去掉 vendored 后需实机复测 lgn IPv6 发现 |
 | P2-02 | P2 | `md5` 0.7 → 0.8 | 消除过旧加密哈希依赖版本 | `src-tauri/Cargo.toml`（行 40）；调用点 `campus_services.rs` 2036/2630/2654/2700、`lib.rs` 7374 | 1) 升级后 `cargo test --manifest-path src-tauri/Cargo.toml campus_services` 与 `lib` 相关测试全绿；2) 现有 digest 断言（`192.0.2.8`、`2001:db8::8`）数值不变；3) `grep -rn "md5::compute" src-tauri/src \| wc -l` 仍为 5（无新增调用点） | 无 | 低。若 API 有变，改动限于调用点，不新增封装 |
 | P2-03 | P2 | 重复依赖收敛记录 | 避免同一 crate 多版本共存导致体积与行为分叉 | `src-tauri/Cargo.toml`、新增 `docs/dependency-health.md` | 1) `cargo tree -d --manifest-path src-tauri/Cargo.toml` 中 `rustls`、`reqwest`、`sha2`、`tokio` 无多版本共存，或例外逐条记录原因；2) 记录 TLS 后端矩阵（rustls / native-tls 各用在哪些模块）；3) `npm run check:versions` 通过 | P2-01 | 纯记录类，不得借机做大版本升级 |
+| P2-04 | P2 | 恢复 `clippy -D warnings` 基线 | 当前 Rust 1.99 下 HEAD 已有 10 个 clippy 错误，导致 CI lint 门禁无法作为有效判据 | `src-tauri/src/lib.rs`（464/684-689/1310）、`src-tauri/src/probe_transport.rs`（452/454）、`src-tauri/src/dual_stack.rs`（72）；必要时加 `rust-toolchain.toml` 固定版本 | 1) `cargo clippy --all-targets -- -D warnings` 退出码 0；2) 修复不改变行为，现有测试全绿；3) 若选择固定工具链，记录版本与升级策略 | 无 | 10 个错误均为既有问题；逐条修复需避免为消 lint 而改变语义 |
 
 ### 4.5 P2 新功能：IPv6 免流
 
