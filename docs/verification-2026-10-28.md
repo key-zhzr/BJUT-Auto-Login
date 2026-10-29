@@ -65,3 +65,12 @@ git revert 80b1109  # P1-01
 git revert 943197f  # P1-04
 git revert b0e6ba2  # P1-05
 ```
+
+## 补充：P1-06 / P2-02（2026-10-29）
+
+| 项 | 提交 | 验证 |
+| --- | --- | --- |
+| P1-06 平台 CI 子集 | `23f5774` | 在 `desktop-platform-check` 增加 `portal_auth` 与 `dual_stack` 测试；因 Actions 未启用，尚未实际执行 |
+| P2-02 `md5` 升级 | `652a2d9` | 0.7.0 → 0.8.1；`cargo test campus_services` 16 passed / 1 ignored；全量仍 262 passed / 2 failed / 4 ignored；clippy 仍为同一组 10 个既有错误；`md5::compute` 调用点仍为 5 |
+
+P2-02 的 `cargo update` 通过当前代理完成，锁文件仅变更 `md5` 版本与校验和。
