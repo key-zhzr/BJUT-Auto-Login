@@ -267,20 +267,12 @@ impl LgnLinkConfiguration {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn lgn_link_configuration(interface: &str) -> LgnLinkConfiguration {
-    let read = |program: &str, args: &[&str]| {
-        std::process::Command::new(program)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-            .unwrap_or_default()
-    };
+    use crate::network_platform::macos_read_command;
     parse_link_configuration(
         interface,
-        &read("/sbin/ifconfig", &[interface]),
-        &read("/usr/sbin/ipconfig", &["getpacket", interface]),
-        &read("/usr/sbin/scutil", &["--dns"]),
+        &macos_read_command("/sbin/ifconfig", &[interface]),
+        &macos_read_command("/usr/sbin/ipconfig", &["getpacket", interface]),
+        &macos_read_command("/usr/sbin/scutil", &["--dns"]),
     )
 }
 

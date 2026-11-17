@@ -113,16 +113,11 @@ pub(crate) fn power_saving() -> bool {
 fn read_power_saving() -> bool {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("/usr/bin/pmset")
-            .arg("-g")
-            .output()
-            .ok()
-            .is_some_and(|output| {
-                output.status.success()
-                    && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-                        let mut fields = line.split_whitespace();
-                        fields.next() == Some("lowpowermode") && fields.next() == Some("1")
-                    })
+        crate::network_platform::macos_read_command("/usr/bin/pmset", &["-g"])
+            .lines()
+            .any(|line| {
+                let mut fields = line.split_whitespace();
+                fields.next() == Some("lowpowermode") && fields.next() == Some("1")
             })
     }
     #[cfg(target_os = "windows")]
