@@ -73,6 +73,96 @@ export interface UsageReport {
         buckets: number[][];
     };
 }
+type RouterUsageRequest = UsageQuery & {part?: 'summary' | 'series'};
+type RouterUsageResponse = UsageReport & {part?: 'summary' | 'series'; state?: string};
+
+function requireUsageReport(report: RouterUsageResponse) {
+    if (typeof report?.enabled !== 'boolean' || (report.scope !== 'local' && report.scope !== 'all')) {
+        throw new Error('路由器未返回流量统计状态');
+    }
+}
+
+function routerUsageWindows(query: UsageQuery): UsageQuery[] {
+    const windows: UsageQuery[] = [];
+    const add = (start: number, end: number, resolution: number) => {
+        const span = resolution === 60 ? 86400 : resolution === 3600 ? 7 * 86400 : 90 * 86400;
+        while (start <= end) {
+            const boundary = (Math.floor((start + 28800) / span) + 1) * span - 28800;
+            const last = Math.min(end, boundary - 1);
+            windows.push({start, end: last, resolution, monthly: false});
+            start = boundary;
+        }
+    };
+    const start = Math.max(0, Math.floor((query.start + 28800) / query.resolution) * query.resolution - 28800);
+    if (query.monthly) {
+        const day = usageBucket(start, 'day'), hour = usageBucket(start, 'hour');
+        add(Math.max(0, usageMonthStart(start)), day - 1, 86400);
+        add(Math.max(0, day), hour - 1, 3600);
+        add(Math.max(0, hour), start - 1, 60);
+    }
+    add(start, query.end, query.resolution);
+    return windows;
+}
+
+/** Load closed time windows once and refresh the recent tail as samples arrive. */
+export class RouterUsageReader {
+    private pages = new Map<string, {expires: number; rows: UsagePoint[]}>();
+
+    clear() { this.pages.clear(); }
+
+    async read(
+        request: (query: RouterUsageRequest) => Promise<RouterUsageResponse>,
+        query: UsageQuery,
+        current: () => boolean = () => true,
+    ): Promise<UsageReport | null> {
+        const now = Date.now();
+        // A short range also works on routers that ignore the optional part.
+        const at = Math.floor(now / 1000);
+        const summary = await request({part: 'summary', start: at, end: at, resolution: 86400, monthly: false});
+        if (!current()) return null;
+        requireUsageReport(summary);
+        if (!summary.enabled) {
+            this.clear();
+            return summary;
+        }
+        const paged = summary.part === 'summary';
+        const load = async (window: UsageQuery): Promise<UsagePoint[] | null> => {
+            if (!current()) return null;
+            const page = await request(paged ? {...window, part: 'series'} : window);
+            if (!current()) return null;
+            if (page?.state === 'split') {
+                const steps = Math.floor((window.end - window.start) / window.resolution);
+                if (steps < 1) throw new Error('此时段的流量数据过多');
+                const boundary = window.start + Math.ceil(steps / 2) * window.resolution;
+                const left = await load({...window, end: boundary - 1});
+                if (!left) return null;
+                const right = await load({...window, start: boundary});
+                return right ? left.concat(right) : null;
+            }
+            requireUsageReport(page);
+            if (!page.enabled || page.scope !== summary.scope) return null;
+            return normalizeUsageReport(page).series.filter(row =>
+                row.resolution === window.resolution && row.at >= window.start && row.at <= window.end);
+        };
+        const next = new Map<string, {expires: number; rows: UsagePoint[]}>();
+        const series: UsagePoint[] = [];
+        for (const window of routerUsageWindows(query)) {
+            const key = JSON.stringify([paged, summary.scope, window.start, window.end, window.resolution]);
+            let entry = this.pages.get(key);
+            if (!entry || entry.expires <= now) {
+                const rows = await load(window);
+                if (!rows) return null;
+                entry = {expires: now + 5 * 60_000, rows};
+            }
+            if (window.end < at - 180) next.set(key, entry);
+            for (const row of entry.rows) series.push(row);
+        }
+        if (!current()) return null;
+        this.pages = next;
+        return {...summary, timeline: undefined, series};
+    }
+}
+
 export function normalizeUsageReport(report: UsageReport): UsageReport {
     const series = [...(report.series || [])];
     for (const row of report.timeline?.buckets || []) {
@@ -128,11 +218,15 @@ export function usageZoom(start: number, end: number, anchor: number, factor: nu
     const ratio = end > start ? Math.max(0,Math.min(1,(anchor-start)/(end-start))) : .5;
     return [anchor-width*ratio,anchor+width*(1-ratio)];
 }
+export function usageDisplayScale(scale: UsageScale, start: number, end: number) {
+    let index = usageScales.findIndex(item => item.value === scale);
+    while (usageScales[index].seconds && (end-start)/usageScales[index].seconds > 4500) index++;
+    return usageScales[index];
+}
 export function buildUsageChart(rows: UsagePoint[], options: UsageChartOptions): { times: number[]; curves: UsageCurve[]; samples: number; totalMb: number; scale: UsageScale } {
     const now = options.now ?? Date.now() / 1000;
     const requestedStart = options.start ?? now-options.range, requestedEnd = Math.min(now,options.end ?? now);
-    let scale = usageScales.find(item => item.value === options.scale)!;
-    while (scale.seconds && (requestedEnd-requestedStart)/scale.seconds>4500) scale=usageScales[Math.min(usageScales.indexOf(scale)+1,usageScales.length-1)];
+    const scale = usageDisplayScale(options.scale, requestedStart, requestedEnd);
     const resolution = scale.value === 'month' || scale.seconds >= 86400 ? 86400 : scale.seconds >= 3600 ? 3600 : 60;
     const start = usageBucket(requestedStart, scale.value), end = usageBucket(requestedEnd, scale.value);
     const times: number[] = [];

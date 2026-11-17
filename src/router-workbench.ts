@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { DeviceUsageView } from './device-usage-view';
 import { recordRouterQuality } from './network-quality';
-import type { UsageReport } from './device-usage-model';
+import { RouterUsageReader } from './device-usage-model';
 import { RouterAdmin } from './router-admin';
 import { renderRouterBillingSummary } from './router-billing-summary';
 import { RouterBillingCenter } from './router-billing-center';
@@ -38,7 +38,14 @@ export class RouterWorkbench {
   private logsBusy = false;
   private disconnected=false;
   private receivedAt=Date.now();
-  private trafficView=new DeviceUsageView(byId('router-device-usage-panel'),'router',async(enabled)=>{await this.request('save_settings',{traffic_monitor:enabled?'1':'0'});this.admin.invalidateSettings();await this.refreshTraffic();},()=>{void this.refreshTraffic();});
+  private trafficReader = new RouterUsageReader();
+  private trafficRevision = 0;
+  private trafficView = new DeviceUsageView(byId('router-device-usage-panel'), 'router', async enabled => {
+    await this.request('save_settings', {traffic_monitor: enabled ? '1' : '0'});
+    this.admin.invalidateSettings();
+    this.trafficReader.clear();
+    await this.reloadTraffic();
+  }, () => {void this.reloadTraffic();});
   private trafficBusy=false;
   private lastTraffic=0;
 
@@ -66,7 +73,7 @@ export class RouterWorkbench {
     window.setInterval(() => {
       if (document.hidden || !this.snapshot) return;
       const page = document.querySelector('.page.active')?.id;
-      if(page==='dashboard'&&!this.disconnected&&this.supports('traffic_charts')&&Date.now()-this.lastTraffic>=5000)void this.refreshTraffic();
+      if(page==='dashboard'&&!this.disconnected&&this.supports('traffic_charts')&&Date.now()-this.lastTraffic>=15000)void this.refreshTraffic();
       if (page === 'logs' && Date.now() - this.lastLogsPoll >= 5000) void this.refreshLogs();
     },1000);
     window.addEventListener('focus', () => { if (!this.snapshot && !this.discoveryBusy) void this.discover(); });
@@ -96,7 +103,10 @@ export class RouterWorkbench {
     const firstConnection = !this.snapshot;
     this.snapshot = data; this.admin.update(data);
     setVisible(byId('router-device-usage-panel'),this.supports('traffic_charts'));
-    if(firstConnection){this.lastTraffic=0;void this.refreshTraffic();}
+    if(firstConnection && this.supports('traffic_charts')) {
+      this.trafficView.showError('正在读取路由器流量统计…');
+      void this.reloadTraffic();
+    }
     if(reconnect)this.admin.resume();
     for (const id of ['router-dashboard','router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), true);
     byId('btn-router-auto-connect').hidden = true;
@@ -120,6 +130,7 @@ export class RouterWorkbench {
 
   disconnect(): void {
     setVisible(byId('router-device-usage-panel'),false);this.trafficView.render([],'已断开路由器');this.lastTraffic=0;
+    this.trafficRevision++;this.trafficReader.clear();
     this.billingCenter.invalidate();
     this.generation++; this.snapshot = null;
     this.accountsStamp = ''; this.admin.disconnect(); this.logSnapshot = '';
@@ -135,7 +146,10 @@ export class RouterWorkbench {
 
   markDisconnected(reason:string):void {
     if(!this.snapshot)return;
-    if(!this.disconnected)this.billingCenter.invalidate();
+    if(!this.disconnected) {
+      this.billingCenter.invalidate();
+      this.trafficRevision++;this.trafficReader.clear();this.lastTraffic=0;
+    }
     this.disconnected=true;
     this.trafficView.render([],'连接已中断，重新连接后恢复统计。');
     if(!byId('router-billing-summary-content').hidden)byId('router-billing-summary-content').replaceChildren(node('p','路由连接已中断，请等待重新连接。'));
@@ -154,12 +168,26 @@ export class RouterWorkbench {
   }
 
   private supports(capability: string): boolean { return this.snapshot?.capabilities?.includes(capability) || false; }
+  private reloadTraffic(): Promise<void> {
+    this.trafficRevision++;
+    return this.refreshTraffic();
+  }
   private async refreshTraffic():Promise<void> {
     if(this.trafficBusy||!this.snapshot||this.disconnected||!this.supports('traffic_charts'))return;
-    this.trafficBusy=true;this.lastTraffic=Date.now();const router=this.snapshot.managementUrl;
-    try{const data=await this.request<UsageReport>('traffic',{...this.trafficView.query()});if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.update(data);}
-    catch{if(this.snapshot?.managementUrl===router&&!this.disconnected)this.trafficView.showError('暂时无法读取路由器设备流量。');}
-    finally{this.trafficBusy=false;}
+    this.trafficBusy = true;
+    this.lastTraffic = Date.now();
+    const revision = this.trafficRevision;
+    const current = () => this.trafficRevision === revision && !!this.snapshot && !this.disconnected;
+    try {
+      const data = await this.trafficReader.read(
+        query => this.request('traffic', {...query}), this.trafficView.query(), current);
+      if (data && current()) this.trafficView.update(data);
+    } catch {
+      if (current()) this.trafficView.showError('暂时无法读取路由器流量，稍后会自动重试。');
+    } finally {
+      this.trafficBusy = false;
+      if (revision !== this.trafficRevision) void this.refreshTraffic();
+    }
   }
   private async request<T>(operation: string, args: Record<string,unknown> = {}): Promise<T> {
     if(this.disconnected)throw new Error('路由连接已中断，请等待重新连接。');

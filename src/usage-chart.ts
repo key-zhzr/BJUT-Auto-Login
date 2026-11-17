@@ -1,4 +1,4 @@
-import { buildUsageChart, normalizeUsageReport, forecastUsage, flowLabel, usageChartCsv, usageInterfaces, usageRangeLabel, usageScales, usageZoom, usageTooltipPosition, defaultUsageRetention, type UsageChartOptions, type UsageReport, type UsageScope } from './device-usage-model';
+import { buildUsageChart, normalizeUsageReport, forecastUsage, flowLabel, usageBucket, usageChartCsv, usageDisplayScale, usageInterfaces, usageRangeLabel, usageScales, usageZoom, usageTooltipPosition, defaultUsageRetention, type UsageChartOptions, type UsageReport, type UsageScope } from './device-usage-model';
 
 export interface UsageSelect {
     element: HTMLElement;
@@ -158,9 +158,9 @@ export class UsageChart {
     update(data: UsageReport, message = '') {
         const scoped = normalizeUsageReport(data);
         const next = {...scoped, enabled: data.enabled === true, scope: data.scope === 'all' ? 'all' as const : 'local' as const, accounts: scoped.accounts, history: scoped.history, series: scoped.series};
+        this.status.textContent = message || (next.enabled ? `计费下载量 · 每分钟更新 · 采集${next.scope === 'local' ? this.scopeLocal.textContent : '全部在线设备'}` : '流量统计未开启，可手动开启。');
         const stamp = JSON.stringify([next, message]); if (stamp === this.stamp) return; this.stamp = stamp; this.data = next;
         this.enabled.textContent = next.enabled ? '暂停统计' : '开启统计'; this.enabled.setAttribute('aria-pressed', String(next.enabled));
-        this.status.textContent = message || (next.enabled ? `计费下载量 · 每分钟更新 · 采集${next.scope === 'local' ? this.scopeLocal.textContent : '全部在线设备'}` : '流量统计未开启，可手动开启。');
         this.resize(this.root, () => {
         this.content.hidden = !next.enabled;
         for (const [button, scope] of [[this.scopeLocal, 'local'], [this.scopeAll, 'all']] as const) {
@@ -178,7 +178,12 @@ export class UsageChart {
         });
     }
     showError(message: string) {this.status.textContent = message;}
-    query(){const scale=usageScales.find(item=>item.value===this.chart.scale)!;return {start:Math.floor(this.options.start??Date.now()/1000-this.options.range),end:Math.ceil(this.options.end??Date.now()/1000),resolution:scale.seconds>=86400||scale.value==='month'?86400:scale.seconds>=3600?3600:60,monthly:this.options.mode==='monthly'};}
+    query() {
+        const now = Date.now() / 1000;
+        const start = this.options.start ?? now - this.options.range, end = Math.min(now, this.options.end ?? now);
+        const scale = usageDisplayScale(this.options.scale, start, end);
+        return {start: Math.max(0, usageBucket(start, scale.value)), end: Math.ceil(end), resolution: scale.seconds >= 86400 || scale.value === 'month' ? 86400 : scale.seconds >= 3600 ? 3600 : 60, monthly: this.options.mode === 'monthly'};
+    }
     destroy() {this.observer?.disconnect();if(this.wheelFrame)cancelAnimationFrame(this.wheelFrame);}
     private updateInterfaces() {
         const choices = usageInterfaces(this.viewed().series, this.options.account), stamp = JSON.stringify([choices, this.options.interfaces]);

@@ -3,6 +3,57 @@ import assert from 'node:assert/strict';
 import {usageDelta,usageIdentity,forecastUsage,usageCsv} from '../src/device-usage-model.ts';
 import {qualitySummary,diagnosticAdvice} from '../src/network-quality-model.ts';
 import {usageTooltipPosition} from '../src/device-usage-model.ts';
+import {RouterUsageReader} from '../src/device-usage-model.ts';
+
+test('router history splits oversized days and preserves every minute and its observation interval', async () => {
+    const first = Date.parse('2026-10-25T00:00:00+08:00') / 1000;
+    const end = first + 3 * 86400 - 1;
+    const metadata = {enabled: true, scope: 'local', history: [], accounts: [], series: []};
+    const channels = ['lan3', 'lan4', 'lan5'].map(device =>
+        ({device, account:'test', interfaceId:device, interfaceName:device, local:true}));
+    let requests = 0, splits = 0;
+    const request = async query => {
+        requests++;
+        if (query.part === 'summary') return {...metadata, part:'summary'};
+        if (query.end - query.start >= 43200) {
+            splits++;
+            return {state:'split'};
+        }
+        const buckets = [];
+        for (let at = query.start; at <= query.end; at += 60) {
+            channels.forEach((_, i) => buckets.push([i, 60, at, 1, 60, at - 59, at + 1]));
+        }
+        return {...metadata, part:'series', timeline:{channels, buckets}};
+    };
+    const reader = new RouterUsageReader(), query = {start:first, end, resolution:60, monthly:false};
+    const data = await reader.read(request, query);
+    assert.equal(splits, 3);
+    assert.equal(data.series.length, 3 * 3 * 1440);
+    assert.equal(new Set(data.series.map(row => `${row.at}/${row.interfaceId}`)).size, data.series.length);
+    assert.ok(data.series.every(row => row.startedAt === row.at - 59 && row.endedAt === row.at + 1));
+    requests = 0;
+    assert.deepEqual(await reader.read(request, query), data);
+    assert.equal(requests, 1);
+});
+
+test('router history rejects missing status, stops superseded reads and keeps legacy responses usable', async () => {
+    const reader = new RouterUsageReader();
+    const start = Date.parse('2026-10-25T03:15:00+08:00') / 1000;
+    const query = {start, end:start + 3600, resolution:60, monthly:true};
+    await assert.rejects(reader.read(async () => ({}), query), /未返回/);
+    const report = {enabled:true, scope:'local', accounts:[], history:[], series:[]};
+    assert.equal(await reader.read(async () => report, query, () => false), null);
+    const windows = [];
+    const data = await reader.read(async request => {
+        if (request.part !== 'summary') windows.push(request);
+        return report;
+    }, query);
+    assert.equal(data.enabled, true);
+    assert.deepEqual(windows.map(window => window.resolution), [86400, 3600, 60, 60]);
+    assert.equal(windows.at(-2).end + 1, start);
+    assert.equal(windows.at(-1).end, query.end);
+    assert.ok(windows.every(window => !window.monthly && !window.part));
+});
 test('chart tooltips leave space around the pointer and stay in the plot',()=>{
  for(const [width,height,bw,bh,x,y] of [[1000,270,220,110,500,200],[1000,270,220,110,980,40],[310,270,280,130,160,230]]){
   const p=usageTooltipPosition(width,height,bw,bh,x,y);

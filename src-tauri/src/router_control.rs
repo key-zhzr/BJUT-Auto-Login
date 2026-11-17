@@ -1012,7 +1012,7 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
     let allowed: &[&str] = match operation {
         "logs" | "settings" | "pushplus_test" | "pushplus_status" | "billing_cached"
         | "maintenance_info" => &[],
-        "traffic" => &["start", "end", "resolution", "monthly"],
+        "traffic" => &["start", "end", "resolution", "monthly", "part"],
         "maintenance_start" => &["action", "prepared", "backup"],
         "maintenance_poll" => &["ticket"],
         "save_settings" => &service,
@@ -1089,6 +1089,7 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
                     .is_some_and(|v| (0..=41024448000).contains(&v)),
                 "resolution" => matches!(value.as_i64(), Some(60 | 3600 | 86400)),
                 "monthly" => value.is_boolean(),
+                "part" => matches!(value.as_str(), Some("summary" | "series")),
                 "traffic_scope" => matches!(value.as_str(), Some("local" | "all")),
                 "refresh" => value.is_boolean(),
                 "ticket" => value.as_str().is_some_and(valid_token),
