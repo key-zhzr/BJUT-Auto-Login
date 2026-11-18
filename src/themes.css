@@ -433,7 +433,7 @@ html:root[data-theme] {
 }
 
 :root[data-theme] .btn,
-:root[data-theme] input,
+:root[data-theme] input:not([type="checkbox"]):not([type="radio"]),
 :root[data-theme] textarea,
 :root[data-theme] .custom-select-trigger {
   border-radius: var(--theme-control-radius);
@@ -454,8 +454,12 @@ html:root[data-theme] {
 :root[data-theme] input[type="password"],
 :root[data-theme] input[type="number"],
 :root[data-theme] input[type="date"],
+:root[data-theme] input[type="datetime-local"],
 :root[data-theme] input[type="search"],
 :root[data-theme] textarea,
+:root[data-theme] .presentation-dialog select,
+:root[data-theme] .traffic-field select,
+:root[data-theme] .traffic-dates input,
 :root[data-theme] .billing-action-controls input,
 :root[data-theme] .billing-security-form input,
 :root[data-theme] .billing-recharge-form input,
@@ -476,8 +480,11 @@ html:root[data-theme] {
   opacity: 0.82;
 }
 
-:root[data-theme] input:focus,
+:root[data-theme] input:not([type="checkbox"]):not([type="radio"]):focus,
 :root[data-theme] textarea:focus,
+:root[data-theme] .presentation-dialog select:focus,
+:root[data-theme] .traffic-field select:focus,
+:root[data-theme] .traffic-dates input:focus,
 :root[data-theme] .billing-action-controls input:focus,
 :root[data-theme] .billing-security-form input:focus,
 :root[data-theme] .billing-recharge-form input:focus,
@@ -909,7 +916,9 @@ html:root[data-theme] {
 }
 
 :root[data-theme="apple27"] .titlebar-button {
-  border-radius: 6px;
+  width: 46px;
+  height: 30px;
+  border-radius: 0;
 }
 
 :root[data-theme="apple27"] .btn-secondary {
@@ -966,15 +975,9 @@ html:root[data-theme] {
   box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.2);
 }
 
-:root[data-theme="apple27"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
-:root[data-theme="apple27"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
-  color: var(--theme-text);
-  border-color: transparent;
-  background: var(--theme-hover-bg);
-  box-shadow: none;
-}
-
 @media (min-width: 769px) {
+  :root[data-theme="apple27"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
+  :root[data-theme="apple27"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active,
   :root[data-theme="apple27"] body.is-android #nav.dashboard-expanded .nav-dashboard-parent.active,
   :root[data-theme="apple27"] body.is-android #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
     color: var(--theme-text);
@@ -993,7 +996,7 @@ html:root[data-theme] {
 }
 
 :root[data-theme="apple27"] .custom-select-trigger,
-:root[data-theme="apple27"] input,
+:root[data-theme="apple27"] input:not([type="checkbox"]):not([type="radio"]),
 :root[data-theme="apple27"] textarea {
   min-height: var(--theme-control-height);
   border-color: var(--theme-border-strong);
@@ -1001,14 +1004,20 @@ html:root[data-theme] {
 
 :root[data-theme="apple27"] .custom-select-trigger,
 :root[data-theme="apple27"] input:not([type="checkbox"]):not([type="radio"]),
+:root[data-theme="apple27"] .presentation-dialog select,
+:root[data-theme="apple27"] .traffic-field select,
+:root[data-theme="apple27"] .traffic-dates input,
 :root[data-theme="apple27"] .custom-select.form-select .custom-select-trigger {
   height: var(--theme-control-height);
   padding-block: 0;
   font-size: 0.82rem;
 }
 
-:root[data-theme="apple27"] input:focus,
+:root[data-theme="apple27"] input:not([type="checkbox"]):not([type="radio"]):focus,
 :root[data-theme="apple27"] textarea:focus,
+:root[data-theme="apple27"] .presentation-dialog select:focus,
+:root[data-theme="apple27"] .traffic-field select:focus,
+:root[data-theme="apple27"] .traffic-dates input:focus,
 :root[data-theme="apple27"] .custom-select.open .custom-select-trigger {
   border-color: rgba(var(--accent-rgb), 0.7);
   box-shadow:
@@ -1105,13 +1114,22 @@ html:root[data-theme] {
   width: 46px;
   height: 32px;
   border-radius: 0;
+  color: #1b1b1b;
+}
+
+:root[data-theme="winui"][data-color-scheme="dark"] .titlebar-button {
   color: var(--theme-text-muted);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  :root[data-theme="winui"] body:not(.is-android) .titlebar-button:hover {
-    color: var(--theme-text);
-    background: var(--theme-hover-bg);
+  :root[data-theme="winui"] body:not(.is-android) .titlebar-button:not(.titlebar-close):hover {
+    color: #000000;
+    background: rgba(0, 0, 0, 0.065);
+  }
+
+  :root[data-theme="winui"][data-color-scheme="dark"] body:not(.is-android) .titlebar-button:not(.titlebar-close):hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.08);
   }
 
   :root[data-theme="winui"] body:not(.is-android) .titlebar-button.titlebar-close:hover {
@@ -1302,25 +1320,18 @@ html:root[data-theme] {
   content: "";
 }
 
-:root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
-:root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
-  color: var(--theme-text);
-  background: transparent;
-}
-
-:root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active::before,
-:root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active::before,
-:root[data-theme="winui"] #nav:not(.billing-active) .nav-billing-link.active::before {
-  display: none;
-}
-
 @media (min-width: 769px) {
+  :root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
+  :root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active,
   :root[data-theme="winui"] body.is-android #nav.dashboard-expanded .nav-dashboard-parent.active,
   :root[data-theme="winui"] body.is-android #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
     color: var(--theme-text);
     background: transparent;
   }
 
+  :root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active::before,
+  :root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active::before,
+  :root[data-theme="winui"] #nav:not(.billing-active) .nav-billing-link.active::before,
   :root[data-theme="winui"] body.is-android #nav.dashboard-expanded .nav-dashboard-parent.active::before,
   :root[data-theme="winui"] body.is-android #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active::before {
     display: none;
@@ -1328,7 +1339,7 @@ html:root[data-theme] {
 }
 
 :root[data-theme="winui"] .custom-select-trigger,
-:root[data-theme="winui"] input,
+:root[data-theme="winui"] input:not([type="checkbox"]):not([type="radio"]),
 :root[data-theme="winui"] textarea {
   min-height: var(--theme-control-height);
   border-bottom-color: var(--theme-border-strong);
@@ -1336,6 +1347,9 @@ html:root[data-theme] {
 
 :root[data-theme="winui"] .custom-select-trigger,
 :root[data-theme="winui"] input:not([type="checkbox"]):not([type="radio"]),
+:root[data-theme="winui"] .presentation-dialog select,
+:root[data-theme="winui"] .traffic-field select,
+:root[data-theme="winui"] .traffic-dates input,
 :root[data-theme="winui"] .custom-select.form-select .custom-select-trigger {
   height: var(--theme-control-height);
   padding-block: 0;
@@ -1365,8 +1379,11 @@ html:root[data-theme] {
   content: "";
 }
 
-:root[data-theme="winui"] input:focus,
+:root[data-theme="winui"] input:not([type="checkbox"]):not([type="radio"]):focus,
 :root[data-theme="winui"] textarea:focus,
+:root[data-theme="winui"] .presentation-dialog select:focus,
+:root[data-theme="winui"] .traffic-field select:focus,
+:root[data-theme="winui"] .traffic-dates input:focus,
 :root[data-theme="winui"] .custom-select.open .custom-select-trigger {
   border-color: rgba(var(--accent-rgb), 0.72);
   box-shadow:

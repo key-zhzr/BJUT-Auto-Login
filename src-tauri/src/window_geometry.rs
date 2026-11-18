@@ -2,6 +2,9 @@
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
+const MIN_WINDOW_WIDTH: f64 = 640.0;
+const MIN_WINDOW_HEIGHT: f64 = 520.0;
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Geometry {
     x: i32,
@@ -21,11 +24,11 @@ fn fit(saved: &Geometry, area: &WorkArea) -> Geometry {
     let scale = area.scale.max(0.5);
     let width = saved
         .width
-        .clamp(320.0, 4096.0)
+        .clamp(MIN_WINDOW_WIDTH, 4096.0)
         .min((area.width as f64 / scale - 16.0).max(1.0));
     let height = saved
         .height
-        .clamp(400.0, 4096.0)
+        .clamp(MIN_WINDOW_HEIGHT, 4096.0)
         .min((area.height as f64 / scale - 40.0).max(1.0));
     Geometry {
         x: saved.x.clamp(
@@ -61,6 +64,10 @@ fn read(window: &tauri::WebviewWindow) -> Option<Geometry> {
     })
 }
 pub(crate) fn install(window: &tauri::WebviewWindow) {
+    let _ = window.set_min_size(Some(tauri::LogicalSize::new(
+        MIN_WINDOW_WIDTH,
+        MIN_WINDOW_HEIGHT,
+    )));
     let Ok(dir) = window.app_handle().path().app_data_dir() else {
         return;
     };

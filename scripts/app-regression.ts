@@ -30,7 +30,9 @@ Object.defineProperty(window, 'localStorage', { value: {
   setItem: (key: string, value: string) => memory.set(key, String(value)),
   removeItem: (key: string) => memory.delete(key), clear: () => memory.clear(),
 } });
-const platform = new URL(location.href).searchParams.get('platform');
+const fixtureOptions = new URL(location.href).searchParams;
+const platform = fixtureOptions.get('platform');
+const routerAvailable = !fixtureOptions.has('no-router');
 const installedBuildTimestamp = 1_794_931_200;
 let updateManifestReads = 0;
 const mobileLayout = platform === 'android';
@@ -89,7 +91,7 @@ const routerTickets = new Map<string,string>();
 const recordTickets = new Map<string, any>();
 const moduleTickets=new Map<string,string>();
 const bundlePolls=new Map<string,number>();
-let savedRouterInfo:any=new URL(location.href).searchParams.has('saved')?{address:'https://192.0.2.1',username:'root',certificate:'synthetic-pem',allowHttp:false}:null,routerFailures=0;
+let savedRouterInfo:any=fixtureOptions.has('saved')?{address:'https://192.0.2.1',username:'root',certificate:'synthetic-pem',allowHttp:false}:null,routerFailures=0;
 function usageFixture(enabled:boolean,scope:string) {
   const at=Math.floor(Date.now()/60000)*60;
   const channels=[{account:'25000001',device:'a',interfaceId:'en7',interfaceName:'USB LAN (en7)',local:true},{account:'25000001',device:'b',interfaceId:'en0',interfaceName:'Wi-Fi (en0)',local:true},{account:'25000001',device:'c',interfaceId:'device:other',interfaceName:'其他设备 AA:BB:CC:00:11:22',local:false}];
@@ -104,11 +106,12 @@ mockIPC(async (cmd, payload: any = {}) => {
   if(cmd==='create_diagnostic_bundle')return '测试诊断包：账号和网络标识已脱敏';
   if(cmd==='get_device_usage')return [{account:'25000001',updatedAt:Math.floor(Date.now()/1000),devices:[{loginAt:'2026-10-25 12:00',ip:'192.0.2.20',mac:'AA-BB-CC-DD-EE-FF',usedFlowMb:'1234.5'}]}];
   calls.push({cmd,payload,at:now()});
-  if (cmd === 'discover_routers') return [{name:'测试路由器',address:'https://192.0.2.1/',version:'0.1.6',secure:true}];
+  if (cmd === 'discover_routers') return routerAvailable ? [{name:'测试路由器',address:'https://192.0.2.1/',version:'0.1.6',secure:true}] : [];
   if (cmd === 'saved_router_connection') return savedRouterInfo;
   if (cmd === 'forget_router_password') {savedRouterInfo=null;return;}
   if (cmd === 'export_billing_csv') return '/mock-exports/router-usage.csv';
   if (cmd === 'reconnect_router') {
+    if (!routerAvailable) throw new Error('ROUTER_NETWORK_MISMATCH:当前网络与记住的路由器不匹配');
     if(payload.rememberPassword===false)savedRouterInfo=null;
     return routerSnapshot;
   }
@@ -173,7 +176,7 @@ mockIPC(async (cmd, payload: any = {}) => {
     await emit('network-diagnostic-step', {runId:payload.runId,step:{id:'dns',label:'DNS 解析',status:'success',message:'模拟 DNS 已完成',durationMs:3}});
     await emit('network-diagnostic-step', {runId:'old-run',step:{id:'dns',label:'DNS 解析',status:'error',message:'过期结果',durationMs:1}});
     await new Promise(resolve => setTimeout(resolve, 400));
-    if (diagnosticsCount > 1) throw new Error('模拟诊断失败');
+    if (diagnosticsCount === 2) throw new Error('模拟诊断失败');
     await emit('network-diagnostic-progress', {runId:payload.runId,percent:75,label:'正在确认认证网关'});
     await new Promise(resolve => setTimeout(resolve, 400));
     return {overall:'healthy',summary:'模拟诊断完成',createdAt:'2026-09-19',ssid:'',ip:'172.26.1.2',steps:[]};
@@ -403,7 +406,8 @@ button.addEventListener('click',async()=>{
     assert(!memory.get('bjut_router_password'),'管理密码写入了 UI 存储');
     assert(savedRouterInfo && !JSON.stringify(savedRouterInfo).includes('synthetic-router-password'),'保存信息包含明文密码');
     click('[data-target="dashboard"]');
-    const portSelect=document.querySelector<HTMLElement>('.router-port-card .custom-select')!;
+    const portCard = document.querySelector<HTMLElement>('.router-port-card[data-uplink="dorm_b"]')!;
+    const portSelect = portCard.querySelector<HTMLElement>('.custom-select')!;
     const portTrigger=portSelect.querySelector<HTMLElement>('.custom-select-trigger')!;
     await new Promise(resolve=>setTimeout(resolve,260));
     portTrigger.scrollIntoView({block:'center'});
@@ -411,16 +415,19 @@ button.addEventListener('click',async()=>{
     portTrigger.click();
     await new Promise(resolve=>setTimeout(resolve,350));
     assert(portSelect.classList.contains('open'),'路由端口账号菜单打开后被收起');
-    const option=portSelect.querySelector<HTMLElement>('.custom-option')!,rect=option.getBoundingClientRect();
+    const option = portSelect.querySelector<HTMLElement>('.custom-option[data-value="account2"]')!, rect = option.getBoundingClientRect();
     const hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);
-    assert(!!hit&&option.contains(hit),'路由端口账号菜单被卡片裁切或遮挡');portTrigger.click();
+    assert(!!hit&&option.contains(hit),'路由端口账号菜单被卡片裁切或遮挡');
+    option.click();
+    portCard.querySelector<HTMLButtonElement>('.router-port-login')!.click();
+    await wait(()=>calls.some(call=>call.cmd==='router_login'&&call.payload.uplink==='dorm_b'&&call.payload.account==='account2'));
+    note('通过：路由端口账号菜单可见，并直接登录所选接口');
+    click('[data-target="diagnostics"]');
+    click('#btn-run-diagnostics');
+    await wait(()=>document.getElementById('diagnostic-summary-title')!.textContent==='模拟诊断完成');
+    assert(!document.querySelector('#diagnostic-steps [data-step-id^="router_"]'), '本机诊断仍包含路由上游结果');
     click('[data-target="settings"]');
     click('[data-settings-target="router"]');
-    note('通过：路由端口账号下拉可见，选项不被卡片裁切');
-    click('#router-uplink-select .custom-select-trigger'); click('#router-uplink-select [data-value="dorm_b"]');
-    click('#router-account-select .custom-select-trigger'); click('#router-account-select [data-value="account2"]');
-    click('#btn-router-login');
-    await wait(()=>calls.some(call=>call.cmd==='router_login'&&call.payload.uplink==='dorm_b'&&call.payload.account==='account2'));
     (document.getElementById('router-sync-details') as HTMLDetailsElement).open=true;
     await wait(()=>!!document.querySelector('#router-sync-accounts input[value="25000002"]'));
     (document.querySelector('#router-sync-accounts input[value="25000002"]') as HTMLInputElement).checked=true;

@@ -8296,8 +8296,8 @@ pub fn run() {
                                 let screen =
                                     monitor.size().to_logical::<f64>(monitor.scale_factor());
                                 (
-                                    1080.0_f64.min((screen.width - 48.0).max(320.0)),
-                                    780.0_f64.min((screen.height - 80.0).max(400.0)),
+                                    1080.0_f64.min((screen.width - 48.0).max(640.0)),
+                                    780.0_f64.min((screen.height - 80.0).max(520.0)),
                                 )
                             })
                             .unwrap_or((1080.0, 780.0));

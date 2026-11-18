@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {usageDelta,usageIdentity,forecastUsage,usageCsv} from '../src/device-usage-model.ts';
-import {qualitySummary,diagnosticAdvice} from '../src/network-quality-model.ts';
+import {diagnosticAdvice} from '../src/diagnostic-advice.ts';
 import {usageTooltipPosition} from '../src/device-usage-model.ts';
 import {RouterUsageReader} from '../src/device-usage-model.ts';
 
@@ -78,9 +78,7 @@ test('predictions require enough observed days, ignore missing data and use Chin
  assert.equal(forecastUsage(rows,'无限'),null);
  assert.match(usageCsv([{...rows[0],label:'=malicious()'}]),/"'=malicious\(\)"/);
 });
-test('quality summaries distinguish checks from packet loss and advice follows evidence',()=>{
- const rows=[{ok:true,ms:50},{ok:true,ms:150},{ok:false,ms:3000}];
- assert.deepEqual(qualitySummary(rows),{count:3,failure:1/3,p50:50,p95:150});
+test('local diagnostic advice follows the reported evidence',()=>{
  const report={stale:true,steps:[],overall:'changed'};
  assert.deepEqual(diagnosticAdvice(report),['网络在诊断期间发生变化，请重新检测。']);
  assert.match(diagnosticAdvice({steps:[{id:'campus_route',status:'warning'}],overall:'partial'}).join(' '),/放行校园网段/);

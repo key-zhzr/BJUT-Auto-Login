@@ -5,10 +5,10 @@ const resizing = new WeakMap<HTMLElement, { animation: Animation; cleanup: () =>
 const disclosures = new WeakMap<HTMLDetailsElement, { desired: boolean; ignore: boolean | null; height: number }>();
 const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-export function setVisible(element: HTMLElement, visible: boolean) {
+export function setVisible(element: HTMLElement, visible: boolean, options?: { autoAnchor?: boolean }) {
   let controller = visibility.get(element);
   if (!controller) { controller = new AnimatedVisibility(element); visibility.set(element, controller); }
-  controller.setVisible(visible);
+  controller.setVisible(visible, options);
 }
 
 function stop(element: HTMLElement) {
@@ -24,13 +24,15 @@ export interface ScrollAnchorHandle {
   sync: () => void;
   startLoop: () => void;
   stop: () => void;
+  release?: () => void;
 }
 
-const NOOP_ANCHOR: ScrollAnchorHandle = { sync: () => {}, startLoop: () => {}, stop: () => {} };
+const NOOP_ANCHOR: ScrollAnchorHandle = { sync: () => {}, startLoop: () => {}, stop: () => {}, release: () => {} };
 
-/** Anchor content below `element` when `element` sits in the upper half of `#main-content`,
- * squeezing content above upward instead of jerking the rest of the page downward. */
-export function createUpperHalfScrollAnchor(element: HTMLElement): ScrollAnchorHandle {
+/** Anchor content below `element` when `element` sits in the upper half of `#main-content`
+ * and an automatic update asks to squeeze content above upward instead of jerking the page. */
+export function createUpperHalfScrollAnchor(element: HTMLElement, enabled = false): ScrollAnchorHandle {
+  if (!enabled) return NOOP_ANCHOR;
   const scroller = element.closest<HTMLElement>('#main-content');
   const page = element.closest<HTMLElement>('.page.active');
   if (!scroller || !page) return NOOP_ANCHOR;
@@ -58,20 +60,31 @@ export function createUpperHalfScrollAnchor(element: HTMLElement): ScrollAnchorH
     : anchorRectBefore.top;
   if (referenceY >= scrollerRect.top + scrollerRect.height * 0.5) return NOOP_ANCHOR;
 
-  let lastAnchorTop = anchorRectBefore.top;
-  let lastScrollTop = scroller.scrollTop;
+  const previousOverflowAnchor = scroller.style.overflowAnchor;
+  scroller.style.overflowAnchor = 'none';
+  let targetTop = anchorRectBefore.top;
+  let expectedScrollTop = scroller.scrollTop;
+  let previousMaxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
   let rafId: number | null = null;
+  let released = false;
 
   const sync = () => {
-    if (!anchor?.isConnected || !page.classList.contains('active')) return false;
-    const currentTop = anchor.getBoundingClientRect().top;
-    const diff = currentTop - lastAnchorTop;
-    // Respect scrolling done by the user or the browser's own scroll anchoring.
-    if (Math.abs(scroller.scrollTop - lastScrollTop) < 0.25 && Math.abs(diff) > 0.25) {
-      scroller.scrollTop = Math.max(0, scroller.scrollTop + diff);
+    if (released || !anchor?.isConnected || !page.classList.contains('active')) return false;
+    const currentScrollTop = scroller.scrollTop;
+    const currentMaxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const wasClampedAtBottom = Math.abs(expectedScrollTop - previousMaxScrollTop) <= 1.5
+      && Math.abs(currentScrollTop - currentMaxScrollTop) <= 1.5;
+    if (!wasClampedAtBottom && Math.abs(currentScrollTop - expectedScrollTop) > 1.5) {
+      targetTop -= currentScrollTop - expectedScrollTop;
+      expectedScrollTop = currentScrollTop;
     }
-    lastAnchorTop = anchor.getBoundingClientRect().top;
-    lastScrollTop = scroller.scrollTop;
+    const currentTop = anchor.getBoundingClientRect().top;
+    const diff = currentTop - targetTop;
+    if (Math.abs(diff) >= 0.5) {
+      scroller.scrollTop = Math.max(0, currentScrollTop + diff);
+    }
+    expectedScrollTop = scroller.scrollTop;
+    previousMaxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
     return true;
   };
 
@@ -82,13 +95,22 @@ export function createUpperHalfScrollAnchor(element: HTMLElement): ScrollAnchorH
   return {
     sync,
     startLoop: () => {
-      if (rafId === null) rafId = requestAnimationFrame(loop);
+      if (rafId === null && !released) rafId = requestAnimationFrame(loop);
     },
     stop: () => {
       if (rafId !== null) {
         cancelAnimationFrame(rafId);
         rafId = null;
       }
+    },
+    release: () => {
+      if (released) return;
+      released = true;
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      scroller.style.overflowAnchor = previousOverflowAnchor;
     },
   };
 }
@@ -98,11 +120,12 @@ function heightTransition(
   from: number,
   to: number,
   finished: () => void = () => {},
-  anchor: ScrollAnchorHandle = createUpperHalfScrollAnchor(element),
+  anchor: ScrollAnchorHandle = createUpperHalfScrollAnchor(element, false),
 ) {
-  if (Math.abs(from - to) < 1 || from < 0 || to < 0 || reduced() || !element.animate) {
+  if (Math.abs(from - to) < 1 || from <= 0 || to <= 0 || reduced() || !element.animate) {
     finished();
     anchor.sync();
+    anchor.release?.();
     return;
   }
   const overflow = element.style.overflow, sizing = element.style.boxSizing;
@@ -111,48 +134,50 @@ function heightTransition(
     element.style.overflow = overflow;
     element.style.boxSizing = sizing;
     anchor.stop();
+    anchor.release?.();
   };
   const animation = element.animate([{ height: `${from}px` }, { height: `${to}px` }], {
     duration: to > from ? 220 : 180, easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)', fill: 'both',
   });
+  anchor.sync();
   anchor.startLoop();
   resizing.set(element, { animation, cleanup });
   animation.onfinish = () => {
     if (resizing.get(element)?.animation !== animation) return;
-    finished(); animation.cancel(); cleanup(); resizing.delete(element); anchor.sync();
+    finished(); animation.cancel(); cleanup(); resizing.delete(element);
   };
 }
 
 /** Preserve the interpolated height when a live list changes during a transition. */
-export function animateResize(element: HTMLElement, update: () => void) {
-  const anchor = createUpperHalfScrollAnchor(element);
-  const before = element.getBoundingClientRect().height;
+export function animateResize(element: HTMLElement, update: () => void, autoAnchor = false) {
+  const anchor = createUpperHalfScrollAnchor(element, autoAnchor);
+  const before = element.offsetHeight;
   stop(element); update();
-  heightTransition(element, before, element.getBoundingClientRect().height, () => {}, anchor);
+  heightTransition(element, before, element.offsetHeight, () => {}, anchor);
 }
 
 function disclosureState(details: HTMLDetailsElement) {
   let state = disclosures.get(details);
   if (!state) {
-    state = { desired: details.open, ignore: null, height: details.getBoundingClientRect().height };
+    state = { desired: details.open, ignore: null, height: details.offsetHeight };
     disclosures.set(details, state);
   }
   return state;
 }
 
 export function setExpanded(details: HTMLDetailsElement, expanded: boolean, previousHeight?: number) {
-  const anchor = createUpperHalfScrollAnchor(details);
+  const anchor = createUpperHalfScrollAnchor(details, false);
   const state = disclosureState(details);
-  const before = previousHeight ?? details.getBoundingClientRect().height;
+  const before = previousHeight ?? details.offsetHeight;
   state.desired = expanded;
   stop(details);
   const nativeOpen = (value: boolean) => { state.ignore = value; details.open = value; };
   nativeOpen(false);
-  const collapsed = details.getBoundingClientRect().height;
+  const collapsed = details.offsetHeight;
   nativeOpen(true);
-  const opened = details.getBoundingClientRect().height;
+  const opened = details.offsetHeight;
   heightTransition(details, before, expanded ? opened : collapsed, () => {
-    nativeOpen(state.desired); state.height = details.getBoundingClientRect().height;
+    nativeOpen(state.desired); state.height = details.offsetHeight;
   }, anchor);
 }
 

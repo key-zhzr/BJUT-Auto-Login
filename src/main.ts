@@ -5,7 +5,6 @@ import { setupDeviceUsage } from './device-usage-view';
 import {defaultUsageRetention,usageStorageEstimate,type UsageRetention} from './device-usage-model';
 import { setupAdvancedDiagnostics } from './advanced-diagnostics';
 import { setupQuickActions } from './quick-actions';
-import { setupNetworkQuality } from './network-quality';
 import {
   getBillingSource,
   getRouterBillingBridge,
@@ -268,14 +267,26 @@ if (navigator.userAgent.includes('Mac OS X')) {
   }
 }
 
+const syncWindowMaximizeGlyph = async () => {
+  if (!window.__TAURI__) return;
+  try {
+    const maximized = await getCurrentWindow().isMaximized();
+    document.body.classList.toggle('is-window-maximized', maximized);
+  } catch {
+    document.body.classList.remove('is-window-maximized');
+  }
+};
 document.getElementById('titlebar-minimize')?.addEventListener('click', () => {
   try { getCurrentWindow().minimize(); } catch(err) {}
 });
 document.getElementById('titlebar-maximize')?.addEventListener('click', async () => {
   try {
     await getCurrentWindow().toggleMaximize();
+    await syncWindowMaximizeGlyph();
   } catch(err) {}
 });
+window.addEventListener('resize', () => { void syncWindowMaximizeGlyph(); }, { passive: true });
+void syncWindowMaximizeGlyph();
 document.getElementById('titlebar-close')?.addEventListener('click', () => {
   try { getCurrentWindow().close(); } catch(err) {}
 });
@@ -354,7 +365,7 @@ function scheduleCurrentCampusAccountDiscovery() {
 
 let discoveredCampusAccount: DiscoveredCampusAccount | null = null;
 
-function syncDiscoveredAccountCard() {
+function syncDiscoveredAccountCard(autoAnchor = true) {
   const card = document.getElementById('discovered-account-card')!;
   const description = document.getElementById('discovered-account-description')!;
   const acceptButton = document.getElementById('btn-discovered-account-accept') as HTMLButtonElement;
@@ -363,7 +374,7 @@ function syncDiscoveredAccountCard() {
     ? accountsCache.some(account => account.user === candidate.user)
     : true;
   if (!candidate?.user || alreadyKnown) {
-    setVisible(card, false);
+    setVisible(card, false, { autoAnchor });
     if (alreadyKnown) discoveredCampusAccount = null;
     return;
   }
@@ -376,7 +387,7 @@ function syncDiscoveredAccountCard() {
     : UI_TEXT.accountDiscovery.importAction;
   document.getElementById('btn-discovered-account-dismiss')!.textContent =
     UI_TEXT.accountDiscovery.dismissAction;
-  setVisible(card, true);
+  setVisible(card, true, { autoAnchor });
   renderIcons(card);
 }
 
@@ -457,7 +468,7 @@ async function dismissDiscoveredCampusAccount() {
       .catch(() => undefined);
   }
   discoveredCampusAccount = null;
-  syncDiscoveredAccountCard();
+  syncDiscoveredAccountCard(false);
 }
 
 interface PermissionHealthItem {
@@ -1068,6 +1079,7 @@ async function loadConfigFromRust(): Promise<boolean> {
 
 function applyNetworkStatePayload(data: NetworkStatePayload) {
   networkExperience.renderState(data);
+  routerWorkbench?.onNetworkState(data);
   if (!document.hidden) void refreshNetworkAdapters().catch(error => console.error('读取网卡失败', error));
   const networkChanged = Boolean(data.ip && lastKnownIp && data.ip !== lastKnownIp);
   if (networkChanged && portalUserInfoCache) {
@@ -1692,7 +1704,13 @@ const networkExperience = new NetworkExperience(async id => {
   await operation;
 }, async () => {
   await refreshNetworkAdapters();
-  await invoke('trigger_manual_check');
+  networkProgressView.markManualTrigger();
+  try {
+    await invoke('trigger_manual_check');
+  } catch (error) {
+    networkProgressView.clearManualTrigger();
+    throw error;
+  }
 });
 const loginProgressView = new LoginProgressView(async operationId => {
   await invoke('cancel_manual_login', { operationId });
@@ -2087,7 +2105,6 @@ async function init() {
   setupTrayPreferences(syncConfigToRust);
   setupDeviceUsage(syncConfigToRust);
   setupAdvancedDiagnostics();
-  setupNetworkQuality();
   setupQuickActions(activatePage);
   document.getElementById('setting-prefer-flow')!.addEventListener('change',async event=>{const input=event.target as HTMLInputElement;const previous=localStorage.getItem('bjut_prefer_remaining_flow');input.disabled=true;localStorage.setItem('bjut_prefer_remaining_flow',String(input.checked));try{await syncConfigToRust();}catch{localStorage.setItem('bjut_prefer_remaining_flow',previous||'false');input.checked=previous==='true';}finally{input.disabled=false;}});
   window.addEventListener('usage-preferences', updateUsagePreferences);
@@ -2433,16 +2450,7 @@ async function runDiagnostics() {
   diagnosticProgressValue = 0;
   updateDiagnosticProgress(0, '正在检查网络链路…', true);
   try {
-    const routerSteps = routerWorkbench?.diagnosticSteps() || Promise.resolve([]);
     lastDiagnosticReport = await invoke<DiagnosticReport>('run_network_diagnostics', { runId: diagnosticRunId });
-    const upstreamSteps = await routerSteps;
-    const joint=routerWorkbench?.jointDiagnosticStep(lastDiagnosticReport.overall==='healthy');
-    if(joint)upstreamSteps.unshift(joint);
-    lastDiagnosticReport.steps.push(...upstreamSteps);
-    if (lastDiagnosticReport.overall === 'healthy' && upstreamSteps.some(step => step.status !== 'success')) {
-      lastDiagnosticReport.overall = 'partial';
-      lastDiagnosticReport.summary = '当前设备联网正常，部分路由上游需检查';
-    }
     finishDiagnosticProgress();
     renderDiagnosticReport(lastDiagnosticReport);
     await Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
@@ -3144,8 +3152,10 @@ function setupEventListeners() {
     try {
       localStorage.setItem('bjut_adaptive_network_checks', String(input.checked));
       await syncConfigToRust();
+      networkProgressView.markManualTrigger();
       await invoke('trigger_manual_check');
     } catch (error) {
+      networkProgressView.clearManualTrigger();
       localStorage.setItem('bjut_adaptive_network_checks', previous || 'true'); input.checked = previous !== 'false';
       log('网络', `保存自适应检测设置失败：${String(error)}`, 'error');
     } finally { input.disabled = false; }
@@ -3951,8 +3961,10 @@ function setupEventListeners() {
 
       if (window.__TAURI__) {
         try {
+          networkProgressView.markManualTrigger();
           await invoke('trigger_manual_check');
         } catch (err) {
+          networkProgressView.clearManualTrigger();
           console.error('Failed to trigger manual check in Rust:', err);
           isChecking = false;
           clearTimeout(safetyTimeout);
@@ -3960,8 +3972,10 @@ function setupEventListeners() {
         }
       } else {
         try {
+          networkProgressView.markManualTrigger();
           await checkNetwork();
         } finally {
+          networkProgressView.clearManualTrigger();
           isChecking = false;
           clearTimeout(safetyTimeout);
           if (btnIcon) btnIcon.style.animation = '';

@@ -39,13 +39,23 @@
         <span>BJUT-AL</span>
       </div>
       <div class="titlebar-button" id="titlebar-minimize">
-        <i data-lucide="minus" style="width: 14px; height: 14px; pointer-events: none;"></i>
+        <svg class="titlebar-glyph" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" shape-rendering="crispEdges">
+          <path d="M 0,5.5 H 10" stroke="currentColor" stroke-width="1" />
+        </svg>
       </div>
       <div class="titlebar-button" id="titlebar-maximize">
-        <i data-lucide="square" style="width: 12px; height: 12px; pointer-events: none;"></i>
+        <svg class="titlebar-glyph titlebar-glyph-maximize" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" shape-rendering="crispEdges">
+          <rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" stroke-width="1" />
+        </svg>
+        <svg class="titlebar-glyph titlebar-glyph-restore" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" shape-rendering="crispEdges">
+          <path d="M 2.5,2.5 V 0.5 H 9.5 V 7.5 H 7.5" stroke="currentColor" stroke-width="1" />
+          <rect x="0.5" y="2.5" width="7" height="7" stroke="currentColor" stroke-width="1" />
+        </svg>
       </div>
       <div class="titlebar-button titlebar-close" id="titlebar-close">
-        <i data-lucide="x" style="width: 16px; height: 16px; pointer-events: none;"></i>
+        <svg class="titlebar-glyph" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+          <path d="M 0.5,0.5 L 9.5,9.5 M 9.5,0.5 L 0.5,9.5" stroke="currentColor" stroke-width="1.05" stroke-linecap="butt" />
+        </svg>
       </div>
     </div>
     
@@ -58,7 +68,7 @@
         </div>
         <ul class="nav-items">
           <li class="nav-dashboard-group">
-            <div class="nav-item nav-dashboard-parent active" data-target="dashboard" role="button" aria-expanded="true" aria-controls="nav-dashboard-children">
+            <div class="nav-item nav-dashboard-parent active" data-target="dashboard" title="控制台" role="button" aria-expanded="true" aria-controls="nav-dashboard-children">
               <i data-lucide="layout-dashboard"></i> <span>控制台</span>
               <i class="nav-tree-chevron" data-lucide="chevron-down" aria-hidden="true"></i>
             </div>
@@ -91,16 +101,16 @@
               </div>
             </div>
           </li>
-          <li class="nav-item" data-target="accounts">
+          <li class="nav-item" data-target="accounts" title="账号管理">
             <i data-lucide="users"></i> <span>账号管理</span>
           </li>
-          <li class="nav-item" data-target="diagnostics">
+          <li class="nav-item" data-target="diagnostics" title="网络诊断">
             <i data-lucide="shield-check"></i> <span>网络诊断</span>
           </li>
-          <li class="nav-item" data-target="logs">
+          <li class="nav-item" data-target="logs" title="运行日志">
             <i data-lucide="file-text"></i> <span>运行日志</span>
           </li>
-          <li class="nav-item" data-target="settings">
+          <li class="nav-item" data-target="settings" title="设置">
             <i data-lucide="settings"></i> <span>设置</span>
           </li>
         </ul>
@@ -132,13 +142,6 @@
                 <button id="btn-router-disconnect" class="btn btn-secondary btn-sm" type="button">停止协作</button>
               </div></div>
               <div id="router-uplink-status" class="router-port-grid"></div>
-              <details class="router-more-actions"><summary><span>指定上游和账号</span><i class="disclosure-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
-                <div class="router-controls-row">
-                  <div class="custom-select" id="router-uplink-select" aria-label="路由上游"><div class="custom-select-trigger"><span>选择上游</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div></div>
-                  <div class="custom-select" id="router-account-select" aria-label="路由登录账号"><div class="custom-select-trigger"><span>自动选择账号</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div></div>
-                </div>
-                <div class="router-actions"><button id="btn-router-login" class="btn btn-primary btn-sm" type="button">登录所选上游</button><button id="btn-router-billing" class="btn btn-secondary btn-sm" type="button">计费中心</button></div>
-              </details>
             </div>
           </section>
           <h3 id="dashboard-local-label" class="router-local-heading" hidden>当前设备</h3>
@@ -833,10 +836,6 @@
           </section>
 
           <div class="diagnostics-grid">
-            <section id="router-diagnostics-panel" class="diagnostic-panel glass-card router-page-panel" hidden>
-              <div class="router-panel-header"><h3>路由上游</h3><button id="btn-router-diagnostics-refresh" class="btn btn-secondary btn-sm" type="button">刷新</button></div>
-              <div id="router-diagnostics-results"></div>
-            </section>
             <details id="account-health-panel" class="diagnostic-panel glass-card">
               <summary class="account-health-summary">
                 <strong>账号状态</strong>
@@ -862,23 +861,6 @@
             </summary>
             <ol id="network-events-list" class="network-events-list"><li class="diagnostic-empty">暂无网络事件，检测和登录后会在此说明原因</li></ol>
           </details>
-
-          <section id="network-quality-panel" class="diagnostic-panel glass-card network-quality-panel">
-            <div class="diagnostic-panel-header">
-              <div>
-                <h3>网络质量 · 最近 24 小时</h3>
-                <p>仅记录已完成的检查，未通过比例不等于丢包率</p>
-              </div>
-              <label class="quality-alert-toggle">
-                <span>异常与恢复提醒</span>
-                <span class="switch">
-                  <input id="quality-alerts" type="checkbox">
-                  <span class="slider round"></span>
-                </span>
-              </label>
-            </div>
-            <div id="network-quality-content" class="network-quality-content transfer-note"></div>
-          </section>
         </section>
 
         <!-- Logs -->

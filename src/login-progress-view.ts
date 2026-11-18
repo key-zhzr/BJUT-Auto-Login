@@ -68,6 +68,6 @@ export class LoginProgressView {
     if (message) element('login-progress-message').textContent = message;
     element('btn-cancel-login').hidden = true;
     this.onFinished([element('login-progress-message').textContent, element('login-progress-time').textContent, element('login-progress-phases').textContent].filter(Boolean).join('；'), success);
-    this.hideTimer = window.setTimeout(() => { this.visibility.setVisible(false); this.hideTimer = null; }, 15_000);
+    this.hideTimer = window.setTimeout(() => { this.visibility.setVisible(false, { autoAnchor: true }); this.hideTimer = null; }, 15_000);
   }
 }

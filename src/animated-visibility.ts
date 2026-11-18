@@ -10,11 +10,12 @@ export class AnimatedVisibility {
     this.visible = !element.hidden;
   }
 
-  setVisible(visible: boolean) {
+  setVisible(visible: boolean, options?: { autoAnchor?: boolean }) {
     if (visible === this.visible) return;
     this.visible = visible;
-    const anchor = createUpperHalfScrollAnchor(this.element);
     this.scrollAnchor?.stop();
+    this.scrollAnchor?.release?.();
+    const anchor = createUpperHalfScrollAnchor(this.element, Boolean(options?.autoAnchor));
     this.scrollAnchor = anchor;
     const wasHidden = this.element.hidden;
     // Read the interpolated state before cancelling, so a new check can reverse
@@ -30,6 +31,7 @@ export class AnimatedVisibility {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !this.element.animate) {
       this.element.hidden = !visible;
       anchor.sync();
+      anchor.release?.();
       this.scrollAnchor = null;
       return;
     }
@@ -39,6 +41,7 @@ export class AnimatedVisibility {
     if (!(Number.parseFloat(expanded.height) > 0)) {
       this.element.hidden = !visible;
       anchor.sync();
+      anchor.release?.();
       this.scrollAnchor = null;
       return;
     }
@@ -49,6 +52,7 @@ export class AnimatedVisibility {
       { duration: visible ? 220 : 180, easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)', fill: 'both' },
     );
     this.animation = animation;
+    anchor.sync();
     anchor.startLoop();
     animation.onfinish = () => {
       if (this.animation !== animation) return;
@@ -58,6 +62,7 @@ export class AnimatedVisibility {
       animation.cancel();
       anchor.stop();
       anchor.sync();
+      anchor.release?.();
       if (this.scrollAnchor === anchor) this.scrollAnchor = null;
     };
   }

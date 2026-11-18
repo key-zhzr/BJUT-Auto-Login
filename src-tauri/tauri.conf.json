@@ -17,6 +17,8 @@
         "title": "BJUT-Auto-Login",
         "width": 960,
         "height": 700,
+        "minWidth": 640,
+        "minHeight": 520,
         "visible": false,
         "decorations": true,
         "titleBarStyle": "Overlay",

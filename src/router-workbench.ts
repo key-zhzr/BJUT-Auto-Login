@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 import { DeviceUsageView } from './device-usage-view';
-import { recordRouterQuality } from './network-quality';
 import { RouterUsageReader } from './device-usage-model';
 import { RouterAdmin } from './router-admin';
 import { renderRouterBillingSummary } from './router-billing-summary';
@@ -8,9 +7,9 @@ import { RouterBillingCenter } from './router-billing-center';
 import { CustomSelect } from './custom-select';
 import { animateResize, setVisible } from './layout-motion';
 import { routerPortIcon } from './router-port-icon';
-import type { DiagnosticStep } from './models';
+import type { NetworkStatePayload } from './models';
 import { routerBytes, routerCounter, routerStatus, routerAdvice } from './router-model';
-import type { RouterSnapshot, RouterCandidate, RouterUplink } from './router-model';
+import type { RouterSnapshot, RouterCandidate } from './router-model';
 import { setBillingSource, setRouterBillingBridge } from './router-billing-bridge';
 
 const byId = (id: string) => document.getElementById(id)!;
@@ -26,6 +25,8 @@ export class RouterWorkbench {
   billingSelected = false;
   private candidates: RouterCandidate[] = [];
   private discoveryBusy = false;
+  private discoveryRevision = 0;
+  private networkIdentity?: string;
   private generation = 0;
   private lastLogsPoll = 0;
   private accountsStamp = '';
@@ -61,7 +62,6 @@ export class RouterWorkbench {
     byId('btn-router-manual-connect').addEventListener('click', () => options.connect());
     byId('btn-billing-source-router').addEventListener('click', () => this.selectBillingSource(true));
     byId('btn-billing-source-local').addEventListener('click', () => this.selectBillingSource(false));
-    byId('btn-router-diagnostics-refresh').addEventListener('click', () => { void options.refresh(); });
     byId('btn-router-logs-refresh').addEventListener('click', () => { void this.refreshLogs(); });
     this.admin = new RouterAdmin({request:<T>(name:string,args?:Record<string,unknown>)=>this.request<T>(name,args),refresh:options.refresh,confirm:options.confirm,log:options.log});
     this.billingCenter = new RouterBillingCenter(
@@ -76,24 +76,61 @@ export class RouterWorkbench {
       if(page==='dashboard'&&!this.disconnected&&this.supports('traffic_charts')&&Date.now()-this.lastTraffic>=15000)void this.refreshTraffic();
       if (page === 'logs' && Date.now() - this.lastLogsPoll >= 5000) void this.refreshLogs();
     },1000);
-    window.addEventListener('focus', () => { if (!this.snapshot && !this.discoveryBusy) void this.discover(); });
+    const rediscover = () => { void this.discover(); };
+    window.addEventListener('focus', rediscover);
+    window.addEventListener('online', rediscover);
     void this.discover();
   }
 
+  private get hasActiveConnection(): boolean {
+    return this.snapshot !== null && !this.disconnected;
+  }
+
+  private syncDashboardVisibility(): void {
+    setVisible(byId('router-dashboard'), this.hasActiveConnection || this.candidates.length > 0);
+  }
+
+  private invalidateDiscovery(): void {
+    this.discoveryRevision++;
+    this.candidates = [];
+    this.syncDashboardVisibility();
+  }
+
+  onNetworkState(state: NetworkStatePayload): void {
+    if (state.state === 'Checking') return;
+    const identity = [state.interfaceName, state.ip, state.ssid, state.bssid].join('|');
+    const previous = this.networkIdentity;
+    this.networkIdentity = identity;
+    if (previous === undefined || previous === identity) return;
+    this.invalidateDiscovery();
+    if (this.hasActiveConnection) void this.options.refresh();
+    else void this.discover();
+  }
+
   async discover(): Promise<void> {
-    if (this.discoveryBusy || this.snapshot) return;
+    if (this.discoveryBusy || this.hasActiveConnection) return;
     this.discoveryBusy = true;
+    const revision = this.discoveryRevision;
+    const current = () => revision === this.discoveryRevision && !this.hasActiveConnection;
     byId('router-settings-connection').textContent = '正在查找局域网路由器…';
     try {
       const result = await invoke<RouterCandidate[]>('discover_routers', {lastAddress: localStorage.getItem('bjut_router_address')});
+      if (!current()) return;
       this.candidates = Array.isArray(result) ? result : [];
-      if (this.snapshot) return;
       const found = this.candidates[0];
-      setVisible(byId('router-dashboard'), !!found);
+      this.syncDashboardVisibility();
       byId('router-discovery-message').textContent = found ? `${found.name} · ${new URL(found.address).host}` : '';
       byId('router-settings-connection').textContent = found ? `发现 ${new URL(found.address).host}，可在控制台连接。` : '未发现路由器，可手动填写地址连接。';
-    } catch { if (!this.snapshot) byId('router-settings-connection').textContent = '暂未发现路由器，可使用手动连接。'; }
-    finally { this.discoveryBusy = false; }
+    } catch {
+      if (current()) {
+        this.candidates = [];
+        this.syncDashboardVisibility();
+        byId('router-settings-connection').textContent = '暂未发现路由器，可使用手动连接。';
+      }
+    } finally {
+      this.discoveryBusy = false;
+      if (revision !== this.discoveryRevision) void this.discover();
+    }
   }
 
   render(data: RouterSnapshot): void {
@@ -108,7 +145,8 @@ export class RouterWorkbench {
       void this.reloadTraffic();
     }
     if(reconnect)this.admin.resume();
-    for (const id of ['router-dashboard','router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), true);
+    this.syncDashboardVisibility();
+    for (const id of ['router-accounts-panel','router-logs-panel','router-billing-source','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), true);
     byId('btn-router-auto-connect').hidden = true;
     byId('btn-router-discover').hidden = true;
     byId('router-discovery-message').textContent = new URL(data.managementUrl).host;
@@ -118,7 +156,7 @@ export class RouterWorkbench {
       this.accountsStamp = stamp;
       this.renderAccounts();
     }
-    this.renderPorts(); this.renderDiagnostics();
+    this.renderPorts();
     setVisible(byId('router-settings-form'), this.supports('settings'));
     if (firstConnection) this.selectBillingSource(true);
     if(reconnect && this.billingSelected && document.querySelector('.page.active')?.id==='billing-center') {
@@ -136,17 +174,19 @@ export class RouterWorkbench {
     this.accountsStamp = ''; this.admin.disconnect(); this.logSnapshot = '';
     this.portAccounts.forEach(select=>select.close());this.portAccounts.clear();
     this.ports.clear(); this.samples.clear(); byId('router-uplink-status').replaceChildren();
-    for (const id of ['router-accounts-panel','router-diagnostics-panel','router-logs-panel','router-billing-source','router-settings-form','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), false);
+    for (const id of ['router-accounts-panel','router-logs-panel','router-billing-source','router-settings-form','dashboard-local-label','router-local-accounts-title']) setVisible(byId(id), false);
     this.selectBillingSource(false);
     byId('btn-router-auto-connect').hidden = false; byId('btn-router-discover').hidden = false;
     byId('router-settings-connection').textContent = '已断开，可重新查找或手动连接。';
-    setVisible(byId('router-dashboard'), !!this.candidates.length);
+    this.syncDashboardVisibility();
     byId('router-discovery-message').textContent = this.candidates[0]?.name || '';
+    void this.discover();
   }
 
   markDisconnected(reason:string):void {
     if(!this.snapshot)return;
-    if(!this.disconnected) {
+    const wasConnected = !this.disconnected;
+    if(wasConnected) {
       this.billingCenter.invalidate();
       this.trafficRevision++;this.trafficReader.clear();this.lastTraffic=0;
     }
@@ -157,6 +197,10 @@ export class RouterWorkbench {
     byId('router-settings-connection').textContent='连接已中断，以下为上次读取的数据。';
     byId('router-discovery-message').textContent=reason;
     byId('btn-router-auto-connect').hidden=false;
+    if (wasConnected) {
+      this.invalidateDiscovery();
+      void this.discover();
+    }
   }
   private setControlsAvailable(available:boolean) {
     for(const id of ['router-uplink-status','router-accounts-panel','router-settings-form']) {
@@ -201,7 +245,6 @@ export class RouterWorkbench {
     const live = new Set(this.snapshot.uplinks.map(item=>item.id));
     for (const [id,card] of this.ports) if (!live.has(id)) { this.portAccounts.get(id)?.close();this.portAccounts.delete(id);card.remove(); this.ports.delete(id); this.samples.delete(id); }
     for (const item of this.snapshot.uplinks) {
-      if(!item.stale)recordRouterQuality(item.device||item.id,(item.updated_at||0)*1000,item.internet4,item.internet6);
       let card = this.ports.get(item.id);
       if (!card) {
         card = node('article','', 'router-port-card router-enter'); card.dataset.uplink = item.id;
@@ -281,31 +324,6 @@ export class RouterWorkbench {
     setBillingSource(this.billingSelected ? 'router' : 'local');
   }
 
-  private renderDiagnostics(): void {
-    if (!this.snapshot) return;
-    const uplinks=this.snapshot.uplinks;
-    animateResize(byId('router-diagnostics-results'),()=>byId('router-diagnostics-results').replaceChildren(...uplinks.map(item=>{
-      const row=node('div','','router-diagnostic-row');row.append(node('strong',[item.device,item.network].filter(Boolean).join(' · ') || item.id),node('p',this.diagnosticMessage(item)));return row;
-    })));
-  }
-  private diagnosticMessage(item: RouterUplink): string {
-    const family=(name:string,state?:string)=>`${name} ${state==='reachable'?'通过':state==='unreachable'?'未通过':state==='not_configured'?'未取得地址':'待检测'}`;
-    const route=(value?:string)=>({managed:'固定出口',kernel:'系统路由',missing_default:'缺少默认路由',failed:'出口未就绪',not_configured:'未取得地址'}[value || ''] || '待检查');
-    return [routerStatus(item,this.disconnected),`认证会话：${item.session==='online'?'已认证':item.session==='offline'?'未认证':'待确认'}`,`${family('IPv4',item.internet4)} · ${family('IPv6',item.internet6)}`,`IPv4 ${route(item.route4)} · IPv6 ${route(item.route6)}`,item.message,routerAdvice(item),item.updated_at?`更新于 ${new Date(item.updated_at*1000).toLocaleTimeString()}`:'尚无检测结果'].filter(Boolean).join('\n');
-  }
-  async diagnosticSteps(): Promise<DiagnosticStep[]> {
-    if (!this.snapshot) return [];
-    try { await this.options.refresh(); }
-    catch { /* Keep explicitly dated last results available. */ }
-    return this.snapshot?.uplinks.map(item=>({id:`router_${item.id}`,label:`路由上游 ${item.device || item.network || item.id}`,status:routerStatus(item,this.disconnected)==='互联网已连接'?'success':'warning',message:this.diagnosticMessage(item),durationMs:0})) || [];
-  }
-  jointDiagnosticStep(localHealthy:boolean):DiagnosticStep|null {
-    if(!this.snapshot)return null;
-    const live=this.snapshot.uplinks.filter(item=>routerStatus(item,this.disconnected)!=='数据已过期');
-    const online=live.filter(item=>item.state==='online').length;
-    const message=!live.length?'路由器结果已过期，请恢复协作连接后重新诊断。':online && !localHealthy?'路由器存在可用上游，当前设备探测异常；请优先检查本机 VPN、DNS 和局域网连接。':!online && localHealthy?'当前设备联网正常，路由上游尚未确认可用；可能使用了其他网络出口，请检查各上游认证与路由。':online?`${online} 条路由上游可用，当前设备联网正常。`:'当前设备与路由上游均未确认联网，请先检查上游接口和校园网认证。';
-    return {id:'router_joint',label:'本机与路由器联合判断',status:online && localHealthy?'success':'warning',message,durationMs:0};
-  }
   diagnosticBundle():unknown {
     if(!this.snapshot)return null;
     let logs=this.logSnapshot;

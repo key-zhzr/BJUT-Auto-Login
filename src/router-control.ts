@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import { CustomSelect } from './custom-select';
 import type { AccountView } from './models';
 import { routerPollInterval, type RouterSnapshot } from './router-model';
 import { RouterWorkbench } from './router-workbench';
@@ -14,8 +13,7 @@ export function setupRouterControl(getAccounts:()=>AccountView[],log:(message:st
   const certificate=byId('router-certificate') as HTMLTextAreaElement,allowHttp=byId('router-allow-http') as HTMLInputElement,remember=byId('router-remember-password') as HTMLInputElement;
   const modal=byId('router-connect-modal'),message=byId('router-message'),connectedPanel=byId('router-connected');
   const connectButton=byId('btn-router-connect') as HTMLButtonElement,syncButton=byId('btn-router-sync') as HTMLButtonElement,localAccounts=byId('router-sync-accounts');
-  const uplink=new CustomSelect('router-uplink-select'),account=new CustomSelect('router-account-select');
-  let connected=false,busy=false,snapshot:RouterSnapshot|null=null,optionsStamp='',lastPoll=0,generation=0;
+  let connected=false,busy=false,snapshot:RouterSnapshot|null=null,lastPoll=0,generation=0;
   let resumeInfo:ConnectionInfo|null=null,savedInfo:ConnectionInfo|null=null,allowRetry=false,failures=0,nextRetry=0,restoring=false;
   let paused=localStorage.getItem('bjut_router_paused')==='true',returnFocus:HTMLElement|null=null;
   address.value=localStorage.getItem('bjut_router_address') || 'https://192.168.1.1';
@@ -38,16 +36,11 @@ export function setupRouterControl(getAccounts:()=>AccountView[],log:(message:st
   }
   function render(data:RouterSnapshot) {
     snapshot=data;connected=true;byId('router-version').textContent=`路由端 v${data.version}`;
-    const stamp=JSON.stringify([data.uplinks.map(item=>[item.id,item.network]),data.accounts]);
-    if(stamp!==optionsStamp){
-      const previous=uplink.value;uplink.setOptions(data.uplinks.length?data.uplinks.map(item=>({value:item.id,text:[item.id,item.network].filter(Boolean).join(' · ')})):[{value:'',text:'请先配置上游'}]);uplink.setDisabled(!data.uplinks.length);uplink.value=data.uplinks.some(item=>item.id===previous)?previous:data.uplinks[0]?.id || '';
-      const previousAccount=account.value;account.setOptions([{value:'',text:'自动选择账号'},...data.accounts.filter(item=>item.hasPassword).map(item=>({value:item.id,text:item.user+(item.enabled?'':'（手动）')}))]);account.value=data.accounts.some(item=>item.id===previousAccount)?previousAccount:'';optionsStamp=stamp;
-    }
     workbench.render(data);
     setVisible(connectedPanel,true);
   }
   function unavailable(error:unknown) {
-    connected=false;snapshot=null;setVisible(connectedPanel,false);workbench.markDisconnected(String(error));setVisible(byId('router-dashboard'),true);
+    connected=false;snapshot=null;setVisible(connectedPanel,false);workbench.markDisconnected(String(error));
     if(/ROUTER_(NETWORK_MISMATCH|REPAIR_REQUIRED):/.test(String(error))) {nextRetry=Date.now()+30000;showMessage(String(error),true);}
     else if(String(error).includes('ROUTER_CERT_UNTRUSTED:') || String(error).includes('账号或密码')) {allowRetry=false;showMessage(`${String(error)}，请重新连接。`,true);}
     else {nextRetry=Date.now()+Math.min(60000,2000*2**Math.min(failures++,5));showMessage(`连接中断，${Math.round((nextRetry-Date.now())/1000)} 秒后重试。`,true);}
@@ -106,11 +99,9 @@ export function setupRouterControl(getAccounts:()=>AccountView[],log:(message:st
   });
   async function loginUplink(target:string,selectedAccount?:string) {
     if(!connected || busy || !target)return;const current=generation;busy=true;
-    try{const result=await invoke<string>('router_login',{uplink:target,account:selectedAccount || account.value || null});if(current===generation && connected){showMessage(result);log(result);lastPoll=0;}}
+    try{const result=await invoke<string>('router_login',{uplink:target,account:selectedAccount || null});if(current===generation && connected){showMessage(result);log(result);lastPoll=0;}}
     catch(error){if(current===generation)showMessage(String(error),true);}finally{busy=false;void refresh();}
   }
-  byId('btn-router-login').addEventListener('click',()=>{void loginUplink(uplink.value);});
-  byId('btn-router-billing').addEventListener('click',()=>{if(snapshot)byId('btn-open-billing').click();});
   byId('router-sync-details').addEventListener('toggle',event=>{
     if(!(event.target as HTMLDetailsElement).open)return;
     const checked=new Set([...localAccounts.querySelectorAll<HTMLInputElement>('input:checked')].map(i=>i.value));
@@ -121,7 +112,7 @@ export function setupRouterControl(getAccounts:()=>AccountView[],log:(message:st
   syncButton.addEventListener('click',async()=>{
     if(!connected || busy)return;const current=generation;const users=[...localAccounts.querySelectorAll<HTMLInputElement>('input:checked')].map(i=>i.value);
     if(!users.length){showMessage('请勾选要同步的账号');return;}busy=true;syncButton.disabled=true;
-    try{const result=await invoke<string>('sync_router_accounts',{users});if(current===generation){showMessage(result);log(result);const data=await invoke<RouterSnapshot>('get_router_status');if(current===generation && connected){optionsStamp='';render(data);}}}
+    try{const result=await invoke<string>('sync_router_accounts',{users});if(current===generation){showMessage(result);log(result);const data=await invoke<RouterSnapshot>('get_router_status');if(current===generation && connected)render(data);}}
     catch(error){if(current===generation)showMessage(String(error),true);}finally{busy=false;syncButton.disabled=false;}
   });
   // Like LuCI, schedule from the last request's start. A fixed one-second

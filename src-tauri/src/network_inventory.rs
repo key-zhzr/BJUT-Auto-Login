@@ -169,11 +169,16 @@ fn parse_ifconfig(text: &str, wifi_names: &[String]) -> Vec<NetworkAdapter> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn adapters() -> Vec<NetworkAdapter> {
+pub(crate) fn macos_link_adapters() -> Vec<NetworkAdapter> {
     let wifi = corewlan::WiFiClient::shared()
         .map(|client| client.interface_names())
         .unwrap_or_default();
-    let mut adapters = parse_ifconfig(&read("/sbin/ifconfig", &[]), &wifi);
+    parse_ifconfig(&read("/sbin/ifconfig", &[]), &wifi)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn adapters() -> Vec<NetworkAdapter> {
+    let mut adapters = macos_link_adapters();
     let ports = read("/usr/sbin/networksetup", &["-listallhardwareports"]);
     let mut name = "";
     for line in ports.lines() {

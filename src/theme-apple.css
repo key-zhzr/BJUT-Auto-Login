@@ -314,7 +314,7 @@
 }
 
 :root[data-theme="apple27"] body.is-desktop main {
-  padding-top: calc(30px + 1.6rem);
+  padding-top: calc(30px + 1.35rem);
 }
 
 :root[data-theme="apple27"] .titlebar,
@@ -338,10 +338,36 @@
 
 :root[data-theme="apple27"] .titlebar-button {
   border-radius: 0;
-  color: var(--apple-secondary-label);
+  color: #1b1b1b;
   transition:
     color var(--apple-duration-fast) ease,
     background-color var(--apple-duration-fast) ease;
+}
+
+:root[data-theme="apple27"][data-color-scheme="dark"] .titlebar-button {
+  color: var(--apple-secondary-label);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="apple27"] body:not(.is-android) .titlebar-button:not(.titlebar-close):hover {
+    color: #000000;
+    background: rgba(0, 0, 0, 0.065);
+  }
+
+  :root[data-theme="apple27"][data-color-scheme="dark"] body:not(.is-android) .titlebar-button:not(.titlebar-close):hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
+:root[data-theme="apple27"] body:not(.is-android) .titlebar-button:not(.titlebar-close):active {
+  color: #000000;
+  background: rgba(0, 0, 0, 0.11);
+}
+
+:root[data-theme="apple27"][data-color-scheme="dark"] body:not(.is-android) .titlebar-button:not(.titlebar-close):active {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.13);
 }
 
 :root[data-theme="apple27"] .page-header h1,
@@ -420,7 +446,7 @@
   font-weight: 600;
 }
 
-:root[data-theme="apple27"] body.is-desktop :is(
+:root[data-theme="apple27"] :is(
   .nav-item.active,
   .nav-tree-link.active,
   .billing-section-nav-button.active
@@ -428,15 +454,44 @@
   color: var(--accent-color);
 }
 
-:root[data-theme="apple27"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
-:root[data-theme="apple27"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
-  background: transparent;
-  box-shadow: none;
+@media (min-width: 769px) {
+  :root[data-theme="apple27"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
+  :root[data-theme="apple27"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  :root[data-theme="apple27"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active > svg:first-child,
+  :root[data-theme="apple27"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active > svg:first-child {
+    color: var(--apple-secondary-label);
+  }
 }
 
-:root[data-theme="apple27"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active > svg:first-child,
-:root[data-theme="apple27"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active > svg:first-child {
-  color: var(--apple-secondary-label);
+@media (max-width: 768px) {
+  :root[data-theme="apple27"] body.is-desktop #nav {
+    padding: calc(30px + 1.15rem) 0.5rem 1.15rem !important;
+  }
+
+  :root[data-theme="apple27"] body.is-desktop main {
+    padding-top: calc(30px + 1.35rem) !important;
+  }
+
+  :root[data-theme="apple27"] body.is-desktop .nav-item {
+    width: 44px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    padding: 0 !important;
+    border-radius: 10px !important;
+  }
+
+  :root[data-theme="apple27"] body.is-desktop .nav-item.active {
+    color: var(--apple-label);
+    background: var(--apple-fill-hover);
+  }
+
+  :root[data-theme="apple27"] body.is-desktop .nav-item.active > svg:first-child {
+    color: var(--accent-color);
+  }
 }
 
 :root[data-theme="apple27"] .nav-dashboard-children,
@@ -745,8 +800,12 @@
 :root[data-theme="apple27"] input[type="password"],
 :root[data-theme="apple27"] input[type="number"],
 :root[data-theme="apple27"] input[type="date"],
+:root[data-theme="apple27"] input[type="datetime-local"],
 :root[data-theme="apple27"] input[type="search"],
 :root[data-theme="apple27"] textarea,
+:root[data-theme="apple27"] .presentation-dialog select,
+:root[data-theme="apple27"] .traffic-field select,
+:root[data-theme="apple27"] .traffic-dates input,
 :root[data-theme="apple27"] .billing-action-controls input,
 :root[data-theme="apple27"] .billing-security-form input,
 :root[data-theme="apple27"] .billing-recharge-form input,
@@ -771,8 +830,11 @@
   opacity: 1;
 }
 
-:root[data-theme="apple27"] input:focus,
+:root[data-theme="apple27"] input:not([type="checkbox"]):not([type="radio"]):focus,
 :root[data-theme="apple27"] textarea:focus,
+:root[data-theme="apple27"] .presentation-dialog select:focus,
+:root[data-theme="apple27"] .traffic-field select:focus,
+:root[data-theme="apple27"] .traffic-dates input:focus,
 :root[data-theme="apple27"] .billing-action-controls input:focus,
 :root[data-theme="apple27"] .billing-security-form input:focus,
 :root[data-theme="apple27"] .billing-recharge-form input:focus,
@@ -992,7 +1054,11 @@
   :root[data-theme="apple27"] body:not(.is-desktop) input[type="password"],
   :root[data-theme="apple27"] body:not(.is-desktop) input[type="number"],
   :root[data-theme="apple27"] body:not(.is-desktop) input[type="date"],
+  :root[data-theme="apple27"] body:not(.is-desktop) input[type="datetime-local"],
   :root[data-theme="apple27"] body:not(.is-desktop) input[type="search"],
+  :root[data-theme="apple27"] body:not(.is-desktop) .presentation-dialog select,
+  :root[data-theme="apple27"] body:not(.is-desktop) .traffic-field select,
+  :root[data-theme="apple27"] body:not(.is-desktop) .traffic-dates input,
   :root[data-theme="apple27"] body:not(.is-desktop) .custom-select-trigger,
   :root[data-theme="apple27"] body:not(.is-desktop) .custom-select.form-select .custom-select-trigger {
     min-height: var(--apple-control-height-touch);
@@ -1214,7 +1280,11 @@
   :root[data-theme="apple27"] body.is-android input[type="password"],
   :root[data-theme="apple27"] body.is-android input[type="number"],
   :root[data-theme="apple27"] body.is-android input[type="date"],
+  :root[data-theme="apple27"] body.is-android input[type="datetime-local"],
   :root[data-theme="apple27"] body.is-android input[type="search"],
+  :root[data-theme="apple27"] body.is-android .presentation-dialog select,
+  :root[data-theme="apple27"] body.is-android .traffic-field select,
+  :root[data-theme="apple27"] body.is-android .traffic-dates input,
   :root[data-theme="apple27"] body.is-android .custom-select-trigger,
   :root[data-theme="apple27"] body.is-android .custom-select.form-select .custom-select-trigger {
     min-height: var(--apple-control-height-touch);

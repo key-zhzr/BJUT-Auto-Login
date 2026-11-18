@@ -1,6 +1,6 @@
 import type { DiagnosticReport, DiagnosticStep, DualStackReport } from './models';
 import { animateResize, setVisible } from './layout-motion';
-import { diagnosticAdvice } from './network-quality-model';
+import { diagnosticAdvice } from './diagnostic-advice';
 
 export function renderDiagnosticReportView(report: DiagnosticReport, options: { busy: boolean; renderHealth: (health: DualStackReport) => void; formatTime: (time: string) => string }) {
   const adapterRepairPanel = document.getElementById('diagnostic-adapter-repair')!;

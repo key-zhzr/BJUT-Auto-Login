@@ -252,22 +252,41 @@
   width: 46px;
   height: 32px;
   border-radius: 0;
-  color: var(--win-text-secondary);
+  color: #1b1b1b;
   transition:
     color var(--win-duration-fast) linear,
     background-color var(--win-duration-fast) linear;
 }
 
+:root[data-theme="winui"][data-color-scheme="dark"] .titlebar-button {
+  color: var(--win-text-secondary);
+}
+
+:root[data-theme="winui"] .titlebar-button svg.titlebar-glyph {
+  width: 10px;
+  height: 10px;
+}
+
 @media (hover: hover) and (pointer: fine) {
-  :root[data-theme="winui"] body:not(.is-android) .titlebar-button:hover {
-    color: var(--win-text-primary);
-    background: var(--win-control-fill-hover);
+  :root[data-theme="winui"] body:not(.is-android) .titlebar-button:not(.titlebar-close):hover {
+    color: #000000;
+    background: rgba(0, 0, 0, 0.065);
+  }
+
+  :root[data-theme="winui"][data-color-scheme="dark"] body:not(.is-android) .titlebar-button:not(.titlebar-close):hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.08);
   }
 }
 
-:root[data-theme="winui"] .titlebar-button:active {
-  color: var(--win-text-secondary);
-  background: var(--win-control-fill-pressed);
+:root[data-theme="winui"] body:not(.is-android) .titlebar-button:not(.titlebar-close):active {
+  color: #000000;
+  background: rgba(0, 0, 0, 0.11);
+}
+
+:root[data-theme="winui"][data-color-scheme="dark"] body:not(.is-android) .titlebar-button:not(.titlebar-close):active {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.13);
 }
 
 :root[data-theme="winui"] .titlebar-button.titlebar-close:active {
@@ -494,15 +513,17 @@
   content: "";
 }
 
-:root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
-:root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
-  background: transparent;
-}
+@media (min-width: 769px) {
+  :root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active,
+  :root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
+    background: transparent;
+  }
 
-:root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active::before,
-:root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active::before,
-:root[data-theme="winui"] #nav:not(.billing-active) .nav-billing-link.active::before {
-  display: none;
+  :root[data-theme="winui"] body.is-desktop #nav.dashboard-expanded .nav-dashboard-parent.active::before,
+  :root[data-theme="winui"] body.is-desktop #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active::before,
+  :root[data-theme="winui"] #nav:not(.billing-active) .nav-billing-link.active::before {
+    display: none;
+  }
 }
 
 @media (min-width: 769px) {
@@ -551,50 +572,32 @@
     opacity var(--win-duration-fast) linear;
 }
 
-/* Keep the pane stable like Windows Settings. At genuinely narrow desktop
-   widths it becomes a fixed icon rail; hovering never resizes the layout. */
-@media (max-width: 767px) {
-  :root[data-theme="winui"] body.is-desktop .app-container {
-    padding-left: 56px;
-  }
-
+/* Narrow desktop widths (< 769px) collapse the pane into a clean icon-only rail
+   matching Tier 2 vertical spacing without overlaying the content pane. */
+@media (max-width: 768px) {
   :root[data-theme="winui"] body.is-desktop #nav {
-    position: fixed;
-    top: 32px;
-    bottom: 0;
-    left: 0;
-    z-index: 850;
-    width: 56px;
-    padding: var(--win-space-2);
-    overflow: hidden;
-    background: var(--win-flyout-solid);
-    box-shadow: none;
-    transition: none;
-  }
-
-  :root[data-theme="winui"] body.is-desktop #nav .nav-items {
-    width: 40px;
+    width: 64px !important;
+    flex: 0 0 64px !important;
+    padding: 1.15rem 0.5rem !important;
   }
 
   :root[data-theme="winui"] body.is-desktop #nav .nav-item {
-    width: 40px;
-    justify-content: center;
-    gap: 0;
-    padding-inline: 9px;
-    overflow: hidden;
+    width: 44px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    padding: 0 !important;
+    justify-content: center !important;
+    gap: 0 !important;
   }
 
-  :root[data-theme="winui"] body.is-desktop #nav .nav-item > span,
-  :root[data-theme="winui"] body.is-desktop #nav .nav-item > .nav-tree-chevron {
-    display: none;
+  :root[data-theme="winui"] body.is-desktop #nav .nav-item.active {
+    color: var(--win-text-primary);
+    background: var(--win-control-fill-hover);
   }
 
-  :root[data-theme="winui"] body.is-desktop #nav :is(
-    .nav-dashboard-children,
-    .nav-billing-tree,
-    .nav-tree-chevron
-  ) {
-    display: none;
+  :root[data-theme="winui"] body.is-desktop #nav .nav-item.active::before {
+    display: block !important;
+    left: 2px;
   }
 }
 
@@ -689,8 +692,12 @@
   input[type="password"],
   input[type="number"],
   input[type="date"],
+  input[type="datetime-local"],
   input[type="search"],
   textarea,
+  .presentation-dialog select,
+  .traffic-field select,
+  .traffic-dates input,
   .custom-select-trigger,
   .custom-select.form-select .custom-select-trigger
 ) {
@@ -715,7 +722,11 @@
   input[type="password"],
   input[type="number"],
   input[type="date"],
+  input[type="datetime-local"],
   input[type="search"],
+  .presentation-dialog select,
+  .traffic-field select,
+  .traffic-dates input,
   .custom-select-trigger,
   .custom-select.form-select .custom-select-trigger
 ) {
@@ -729,8 +740,12 @@
     input[type="password"],
     input[type="number"],
     input[type="date"],
+    input[type="datetime-local"],
     input[type="search"],
     textarea,
+    .presentation-dialog select,
+    .traffic-field select,
+    .traffic-dates input,
     .custom-select-trigger
   ):hover:not(:disabled) {
     border-color: var(--win-control-stroke-strong);
@@ -755,8 +770,11 @@
   opacity: 1;
 }
 
-:root[data-theme="winui"] input:focus,
+:root[data-theme="winui"] input:not([type="checkbox"]):not([type="radio"]):focus,
 :root[data-theme="winui"] textarea:focus,
+:root[data-theme="winui"] .presentation-dialog select:focus,
+:root[data-theme="winui"] .traffic-field select:focus,
+:root[data-theme="winui"] .traffic-dates input:focus,
 :root[data-theme="winui"] .custom-select.open .custom-select-trigger {
   border-color: var(--win-control-stroke-strong);
   border-bottom-color: var(--win-accent-fill-rest);
@@ -1142,7 +1160,11 @@
   input[type="password"],
   input[type="number"],
   input[type="date"],
+  input[type="datetime-local"],
   input[type="search"],
+  .presentation-dialog select,
+  .traffic-field select,
+  .traffic-dates input,
   .custom-select-trigger,
   .custom-select.form-select .custom-select-trigger
 ) {
@@ -1449,8 +1471,7 @@
     .settings-nav-item,
     .settings-back-button,
     .billing-back-button,
-    .security-info-box,
-    .quality-metric-card
+    .security-info-box
   ) {
     border: 2px solid CanvasText;
     background: Canvas;

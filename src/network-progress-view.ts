@@ -14,6 +14,8 @@ export class NetworkProgressView {
   private current: NetworkCheckProgress | null = null;
   private updated = 0;
   private displayed = 0;
+  private manualPending = false;
+  private manualCheckId: number | null = null;
   private timer: number | null = null;
   private hideTimer: number | null = null;
   private readonly panel = document.getElementById('network-check-progress')!;
@@ -22,10 +24,26 @@ export class NetworkProgressView {
   private readonly elapsed = document.getElementById('network-check-elapsed')!;
   private readonly bar = document.getElementById('network-check-bar')!;
 
+  markManualTrigger() {
+    this.manualPending = true;
+  }
+
+  clearManualTrigger() {
+    this.manualPending = false;
+  }
+
   render(progress: NetworkCheckProgress) {
     if (this.current && (progress.id < this.current.id
       || (progress.id === this.current.id && progress.revision <= this.current.revision))) return;
-    if (this.current?.id !== progress.id) this.displayed = 0;
+    const isNewCheck = this.current?.id !== progress.id;
+    if (isNewCheck) {
+      this.displayed = 0;
+      if (this.manualPending) {
+        this.manualCheckId = progress.id;
+        this.manualPending = false;
+      }
+    }
+    const autoAnchor = this.manualCheckId !== progress.id;
     this.current = progress;
     this.updated = performance.now();
     this.label.textContent = progress.message;
@@ -33,9 +51,12 @@ export class NetworkProgressView {
     if (this.hideTimer !== null) window.clearTimeout(this.hideTimer);
     this.timer = null; this.hideTimer = null;
     this.paint();
-    this.visibility.setVisible(true);
+    this.visibility.setVisible(true, { autoAnchor });
     if (progress.complete) {
-      this.hideTimer = window.setTimeout(() => { this.visibility.setVisible(false); this.hideTimer = null; }, 4000);
+      this.hideTimer = window.setTimeout(() => {
+        this.visibility.setVisible(false, { autoAnchor });
+        this.hideTimer = null;
+      }, 4000);
     } else {
       this.timer = window.setInterval(() => this.paint(), 150);
     }

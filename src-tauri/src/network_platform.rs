@@ -9,7 +9,7 @@ use crate::network_trust::is_campus_local_ip;
 
 /// Type 3 gateways live on 172.30/16, but wired clients use BJUT's regular
 /// campus address ranges. Callers additionally require physical Ethernet.
-#[cfg(not(target_os = "android"))]
+#[cfg(any(not(target_os = "android"), test))]
 pub(crate) fn is_campus_wired_ipv4(value: &str) -> bool {
     usable_physical_ipv4(value).is_some() && is_campus_local_ip(value)
 }
@@ -77,19 +77,6 @@ pub(crate) fn macos_is_physical_ethernet_interface(interface: &str) -> bool {
                     .any(|name| name == interface)
             })
             .unwrap_or(false)
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn macos_campus_wired_identity(excluded_interface: &str) -> Option<(String, String)> {
-    macos_read_command("/sbin/ifconfig", &["-l"])
-        .split_whitespace()
-        .filter(|interface| {
-            macos_is_physical_ethernet_interface(interface) && *interface != excluded_interface
-        })
-        .find_map(|interface| {
-            let address = macos_ipv4_for_interface(interface);
-            is_campus_wired_ipv4(&address).then(|| (interface.to_string(), address))
-        })
 }
 
 #[cfg(target_os = "macos")]

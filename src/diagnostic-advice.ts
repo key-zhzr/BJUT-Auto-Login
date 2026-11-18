@@ -1,17 +1,5 @@
 import type { DiagnosticReport } from './models';
-export type QualitySample = {
-    at: number;
-    scope: string;
-    family: string;
-    ok: boolean;
-    ms: number | null;
-    generation?: number;
-};
-export function qualitySummary(samples: QualitySample[]) {
-    const timings = samples.filter(x => x.ok && x.ms !== null).map(x => x.ms as number).sort((a, b) => a - b);
-    const percentile = (p: number) => timings.length ? timings[Math.max(0, Math.ceil(timings.length * p) - 1)] : null;
-    return { count: samples.length, failure: samples.length ? samples.filter(x => !x.ok).length / samples.length : 0, p50: percentile(.5), p95: percentile(.95) };
-}
+
 export function diagnosticAdvice(report: DiagnosticReport): string[] {
     if (report.stale)
         return ['网络在诊断期间发生变化，请重新检测。'];

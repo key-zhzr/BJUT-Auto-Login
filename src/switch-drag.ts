@@ -36,12 +36,20 @@ export function setupSwitchDrag(): void {
     }
   };
 
+  const resetMainHorizontalScroll = () => {
+    const main = document.getElementById('main-content');
+    if (main && main.scrollLeft !== 0) main.scrollLeft = 0;
+    if (document.documentElement.scrollLeft !== 0) document.documentElement.scrollLeft = 0;
+    if (document.body.scrollLeft !== 0) document.body.scrollLeft = 0;
+  };
+
   document.addEventListener('pointerdown', event => {
     if (event.button !== 0 && event.pointerType === 'mouse') return;
     const target = event.target instanceof Element ? event.target : null;
     const switchEl = target?.closest<HTMLElement>('.switch');
     const input = switchEl?.querySelector<HTMLInputElement>('input[type="checkbox"]');
     if (!switchEl || !input || input.disabled) return;
+    window.getSelection()?.removeAllRanges();
     drag = {
       switchEl,
       input,
@@ -53,6 +61,14 @@ export function setupSwitchDrag(): void {
       currentRatio: input.checked ? 1 : 0,
       engaged: false,
     };
+  });
+
+  document.addEventListener('selectstart', event => {
+    if (drag) event.preventDefault();
+  });
+
+  document.addEventListener('dragstart', event => {
+    if (drag) event.preventDefault();
   });
 
   document.addEventListener('pointermove', event => {
@@ -67,8 +83,11 @@ export function setupSwitchDrag(): void {
       if (Math.abs(dx) < 4) return;
       drag.engaged = true;
       drag.switchEl.classList.add('is-dragging');
+      window.getSelection()?.removeAllRanges();
       try { drag.switchEl.setPointerCapture?.(drag.pointerId); } catch {}
     }
+    event.preventDefault();
+    resetMainHorizontalScroll();
     const base = drag.initialChecked ? drag.maxTravel : 0;
     const clamped = Math.max(0, Math.min(drag.maxTravel, base + dx));
     drag.currentRatio = drag.maxTravel > 0 ? clamped / drag.maxTravel : 0;
