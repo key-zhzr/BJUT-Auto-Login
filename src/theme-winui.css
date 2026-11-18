@@ -200,6 +200,10 @@
   padding-top: 32px;
 }
 
+:root[data-theme="winui"] body.is-android .app-container {
+  padding-top: 0;
+}
+
 :root[data-theme="winui"] body::before,
 :root[data-theme="winui"] body::after {
   display: none !important;
@@ -254,9 +258,11 @@
     background-color var(--win-duration-fast) linear;
 }
 
-:root[data-theme="winui"] .titlebar-button:hover {
-  color: var(--win-text-primary);
-  background: var(--win-control-fill-hover);
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="winui"] body:not(.is-android) .titlebar-button:hover {
+    color: var(--win-text-primary);
+    background: var(--win-control-fill-hover);
+  }
 }
 
 :root[data-theme="winui"] .titlebar-button:active {
@@ -264,10 +270,16 @@
   background: var(--win-control-fill-pressed);
 }
 
-:root[data-theme="winui"] .titlebar-button.titlebar-close:hover,
 :root[data-theme="winui"] .titlebar-button.titlebar-close:active {
   color: #ffffff;
   background: #c42b1c;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="winui"] body:not(.is-android) .titlebar-button.titlebar-close:hover {
+    color: #ffffff;
+    background: #c42b1c;
+  }
 }
 
 :root[data-theme="winui"] .glass-card,
@@ -437,12 +449,18 @@
   line-height: 16px;
 }
 
-:root[data-theme="winui"] .nav-item:hover,
-:root[data-theme="winui"] .nav-tree-link:hover,
-:root[data-theme="winui"] .billing-section-nav-button:hover:not(:disabled) {
-  color: var(--win-text-primary);
-  border-color: transparent;
-  background: var(--win-control-fill-hover);
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="winui"] body:not(.is-android) :is(
+    .nav-item,
+    .nav-tree-link,
+    .billing-section-nav-button:not(:disabled),
+    .settings-nav-item,
+    .settings-back-button
+  ):hover {
+    color: var(--win-text-primary);
+    border-color: transparent;
+    background: var(--win-control-fill-hover);
+  }
 }
 
 :root[data-theme="winui"] .nav-item:active,
@@ -487,9 +505,34 @@
   display: none;
 }
 
+@media (min-width: 769px) {
+  :root[data-theme="winui"] body.is-android #nav.dashboard-expanded .nav-dashboard-parent.active,
+  :root[data-theme="winui"] body.is-android #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
+    background: transparent;
+  }
+
+  :root[data-theme="winui"] body.is-android #nav.dashboard-expanded .nav-dashboard-parent.active::before,
+  :root[data-theme="winui"] body.is-android #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active::before {
+    display: none;
+  }
+}
+
+:root[data-theme="winui"] .settings-nav-item {
+  border: 1px solid var(--win-divider-stroke);
+  border-radius: var(--win-radius-control);
+  background: var(--win-card-fill-secondary);
+}
+
+:root[data-theme="winui"] .settings-back-button,
+:root[data-theme="winui"] .billing-back-button {
+  border: 1px solid var(--win-control-stroke-rest);
+  border-radius: var(--win-radius-control);
+  background: var(--win-control-fill-rest);
+  color: var(--win-text-primary);
+}
+
 :root[data-theme="winui"] body.is-desktop .nav-item[data-target="settings"] {
   margin-top: auto;
-  border-top-color: var(--win-divider-stroke);
 }
 
 :root[data-theme="winui"] .nav-dashboard-children,
@@ -578,12 +621,14 @@
     opacity var(--win-duration-fast) linear;
 }
 
-:root[data-theme="winui"] .btn:hover:not(:disabled) {
-  color: var(--win-text-primary);
-  border-color: var(--win-control-stroke-strong);
-  background: var(--win-control-fill-hover);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
-  transform: none;
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="winui"] body:not(.is-android) .btn:hover:not(:disabled) {
+    color: var(--win-text-primary);
+    border-color: var(--win-control-stroke-strong);
+    background: var(--win-control-fill-hover);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    transform: none;
+  }
 }
 
 :root[data-theme="winui"] .btn:active:not(:disabled) {
@@ -603,10 +648,12 @@
   box-shadow: none;
 }
 
-:root[data-theme="winui"] .btn-primary:hover:not(:disabled) {
-  color: var(--accent-contrast);
-  border-color: transparent;
-  background: var(--win-accent-fill-hover);
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="winui"] body:not(.is-android) .btn-primary:hover:not(:disabled) {
+    color: var(--accent-contrast);
+    border-color: transparent;
+    background: var(--win-accent-fill-hover);
+  }
 }
 
 :root[data-theme="winui"] .btn-primary:active:not(:disabled) {
@@ -676,17 +723,19 @@
   padding-block: 0;
 }
 
-:root[data-theme="winui"] :is(
-  input[type="text"],
-  input[type="password"],
-  input[type="number"],
-  input[type="date"],
-  input[type="search"],
-  textarea,
-  .custom-select-trigger
-):hover:not(:disabled) {
-  border-color: var(--win-control-stroke-strong);
-  background: var(--win-control-fill-hover);
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="winui"] body:not(.is-android) :is(
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    input[type="date"],
+    input[type="search"],
+    textarea,
+    .custom-select-trigger
+  ):hover:not(:disabled) {
+    border-color: var(--win-control-stroke-strong);
+    background: var(--win-control-fill-hover);
+  }
 }
 
 :root[data-theme="winui"] input::placeholder,
@@ -757,7 +806,13 @@
     background-color var(--win-duration-fast) linear;
 }
 
-:root[data-theme="winui"] .custom-option:hover,
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="winui"] body:not(.is-android) .custom-option:hover {
+    color: var(--win-text-primary);
+    background: var(--win-control-fill-hover);
+  }
+}
+
 :root[data-theme="winui"] .custom-option.is-focused,
 :root[data-theme="winui"] .custom-option:focus-visible {
   color: var(--win-text-primary);
@@ -814,8 +869,15 @@
     transform var(--win-duration-normal) var(--win-ease-enter);
 }
 
-:root[data-theme="winui"] .switch:hover .slider::before {
-  width: 14px;
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="winui"] body:not(.is-android) .switch:hover .slider::before {
+    width: 14px;
+  }
+
+  :root[data-theme="winui"] body:not(.is-android) .switch:hover input:checked + .slider {
+    border-color: var(--win-accent-fill-hover);
+    background: var(--win-accent-fill-hover);
+  }
 }
 
 :root[data-theme="winui"] input:checked + .slider {
@@ -828,9 +890,28 @@
   transform: translateX(20px);
 }
 
-:root[data-theme="winui"] .switch:hover input:checked + .slider {
-  border-color: var(--win-accent-fill-hover);
-  background: var(--win-accent-fill-hover);
+:root[data-theme="winui"] body .switch.is-dragging input + .slider::before,
+:root[data-theme="winui"] body .switch.is-dragging input + .slider:before {
+  transform: translateX(var(--switch-drag-x, 0px)) !important;
+  transition: none !important;
+}
+
+:root[data-theme="winui"] body .switch.is-dragging.is-drag-on input + .slider {
+  border-color: var(--win-accent-fill-rest) !important;
+  background: var(--win-accent-fill-rest) !important;
+}
+
+:root[data-theme="winui"] body .switch.is-dragging.is-drag-on input + .slider::before {
+  background: var(--accent-contrast);
+}
+
+:root[data-theme="winui"] body .switch.is-dragging:not(.is-drag-on) input + .slider {
+  border-color: var(--win-control-stroke-strong) !important;
+  background: transparent !important;
+}
+
+:root[data-theme="winui"] body .switch.is-dragging:not(.is-drag-on) input + .slider::before {
+  background: var(--win-text-secondary);
 }
 
 /* Keyboard focus uses two contrasting rings and remains visible for any accent. */
@@ -898,7 +979,7 @@
   margin-top: var(--win-space-6);
 }
 
-:root[data-theme="winui"] .page.active {
+:root[data-theme="winui"] .page.active:not(.page-slide-from-right):not(.page-slide-from-left) {
   animation: winui-theme-page-enter var(--win-duration-normal) var(--win-ease-enter);
 }
 
@@ -930,42 +1011,78 @@
 /* Fluent overlay scrollbars                                                   */
 /* -------------------------------------------------------------------------- */
 
-:root[data-theme="winui"] {
-  scrollbar-color: var(--theme-scrollbar) transparent;
-  scrollbar-width: thin;
+@supports not selector(::-webkit-scrollbar) {
+  :root[data-theme="winui"] {
+    scrollbar-color: var(--theme-scrollbar) transparent;
+    scrollbar-width: thin;
+  }
+
+  :root[data-theme="winui"] .nav-items {
+    scrollbar-width: thin;
+  }
 }
 
 :root[data-theme="winui"] ::-webkit-scrollbar {
-  width: 14px;
-  height: 14px;
+  width: 7px;
+  height: 7px;
+  background: transparent;
 }
 
 :root[data-theme="winui"] ::-webkit-scrollbar-track,
-:root[data-theme="winui"] ::-webkit-scrollbar-corner {
-  background: transparent;
+:root[data-theme="winui"] ::-webkit-scrollbar-track-piece,
+:root[data-theme="winui"] ::-webkit-scrollbar-corner,
+:root[data-theme="winui"] ::-webkit-scrollbar-button {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
 :root[data-theme="winui"] ::-webkit-scrollbar-thumb {
   min-height: 32px;
-  border: 6px solid transparent;
-  border-radius: 8px;
+  border: 2px solid transparent;
+  border-radius: 999px;
   background: var(--theme-scrollbar);
   background-clip: content-box;
 }
 
-:root[data-theme="winui"] ::-webkit-scrollbar-thumb:hover,
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="winui"] body:not(.is-android) ::-webkit-scrollbar-thumb:hover {
+    border-width: 1px;
+    background: var(--theme-scrollbar-hover);
+    background-clip: content-box;
+  }
+}
+
 :root[data-theme="winui"] ::-webkit-scrollbar-thumb:active {
-  border-width: 4px;
+  border-width: 1px;
   background: var(--theme-scrollbar-hover);
   background-clip: content-box;
 }
 
-:root[data-theme="winui"] .nav-items {
-  scrollbar-width: thin;
-}
-
 :root[data-theme="winui"] .nav-items::-webkit-scrollbar {
   display: block;
+}
+
+:root[data-theme="winui"] .custom-select-options::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+  background: transparent;
+}
+
+:root[data-theme="winui"] .custom-select-options::-webkit-scrollbar-track,
+:root[data-theme="winui"] .custom-select-options::-webkit-scrollbar-track-piece,
+:root[data-theme="winui"] .custom-select-options::-webkit-scrollbar-corner,
+:root[data-theme="winui"] .custom-select-options::-webkit-scrollbar-button {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+:root[data-theme="winui"] .custom-select-options::-webkit-scrollbar-thumb {
+  min-height: 24px;
+  border: none;
+  border-radius: 999px;
+  background: var(--theme-scrollbar);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1015,30 +1132,12 @@
   background: var(--win-flyout-solid);
 }
 
-:root[data-theme="winui"] body.is-android #nav {
-  border-radius: var(--win-radius-card);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-}
-
-:root[data-theme="winui"] body.is-android #nav .nav-item {
-  min-height: 48px;
-  height: 100%;
-  gap: var(--win-space-1);
-  padding: var(--win-space-1) 2px;
-  font-size: 12px;
-  line-height: 16px;
-}
-
-:root[data-theme="winui"] body.is-android #nav .nav-item.active::before {
-  top: calc(50% + 1px);
-  left: 50%;
-  width: 16px;
-  height: 3px;
-  transform: translateX(-50%);
+:root[data-theme="winui"] body.is-android .btn {
+  min-height: 44px;
+  height: auto;
 }
 
 :root[data-theme="winui"] body.is-android :is(
-  .btn,
   input[type="text"],
   input[type="password"],
   input[type="number"],
@@ -1051,50 +1150,116 @@
   height: 44px;
 }
 
-/* Match the other mobile themes: billing sections use a second dock directly
-   above the primary navigation. */
-:root[data-theme="winui"] body.is-android.billing-center-active main {
-  padding-bottom: calc(11.25rem + env(safe-area-inset-bottom));
+@media (max-width: 768px) {
+  :root[data-theme="winui"] body.is-android #nav {
+    border-radius: var(--win-radius-card);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  }
+
+  :root[data-theme="winui"] body.is-android #nav .nav-item {
+    min-height: 48px;
+    height: 100%;
+    gap: var(--win-space-1);
+    padding: var(--win-space-1) 2px;
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  :root[data-theme="winui"] body.is-android #nav .nav-item.active::before {
+    top: calc(50% + 1px);
+    left: 50%;
+    width: 16px;
+    height: 3px;
+    transform: translateX(-50%);
+  }
+
+  /* Single mobile dock: entering billing center swaps the primary navigation
+     for billing sections to reclaim bottom viewport space. */
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active main {
+    padding-bottom: calc(6.4rem + env(safe-area-inset-bottom));
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active #nav {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(-50%) translateY(16px);
+    transition: opacity 140ms ease, transform 140ms ease;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-mobile-nav {
+    position: fixed;
+    top: auto;
+    bottom: max(0.65rem, env(safe-area-inset-bottom));
+    left: 50%;
+    right: auto;
+    z-index: 810;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    width: min(calc(100% - 1.5rem), 34rem);
+    height: 4.55rem;
+    margin: 0;
+    padding: 0.38rem;
+    overflow: visible;
+    border-radius: var(--win-radius-card);
+    transform: translateX(-50%) translateZ(0);
+    background: var(--win-layer-default);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-section-nav-button {
+    min-height: 0;
+    height: 100%;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--win-space-1);
+    padding: var(--win-space-1) 2px;
+    border-radius: var(--win-radius-control);
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-section-nav-button.active::before {
+    top: calc(50% + 1px);
+    left: 50%;
+    width: 16px;
+    height: 3px;
+    transform: translateX(-50%);
+  }
 }
 
-:root[data-theme="winui"] body.is-android.billing-center-active .billing-mobile-nav {
-  position: fixed;
-  top: auto;
-  bottom: calc(max(0.65rem, env(safe-area-inset-bottom)) + 5rem);
-  left: 50%;
-  right: auto;
-  z-index: 810;
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  width: min(calc(100% - 1.5rem), 34rem);
-  height: 4.55rem;
-  margin: 0;
-  padding: 0.38rem;
-  overflow: visible;
-  border-radius: var(--win-radius-card);
-  transform: translateX(-50%) translateZ(0);
-  background: var(--win-layer-default);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-}
+@media (min-width: 769px) {
+  :root[data-theme="winui"] body.is-android nav {
+    padding: var(--win-space-3) var(--win-space-2);
+    border-right: 1px solid var(--win-divider-stroke);
+    border-radius: 0;
+    background: var(--win-card-fill);
+    box-shadow: none;
+  }
 
-:root[data-theme="winui"] body.is-android.billing-center-active .billing-section-nav-button {
-  min-height: 0;
-  height: 100%;
-  flex-direction: column;
-  justify-content: center;
-  gap: var(--win-space-1);
-  padding: var(--win-space-1) 2px;
-  border-radius: var(--win-radius-control);
-  font-size: 12px;
-  line-height: 16px;
-}
+  :root[data-theme="winui"] body.is-android .nav-brand {
+    display: flex;
+    margin-bottom: var(--win-space-3);
+  }
 
-:root[data-theme="winui"] body.is-android.billing-center-active .billing-section-nav-button.active::before {
-  top: calc(50% + 1px);
-  left: 50%;
-  width: 16px;
-  height: 3px;
-  transform: translateX(-50%);
+  :root[data-theme="winui"] body.is-android #nav .nav-item {
+    min-height: 44px;
+    gap: var(--win-space-3);
+    padding: var(--win-space-2) var(--win-space-3);
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  :root[data-theme="winui"] body.is-android #nav .nav-tree-link {
+    min-height: 36px;
+    padding: 6px var(--win-space-2);
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  :root[data-theme="winui"] body.is-android .nav-item[data-target="settings"] {
+    margin-top: auto;
+  }
 }
 
 :root[data-theme="winui"] body.is-android :is(
@@ -1103,20 +1268,27 @@
   .nav-item,
   .nav-tree-link,
   .billing-section-nav-button,
-  .custom-option,
+  .billing-back-button,
+  .settings-back-button,
+  .settings-nav-item,
   .custom-select-trigger,
+  .custom-option,
   .billing-package-option,
   .billing-payment-method,
-  .account-avatar
-):hover {
-  filter: none;
-  transform: none;
-  transition: none !important;
+  summary
+):not(:disabled):not([aria-disabled="true"]):active {
+  transform: scale(0.978);
+  filter: brightness(0.94);
+  transition: transform 80ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 80ms ease;
+}
+
+:root[data-theme="winui"] body.is-android .switch:active input:not(:disabled) + .slider {
+  filter: brightness(0.92);
 }
 
 @media (max-width: 480px) {
-  :root[data-theme="winui"] body.is-android.billing-center-active .billing-mobile-nav {
-    bottom: calc(max(0.45rem, env(safe-area-inset-bottom)) + 4.8rem);
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-mobile-nav {
+    bottom: max(0.45rem, env(safe-area-inset-bottom));
     width: calc(100% - 1rem);
     height: 4.35rem;
     padding: 0.32rem;
@@ -1155,10 +1327,33 @@
 @media (prefers-reduced-motion: reduce) {
   :root[data-theme="winui"] :is(
     .page.active,
+    .page.active.page-slide-from-right,
+    .page.active.page-slide-from-left,
     .billing-section-enter,
-    .billing-payment-panel.is-entering
+    .billing-payment-panel.is-entering,
+    .settings-home-enter,
+    .settings-subpage-enter,
+    .diagnostic-step-enter
   ) {
     animation: none !important;
+  }
+
+  :root[data-theme="winui"] body.is-android :is(
+    .btn,
+    .btn-icon,
+    .nav-item,
+    .nav-tree-link,
+    .billing-section-nav-button,
+    .billing-back-button,
+    .settings-back-button,
+    .settings-nav-item,
+    .custom-select-trigger,
+    .custom-option,
+    .billing-package-option,
+    .billing-payment-method,
+    summary
+  ):active {
+    transform: none !important;
   }
 
   :root[data-theme="winui"] :is(
@@ -1169,11 +1364,16 @@
     .nav-dashboard-children,
     .nav-billing-tree,
     .nav-tree-chevron,
+    .disclosure-chevron,
     .billing-section-nav-button,
+    .billing-back-button,
+    .settings-nav-item,
+    .settings-back-button,
     .slider,
     .slider::before,
     .custom-select-trigger,
     .custom-select-trigger i,
+    .custom-select-trigger svg,
     .custom-select-options,
     .custom-option,
     .modal-overlay,
@@ -1245,7 +1445,12 @@
     .diagnostic-summary,
     .log-filters,
     .custom-select-options,
-    .modal-content
+    .modal-content,
+    .settings-nav-item,
+    .settings-back-button,
+    .billing-back-button,
+    .security-info-box,
+    .quality-metric-card
   ) {
     border: 2px solid CanvasText;
     background: Canvas;

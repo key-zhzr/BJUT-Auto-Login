@@ -20,26 +20,115 @@ function stop(element: HTMLElement) {
   resizing.delete(element);
 }
 
-function heightTransition(element: HTMLElement, from: number, to: number, finished: () => void = () => {}) {
-  if (Math.abs(from - to) < 1 || from < 0 || to < 0 || reduced() || !element.animate) { finished(); return; }
+export interface ScrollAnchorHandle {
+  sync: () => void;
+  startLoop: () => void;
+  stop: () => void;
+}
+
+const NOOP_ANCHOR: ScrollAnchorHandle = { sync: () => {}, startLoop: () => {}, stop: () => {} };
+
+/** Anchor content below `element` when `element` sits in the upper half of `#main-content`,
+ * squeezing content above upward instead of jerking the rest of the page downward. */
+export function createUpperHalfScrollAnchor(element: HTMLElement): ScrollAnchorHandle {
+  const scroller = element.closest<HTMLElement>('#main-content');
+  const page = element.closest<HTMLElement>('.page.active');
+  if (!scroller || !page) return NOOP_ANCHOR;
+
+  let anchor: HTMLElement | null = null;
+  let current: Element | null = element;
+  while (current && current !== page && !anchor) {
+    let sibling = current.nextElementSibling;
+    while (sibling) {
+      if (sibling instanceof HTMLElement && !sibling.hidden && sibling.getBoundingClientRect().height > 0) {
+        anchor = sibling;
+        break;
+      }
+      sibling = sibling.nextElementSibling;
+    }
+    current = current.parentElement;
+  }
+  if (!anchor) return NOOP_ANCHOR;
+
+  const scrollerRect = scroller.getBoundingClientRect();
+  const anchorRectBefore = anchor.getBoundingClientRect();
+  const elementRectBefore = element.getBoundingClientRect();
+  const referenceY = !element.hidden && elementRectBefore.height > 0
+    ? elementRectBefore.top + elementRectBefore.height * 0.5
+    : anchorRectBefore.top;
+  if (referenceY >= scrollerRect.top + scrollerRect.height * 0.5) return NOOP_ANCHOR;
+
+  let lastAnchorTop = anchorRectBefore.top;
+  let lastScrollTop = scroller.scrollTop;
+  let rafId: number | null = null;
+
+  const sync = () => {
+    if (!anchor?.isConnected || !page.classList.contains('active')) return false;
+    const currentTop = anchor.getBoundingClientRect().top;
+    const diff = currentTop - lastAnchorTop;
+    // Respect scrolling done by the user or the browser's own scroll anchoring.
+    if (Math.abs(scroller.scrollTop - lastScrollTop) < 0.25 && Math.abs(diff) > 0.25) {
+      scroller.scrollTop = Math.max(0, scroller.scrollTop + diff);
+    }
+    lastAnchorTop = anchor.getBoundingClientRect().top;
+    lastScrollTop = scroller.scrollTop;
+    return true;
+  };
+
+  const loop = () => {
+    rafId = sync() ? requestAnimationFrame(loop) : null;
+  };
+
+  return {
+    sync,
+    startLoop: () => {
+      if (rafId === null) rafId = requestAnimationFrame(loop);
+    },
+    stop: () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    },
+  };
+}
+
+function heightTransition(
+  element: HTMLElement,
+  from: number,
+  to: number,
+  finished: () => void = () => {},
+  anchor: ScrollAnchorHandle = createUpperHalfScrollAnchor(element),
+) {
+  if (Math.abs(from - to) < 1 || from < 0 || to < 0 || reduced() || !element.animate) {
+    finished();
+    anchor.sync();
+    return;
+  }
   const overflow = element.style.overflow, sizing = element.style.boxSizing;
   element.style.overflow = 'clip'; element.style.boxSizing = 'border-box';
-  const cleanup = () => { element.style.overflow = overflow; element.style.boxSizing = sizing; };
+  const cleanup = () => {
+    element.style.overflow = overflow;
+    element.style.boxSizing = sizing;
+    anchor.stop();
+  };
   const animation = element.animate([{ height: `${from}px` }, { height: `${to}px` }], {
     duration: to > from ? 220 : 180, easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)', fill: 'both',
   });
+  anchor.startLoop();
   resizing.set(element, { animation, cleanup });
   animation.onfinish = () => {
     if (resizing.get(element)?.animation !== animation) return;
-    finished(); animation.cancel(); cleanup(); resizing.delete(element);
+    finished(); animation.cancel(); cleanup(); resizing.delete(element); anchor.sync();
   };
 }
 
 /** Preserve the interpolated height when a live list changes during a transition. */
 export function animateResize(element: HTMLElement, update: () => void) {
+  const anchor = createUpperHalfScrollAnchor(element);
   const before = element.getBoundingClientRect().height;
   stop(element); update();
-  heightTransition(element, before, element.getBoundingClientRect().height);
+  heightTransition(element, before, element.getBoundingClientRect().height, () => {}, anchor);
 }
 
 function disclosureState(details: HTMLDetailsElement) {
@@ -52,6 +141,7 @@ function disclosureState(details: HTMLDetailsElement) {
 }
 
 export function setExpanded(details: HTMLDetailsElement, expanded: boolean, previousHeight?: number) {
+  const anchor = createUpperHalfScrollAnchor(details);
   const state = disclosureState(details);
   const before = previousHeight ?? details.getBoundingClientRect().height;
   state.desired = expanded;
@@ -63,7 +153,7 @@ export function setExpanded(details: HTMLDetailsElement, expanded: boolean, prev
   const opened = details.getBoundingClientRect().height;
   heightTransition(details, before, expanded ? opened : collapsed, () => {
     nativeOpen(state.desired); state.height = details.getBoundingClientRect().height;
-  });
+  }, anchor);
 }
 
 export function toggleExpanded(details: HTMLDetailsElement) {

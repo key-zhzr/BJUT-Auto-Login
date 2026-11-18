@@ -218,7 +218,7 @@ export class RouterWorkbench {
         const detail=node('details','','router-port-details'); detail.append(node('summary','网络详情'));
         const description=node('p'); description.dataset.field='description'; detail.append(description);
         const choice=node('div','','custom-select');choice.id=`router-port-account-${item.id}`;choice.setAttribute('aria-label',`${item.device || item.id} 登录账号`);
-        choice.innerHTML='<div class="custom-select-trigger"><span></span><span aria-hidden="true">⌄</span></div><div class="custom-select-options"></div>';
+        choice.innerHTML='<div class="custom-select-trigger"><span></span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></div><div class="custom-select-options"></div>';
         const tools=node('div','','router-port-actions');
         const login=button('登录',()=>{ void this.options.login(item.id,this.portAccounts.get(item.id)?.value); },'btn btn-secondary btn-sm router-port-login');
         const change=button('切换账号',()=>{void this.portAction(item.id,'switch_account');});

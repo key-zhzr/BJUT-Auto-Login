@@ -93,19 +93,34 @@ function renderQuality() {
     animateResize(node, () => {
         node.replaceChildren();
         if (!groups.length) {
-            node.textContent = '等待网络检测记录。仅记录已完成的检查，未通过比例不等于丢包率。';
+            const empty = document.createElement('div');
+            empty.className = 'diagnostic-empty';
+            empty.textContent = '等待网络检测记录。仅记录已完成的检查，未通过比例不等于丢包率。';
+            node.append(empty);
             return;
         }
         for (const id of groups) {
-            const samples = recent.filter(x => `${x.scope}|${x.family}` === id), stats = qualitySummary(samples), p = document.createElement('p');
-            p.textContent = `${id.replace('|', ' · ')}：${stats.count} 次 · 未通过 ${Math.round(stats.failure * 100)}% · 中位 ${stats.p50 ?? '--'} ms · P95 ${stats.p95 ?? '--'} ms`;
-            node.append(p);
+            const samples = recent.filter(x => `${x.scope}|${x.family}` === id), stats = qualitySummary(samples);
+            const card = document.createElement('article');
+            card.className = 'quality-metric-card';
+            const head = document.createElement('div');
+            head.className = 'quality-metric-head';
+            const title = document.createElement('strong');
+            title.textContent = id.replace('|', ' · ');
+            const count = document.createElement('span');
+            count.textContent = `${stats.count} 次检查`;
+            head.append(title, count);
+            const meta = document.createElement('div');
+            meta.className = 'quality-metric-stats';
+            meta.textContent = `未通过 ${Math.round(stats.failure * 100)}% · 中位 ${stats.p50 ?? '--'} ms · P95 ${stats.p95 ?? '--'} ms`;
+            card.append(head, meta);
             const values = samples.filter(x => x.ms !== null).slice(-60), max = Math.max(1, ...values.filter(x => x.ok).map(x => x.ms!));
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svg.setAttribute('viewBox', '0 0 400 64');
             svg.setAttribute('role', 'img');
             svg.setAttribute('aria-label', '最近60次检查响应时间，空缺表示未通过');
-            svg.style.cssText = 'width:100%;height:64px;color:var(--accent-color)';
+            svg.classList.add('quality-metric-sparkline');
+            svg.style.cssText = 'height:64px;color:var(--accent-color)';
             let previous: QualitySample | undefined;
             values.forEach((sample, index) => { if (sample.ok && previous?.ok) {
                 const line = document.createElementNS(svg.namespaceURI, 'line');
@@ -118,7 +133,8 @@ function renderQuality() {
                 svg.append(line);
             } previous = sample; });
             if (values.length)
-                node.append(svg);
+                card.append(svg);
+            node.append(card);
         }
     });
 }

@@ -79,5 +79,8 @@
   const meta = document.querySelector('meta[name="theme-color"]');
   const lightBackground = theme === 'apple27' ? '#f2f2f7' : theme === 'winui' ? '#f3f3f3' : '#eef2f7';
   const darkBackground = theme === 'basic' ? '#0f172a' : '#000000';
-  if (meta) meta.content = scheme === 'dark' ? darkBackground : lightBackground;
+  const initialBackground = scheme === 'dark' ? darkBackground : lightBackground;
+  root.style.backgroundColor = initialBackground;
+  root.style.setProperty('--prepaint-body-bg', initialBackground);
+  if (meta) meta.content = initialBackground;
 })();

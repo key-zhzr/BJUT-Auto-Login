@@ -23,8 +23,8 @@ export function setupOnboarding(options: {
                 localStorage.setItem(KEY, String(step));
                 const pages = [
                     ['添加校园网账号', '没有网络也可以先添加账号。已有备份时，可到设置中导入。', '添加账号', 'accounts', 'btn-show-add'],
-                    ['选择连接方式', '默认自动选择认证网卡。需要固定使用某张网卡时，可在设置中选择；自动登录也由你决定。', '查看网络设置', 'settings', ''],
-                    ['保持后台运行', options.android ? '在设置中检查后台与通知权限，避免系统休眠后停止自动登录。' : '关闭窗口后可从托盘再次打开。左键显示主窗口，右键打开快捷菜单。', '查看后台设置', 'settings', ''],
+                    ['选择连接方式', '默认自动选择认证网卡。需要固定使用某张网卡时，可在设置中选择；自动登录也由你决定。', '查看网络设置', 'settings:automation', ''],
+                    ['保持后台运行', options.android ? '在设置中检查后台与通知权限，避免系统休眠后停止自动登录。' : '关闭窗口后可从托盘再次打开。左键显示主窗口，右键打开快捷菜单。', '查看后台设置', options.android ? 'settings:security' : 'settings:automation', ''],
                     ['连接路由器（可选）', '安装了路由端时，可在控制台连接，共同查看上游、账号与计费信息。两端也可以独立使用。', '查看路由协作', 'dashboard', ''],
                 ];
                 const [title, text, action, page, button] = pages[step];

@@ -62,7 +62,7 @@ const diagnosticOrder = ['network_identity', 'campus_route', 'campus_environment
 export function renderDiagnosticStep(step: DiagnosticStep, animate = true) {
   const diagnosticSteps = document.getElementById('diagnostic-steps')!;
   const row = document.createElement('div');
-  row.className = `diagnostic-step ${step.status}`;
+  row.className = `diagnostic-step ${step.status}${animate ? ' diagnostic-step-enter' : ''}`;
   const marker = document.createElement('span');
   marker.className = 'diagnostic-step-marker';
   marker.textContent = step.status === 'checking' ? '…' : step.status === 'success' ? '✓' : step.status === 'warning' ? '!' : step.status === 'skipped' ? '–' : '×';

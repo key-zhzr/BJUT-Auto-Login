@@ -9,6 +9,7 @@ export const SETTINGS_COPY = {
   pageDescription: '自定义应用程序行为',
   groups: {
     appearance: '外观',
+    interface: '界面与托盘',
     automation: '自动化设置',
     networkSecurity: '网络与安全',
     androidNotifications: 'Android 通知',
@@ -21,7 +22,8 @@ export const SETTINGS_COPY = {
       description: '按 SSID 或有线环境绑定账号顺序、协议和检测策略',
     },
     usage: '流量与余额提醒',
-    advanced: '高级设置',
+    trafficStats: '设备流量统计',
+    advanced: '数据与维护',
   },
   items: {
     'setting-theme': {

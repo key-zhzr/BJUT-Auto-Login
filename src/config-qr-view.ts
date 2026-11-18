@@ -4,7 +4,10 @@ import { IS_ANDROID } from './platform';
 function dialog(title: string) {
   const returnFocus = document.activeElement as HTMLElement | null;
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay config-qr-overlay';
+  const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  overlay.className = reduceMotion
+    ? 'modal-overlay config-qr-overlay'
+    : 'modal-overlay config-qr-overlay hidden';
   overlay.innerHTML = `<section class="modal-content config-qr-dialog" role="dialog" aria-modal="true" aria-labelledby="config-qr-title">
     <h2 id="config-qr-title"></h2><div class="config-qr-body"></div>
     <p class="config-qr-status" role="status"></p><div class="config-qr-actions"></div>
@@ -13,10 +16,31 @@ function dialog(title: string) {
   document.body.append(overlay);
   const closeButton = overlay.querySelector<HTMLButtonElement>('.config-qr-close')!;
   let closeAction = () => {};
-  const close = () => { if (!overlay.isConnected) return; closeAction(); overlay.remove(); returnFocus?.focus(); };
+  let closing = false;
+  const finishClose = () => {
+    overlay.remove();
+    returnFocus?.focus();
+  };
+  const close = () => {
+    if (!overlay.isConnected || closing) return;
+    closing = true;
+    closeAction();
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      finishClose();
+      return;
+    }
+    overlay.classList.add('is-closing');
+    window.setTimeout(finishClose, 220);
+  };
   closeButton.onclick = close;
   overlay.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); close(); } });
-  closeButton.focus();
+  const reveal = () => {
+    if (!overlay.isConnected || closing) return;
+    overlay.classList.remove('hidden');
+    closeButton.focus({ preventScroll: true });
+  };
+  if (reduceMotion) reveal();
+  else requestAnimationFrame(() => requestAnimationFrame(reveal));
   return { overlay, close, onClose: (action: () => void) => { closeAction = action; },
     body: overlay.querySelector<HTMLElement>('.config-qr-body')!,
     actions: overlay.querySelector<HTMLElement>('.config-qr-actions')!,

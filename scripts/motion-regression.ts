@@ -1,6 +1,6 @@
 import { CustomSelect } from '../src/custom-select';
 import { AnimatedVisibility } from '../src/animated-visibility';
-import { setExpanded } from '../src/layout-motion';
+import { animateResize, setExpanded } from '../src/layout-motion';
 
 export async function checkRouterDropdownLayout(note:(text:string)=>void){
   const assert=(value:boolean,text:string)=>{if(!value)throw new Error(text);};
@@ -10,6 +10,7 @@ export async function checkRouterDropdownLayout(note:(text:string)=>void){
   const trigger=document.querySelector<HTMLElement>('#router-service-more [aria-label="认证方式"] .custom-select-trigger')!;
   const theme=document.documentElement.dataset.theme,scroll=main.scrollTop;
   document.querySelector<HTMLElement>('[data-target="settings"]')!.click();
+  document.querySelector<HTMLElement>('[data-settings-target="router"]')?.click();
   setExpanded(details,true);
   while(details.getAnimations().length)await frame();
   try{
@@ -32,6 +33,7 @@ export async function checkRouterDropdownLayout(note:(text:string)=>void){
     note('通过：三种主题展开路由设置菜单时顶栏可见、页面不跳动、选项无白边，窗口无侧边留白');
   }finally{
     if(trigger.getAttribute('aria-expanded')==='true')trigger.click();
+    document.getElementById('btn-settings-back')?.click();
     document.documentElement.dataset.theme=theme;main.scrollTop=scroll;
   }
 }
@@ -102,6 +104,29 @@ export async function runMotionRegression(note:(text:string)=>void){
             assert(Math.abs((inner.left-outer.left)-(outer.right-inner.right))<1.5,`${value} 弹窗左右内边距不等宽`);
           }
         } finally {overlay.remove();}
+      }
+      const spacer = document.createElement('div');
+      const resizing = document.createElement('div');
+      const follower = document.createElement('div');
+      spacer.style.height = '600px';
+      resizing.style.height = '24px';
+      follower.style.height = '1600px';
+      page.replaceChildren(spacer, resizing, follower);
+      const previousOverflowAnchor = main.style.overflowAnchor;
+      main.style.overflowAnchor = 'none';
+      try {
+        main.scrollTop = 500;
+        animateResize(resizing, () => { resizing.style.height = '124px'; });
+        await frame();
+        animateResize(resizing, () => { resizing.style.height = '48px'; });
+        await until(() => resizing.getAnimations().length === 0);
+        const settledScrollTop = main.scrollTop;
+        spacer.style.height = '700px';
+        await frame();
+        await frame();
+        assert(main.scrollTop === settledScrollTop, '中断的动画仍在调整滚动位置');
+      } finally {
+        main.style.overflowAnchor = previousOverflowAnchor;
       }
     } finally {page.remove();previous?.classList.add('active');}
     note('通过：三种主题长短页面宽度一致、内容居中，弹窗有无滚动条时边距等宽');

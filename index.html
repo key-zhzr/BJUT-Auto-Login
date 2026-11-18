@@ -6,6 +6,17 @@
     <meta name="theme-color" content="#0f172a" />
     <title>BJUT-Auto-Login</title>
     <script src="/theme-bootstrap.js"></script>
+    <style>
+      :root[data-color-scheme="light"],
+      :root[data-color-scheme="light"] body,
+      :root[data-color-scheme="light"] .app-loading-mask {
+        background: var(--theme-body-bg, var(--prepaint-body-bg, #eef2f7));
+        color: #172033;
+      }
+      :root[data-color-scheme="light"] .app-loading-card {
+        color: #64748b;
+      }
+    </style>
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="stylesheet" href="/src/themes.css" />
     <link rel="stylesheet" href="/src/theme-apple.css" />
@@ -121,7 +132,7 @@
                 <button id="btn-router-disconnect" class="btn btn-secondary btn-sm" type="button">停止协作</button>
               </div></div>
               <div id="router-uplink-status" class="router-port-grid"></div>
-              <details class="router-more-actions"><summary>指定上游和账号</summary>
+              <details class="router-more-actions"><summary><span>指定上游和账号</span><i class="disclosure-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
                 <div class="router-controls-row">
                   <div class="custom-select" id="router-uplink-select" aria-label="路由上游"><div class="custom-select-trigger"><span>选择上游</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div></div>
                   <div class="custom-select" id="router-account-select" aria-label="路由登录账号"><div class="custom-select-trigger"><span>自动选择账号</span><i data-lucide="chevron-down"></i></div><div class="custom-select-options"></div></div>
@@ -131,11 +142,11 @@
             </div>
           </section>
           <h3 id="dashboard-local-label" class="router-local-heading" hidden>当前设备</h3>
-          <div id="dashboard-override-options" class="glass-card" style="display: none; padding: 1rem; margin-bottom: 1rem; border-radius: 12px;">
-            <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
-              <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 150px;">
-                <label for="override-account" style="font-size: 0.85rem;">登录账号</label>
-                 <div class="custom-select" id="override-account" style="width: 100%;">
+          <div id="dashboard-override-options" class="glass-card dashboard-override-card" hidden>
+            <div class="dashboard-override-grid">
+              <div class="form-group dashboard-override-field">
+                <label for="override-account">登录账号</label>
+                 <div class="custom-select" id="override-account">
                   <div class="custom-select-trigger">
                     <span>自动</span>
                     <i data-lucide="chevron-down"></i>
@@ -145,9 +156,9 @@
                   </div>
                 </div>
               </div>
-              <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 150px;">
-                <label for="override-method" style="font-size: 0.85rem;">登录方式</label>
-                <div class="custom-select" id="override-method" style="width: 100%;">
+              <div class="form-group dashboard-override-field">
+                <label for="override-method">登录方式</label>
+                <div class="custom-select" id="override-method">
                   <div class="custom-select-trigger">
                     <span>自动检测</span>
                     <i data-lucide="chevron-down"></i>
@@ -161,13 +172,13 @@
                 </div>
               </div>
             </div>
-            <div id="dashboard-network-info" style="flex-basis: 100%; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem; color: var(--text-muted); display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.5rem;">
+            <div id="dashboard-network-info" class="dashboard-network-info">
               <div><strong>SSID:</strong> <span id="more-ssid">--</span></div>
               <div><strong>BSSID:</strong> <span id="more-bssid">--</span></div>
               <div><strong>IP:</strong> <span id="more-ip">--</span></div>
             </div>
           </div>
-          <div class="status-card glass-card" style="margin-bottom: 1rem;">
+          <div class="status-card glass-card">
             <div class="status-header">
               <div class="status-icon" id="network-icon"><i data-lucide="wifi"></i></div>
               <div class="status-info">
@@ -207,19 +218,19 @@
           </div>
 
           <!-- Network Data Update Status Bar -->
-          <div class="glass-card" style="display: flex; justify-content: space-between; align-items: center; padding: 0.8rem 1.5rem; margin-bottom: 2rem; border-radius: 12px; font-size: 0.85rem; color: var(--text-muted);">
-            <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
-              <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
-                <i data-lucide="clock" style="width: 14px; height: 14px;"></i> 
-                数据更新时间: <span id="update-timestamp" style="font-family: monospace; color: var(--text-main); font-weight: 500;">--</span>
+          <div class="glass-card dashboard-update-bar">
+            <div class="dashboard-update-meta">
+              <span class="dashboard-update-item">
+                <i data-lucide="clock"></i>
+                数据更新时间: <span id="update-timestamp" class="dashboard-update-value">--</span>
               </span>
-              <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
-                <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> 
-                <span id="countdown-text" style="font-family: monospace; color: var(--text-main); font-weight: 500;">--</span> 秒后更新
+              <span class="dashboard-update-item">
+                <i data-lucide="refresh-cw"></i>
+                <span id="countdown-text" class="dashboard-update-value">--</span> 秒后更新
               </span>
             </div>
-            <button id="btn-manual-update" class="btn btn-secondary btn-sm" style="padding: 0.3rem 0.8rem; border-radius: 6px; display: inline-flex; align-items: center; gap: 0.3rem;">
-              <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i> 手动更新
+            <button id="btn-manual-update" class="btn btn-secondary btn-sm" type="button">
+              <i data-lucide="refresh-cw"></i> 手动更新
             </button>
           </div>
 
@@ -254,11 +265,10 @@
         <section id="billing-center" class="page">
           <header class="page-header billing-center-header">
             <div class="billing-center-heading">
-              <button id="btn-close-billing" class="billing-back-button" type="button">
-                <i data-lucide="arrow-left"></i> 返回控制台
+              <button id="btn-close-billing" class="billing-back-button settings-back-button" type="button">
+                <i data-lucide="arrow-left"></i><span>返回控制台</span>
               </button>
               <h1>校园网计费中心</h1>
-              <p id="billing-center-subtitle">账户状态、在线会话与近期上网记录</p>
             </div>
             <div class="billing-header-tools">
               <label class="billing-account-picker">
@@ -724,12 +734,9 @@
 
         <!-- Accounts -->
         <section id="accounts" class="page">
-          <header class="page-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
-            <div>
-              <h1>账号管理</h1>
-              <p>管理您的校园网登录账号，拖动可改变优先级</p>
-            </div>
-            <button id="btn-show-add" class="btn btn-primary"><i data-lucide="plus"></i> 添加账号</button>
+          <header class="page-header accounts-header">
+            <h1>账号管理</h1>
+            <button id="btn-show-add" class="btn btn-primary" type="button"><i data-lucide="plus"></i> 添加账号</button>
           </header>
 
           <section id="discovered-account-card" class="account-discovery-card glass-card" hidden aria-live="polite">
@@ -754,7 +761,7 @@
           <section id="router-accounts-panel" class="glass-card router-page-panel" hidden>
             <div class="router-panel-header"><h3>路由账号</h3><span id="router-accounts-count"></span><button id="btn-router-add-account" type="button" class="btn btn-primary btn-sm">添加账号</button></div><p id="router-accounts-message" role="status"></p>
             <div id="router-accounts-list"></div>
-            <details id="router-sync-details"><summary>同步本机账号至路由器</summary>
+            <details id="router-sync-details"><summary><span>同步本机账号至路由器</span><i class="disclosure-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
               <div id="router-sync-accounts" class="router-sync-accounts"></div>
               <button id="btn-router-sync" class="btn btn-secondary btn-sm" type="button">同步选定账号</button>
             </details>
@@ -777,109 +784,15 @@
           </section>
         </section>
 
-        <!-- Add Account Modal -->
-        <div id="add-modal" class="modal-overlay hidden">
-          <div class="modal-content glass-card">
-            <h3>添加新账号</h3>
-            <form id="add-account-form">
-              <div class="form-group">
-                <label for="acc-username">用户名 (学号/工号)</label>
-                <input type="text" id="acc-username" required placeholder="请输入用户名">
-              </div>
-              <div class="form-group">
-                <label for="acc-password">密码</label>
-                <div class="password-input-wrap">
-                  <input type="password" id="acc-password" data-sensitive-password required placeholder="请输入密码">
-                  <button type="button" class="btn-icon toggle-password hide-password" data-target="acc-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><i data-lucide="eye"></i></button>
-                </div>
-              </div>
-              <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" id="btn-cancel-add">取消</button>
-                <button type="submit" class="btn btn-primary">添加账号</button>
-              </div>
-            </form>
-          </div>
-        </div>
-
-        <!-- Edit Account Modal -->
-        <div id="edit-modal" class="modal-overlay hidden">
-          <div class="modal-content glass-card">
-            <h3>修改账号</h3>
-            <form id="edit-account-form">
-              <input type="hidden" id="edit-acc-index">
-              <div class="form-group">
-                <label for="edit-acc-username">用户名 (学号/工号)</label>
-                <input type="text" id="edit-acc-username" required>
-              </div>
-              <div class="form-group">
-                <label for="edit-acc-password">密码</label>
-                <div class="password-input-wrap">
-                  <input type="password" id="edit-acc-password" data-sensitive-password required>
-                  <button type="button" class="btn-icon toggle-password hide-password" data-target="edit-acc-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><i data-lucide="eye"></i></button>
-                </div>
-              </div>
-              <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" id="btn-cancel-edit">取消</button>
-                <button type="submit" class="btn btn-primary">保存修改</button>
-              </div>
-            </form>
-          </div>
-        </div>
-
-        <!-- Delete Confirmation Modal -->
-        <div id="delete-modal" class="modal-overlay hidden">
-          <div class="modal-content glass-card">
-            <h3>确认删除</h3>
-            <p id="delete-modal-text" style="margin-bottom: 1.5rem; color: var(--text-muted); font-size: 0.95rem;">确定要删除该账号吗？</p>
-            <div class="modal-actions">
-              <button type="button" class="btn btn-secondary" id="btn-cancel-delete">取消</button>
-              <button type="button" class="btn btn-danger" id="btn-confirm-delete" style="background: var(--error); color: white;">删除</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Security Confirmation Modal -->
-        <div id="security-modal" class="modal-overlay hidden">
-          <div class="modal-content glass-card" style="border: 2px solid var(--error);">
-            <h3 style="color: var(--error); display: flex; align-items: center; gap: 0.5rem;"><i data-lucide="shield-alert"></i> 安全警告</h3>
-            <p style="margin-bottom: 1rem; font-size: 0.95rem;">检测到当前网络环境存在风险，疑似伪造的校园网。</p>
-            <div style="background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 8px; margin-bottom: 1.5rem; font-family: monospace; font-size: 0.85rem; color: var(--text-muted);">
-              <div>SSID: <span id="sec-ssid"></span></div>
-              <div>BSSID: <span id="sec-bssid"></span></div>
-              <div>IP: <span id="sec-ip"></span></div>
-            </div>
-            <div class="modal-actions" style="flex-direction: column; gap: 0.5rem;">
-              <button type="button" class="btn btn-primary" id="btn-sec-cancel" style="width: 100%;">取消登录</button>
-              <button type="button" class="btn btn-secondary" id="btn-sec-cancel-black" style="width: 100%;">取消并将该WiFi加入黑名单</button>
-              <button type="button" class="btn btn-secondary" id="btn-sec-trust-once" style="width: 100%; border-color: var(--warning); color: var(--warning);">信任一次 (继续登录)</button>
-              <button type="button" class="btn btn-secondary" id="btn-sec-trust-white" style="width: 100%; border-color: var(--warning); color: var(--warning);">信任并将该WiFi加入白名单</button>
-            </div>
-          </div>
-        </div>
-
-        <div id="switch-account-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="switch-account-modal-title">
-          <div class="modal-content glass-card switch-account-modal-content">
-            <h3 id="switch-account-modal-title">选择要切换到的账号</h3>
-            <p>请选择已启用且已保存密码的账号。此入口不依赖“更多控制台选项”。</p>
-            <div id="switch-account-options" class="switch-account-options"></div>
-            <div class="modal-actions">
-              <button type="button" class="btn btn-secondary" id="btn-switch-account-cancel">取消</button>
-            </div>
-          </div>
-        </div>
-
         <!-- Diagnostics -->
         <section id="diagnostics" class="page">
           <header class="page-header diagnostics-header">
-            <div>
-              <h1>网络诊断</h1>
-              <p>检查网络链路与账号健康状态</p>
-            </div>
+            <h1>网络诊断</h1>
             <div class="diagnostics-actions">
-              <button id="btn-route-trace" class="btn btn-secondary btn-sm" type="button">链路检查</button>
-              <button id="btn-issue-preview" class="btn btn-secondary btn-sm" type="button">反馈问题</button>
-              <button id="btn-copy-diagnostics" class="btn btn-secondary btn-sm" disabled><i data-lucide="copy"></i> 复制报告</button>
-              <button id="btn-run-diagnostics" class="btn btn-primary"><i data-lucide="activity"></i> 开始诊断</button>
+              <button id="btn-route-trace" class="btn btn-secondary btn-sm" type="button"><i data-lucide="route"></i><span>链路检查</span></button>
+              <button id="btn-issue-preview" class="btn btn-secondary btn-sm" type="button"><i data-lucide="message-square-warning"></i><span>反馈问题</span></button>
+              <button id="btn-copy-diagnostics" class="btn btn-secondary btn-sm" type="button" disabled><i data-lucide="copy"></i><span>复制报告</span></button>
+              <button id="btn-run-diagnostics" class="btn btn-primary btn-sm" type="button"><i data-lucide="activity"></i><span>开始诊断</span></button>
             </div>
           </header>
 
@@ -901,15 +814,23 @@
           <section id="diagnostic-adapter-repair" class="diagnostic-panel glass-card diagnostic-adapter-repair" hidden>
             <div class="diagnostic-panel-header">
               <h3>有线 IPv6 恢复</h3>
-              <button id="btn-restart-lgn-adapter" class="btn btn-secondary btn-sm"><i data-lucide="refresh-cw"></i> 重启有线适配器</button>
+              <button id="btn-restart-lgn-adapter" class="btn btn-secondary btn-sm" type="button"><i data-lucide="refresh-cw"></i> 重启有线适配器</button>
             </div>
             <p id="diagnostic-adapter-repair-message" class="diagnostic-panel-message" role="status"></p>
           </section>
 
-          <details class="diagnostic-panel glass-card network-events-panel" open>
-            <summary>最近网络事件</summary>
-            <ol id="network-events-list" class="network-events-list"><li class="diagnostic-empty">暂无网络事件，检测和登录后会在此说明原因</li></ol>
-          </details>
+          <section class="diagnostic-panel glass-card diagnostic-steps-panel">
+            <div class="diagnostic-panel-header">
+              <div>
+                <h3>网络链路</h3>
+                <p class="diagnostic-pipeline-caption">网络接口 → 校园环境 → DNS → 互联网 → 认证网关</p>
+              </div>
+            </div>
+            <div id="diagnostic-advice" class="transfer-note diagnostic-advice" aria-live="polite"></div>
+            <div id="diagnostic-steps" class="diagnostic-steps">
+              <div class="diagnostic-empty">运行诊断后将在此展示每一步结果</div>
+            </div>
+          </section>
 
           <div class="diagnostics-grid">
             <section id="router-diagnostics-panel" class="diagnostic-panel glass-card router-page-panel" hidden>
@@ -917,10 +838,16 @@
               <div id="router-diagnostics-results"></div>
             </section>
             <details id="account-health-panel" class="diagnostic-panel glass-card">
-              <summary class="account-health-summary"><strong>账号状态</strong><span id="account-health-summary">暂无账号</span></summary>
+              <summary class="account-health-summary">
+                <strong>账号状态</strong>
+                <span class="disclosure-summary-meta">
+                  <span id="account-health-summary">暂无账号</span>
+                  <i class="disclosure-chevron" data-lucide="chevron-down" aria-hidden="true"></i>
+                </span>
+              </summary>
               <div class="diagnostic-panel-header">
                 <p>连续失败的账号会暂停一段时间后重试。</p>
-                <button id="btn-reset-all-health" class="btn btn-secondary btn-sm">全部解除</button>
+                <button id="btn-reset-all-health" class="btn btn-secondary btn-sm" type="button">全部解除</button>
               </div>
               <div id="account-health-list" class="account-health-list">
                 <div class="diagnostic-empty">暂无账号记录</div>
@@ -928,34 +855,41 @@
             </details>
           </div>
 
-          <section class="diagnostic-panel glass-card diagnostic-steps-panel">
+          <details class="diagnostic-panel glass-card network-events-panel" open>
+            <summary class="diagnostic-disclosure-summary">
+              <strong>最近网络事件</strong>
+              <i class="disclosure-chevron" data-lucide="chevron-down" aria-hidden="true"></i>
+            </summary>
+            <ol id="network-events-list" class="network-events-list"><li class="diagnostic-empty">暂无网络事件，检测和登录后会在此说明原因</li></ol>
+          </details>
+
+          <section id="network-quality-panel" class="diagnostic-panel glass-card network-quality-panel">
             <div class="diagnostic-panel-header">
               <div>
-                <h3>网络链路</h3>
-                <p>网络接口 → 校园环境 → DNS → 互联网 → 认证网关</p>
+                <h3>网络质量 · 最近 24 小时</h3>
+                <p>仅记录已完成的检查，未通过比例不等于丢包率</p>
               </div>
+              <label class="quality-alert-toggle">
+                <span>异常与恢复提醒</span>
+                <span class="switch">
+                  <input id="quality-alerts" type="checkbox">
+                  <span class="slider round"></span>
+                </span>
+              </label>
             </div>
-            <div id="diagnostic-advice" class="transfer-note" aria-live="polite"></div>
-            <div id="diagnostic-steps" class="diagnostic-steps">
-              <div class="diagnostic-empty">运行诊断后将在此展示每一步结果</div>
-            </div>
+            <div id="network-quality-content" class="network-quality-content transfer-note"></div>
           </section>
-        <section id="network-quality-panel" class="glass-card">
-          <h3>网络质量 · 最近 24 小时</h3>
-          <div id="network-quality-content" class="transfer-note"></div>
-          <label><input id="quality-alerts" type="checkbox"> 持续异常与恢复时提醒</label>
-        </section>
         </section>
 
         <!-- Logs -->
         <section id="logs" class="page">
           <header class="page-header logs-header">
-            <h1 style="margin: 0;">运行日志</h1>
+            <h1>运行日志</h1>
             <div class="logs-actions">
-              <button id="btn-diagnostic-bundle" class="btn btn-secondary btn-sm"><i data-lucide="shield-check"></i> 复制诊断包</button>
-              <button id="btn-export-logs" class="btn btn-secondary btn-sm"><i data-lucide="download"></i> 导出日志</button>
-              <button id="btn-scroll-logs" class="btn btn-secondary btn-sm"><i data-lucide="arrow-down-to-line"></i> 滚动到底部</button>
-              <button id="btn-clear-logs" class="btn btn-sm btn-log-danger">清空日志</button>
+              <button id="btn-diagnostic-bundle" class="btn btn-secondary btn-sm" type="button"><i data-lucide="shield-check"></i> 复制诊断包</button>
+              <button id="btn-export-logs" class="btn btn-secondary btn-sm" type="button"><i data-lucide="download"></i> 导出日志</button>
+              <button id="btn-scroll-logs" class="btn btn-secondary btn-sm" type="button"><i data-lucide="arrow-down-to-line"></i> 滚动到底部</button>
+              <button id="btn-clear-logs" class="btn btn-danger btn-sm btn-log-danger" type="button">清空日志</button>
             </div>
           </header>
           <div class="log-filters glass-card">
@@ -981,7 +915,7 @@
           </div>
 
           <details id="router-logs-panel" class="glass-card router-page-panel" hidden open>
-            <summary>路由器日志</summary>
+            <summary class="diagnostic-disclosure-summary"><span>路由器日志</span><i class="disclosure-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
             <div class="router-actions"><button id="btn-router-logs-refresh" class="btn btn-secondary btn-sm" type="button">刷新</button></div>
             <pre id="router-logs-content" class="router-log-content">正在读取…</pre>
           </details>
@@ -995,439 +929,644 @@
 
         <!-- Settings -->
         <section id="settings" class="page">
-          <header class="page-header">
-            <h1>设置</h1>
-            <p>自定义应用程序行为</p>
+          <header class="page-header settings-header">
+            <div class="settings-header-copy">
+              <button id="btn-settings-back" class="settings-back-button" type="button" hidden>
+                <i data-lucide="arrow-left"></i><span>返回设置</span>
+              </button>
+              <h1 id="settings-page-title">设置</h1>
+            </div>
           </header>
           
           <div class="settings-container">
-            <div class="settings-group glass-card">
-              <h3>外观</h3>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>界面主题</h4>
-                  <p>Basic 保留项目视觉；Apple OS 27 与 WinUI 分别遵循 Liquid Glass 和 Fluent 材质层级。</p>
-                </div>
-                <div class="custom-select" id="setting-theme" aria-label="界面主题">
-                  <div class="custom-select-trigger" tabindex="0">
-                    <span>Basic</span>
-                    <i data-lucide="chevron-down"></i>
-                  </div>
-                  <div class="custom-select-options">
-                    <div class="custom-option selected" data-value="basic">Basic</div>
-                    <div class="custom-option" data-value="apple27">Apple OS 27</div>
-                    <div class="custom-option" data-value="winui">WinUI</div>
-                  </div>
-                </div>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>明暗模式</h4>
-                  <p>跟随系统会实时响应设备的深色或浅色外观变化。</p>
-                </div>
-                <div class="custom-select" id="setting-color-mode" aria-label="明暗模式">
-                  <div class="custom-select-trigger" tabindex="0">
-                    <span>跟随系统</span>
-                    <i data-lucide="chevron-down"></i>
-                  </div>
-                  <div class="custom-select-options">
-                    <div class="custom-option selected" data-value="system">跟随系统</div>
-                    <div class="custom-option" data-value="dark">深色</div>
-                    <div class="custom-option" data-value="light">浅色</div>
-                  </div>
-                </div>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>强调色</h4>
-                  <p>应用于活动栏目、主按钮、进度与焦点状态。</p>
-                </div>
-                <div class="custom-select appearance-accent-select" id="setting-accent-color" aria-label="强调色">
-                  <div class="custom-select-trigger" tabindex="0">
-                    <span>蓝色</span>
-                    <i data-lucide="chevron-down"></i>
-                  </div>
-                  <div class="custom-select-options">
-                    <div class="custom-option selected" data-value="blue">蓝色</div>
-                    <div class="custom-option" data-value="violet">紫罗兰</div>
-                    <div class="custom-option" data-value="cyan">青色</div>
-                    <div class="custom-option" data-value="green">绿色</div>
-                    <div class="custom-option" data-value="orange">橙色</div>
-                    <div class="custom-option" data-value="rose">玫红</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="settings-group glass-card" style="margin-top: 1rem;">
-              <h3>自动化设置</h3>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>后台自动登录</h4>
-                  <p>当检测到校园网断开时自动进行登录</p>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-auto-login">
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>Wi-Fi 变更检测</h4>
-                  <p>系统网络事件触发即时检测，接口轮询作为兜底；实际频率随下方自适应设置调整</p>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-wifi-change-detect">
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              <div class="setting-item" id="setting-autostart-item">
-                <div class="setting-info">
-                  <h4>开机自启动</h4>
-                  <p>在系统启动时自动后台运行应用（仅桌面端）</p>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-autostart">
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>前台自动检测间隔</h4>
-                  <p>应用在屏幕显示时的基础间隔（秒），自适应模式会按网络状态调整</p>
-                </div>
-                <input type="number" id="setting-check-interval" class="input-inline" min="5" value="15">
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>后台自动检测间隔</h4>
-                  <p>应用在后台运行时的基础间隔（秒），稳定联网后可自动延长</p>
-                </div>
-                <input type="number" id="setting-check-interval-bg" class="input-inline" min="5" value="60">
-              </div>
-              <div class="setting-item">
-                <div class="setting-info"><h4>自适应网络检测</h4><p>稳定时降低后台频率，断网后短暂加快；省电或息屏时减少探测</p></div>
-                <label class="switch"><input type="checkbox" id="setting-adaptive-network" aria-label="自适应网络检测" checked><span class="slider round"></span></label>
-              </div>
-              <p id="network-schedule-summary" class="diagnostic-panel-message" role="status">等待首次检测后显示实际检测频率</p>
-            </div>
-            
-            <section class="settings-group glass-card network-adapter-settings" style="margin-top: 1rem;">
-              <div class="diagnostic-panel-header">
-                <div><h3>认证网卡</h3><p id="network-selection-caption">正在读取网卡…</p></div>
-                <button id="btn-refresh-adapters" class="btn btn-secondary btn-sm" type="button">刷新检测</button>
-              </div>
-              <div id="network-adapter-list" class="network-adapter-list" role="radiogroup" aria-label="认证使用的网卡"></div>
-              <p id="network-adapter-message" role="status" hidden></p>
-            </section>
-
-            <div class="settings-group glass-card" style="margin-top: 1rem;">
-              <h3>网络与安全</h3>
-              <div class="setting-item setting-item-vpn">
-                <div class="setting-info">
-                  <h4>VPN 共存兼容等级</h4>
-                  <p>推荐“高兼容”：保留 HTTPS 校验，并将校园网域名固定到已知网关地址</p>
-                </div>
-                <div class="custom-select" id="setting-vpn-compatibility" aria-label="VPN 共存兼容等级">
-                  <div class="custom-select-trigger" tabindex="0">
-                    <span>高兼容（HTTPS + 固定地址）</span>
-                    <i data-lucide="chevron-down"></i>
-                  </div>
-                  <div class="custom-select-options">
-                    <div class="custom-option" data-value="minimum">最低兼容（HTTPS + 系统 DNS）</div>
-                    <div class="custom-option" data-value="low">较低兼容（HTTPS + 校园网 DNS）</div>
-                    <div class="custom-option selected" data-value="high">高兼容（HTTPS + 固定地址）</div>
-                    <div class="custom-option" data-value="maximum">最高兼容（HTTP + IP，账密明文传输）</div>
-                  </div>
-                </div>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>受信任的 WiFi (白名单)</h4>
-                  <p>在此列表中的网络将跳过安全提示</p>
-                </div>
-                <button class="btn btn-secondary btn-sm" id="btn-manage-whitelist">管理</button>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>不信任的 WiFi (黑名单)</h4>
-                  <p>在此列表中的网络将被拒绝登录</p>
-                </div>
-                <button class="btn btn-secondary btn-sm" id="btn-manage-blacklist">管理</button>
-              </div>
-            </div>
-
-            <div class="settings-group glass-card android-only android-notification-settings" style="margin-top: 1rem;">
-              <h3>Android 通知</h3>
-              <div class="setting-item setting-item-notification-mode">
-                <div class="setting-info">
-                  <h4>通知方式</h4>
-                  <p id="android-notification-mode-description">常驻通知同时显示后台检测与自动登录状态</p>
-                </div>
-                <div class="custom-select" id="setting-android-notification-mode" aria-label="Android 通知方式">
-                  <div class="custom-select-trigger" tabindex="0">
-                    <span>保活与信息共存</span>
-                    <i data-lucide="chevron-down"></i>
-                  </div>
-                  <div class="custom-select-options">
-                    <div class="custom-option selected" data-value="combined">保活与信息共存</div>
-                    <div class="custom-option" data-value="separate">保活与信息分离（静态常驻）</div>
-                  </div>
-                </div>
-              </div>
-              <div class="notification-category-note">以下类别可分别关闭；分离模式下，启用的类别会作为可清除通知单独发送。</div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>网络状态</h4>
-                  <p>联网、离线、移动数据及校园网待认证状态</p>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-android-notify-network-status" checked>
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>自动登录结果</h4>
-                  <p>登录成功、失败、安全阻止及没有可用账号</p>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-android-notify-login-results" checked>
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>余额与流量提醒</h4>
-                  <p>余额或剩余套餐流量低于提醒线</p>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-android-notify-usage-alerts" checked>
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>后台异常</h4>
-                  <p>无界面检测核心或后台服务运行失败</p>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-android-notify-background-errors" checked>
-                  <span class="slider round"></span>
-                </label>
-              </div>
-            </div>
-
-            <div class="settings-group glass-card" style="margin-top: 1rem;" id="permission-health-group">
-              <div class="setting-group-heading">
-                <div>
-                  <h3>权限健康中心</h3>
-                  <p>集中检查网络识别、后台运行、通知与应用更新所需权限</p>
-                </div>
-                <div class="setting-group-actions">
-                  <button class="btn btn-secondary btn-sm permission-health-toggle" id="btn-toggle-permissions" type="button" aria-expanded="true" aria-controls="permission-health-list">
-                    <i data-lucide="chevron-up" aria-hidden="true"></i>
-                    <span id="permission-health-toggle-label">收起详情</span>
+            <div id="settings-home" class="settings-home">
+              <div class="settings-group glass-card settings-overview-group">
+                <h3>个性化</h3>
+                <div class="settings-nav-list">
+                  <button class="settings-nav-item" type="button" data-settings-target="appearance">
+                    <span class="settings-nav-icon"><i data-lucide="palette"></i></span>
+                    <span class="settings-nav-copy">
+                      <strong>外观与界面</strong>
+                      <small>界面主题、明暗模式、强调色与控制台显示</small>
+                    </span>
+                    <span class="settings-nav-meta" id="settings-summary-appearance">Basic · 跟随系统</span>
+                    <i class="settings-nav-chevron" data-lucide="chevron-right" aria-hidden="true"></i>
                   </button>
-                  <button class="btn btn-secondary btn-sm" id="btn-refresh-permissions" type="button">重新检查</button>
                 </div>
               </div>
-              <div id="permission-health-summary" class="permission-health-summary">正在检查系统权限…</div>
-              <div id="permission-health-list" class="permission-health-list" aria-hidden="false"></div>
-            </div>
 
-            <div class="settings-group glass-card" style="margin-top: 1rem;">
-              <div class="setting-group-heading">
-                <div>
-                  <h3>网络配置档案</h3>
-                  <p>按 SSID 或有线环境绑定账号顺序、协议和检测策略</p>
+              <div class="settings-group glass-card settings-overview-group">
+                <h3>连接与网络</h3>
+                <div class="settings-nav-list">
+                  <button class="settings-nav-item" type="button" data-settings-target="automation">
+                    <span class="settings-nav-icon"><i data-lucide="sliders-horizontal"></i></span>
+                    <span class="settings-nav-copy">
+                      <strong>自动化与网络检测</strong>
+                      <small>自动登录、检测频率、认证网卡与网络档案</small>
+                    </span>
+                    <span class="settings-nav-meta" id="settings-summary-automation">自动检测</span>
+                    <i class="settings-nav-chevron" data-lucide="chevron-right" aria-hidden="true"></i>
+                  </button>
+                  <button class="settings-nav-item" type="button" data-settings-target="security">
+                    <span class="settings-nav-icon"><i data-lucide="shield-check"></i></span>
+                    <span class="settings-nav-copy">
+                      <strong>网络安全与权限</strong>
+                      <small>VPN 共存兼容、Wi-Fi 黑白名单与系统权限健康</small>
+                    </span>
+                    <span class="settings-nav-meta" id="settings-summary-security">高兼容</span>
+                    <i class="settings-nav-chevron" data-lucide="chevron-right" aria-hidden="true"></i>
+                  </button>
+                  <button class="settings-nav-item" type="button" data-settings-target="router">
+                    <span class="settings-nav-icon"><i data-lucide="router"></i></span>
+                    <span class="settings-nav-copy">
+                      <strong>路由协作</strong>
+                      <small>局域网 BJUT 路由器连接、上游接口与固件维护</small>
+                    </span>
+                    <span class="settings-nav-meta" id="settings-summary-router">未连接</span>
+                    <i class="settings-nav-chevron" data-lucide="chevron-right" aria-hidden="true"></i>
+                  </button>
                 </div>
-                <button class="btn btn-primary btn-sm" id="btn-add-network-profile">添加档案</button>
               </div>
-              <div id="network-profiles-list" class="network-profiles-list">
-                <div class="diagnostic-empty">暂无网络档案，将使用全局设置</div>
-              </div>
-            </div>
 
-            <div class="settings-group glass-card" style="margin-top: 1rem;">
-              <h3>流量与余额提醒</h3>
-              <div class="setting-item usage-alert-master-setting">
-                <div class="setting-info">
-                  <h4>启用用量提醒</h4>
-                  <p>余额、流量不足时提醒；月末核对下月套餐费用</p>
+              <div class="settings-group glass-card settings-overview-group">
+                <h3>通知、统计与系统</h3>
+                <div class="settings-nav-list">
+                  <button class="settings-nav-item" type="button" data-settings-target="notifications-usage">
+                    <span class="settings-nav-icon"><i data-lucide="bell"></i></span>
+                    <span class="settings-nav-copy">
+                      <strong>通知与流量统计</strong>
+                      <small>余额与流量提醒、统计保留与 Android 通知</small>
+                    </span>
+                    <span class="settings-nav-meta" id="settings-summary-usage">提醒开启</span>
+                    <i class="settings-nav-chevron" data-lucide="chevron-right" aria-hidden="true"></i>
+                  </button>
+                  <button class="settings-nav-item" type="button" data-settings-target="advanced">
+                    <span class="settings-nav-icon"><i data-lucide="database"></i></span>
+                    <span class="settings-nav-copy">
+                      <strong>数据、日志与维护</strong>
+                      <small>配置导入导出、日志等级、更新通道与首次引导</small>
+                    </span>
+                    <span class="settings-nav-meta" id="settings-summary-advanced">正式版</span>
+                    <i class="settings-nav-chevron" data-lucide="chevron-right" aria-hidden="true"></i>
+                  </button>
+                  <button class="settings-nav-item" type="button" data-settings-target="about">
+                    <span class="settings-nav-icon"><i data-lucide="info"></i></span>
+                    <span class="settings-nav-copy">
+                      <strong>关于与更新</strong>
+                      <small>检查更新、当前版本、开源仓库与隐私原则</small>
+                    </span>
+                    <span class="settings-nav-meta" id="settings-summary-about">v0.1.6</span>
+                    <i class="settings-nav-chevron" data-lucide="chevron-right" aria-hidden="true"></i>
+                  </button>
                 </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-usage-alerts" checked>
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info"><h4>余额提醒线</h4><p>单位：元</p></div>
-                <input type="number" id="setting-balance-threshold" class="input-inline" min="0" step="1" value="10">
-              </div>
-              <div class="setting-item">
-                <div class="setting-info"><h4>流量提醒线</h4><p>单位：GB</p></div>
-                <input type="number" id="setting-flow-threshold" class="input-inline" min="0" step="1" value="5">
-              </div>
-            </div>
-
-            <div class="settings-group glass-card" style="margin-top: 1rem;">
-              <h3>高级设置</h3>
-              <div class="setting-item"><div class="setting-info"><h4>优先使用余量充足的账号</h4><p>依据已开启统计取得的新鲜计费数据排序，独立账号顺序优先。</p></div><label class="switch"><input id="setting-prefer-flow" type="checkbox"><span class="slider round"></span></label></div>
-              <div class="setting-item"><div class="setting-info"><h4>设备流量统计</h4><p>开启后每分钟记录计费流量并绘制曲线。Android 在前台更新。</p></div><label class="switch"><input id="setting-traffic-monitor" type="checkbox"><span class="slider round"></span></label></div>
-              <div class="setting-item"><div class="setting-info"><h4>流量统计范围</h4></div><div class="traffic-scope"><label><input type="radio" name="setting-traffic-scope" value="local" checked>仅本机设备</label><label><input type="radio" name="setting-traffic-scope" value="all">全部在线设备</label></div></div>
-              <div class="traffic-retention-controls">
-                <label>分钟明细保留（小时）<input type="number" min="1" max="8760" step="1" data-usage-retention="minuteHours" aria-label="分钟明细保留（小时）"></label>
-                <label>小时汇总保留（天）<input type="number" min="1" max="3660" step="1" data-usage-retention="hourDays" aria-label="小时汇总保留（天）"></label>
-                <label>每日汇总保留（天）<input type="number" min="1" max="36600" step="1" data-usage-retention="dayDays" aria-label="每日汇总保留（天）"></label>
-                <label>统计存储上限（MB）<input type="number" min="1" max="128" step="1" data-usage-retention="storageMb" aria-label="统计存储上限（MB）"></label>
-              </div><p id="usage-storage-estimate" class="traffic-note"></p>
-              <div class="setting-item"><div class="setting-info"><h4>首次使用引导</h4><p>查看账号、网络与后台运行的设置步骤。</p></div><button class="btn btn-secondary btn-sm" id="btn-onboarding" type="button">重新查看</button></div>
-              <div class="setting-item desktop-only"><div class="setting-info"><h4>菜单栏与托盘</h4><p>选择图标、显示内容和快捷菜单。</p></div><button class="btn btn-secondary btn-sm" id="btn-tray-preferences" type="button">自定义</button></div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>更多控制台选项</h4>
-                  <p>在控制台显示指定的账号和登录方式组件</p>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-more-options">
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              <div class="setting-item macos-only" style="display: none;">
-                <div class="setting-info">
-                  <h4>在程序坞显示图标</h4>
-                  <p>关闭后，App将只在右上角菜单栏显示，不占用程序坞</p>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" id="setting-macos-dock" checked>
-                  <span class="slider round"></span>
-                </label>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>更新通道</h4>
-                  <p>选择您想接收的更新版本类型</p>
-                </div>
-                <div class="custom-select" id="setting-update-channel">
-                  <div class="custom-select-trigger">
-                    <span>正式版 (Release)</span>
-                    <i data-lucide="chevron-down"></i>
-                  </div>
-                  <div class="custom-select-options">
-                    <div class="custom-option selected" data-value="release">正式版 (Release)</div>
-                    <div class="custom-option" data-value="prerelease">预览版 (Pre-release)</div>
-                  </div>
-                </div>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>日志详细等级</h4>
-                  <p>控制“运行日志”页面记录的日志级别</p>
-                </div>
-                <div class="custom-select" id="setting-log-level">
-                  <div class="custom-select-trigger">
-                    <span>INFO (信息 - 默认)</span>
-                    <i data-lucide="chevron-down"></i>
-                  </div>
-                  <div class="custom-select-options">
-                    <div class="custom-option" data-value="debug">DEBUG (调试)</div>
-                    <div class="custom-option selected" data-value="info">INFO (信息 - 默认)</div>
-                    <div class="custom-option" data-value="error">ERROR (错误)</div>
-                  </div>
-                </div>
-              </div>
-              <div class="setting-item">
-                <div class="setting-info">
-                  <h4>配置导入/导出</h4>
-                  <p>通过剪贴板或二维码备份、迁移设置和账号。</p>
-                </div>
-                <div>
-                  <div class="config-transfer-actions">
-                    <button class="btn btn-secondary btn-sm" id="btn-import-config">导入</button>
-                    <button class="btn btn-secondary btn-sm" id="btn-export-config">导出</button>
-                  </div>
-                </div>
-              </div>
-              <div class="setting-item" id="setting-quit-item">
-                <div class="setting-info">
-                  <h4>退出应用</h4>
-                  <p>彻底关闭应用并停止后台网络检测与保活服务</p>
-                </div>
-                <button class="btn btn-danger btn-sm" id="btn-quit-app">退出</button>
               </div>
             </div>
 
-            <section id="router-control" class="settings-group glass-card router-control" style="margin-top: 1rem;">
-              <div class="setting-group-heading">
-                <div>
-                  <h3>路由协作</h3>
-                  <p id="router-settings-connection">自动查找当前局域网中的 BJUT 路由器。</p>
-                  <p id="router-message" role="status" aria-live="polite"></p>
+            <section class="settings-subpage" data-settings-subpage="appearance" hidden>
+              <div class="settings-group glass-card">
+                <h3>外观</h3>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>界面主题</h4>
+                    <p>Basic 保留项目视觉；Apple OS 27 与 WinUI 分别遵循 Liquid Glass 和 Fluent 材质层级。</p>
+                  </div>
+                  <div class="custom-select" id="setting-theme" aria-label="界面主题">
+                    <div class="custom-select-trigger" tabindex="0">
+                      <span>Basic</span>
+                      <i data-lucide="chevron-down"></i>
+                    </div>
+                    <div class="custom-select-options">
+                      <div class="custom-option selected" data-value="basic">Basic</div>
+                      <div class="custom-option" data-value="apple27">Apple OS 27</div>
+                      <div class="custom-option" data-value="winui">WinUI</div>
+                    </div>
+                  </div>
                 </div>
-                <div class="setting-group-actions">
-                  <button id="btn-router-settings-discover" class="btn btn-secondary btn-sm" type="button">重新查找</button>
-                  <button id="btn-router-manual-connect" class="btn btn-secondary btn-sm" type="button">手动连接</button>
-                  <button id="btn-router-forget-password" class="btn btn-secondary btn-sm" type="button" hidden>忘记路由密码</button>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>明暗模式</h4>
+                    <p>跟随系统会实时响应设备的深色或浅色外观变化。</p>
+                  </div>
+                  <div class="custom-select" id="setting-color-mode" aria-label="明暗模式">
+                    <div class="custom-select-trigger" tabindex="0">
+                      <span>跟随系统</span>
+                      <i data-lucide="chevron-down"></i>
+                    </div>
+                    <div class="custom-select-options">
+                      <div class="custom-option selected" data-value="system">跟随系统</div>
+                      <div class="custom-option" data-value="dark">深色</div>
+                      <div class="custom-option" data-value="light">浅色</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>强调色</h4>
+                    <p>应用于活动栏目、主按钮、进度与焦点状态。</p>
+                  </div>
+                  <div class="custom-select appearance-accent-select" id="setting-accent-color" aria-label="强调色">
+                    <div class="custom-select-trigger" tabindex="0">
+                      <span>蓝色</span>
+                      <i data-lucide="chevron-down"></i>
+                    </div>
+                    <div class="custom-select-options">
+                      <div class="custom-option selected" data-value="blue">蓝色</div>
+                      <div class="custom-option" data-value="violet">紫罗兰</div>
+                      <div class="custom-option" data-value="cyan">青色</div>
+                      <div class="custom-option" data-value="green">绿色</div>
+                      <div class="custom-option" data-value="orange">橙色</div>
+                      <div class="custom-option" data-value="rose">玫红</div>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <form id="router-settings-form" class="router-settings-form" hidden>
-                <div id="router-service-common" class="router-settings-list"></div>
-                <details id="router-service-advanced" class="router-settings-advanced">
-                  <summary>更多设置与上游</summary>
-                  <div id="router-service-more" class="router-settings-list"></div>
-                  <h4 class="router-settings-subheading">上游接口</h4>
-                  <div id="router-configured-uplinks"></div>
-                </details>
-                <div class="router-settings-footer">
-                  <p id="router-settings-message" role="status"></p>
-                  <button id="btn-router-settings-save" class="btn btn-primary btn-sm" type="submit">保存设置</button>
+
+              <div class="settings-group glass-card">
+                <h3>界面与托盘</h3>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>更多控制台选项</h4>
+                    <p>在控制台显示指定的账号和登录方式组件</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-more-options">
+                    <span class="slider round"></span>
+                  </label>
                 </div>
-              </form>
+                <div class="setting-item desktop-only">
+                  <div class="setting-info">
+                    <h4>菜单栏与托盘</h4>
+                    <p>选择图标、显示内容和快捷菜单。</p>
+                  </div>
+                  <button class="btn btn-secondary btn-sm" id="btn-tray-preferences" type="button">自定义</button>
+                </div>
+                <div class="setting-item macos-only" style="display: none;">
+                  <div class="setting-info">
+                    <h4>在程序坞显示图标</h4>
+                    <p>关闭后，App将只在右上角菜单栏显示，不占用程序坞</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-macos-dock" checked>
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+              </div>
             </section>
 
-            <div id="settings-about" class="settings-group glass-card settings-about-card" style="margin-top: 1rem;">
-              <div class="settings-about-header">
-                <div class="settings-about-logo" aria-hidden="true"></div>
-                <div>
-                  <p class="settings-about-eyebrow">关于</p>
-                  <h3>BJUT Auto Login</h3>
-                  <p>面向北京工业大学校园网的本地自动登录、网络诊断与计费服务助手。</p>
+            <section class="settings-subpage" data-settings-subpage="automation" hidden>
+              <div class="settings-group glass-card">
+                <h3>自动化设置</h3>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>后台自动登录</h4>
+                    <p>当检测到校园网断开时自动进行登录</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-auto-login">
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>Wi-Fi 变更检测</h4>
+                    <p>系统网络事件触发即时检测，接口轮询作为兜底；实际频率随下方自适应设置调整</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-wifi-change-detect">
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="setting-item" id="setting-autostart-item">
+                  <div class="setting-info">
+                    <h4>开机自启动</h4>
+                    <p>在系统启动时自动后台运行应用（仅桌面端）</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-autostart">
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>前台自动检测间隔</h4>
+                    <p>应用在屏幕显示时的基础间隔（秒），自适应模式会按网络状态调整</p>
+                  </div>
+                  <input type="number" id="setting-check-interval" class="input-inline" min="5" value="15">
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>后台自动检测间隔</h4>
+                    <p>应用在后台运行时的基础间隔（秒），稳定联网后可自动延长</p>
+                  </div>
+                  <input type="number" id="setting-check-interval-bg" class="input-inline" min="5" value="60">
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info"><h4>自适应网络检测</h4><p>稳定时降低后台频率，断网后短暂加快；省电或息屏时减少探测</p></div>
+                  <label class="switch"><input type="checkbox" id="setting-adaptive-network" aria-label="自适应网络检测" checked><span class="slider round"></span></label>
+                </div>
+                <p id="network-schedule-summary" class="diagnostic-panel-message setting-schedule-summary" role="status">等待首次检测后显示实际检测频率</p>
+              </div>
+
+              <section class="settings-group glass-card network-adapter-settings">
+                <div class="diagnostic-panel-header">
+                  <div><h3>认证网卡</h3><p id="network-selection-caption">正在读取网卡…</p></div>
+                  <button id="btn-refresh-adapters" class="btn btn-secondary btn-sm" type="button">刷新检测</button>
+                </div>
+                <div id="network-adapter-list" class="network-adapter-list" role="radiogroup" aria-label="认证使用的网卡"></div>
+                <p id="network-adapter-message" role="status" hidden></p>
+              </section>
+
+              <div class="settings-group glass-card">
+                <div class="setting-group-heading">
+                  <div>
+                    <h3>网络配置档案</h3>
+                    <p>按 SSID 或有线环境绑定账号顺序、协议和检测策略</p>
+                  </div>
+                  <button class="btn btn-primary btn-sm" id="btn-add-network-profile" type="button">添加档案</button>
+                </div>
+                <div id="network-profiles-list" class="network-profiles-list">
+                  <div class="diagnostic-empty">暂无网络档案，将使用全局设置</div>
                 </div>
               </div>
-              <div class="settings-about-meta">
-                <div>
-                  <span>当前版本</span><strong id="app-version">v0.1.6</strong>
-                  <small>编译时间 <time id="app-build-time">—</time></small>
+            </section>
+
+            <section class="settings-subpage" data-settings-subpage="security" hidden>
+              <div class="settings-group glass-card">
+                <h3>网络与安全</h3>
+                <div class="setting-item setting-item-vpn">
+                  <div class="setting-info">
+                    <h4>VPN 共存兼容等级</h4>
+                    <p>推荐“高兼容”：保留 HTTPS 校验，并将校园网域名固定到已知网关地址</p>
+                  </div>
+                  <div class="custom-select" id="setting-vpn-compatibility" aria-label="VPN 共存兼容等级">
+                    <div class="custom-select-trigger" tabindex="0">
+                      <span>高兼容（HTTPS + 固定地址）</span>
+                      <i data-lucide="chevron-down"></i>
+                    </div>
+                    <div class="custom-select-options">
+                      <div class="custom-option" data-value="minimum">最低兼容（HTTPS + 系统 DNS）</div>
+                      <div class="custom-option" data-value="low">较低兼容（HTTPS + 校园网 DNS）</div>
+                      <div class="custom-option selected" data-value="high">高兼容（HTTPS + 固定地址）</div>
+                      <div class="custom-option" data-value="maximum">最高兼容（HTTP + IP，账密明文传输）</div>
+                    </div>
+                  </div>
                 </div>
-                <div><span>数据原则</span><strong>账号凭据仅保存在本机安全存储</strong></div>
-                <div><span>项目性质</span><strong>开源第三方工具，非学校官方应用</strong></div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>受信任的 WiFi (白名单)</h4>
+                    <p>在此列表中的网络将跳过安全提示</p>
+                  </div>
+                  <button class="btn btn-secondary btn-sm" id="btn-manage-whitelist" type="button">管理</button>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>不信任的 WiFi (黑名单)</h4>
+                    <p>在此列表中的网络将被拒绝登录</p>
+                  </div>
+                  <button class="btn btn-secondary btn-sm" id="btn-manage-blacklist" type="button">管理</button>
+                </div>
               </div>
-              <div class="settings-about-actions">
-                <button class="btn btn-primary btn-sm" id="btn-check-update" type="button"><i data-lucide="refresh-cw"></i><span>检查更新</span></button>
-                <button class="btn btn-secondary btn-sm" id="btn-redownload-package" type="button"><i data-lucide="download"></i><span>重新下载完整包</span></button>
-                <button class="btn btn-secondary btn-sm" id="btn-open-project-home" type="button"><i data-lucide="external-link"></i> 开源仓库</button>
-                <button class="btn btn-secondary btn-sm" id="btn-open-project-license" type="button"><i data-lucide="file-text"></i> 开源许可</button>
+
+              <div class="settings-group glass-card" id="permission-health-group">
+                <div class="setting-group-heading">
+                  <div>
+                    <h3>权限健康中心</h3>
+                    <p>集中检查网络识别、后台运行、通知与应用更新所需权限</p>
+                  </div>
+                  <div class="setting-group-actions">
+                    <button class="btn btn-secondary btn-sm permission-health-toggle" id="btn-toggle-permissions" type="button" aria-expanded="true" aria-controls="permission-health-list">
+                      <i data-lucide="chevron-up" aria-hidden="true"></i>
+                      <span id="permission-health-toggle-label">收起详情</span>
+                    </button>
+                    <button class="btn btn-secondary btn-sm" id="btn-refresh-permissions" type="button">重新检查</button>
+                  </div>
+                </div>
+                <div id="permission-health-summary" class="permission-health-summary">正在检查系统权限…</div>
+                <div id="permission-health-list" class="permission-health-list" aria-hidden="false"></div>
               </div>
-              <p class="settings-about-note">应用连接校园网认证、计费、校园服务、GitHub 更新及你配置的路由器；敏感字段不会写入运行日志。</p>
-            </div>
+            </section>
+
+            <section class="settings-subpage" data-settings-subpage="notifications-usage" hidden>
+              <div class="settings-group glass-card android-only android-notification-settings">
+                <h3>Android 通知</h3>
+                <div class="setting-item setting-item-notification-mode">
+                  <div class="setting-info">
+                    <h4>通知方式</h4>
+                    <p id="android-notification-mode-description">常驻通知同时显示后台检测与自动登录状态</p>
+                  </div>
+                  <div class="custom-select" id="setting-android-notification-mode" aria-label="Android 通知方式">
+                    <div class="custom-select-trigger" tabindex="0">
+                      <span>保活与信息共存</span>
+                      <i data-lucide="chevron-down"></i>
+                    </div>
+                    <div class="custom-select-options">
+                      <div class="custom-option selected" data-value="combined">保活与信息共存</div>
+                      <div class="custom-option" data-value="separate">保活与信息分离（静态常驻）</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="notification-category-note">以下类别可分别关闭；分离模式下，启用的类别会作为可清除通知单独发送。</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>网络状态</h4>
+                    <p>联网、离线、移动数据及校园网待认证状态</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-android-notify-network-status" checked>
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>自动登录结果</h4>
+                    <p>登录成功、失败、安全阻止及没有可用账号</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-android-notify-login-results" checked>
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>余额与流量提醒</h4>
+                    <p>余额或剩余套餐流量低于提醒线</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-android-notify-usage-alerts" checked>
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>后台异常</h4>
+                    <p>无界面检测核心或后台服务运行失败</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-android-notify-background-errors" checked>
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="settings-group glass-card">
+                <h3>流量与余额提醒</h3>
+                <div class="setting-item usage-alert-master-setting">
+                  <div class="setting-info">
+                    <h4>启用用量提醒</h4>
+                    <p>余额、流量不足时提醒；月末核对下月套餐费用</p>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="setting-usage-alerts" checked>
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info"><h4>余额提醒线</h4><p>单位：元</p></div>
+                  <input type="number" id="setting-balance-threshold" class="input-inline" min="0" step="1" value="10">
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info"><h4>流量提醒线</h4><p>单位：GB</p></div>
+                  <input type="number" id="setting-flow-threshold" class="input-inline" min="0" step="1" value="5">
+                </div>
+              </div>
+
+              <div class="settings-group glass-card">
+                <h3>设备流量统计</h3>
+                <div class="setting-item"><div class="setting-info"><h4>优先使用余量充足的账号</h4><p>依据已开启统计取得的新鲜计费数据排序，独立账号顺序优先。</p></div><label class="switch"><input id="setting-prefer-flow" type="checkbox"><span class="slider round"></span></label></div>
+                <div class="setting-item"><div class="setting-info"><h4>设备流量统计</h4><p>开启后每分钟记录计费流量并绘制曲线。Android 在前台更新。</p></div><label class="switch"><input id="setting-traffic-monitor" type="checkbox"><span class="slider round"></span></label></div>
+                <div class="setting-item"><div class="setting-info"><h4>流量统计范围</h4></div><div class="traffic-scope"><label><input type="radio" name="setting-traffic-scope" value="local" checked>仅本机设备</label><label><input type="radio" name="setting-traffic-scope" value="all">全部在线设备</label></div></div>
+                <div class="traffic-retention-controls">
+                  <label>分钟明细保留（小时）<input type="number" min="1" max="8760" step="1" data-usage-retention="minuteHours" aria-label="分钟明细保留（小时）"></label>
+                  <label>小时汇总保留（天）<input type="number" min="1" max="3660" step="1" data-usage-retention="hourDays" aria-label="小时汇总保留（天）"></label>
+                  <label>每日汇总保留（天）<input type="number" min="1" max="36600" step="1" data-usage-retention="dayDays" aria-label="每日汇总保留（天）"></label>
+                  <label>统计存储上限（MB）<input type="number" min="1" max="128" step="1" data-usage-retention="storageMb" aria-label="统计存储上限（MB）"></label>
+                </div>
+                <p id="usage-storage-estimate" class="traffic-note"></p>
+              </div>
+            </section>
+
+            <section class="settings-subpage" data-settings-subpage="router" hidden>
+              <section id="router-control" class="settings-group glass-card router-control">
+                <div class="setting-group-heading">
+                  <div>
+                    <h3>路由协作</h3>
+                    <p id="router-settings-connection">自动查找当前局域网中的 BJUT 路由器。</p>
+                    <p id="router-message" role="status" aria-live="polite"></p>
+                  </div>
+                  <div class="setting-group-actions">
+                    <button id="btn-router-settings-discover" class="btn btn-secondary btn-sm" type="button">重新查找</button>
+                    <button id="btn-router-manual-connect" class="btn btn-secondary btn-sm" type="button">手动连接</button>
+                    <button id="btn-router-forget-password" class="btn btn-secondary btn-sm" type="button" hidden>忘记路由密码</button>
+                  </div>
+                </div>
+                <form id="router-settings-form" class="router-settings-form" hidden>
+                  <div id="router-service-common" class="router-settings-list"></div>
+                  <details id="router-service-advanced" class="router-settings-advanced">
+                    <summary><span>更多设置与上游</span><i class="disclosure-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
+                    <div id="router-service-more" class="router-settings-list"></div>
+                    <h4 class="router-settings-subheading">上游接口</h4>
+                    <div id="router-configured-uplinks"></div>
+                  </details>
+                  <div class="router-settings-footer">
+                    <p id="router-settings-message" role="status"></p>
+                    <button id="btn-router-settings-save" class="btn btn-primary btn-sm" type="submit">保存设置</button>
+                  </div>
+                </form>
+              </section>
+            </section>
+
+            <section class="settings-subpage" data-settings-subpage="advanced" hidden>
+              <div class="settings-group glass-card">
+                <h3>数据与维护</h3>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>配置导入/导出</h4>
+                    <p>通过剪贴板或二维码备份、迁移设置和账号。</p>
+                  </div>
+                  <div class="config-transfer-actions">
+                    <button class="btn btn-secondary btn-sm" id="btn-import-config" type="button">导入</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-export-config" type="button">导出</button>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>更新通道</h4>
+                    <p>选择您想接收的更新版本类型</p>
+                  </div>
+                  <div class="custom-select" id="setting-update-channel">
+                    <div class="custom-select-trigger">
+                      <span>正式版 (Release)</span>
+                      <i data-lucide="chevron-down"></i>
+                    </div>
+                    <div class="custom-select-options">
+                      <div class="custom-option selected" data-value="release">正式版 (Release)</div>
+                      <div class="custom-option" data-value="prerelease">预览版 (Pre-release)</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>日志详细等级</h4>
+                    <p>控制“运行日志”页面记录的日志级别</p>
+                  </div>
+                  <div class="custom-select" id="setting-log-level">
+                    <div class="custom-select-trigger">
+                      <span>INFO (信息 - 默认)</span>
+                      <i data-lucide="chevron-down"></i>
+                    </div>
+                    <div class="custom-select-options">
+                      <div class="custom-option" data-value="debug">DEBUG (调试)</div>
+                      <div class="custom-option selected" data-value="info">INFO (信息 - 默认)</div>
+                      <div class="custom-option" data-value="error">ERROR (错误)</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="setting-item"><div class="setting-info"><h4>首次使用引导</h4><p>查看账号、网络与后台运行的设置步骤。</p></div><button class="btn btn-secondary btn-sm" id="btn-onboarding" type="button">重新查看</button></div>
+                <div class="setting-item" id="setting-quit-item">
+                  <div class="setting-info">
+                    <h4>退出应用</h4>
+                    <p>彻底关闭应用并停止后台网络检测与保活服务</p>
+                  </div>
+                  <button class="btn btn-danger btn-sm" id="btn-quit-app" type="button">退出</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-subpage" data-settings-subpage="about" hidden>
+              <div id="settings-about" class="settings-group glass-card settings-about-card">
+                <div class="settings-about-header">
+                  <div class="settings-about-logo" aria-hidden="true"></div>
+                  <div>
+                    <p class="settings-about-eyebrow">关于</p>
+                    <h3>BJUT Auto Login</h3>
+                    <p>面向北京工业大学校园网的本地自动登录、网络诊断与计费服务助手。</p>
+                  </div>
+                </div>
+                <div class="settings-about-meta">
+                  <div>
+                    <span>当前版本</span><strong id="app-version">v0.1.6</strong>
+                    <small>编译时间 <time id="app-build-time">—</time></small>
+                  </div>
+                  <div><span>数据原则</span><strong>账号凭据仅保存在本机安全存储</strong></div>
+                  <div><span>项目性质</span><strong>开源第三方工具，非学校官方应用</strong></div>
+                </div>
+                <div class="settings-about-actions">
+                  <button class="btn btn-primary btn-sm" id="btn-check-update" type="button"><i data-lucide="refresh-cw"></i><span>检查更新</span></button>
+                  <button class="btn btn-secondary btn-sm" id="btn-redownload-package" type="button"><i data-lucide="download"></i><span>重新下载完整包</span></button>
+                  <button class="btn btn-secondary btn-sm" id="btn-open-project-home" type="button"><i data-lucide="external-link"></i> 开源仓库</button>
+                  <button class="btn btn-secondary btn-sm" id="btn-open-project-license" type="button"><i data-lucide="file-text"></i> 开源许可</button>
+                </div>
+                <p class="settings-about-note">应用连接校园网认证、计费、校园服务、GitHub 更新及你配置的路由器；敏感字段不会写入运行日志。</p>
+              </div>
+            </section>
           </div>
         </section>
       </main>
+    </div>
+
+    <!-- Add Account Modal -->
+    <div id="add-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card">
+        <h3>添加新账号</h3>
+        <form id="add-account-form">
+          <div class="form-group">
+            <label for="acc-username">用户名 (学号/工号)</label>
+            <input type="text" id="acc-username" required placeholder="请输入用户名">
+          </div>
+          <div class="form-group">
+            <label for="acc-password">密码</label>
+            <div class="password-input-wrap">
+              <input type="password" id="acc-password" data-sensitive-password required placeholder="请输入密码">
+              <button type="button" class="btn-icon toggle-password hide-password" data-target="acc-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><i data-lucide="eye"></i></button>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="btn-cancel-add">取消</button>
+            <button type="submit" class="btn btn-primary">添加账号</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Edit Account Modal -->
+    <div id="edit-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card">
+        <h3>修改账号</h3>
+        <form id="edit-account-form">
+          <input type="hidden" id="edit-acc-index">
+          <div class="form-group">
+            <label for="edit-acc-username">用户名 (学号/工号)</label>
+            <input type="text" id="edit-acc-username" required>
+          </div>
+          <div class="form-group">
+            <label for="edit-acc-password">密码</label>
+            <div class="password-input-wrap">
+              <input type="password" id="edit-acc-password" data-sensitive-password required>
+              <button type="button" class="btn-icon toggle-password hide-password" data-target="edit-acc-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><i data-lucide="eye"></i></button>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="btn-cancel-edit">取消</button>
+            <button type="submit" class="btn btn-primary">保存修改</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="delete-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card">
+        <h3>确认删除</h3>
+        <p id="delete-modal-text" class="modal-lead">确定要删除该账号吗？</p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-cancel-delete">取消</button>
+          <button type="button" class="btn btn-danger btn-danger-solid" id="btn-confirm-delete">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Security Confirmation Modal -->
+    <div id="security-modal" class="modal-overlay hidden">
+      <div class="modal-content glass-card modal-danger-surface">
+        <h3 class="modal-danger-heading"><i data-lucide="shield-alert"></i> 安全警告</h3>
+        <p class="modal-lead">检测到当前网络环境存在风险，疑似伪造的校园网。</p>
+        <div class="security-info-box">
+          <div>SSID: <span id="sec-ssid"></span></div>
+          <div>BSSID: <span id="sec-bssid"></span></div>
+          <div>IP: <span id="sec-ip"></span></div>
+        </div>
+        <div class="modal-actions security-actions">
+          <button type="button" class="btn btn-primary" id="btn-sec-cancel">取消登录</button>
+          <button type="button" class="btn btn-secondary" id="btn-sec-cancel-black">取消并将该WiFi加入黑名单</button>
+          <button type="button" class="btn btn-secondary btn-warning-outline" id="btn-sec-trust-once">信任一次 (继续登录)</button>
+          <button type="button" class="btn btn-secondary btn-warning-outline" id="btn-sec-trust-white">信任并将该WiFi加入白名单</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="switch-account-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="switch-account-modal-title">
+      <div class="modal-content glass-card switch-account-modal-content">
+        <h3 id="switch-account-modal-title">选择要切换到的账号</h3>
+        <p>请选择已启用且已保存密码的账号。此入口不依赖“更多控制台选项”。</p>
+        <div id="switch-account-options" class="switch-account-options"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-switch-account-cancel">取消</button>
+        </div>
+      </div>
     </div>
 
     <div id="router-connect-modal" class="modal-overlay hidden">
       <div class="modal-content glass-card router-connect-modal-content" role="dialog" aria-modal="true" aria-labelledby="router-connect-title">
         <h3 id="router-connect-title">连接路由器</h3>
         <p>使用路由器的管理账号连接。</p>
-        <details id="router-connection-settings" open><summary>连接设置</summary>
+        <details id="router-connection-settings" open><summary><span>连接设置</span><i class="disclosure-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
           <form id="router-connect-form" class="router-connect-form">
             <label>路由器地址<input id="router-address" type="url" autocomplete="url" placeholder="https://192.168.1.1" required></label>
             <div class="router-controls-row"><label>管理账号<input id="router-username" autocomplete="username" required></label><label>管理密码<input id="router-password" type="password" autocomplete="off" required></label></div>
             <label class="router-setting-switch"><input id="router-remember-password" type="checkbox">记住路由密码</label><p class="router-http-note">仅在记住的网络中自动重连。</p>
             <label class="router-setting-switch"><input id="router-allow-http" type="checkbox">允许局域网 HTTP</label>
             <p class="router-http-note">HTTP 仅用于可信局域网，密码将明文传输。</p>
-            <details class="router-certificate-details"><summary>路由器证书（可选）</summary><p>首次连接可确认指纹，也可粘贴 PEM 证书。</p><textarea id="router-certificate" rows="4" spellcheck="false" aria-label="路由器 PEM 证书"></textarea></details>
+            <details class="router-certificate-details"><summary><span>路由器证书（可选）</span><i class="disclosure-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary><p>首次连接可确认指纹，也可粘贴 PEM 证书。</p><textarea id="router-certificate" rows="4" spellcheck="false" aria-label="路由器 PEM 证书"></textarea></details>
             <p id="router-connect-message" role="status" aria-live="polite"></p>
             <div class="modal-actions"><button id="btn-router-connect-cancel" class="btn btn-secondary" type="button">取消</button><button id="btn-router-connect" class="btn btn-primary" type="submit">连接</button></div>
           </form>
@@ -1496,22 +1635,22 @@
     </div>
 
     <div id="tos-modal" class="modal-overlay hidden">
-      <div class="modal-content glass-card" style="max-width: 500px; text-align: left;">
-        <h3 style="display: flex; align-items: center; gap: 0.5rem;"><i data-lucide="shield-check" style="color: var(--text-primary);"></i> 用户协议与隐私政策</h3>
-        <div style="max-height: 250px; overflow-y: auto; margin-bottom: 1.5rem; background: rgba(0,0,0,0.15); border-radius: 8px; padding: 1rem; font-size: 0.85rem; line-height: 1.5; color: var(--text-muted);">
+      <div class="modal-content glass-card tos-modal-content">
+        <h3 class="tos-modal-heading"><i data-lucide="shield-check"></i> 用户协议与隐私政策</h3>
+        <div class="tos-modal-body">
           <p>欢迎使用 BJUT Auto Login（北京工业大学校园网自动登录助手）。在您使用本应用前，请仔细阅读并同意以下条款：</p>
-          <p style="margin-top: 0.5rem; font-weight: bold; color: var(--text-primary);">1. 权限申请与数据使用说明：</p>
+          <p class="tos-section-title">1. 权限申请与数据使用说明：</p>
           <p>• <strong>网络与 Wi-Fi 信息 (SSID/BSSID)：</strong>应用需要读取当前连接的 Wi-Fi 名称以识别您是否连接到了北京工业大学的校园网，并触发自动登录逻辑。</p>
           <p>• <strong>定位权限：</strong>根据操作系统安全策略（Android 与 macOS），前台获取当前连接的 Wi-Fi SSID 和 BSSID 可能需要定位权限；macOS 后台检测不会读取 Wi-Fi 标识。我们声明<strong>绝对不会</strong>收集、上传或跟踪您的任何实际地理位置信息。</p>
           <p>• <strong>本地存储：</strong>您添加的校园网账号和密码将仅保存在设备的安全凭据存储中，<strong>绝对不会</strong>发送到任何第三方服务器。</p>
-          <p style="margin-top: 0.5rem; font-weight: bold; color: var(--text-primary);">2. 后台自动登录与电池忽略权限：</p>
+          <p class="tos-section-title">2. 后台自动登录与电池忽略权限：</p>
           <p>• 为实现断网自动重连，Android 端会使用前台常驻服务。您可选择授予后台定位权限以及“忽略电池优化”权限以保持连接稳定性。</p>
-          <p style="margin-top: 0.5rem; font-weight: bold; color: var(--text-primary);">3. 免责声明：</p>
+          <p class="tos-section-title">3. 免责声明：</p>
           <p>• 本软件为开源第三方助手工具，不对因使用本软件导致的任何服务中断、账户问题或其它任何损失承担责任。请严格遵守国家法律法规及北京工业大学校园网服务条款。</p>
         </div>
-        <div class="modal-actions" style="gap: 1rem;">
-          <button type="button" class="btn btn-secondary" id="btn-tos-disagree" style="flex: 1;">不同意并退出</button>
-          <button type="button" class="btn btn-primary" id="btn-tos-agree" style="flex: 1;">同意并继续</button>
+        <div class="modal-actions tos-modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-tos-disagree">不同意并退出</button>
+          <button type="button" class="btn btn-primary" id="btn-tos-agree">同意并继续</button>
         </div>
       </div>
     </div>
@@ -1520,7 +1659,7 @@
     <div id="alert-modal" class="modal-overlay hidden">
       <div class="modal-content glass-card">
         <h3 id="alert-modal-title">提示</h3>
-        <p id="alert-modal-text" style="margin-bottom: 1.5rem; color: var(--text-muted); font-size: 0.95rem; white-space: pre-wrap;"></p>
+        <p id="alert-modal-text" class="modal-lead modal-pre"></p>
         <div class="modal-actions">
           <button type="button" class="btn btn-primary" id="btn-alert-ok">确定</button>
         </div>
@@ -1531,7 +1670,7 @@
     <div id="confirm-modal" class="modal-overlay hidden">
       <div class="modal-content glass-card">
         <h3 id="confirm-modal-title">确认</h3>
-        <p id="confirm-modal-text" style="margin-bottom: 1.5rem; color: var(--text-muted); font-size: 0.95rem; white-space: pre-wrap; overflow-wrap: anywhere;"></p>
+        <p id="confirm-modal-text" class="modal-lead modal-pre modal-wrap"></p>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" id="btn-confirm-cancel">取消</button>
           <button type="button" class="btn btn-primary" id="btn-confirm-ok">确定</button>

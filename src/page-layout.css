@@ -1,5 +1,5 @@
 /* Keep the original full-page scroll area and room for card shadows. */
-#main-content { overflow-y:scroll; scrollbar-gutter:auto; }
+#main-content { position:relative; overflow-y:scroll; overflow-x:clip; scrollbar-gutter:auto; }
 .modal-content { scrollbar-gutter:auto; }
 .logs-container, .router-table-scroll, .billing-records-table-wrap { scrollbar-gutter:stable; }
 /* Half the actual gutter offsets content to the physical scrollport center.
@@ -11,9 +11,91 @@
    window background; menu gutters leave unpainted bands beside each option. */
 #main-content { isolation: isolate; }
 @media(max-width:768px) {
-  :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap) { scrollbar-width: thin; }
-  :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap)::-webkit-scrollbar { width:3px!important; height:3px!important; }
-  :root[data-theme] :is(.logs-container,#router-logs-content)::-webkit-scrollbar { width:8px!important; height:8px!important; }
+  :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap)::-webkit-scrollbar { width:3px!important; height:3px!important; background:transparent!important; }
+  :root[data-theme] :is(.logs-container,#router-logs-content)::-webkit-scrollbar { width:8px!important; height:8px!important; background:transparent!important; }
+  :root[data-theme] body.is-android #main-content > .page:not(.page-slide-from-right):not(.page-slide-from-left):not(.page-slide-leave-left):not(.page-slide-leave-right) { animation: none; }
+
+  :root[data-theme] body.is-android #main-content > .page:not(#billing-center).active.page-slide-from-right,
+  :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-right > .page-header,
+  :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-right .billing-workbench-content {
+    animation: pageSlideFromRight 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform;
+  }
+
+  :root[data-theme] body.is-android #main-content > .page:not(#billing-center).active.page-slide-from-left,
+  :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-left > .page-header,
+  :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-left .billing-workbench-content {
+    animation: pageSlideFromLeft 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: transform;
+  }
+
+  :root[data-theme] body.is-android #main-content > .page.page-slide-leave-left,
+  :root[data-theme] body.is-android #main-content > .page.page-slide-leave-right {
+    display: block;
+    position: absolute;
+    top: var(--leave-top, 1.5rem);
+    left: var(--leave-left, 0.75rem);
+    width: var(--leave-width, calc(100% - 1.5rem));
+    margin: 0;
+    inset-inline-start: auto;
+    pointer-events: none;
+    z-index: 1;
+    will-change: transform;
+    animation-duration: 300ms;
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+    animation-fill-mode: both;
+  }
+
+  :root[data-theme] body.is-android #main-content > .page.page-slide-leave-left {
+    animation-name: pageSlideOutLeft;
+  }
+
+  :root[data-theme] body.is-android #main-content > .page.page-slide-leave-right {
+    animation-name: pageSlideOutRight;
+  }
+
+  :root[data-theme] body.is-android #main-content > .page:is(.page-slide-leave-left, .page-slide-leave-right) > .page-header {
+    position: relative;
+    transform: translateY(var(--leave-header-offset, 0px));
+    z-index: 10;
+  }
+
+  :root[data-theme] body.is-android #main-content > #billing-center:is(.page-slide-leave-left, .page-slide-leave-right) .billing-mobile-nav {
+    display: none;
+  }
+}
+@keyframes pageSlideFromRight {
+  from { transform: translate3d(calc(100% + 16px), 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+@keyframes pageSlideFromLeft {
+  from { transform: translate3d(calc(-100% - 16px), 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+@keyframes pageSlideOutLeft {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(calc(-100% - 16px), 0, 0); }
+}
+@keyframes pageSlideOutRight {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(calc(100% + 16px), 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme] body.is-android #main-content > .page.active.page-slide-from-right,
+  :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-right > .page-header,
+  :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-right .billing-workbench-content,
+  :root[data-theme] body.is-android #main-content > .page.active.page-slide-from-left,
+  :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-left > .page-header,
+  :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-left .billing-workbench-content,
+  :root[data-theme] body.is-android #main-content > .page.page-slide-leave-left,
+  :root[data-theme] body.is-android #main-content > .page.page-slide-leave-right {
+    animation: none !important;
+  }
+}
+@supports not selector(::-webkit-scrollbar) {
+  @media(max-width:768px) {
+    :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap) { scrollbar-width: thin; }
+  }
 }
 :root[data-theme] #main-content > .page > .page-header {
   flex: 0 0 auto;
@@ -22,12 +104,18 @@
   margin-bottom: .9rem;
   position: sticky;
   top: 0;
-  /* Raised settings cards contain menus, but must stay below the page header.
-     Main's isolated stack also keeps this below dialogs outside the page. */
+  /* Sticky already creates a stacking context above page cards; avoid
+     isolation: isolate here so ::after backdrop-filter samples cleanly. */
   z-index: 3000;
-  isolation: isolate;
   background: transparent;
 }
+:root[data-theme] #main-content > #settings > .page-header {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .25rem;
+}
+/* Unscrolled opaque header veil fades solely via opacity so backdrop-filter
+   and linear-gradient never interpolate mid-transition at scrollTop = 0. */
 :root[data-theme] #main-content > .page > .page-header::before {
   content: '';
   position: absolute;
@@ -38,6 +126,52 @@
   top: calc(-1 * var(--header-top, 2rem));
   bottom: -.6rem;
   background: var(--theme-body-bg, var(--bg-color));
+  opacity: 1;
+  transition: opacity 150ms ease;
+}
+:root[data-theme] #main-content.is-scrolled > .page > .page-header::before {
+  opacity: 0;
+}
+:root[data-theme] #main-content > .page > .page-header::after {
+  content: '';
+  position: absolute;
+  z-index: -2;
+  pointer-events: none;
+  left: calc(-1 * var(--header-left, 0px));
+  right: calc(-1 * var(--header-right, 0px));
+  top: calc(-1 * var(--header-top, 2rem));
+  bottom: -1.6rem;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--theme-body-bg, var(--bg-color)) 97%, transparent) 0%,
+    color-mix(in srgb, var(--theme-body-bg, var(--bg-color)) 88%, transparent) 58%,
+    color-mix(in srgb, var(--theme-body-bg, var(--bg-color)) 45%, transparent) 84%,
+    transparent 100%
+  );
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 68%, rgba(0, 0, 0, 0.5) 86%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0%, #000 68%, rgba(0, 0, 0, 0.5) 86%, transparent 100%);
+  visibility: hidden;
+  transition: visibility 0s linear 160ms;
+}
+:root[data-theme] #main-content.is-scrolled > .page > .page-header::after {
+  visibility: visible;
+  transition-delay: 0s;
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-theme] #main-content > .page > .page-header::after {
+    display: none;
+  }
+  :root[data-theme] #main-content.is-scrolled > .page > .page-header::before {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme] #main-content > .page > .page-header::before,
+  :root[data-theme] #main-content > .page > .page-header::after {
+    transition: none;
+  }
 }
 :root[data-theme] #main-content > .page > .page-header h1 {
   margin: 0;
@@ -45,14 +179,21 @@
   line-height: 2.3rem;
   font-weight: 700;
 }
-:root[data-theme] #btn-open-billing {
-  height: 2.3rem;
+:root[data-theme] #btn-open-billing,
+:root[data-theme] .diagnostics-actions .btn,
+:root[data-theme] .logs-actions .btn {
+  min-height: 2.3rem;
+  height: auto;
   margin: 0;
-  padding: .3rem .7rem;
+  padding: .42rem .78rem;
   align-self: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: .4rem;
+}
+:root[data-theme] body.is-android :is(#btn-open-billing, .diagnostics-actions .btn, .logs-actions .btn) {
+  min-height: 44px;
 }
 /* Keep account, access mode and refresh on one row at every breakpoint. */
 :root[data-theme] .billing-header-tools {
@@ -82,7 +223,6 @@
   :root[data-theme] .billing-header-tools :is(.custom-select-trigger,.btn) { padding-inline:.5rem; font-size:.8rem; }
 }
 #main-content::-webkit-scrollbar-track,
-:root[data-theme] .custom-select-options::-webkit-scrollbar-track,
 :root[data-theme] .logs-container::-webkit-scrollbar-track { margin-block: 10px; }
 :root[data-theme] #logs.page.active { overflow: visible; }
 :root[data-theme] #logs .log-filters { flex: 0 0 auto; }
@@ -105,7 +245,7 @@
 }
 @media(max-width:768px) {
   :root[data-theme] #main-content > .page > .page-header h1 { font-size: 1.6rem; }
-  :root[data-theme] #main-content > #logs > .page-header { align-items:stretch; }
+  :root[data-theme] #main-content > :is(#diagnostics, #logs, #accounts, #billing-center) > .page-header { align-items:stretch; }
   :root[data-theme] #logs .logs-actions { width: 100%; gap: .4rem; }
   :root[data-theme] #logs .logs-actions .btn { flex: 1 1 calc(50% - .4rem); justify-content: center; margin: 0; }
   :root[data-theme] #main-content > .page > .page-header { gap: .5rem; }
@@ -119,7 +259,7 @@
 .config-transfer-dialog .transfer-note { font-size:.8rem; color:var(--text-muted); }
 .config-transfer-dialog .form-group { margin-top:1rem; }
 .config-transfer-dialog .modal-actions { flex-wrap:wrap; }
-.image-captcha-overlay { z-index:1200; }
+.image-captcha-overlay { z-index:4200; }
 .image-captcha-picture { display:flex; align-items:center; flex-wrap:wrap; gap:.75rem; margin-top:1rem; }
 .image-captcha-picture img { display:block; max-width:100%; max-height:140px; border-radius:6px; }
 .image-captcha-overlay input { width:100%; margin-top:.5rem; }

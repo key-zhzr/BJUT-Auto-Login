@@ -88,15 +88,16 @@ function setBillingAction(
 
 /** Apply user-editable page copy before controls copy their initial labels. */
 export function applyConfiguredUiText(root: ParentNode = document): void {
-  setText(root, '#settings > .page-header h1', SETTINGS_COPY.pageTitle);
-  setText(root, '#settings > .page-header p', SETTINGS_COPY.pageDescription);
+  setText(root, '#settings-page-title', SETTINGS_COPY.pageTitle);
 
   setSettingsGroupTitle(root, 'setting-theme', SETTINGS_COPY.groups.appearance);
+  setSettingsGroupTitle(root, 'setting-more-options', SETTINGS_COPY.groups.interface);
   setSettingsGroupTitle(root, 'setting-auto-login', SETTINGS_COPY.groups.automation);
   setSettingsGroupTitle(root, 'setting-vpn-compatibility', SETTINGS_COPY.groups.networkSecurity);
   setSettingsGroupTitle(root, 'setting-android-notification-mode', SETTINGS_COPY.groups.androidNotifications);
   setSettingsGroupTitle(root, 'setting-usage-alerts', SETTINGS_COPY.groups.usage);
-  setSettingsGroupTitle(root, 'setting-more-options', SETTINGS_COPY.groups.advanced);
+  setSettingsGroupTitle(root, 'setting-traffic-monitor', SETTINGS_COPY.groups.trafficStats);
+  setSettingsGroupTitle(root, 'setting-log-level', SETTINGS_COPY.groups.advanced);
   setText(root, '#permission-health-group .setting-group-heading h3', SETTINGS_COPY.groups.permissions.title);
   setText(root, '#permission-health-group .setting-group-heading p', SETTINGS_COPY.groups.permissions.description);
   const profileGroup = root.querySelector<HTMLElement>('#btn-add-network-profile')?.closest<HTMLElement>('.settings-group');
@@ -112,7 +113,6 @@ export function applyConfiguredUiText(root: ParentNode = document): void {
   setText(root, '#settings-about .settings-about-note', SETTINGS_COPY.about.note);
 
   setText(root, '#billing-center .billing-center-heading h1', BILLING_COPY.pageTitle);
-  setText(root, '#billing-center-subtitle', BILLING_COPY.pageDescription);
   setText(root, '#billing-center .billing-account-picker > span', BILLING_COPY.accountPicker);
   Object.entries(BILLING_COPY.nav).forEach(([section, label]) => {
     root.querySelectorAll<HTMLElement>(`[data-billing-section-target="${section}"] span`).forEach(element => {

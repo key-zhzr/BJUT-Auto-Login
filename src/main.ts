@@ -19,6 +19,7 @@ import { chooseConfigTransfer } from './config-transfer-dialog';
 import { setupScrollLayout } from './scroll-layout';
 import { setupPageHeaders } from './page-headers';
 import { setupDisclosureMotion, setVisible, animateResize } from './layout-motion';
+import { setupSwitchDrag } from './switch-drag';
 import { loginBillingWebVpn } from './billing-webvpn';
 import { setupImageCaptchas } from './image-captcha';
 import { NetworkProgressView, type NetworkCheckProgress } from './network-progress-view';
@@ -31,10 +32,10 @@ import { LoginProgressView } from './login-progress-view';
 import { renderNetworkEvents } from './network-events-view';
 import { setupKeyboardNavigation } from './keyboard-navigation';
 import {
-  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
-  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
-  Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minimize2, Minus, MonitorSmartphone, Pause, Play, Plus, Power, Smartphone,
-  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, UserSearch, Users, Wifi,
+  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Bell, Check, CheckCircle, ChevronDown, ChevronUp,
+  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
+  Fingerprint, History, Home, Info, LayoutDashboard, Loader, LogIn, MessageSquareWarning, Minimize2, Minus, MonitorSmartphone, Palette, Pause, Play, Plus, Power, Route, Router, Smartphone,
+  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Trash2, User, UserSearch, Users, Wifi,
   WalletCards, WifiOff, X,
 } from 'lucide';
 import Sortable from 'sortablejs';
@@ -57,6 +58,7 @@ import {
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
 import { requestNetworkTrustApproval, showNetworkTrustListModal } from './network-trust';
 import { applyConfiguredUiText, UI_TEXT } from './ui-text';
+import { SETTINGS_COPY } from './ui-copy/settings';
 import { formatBuildTimestamp, formatBytes, isBuildTimestamp, renderReleaseNotes, selectUpdateAsset } from './update-utils';
 import { getReleaseUpdate, loadGitHubReleases, releaseFromOfficialManifest } from './update-source';
 import {
@@ -84,10 +86,10 @@ const networkProgressView = new NetworkProgressView();
 const rechargeHours = new RechargeHours(() => invoke('get_network_time'));
 
 const icons = {
-  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Check, CheckCircle, ChevronDown, ChevronUp,
-  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
-  Fingerprint, History, Home, LayoutDashboard, Loader, LogIn, Minimize2, Minus, MonitorSmartphone, Pause, Play, Plus, Power, Smartphone,
-  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Square, Trash2, User, UserSearch, Users, Wifi,
+  Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Bell, Check, CheckCircle, ChevronDown, ChevronUp,
+  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
+  Fingerprint, History, Home, Info, LayoutDashboard, Loader, LogIn, MessageSquareWarning, Minimize2, Minus, MonitorSmartphone, Palette, Pause, Play, Plus, Power, Route, Router, Smartphone,
+  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Trash2, User, UserSearch, Users, Wifi,
   WalletCards, WifiOff, X,
 };
 
@@ -750,6 +752,7 @@ function saveUsageAlertSetting(enabled: boolean) {
   settingUsageAlerts.checked = enabled;
   settingAndroidNotifyUsageAlerts.checked = enabled;
   saveAndroidNotificationSetting('bjut_usage_alerts', String(enabled));
+  syncSettingsOverviewSummaries();
 }
 
 function configBackupUiPreferences(): Record<string, string | null> {
@@ -1001,6 +1004,7 @@ async function loadConfigFromRust(): Promise<boolean> {
     settingAndroidNotifyBackgroundErrors.checked = config.android_notify_background_errors !== false;
     renderAndroidNotificationModeDescription();
     renderNetworkProfiles();
+    syncSettingsOverviewSummaries();
     
     const settingCheckIntervalBg = document.getElementById('setting-check-interval-bg') as HTMLInputElement;
     if (settingCheckIntervalBg) {
@@ -1544,7 +1548,7 @@ const btnRefreshBillingCenter = document.getElementById('btn-refresh-billing-cen
 const billingRefreshLabel = document.getElementById('billing-refresh-label')!;
 const btnToggleBillingMauth = document.getElementById('btn-toggle-billing-mauth') as HTMLButtonElement;
 const billingCenterMessage = document.getElementById('billing-center-message')!;
-const billingCenterSubtitle = document.getElementById('billing-center-subtitle')!;
+const billingCenterSubtitle = document.getElementById('billing-center-subtitle');
 const billingCenterAccount = document.getElementById('billing-center-account')!;
 const billingCenterBalance = document.getElementById('billing-center-balance')!;
 const billingCenterFlow = document.getElementById('billing-center-flow')!;
@@ -2049,6 +2053,7 @@ async function init() {
   settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
   settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
   settingUpdateChannel.value = localStorage.getItem('bjut_update_channel') || 'release';
+  syncSettingsOverviewSummaries();
   if (window.__TAURI__) {
     void invoke<UpdateTarget>('get_update_target')
       .then(target => {
@@ -2059,6 +2064,7 @@ async function init() {
           buildTime.dateTime = new Date(target.currentBuildTimestamp * 1000).toISOString();
           buildTime.textContent = formatBuildTimestamp(target.currentBuildTimestamp);
         }
+        syncSettingsOverviewSummaries();
       })
       .catch(error => console.warn('Failed to query application version:', error));
   }
@@ -2067,6 +2073,7 @@ async function init() {
   setupPageHeaders();
   setupScrollLayout();
   setupDisclosureMotion();
+  setupSwitchDrag();
   onBillingSourceChange(source => applyBillingSource(source));
   setRouterBillingProgressListener((percent,message)=>{
     if(getBillingSource()!=='router' || !billingCenterLoading)return;
@@ -2405,9 +2412,18 @@ async function runDiagnostics() {
     await customAlert('网络诊断仅在桌面或移动应用中可用。');
     return;
   }
+  const setDiagnosticsButtonLabel = (label: string) => {
+    const span = btnRunDiagnostics.querySelector('span');
+    if (span) {
+      span.textContent = label;
+    } else {
+      btnRunDiagnostics.innerHTML = `<i data-lucide="activity"></i><span>${label}</span>`;
+      renderIcons(btnRunDiagnostics);
+    }
+  };
   btnRunDiagnostics.disabled = true;
   btnCopyDiagnostics.disabled = true;
-  btnRunDiagnostics.textContent = '诊断中…';
+  setDiagnosticsButtonLabel('诊断中…');
   diagnosticRunActive = true;
   diagnosticRunId = crypto.randomUUID();
   document.getElementById('diagnostic-steps')!.replaceChildren();
@@ -2437,7 +2453,7 @@ async function runDiagnostics() {
     diagnosticRunActive = false;
     btnRestartLgnAdapter.disabled = adapterRestartActive;
     btnRunDiagnostics.disabled = false;
-    btnRunDiagnostics.textContent = '开始诊断';
+    setDiagnosticsButtonLabel('开始诊断');
   }
 }
 
@@ -2694,9 +2710,11 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
     billingCenterMessage.textContent='';
     void getRouterBillingBridge()?.refreshSummary().catch(error=>{if(generation!==billingViewGeneration || getBillingSource()!=='router')return;billingCenterMessage.textContent=String(error);syncBillingCenterMessageVisibility();});
   }
-  billingCenterSubtitle.textContent = getBillingSource() === 'router' && activeBillingWorkbenchSection === 'recharge'
-    ? '路由器计费不包含充值'
-    : billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
+  if (billingCenterSubtitle) {
+    billingCenterSubtitle.textContent = getBillingSource() === 'router' && activeBillingWorkbenchSection === 'recharge'
+      ? '路由器计费不包含充值'
+      : billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
+  }
   if (activeBillingWorkbenchSection === 'recharge' && rechargePayerFollowsBilling) {
     const user = selectedBillingAccountUser();
     const account = availableBillingAccounts().some(account => account.user === user) ? user : defaultBillingAccountUser();
@@ -2736,19 +2754,236 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
   }
 }
 
+const SETTINGS_SUBPAGE_META: Record<string, { title: string; description: string }> = {
+  appearance: {
+    title: '外观与界面',
+    description: '界面主题、明暗模式、强调色与控制台显示',
+  },
+  automation: {
+    title: '自动化与网络检测',
+    description: '后台自动登录、检测频率、认证网卡与网络档案',
+  },
+  security: {
+    title: '网络安全与权限',
+    description: 'VPN 共存兼容、Wi-Fi 黑白名单与系统权限健康',
+  },
+  'notifications-usage': {
+    title: '通知与流量统计',
+    description: '余额与流量提醒、统计保留规则与 Android 通知',
+  },
+  router: {
+    title: '路由协作',
+    description: '局域网 BJUT 路由器连接、上游接口与固件维护',
+  },
+  advanced: {
+    title: '数据、日志与维护',
+    description: '配置导入导出、更新通道、日志级别与首次引导',
+  },
+  about: {
+    title: '关于与更新',
+    description: '版本信息、应用更新、开源仓库与隐私原则',
+  },
+};
+
+const THEME_SUMMARY_LABELS: Record<string, string> = {
+  basic: 'Basic',
+  apple27: 'Apple OS 27',
+  winui: 'WinUI',
+};
+
+const COLOR_MODE_SUMMARY_LABELS: Record<string, string> = {
+  system: '跟随系统',
+  dark: '深色',
+  light: '浅色',
+};
+
+const VPN_SUMMARY_LABELS: Record<string, string> = {
+  minimum: '最低兼容',
+  low: '较低兼容',
+  high: '高兼容',
+  maximum: '明文临时',
+};
+
+let activeSettingsSubpage: string | null = null;
+let settingsMotionTimer: number | null = null;
+
+function setSettingsSummaryText(id: string, text: string) {
+  const node = document.getElementById(id);
+  if (node) node.textContent = text;
+}
+
+function syncSettingsOverviewSummaries() {
+  const theme = normalizeAppTheme(localStorage.getItem('bjut_theme'));
+  const colorMode = normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode'));
+  setSettingsSummaryText(
+    'settings-summary-appearance',
+    `${THEME_SUMMARY_LABELS[theme] || 'Basic'} · ${COLOR_MODE_SUMMARY_LABELS[colorMode] || '跟随系统'}`,
+  );
+  setSettingsSummaryText(
+    'settings-summary-automation',
+    autoLoginEnabled ? '自动登录开启' : '仅手动登录',
+  );
+  const vpn = localStorage.getItem('bjut_vpn_compatibility') || 'high';
+  setSettingsSummaryText('settings-summary-security', VPN_SUMMARY_LABELS[vpn] || '高兼容');
+  const routerForm = document.getElementById('router-settings-form');
+  const routerConnected = routerForm ? !routerForm.hidden : false;
+  setSettingsSummaryText('settings-summary-router', routerConnected ? '已连接' : '未连接');
+  const alertsOn = settingUsageAlerts?.checked ?? (localStorage.getItem('bjut_usage_alerts') !== 'false');
+  const trafficOn = localStorage.getItem('bjut_traffic_monitor_enabled') === 'true';
+  setSettingsSummaryText(
+    'settings-summary-usage',
+    `${alertsOn ? '提醒开启' : '提醒关闭'}${trafficOn ? ' · 统计开启' : ''}`,
+  );
+  const channel = localStorage.getItem('bjut_update_channel') || 'release';
+  setSettingsSummaryText('settings-summary-advanced', channel === 'prerelease' ? '预览版' : '正式版');
+  const versionText = document.getElementById('app-version')?.textContent?.trim() || 'v0.1.6';
+  setSettingsSummaryText('settings-summary-about', versionText);
+}
+
+function openSettingsSubpage(
+  subpage: string | null,
+  options: { animate?: boolean; resetScroll?: boolean } = {},
+) {
+  CustomSelect.closeOpen();
+  const meta = subpage ? SETTINGS_SUBPAGE_META[subpage] : undefined;
+  const nextSubpage = meta ? subpage : null;
+  const changed = activeSettingsSubpage !== nextSubpage;
+  activeSettingsSubpage = nextSubpage;
+
+  const backBtn = document.getElementById('btn-settings-back');
+  const titleEl = document.getElementById('settings-page-title');
+  const homeEl = document.getElementById('settings-home');
+  const subpageEls = document.querySelectorAll<HTMLElement>('.settings-subpage[data-settings-subpage]');
+
+  if (backBtn) backBtn.hidden = !nextSubpage;
+  if (titleEl) titleEl.textContent = meta ? meta.title : SETTINGS_COPY.pageTitle;
+  if (homeEl) homeEl.hidden = Boolean(nextSubpage);
+
+  let visiblePanel: HTMLElement | null = nextSubpage ? null : homeEl;
+  subpageEls.forEach(panel => {
+    const isMatch = panel.dataset.settingsSubpage === nextSubpage;
+    panel.hidden = !isMatch;
+    panel.classList.remove('settings-subpage-enter');
+    if (isMatch) visiblePanel = panel;
+  });
+  homeEl?.classList.remove('settings-home-enter');
+
+  if (!nextSubpage) {
+    syncSettingsOverviewSummaries();
+  } else if (nextSubpage === 'security') {
+    void refreshPermissionHealth();
+  }
+
+  if (settingsMotionTimer !== null) {
+    window.clearTimeout(settingsMotionTimer);
+    settingsMotionTimer = null;
+  }
+
+  const shouldAnimate = options.animate !== false
+    && changed
+    && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (visiblePanel && shouldAnimate) {
+    const enterClass = nextSubpage ? 'settings-subpage-enter' : 'settings-home-enter';
+    void visiblePanel.offsetWidth;
+    visiblePanel.classList.add(enterClass);
+    settingsMotionTimer = window.setTimeout(() => {
+      visiblePanel?.classList.remove(enterClass);
+      settingsMotionTimer = null;
+    }, 240);
+  }
+
+  if (options.resetScroll !== false) {
+    const mainEl = document.getElementById('main-content');
+    mainEl?.scrollTo({ top: 0, behavior: 'auto' });
+    mainEl?.classList.remove('is-scrolled');
+  }
+}
+
+const NAV_PAGE_ORDER: Record<string, number> = {
+  dashboard: 0,
+  'billing-center': 0.5,
+  accounts: 1,
+  diagnostics: 2,
+  logs: 3,
+  settings: 4,
+};
+let cancelPageSlide: (() => void) | null = null;
+let activeLeavingPage: HTMLElement | null = null;
+
+function clearPageSlideState() {
+  cancelPageSlide?.();
+  cancelPageSlide = null;
+  if (activeLeavingPage) {
+    activeLeavingPage.classList.remove('page-slide-leave-left', 'page-slide-leave-right');
+    activeLeavingPage.inert = false;
+    activeLeavingPage.style.removeProperty('--leave-top');
+    activeLeavingPage.style.removeProperty('--leave-left');
+    activeLeavingPage.style.removeProperty('--leave-width');
+    activeLeavingPage.style.removeProperty('--leave-header-offset');
+    activeLeavingPage = null;
+  }
+  pages.forEach(page => {
+    page.classList.remove(
+      'page-slide-from-right',
+      'page-slide-from-left',
+      'page-slide-leave-left',
+      'page-slide-leave-right',
+    );
+  });
+}
+
 function activatePage(target: string, navTarget = target) {
-  const pageChanged = !document.getElementById(target)?.classList.contains('active');
-  const consoleExpanded = target === 'dashboard' || target === 'billing-center';
-  const billingExpanded = target === 'billing-center';
-  document.body.classList.toggle('billing-center-active', IS_ANDROID && billingExpanded);
+  CustomSelect.closeOpen();
+  let resolvedTarget = target;
+  let resolvedNavTarget = navTarget;
+  let requestedSettingsSubpage: string | null | undefined;
+  if (resolvedTarget.startsWith('settings:')) {
+    requestedSettingsSubpage = resolvedTarget.slice('settings:'.length);
+    resolvedTarget = 'settings';
+    resolvedNavTarget = 'settings';
+  }
+  const prevPageEl = document.querySelector<HTMLElement>('.page.active');
+  const prevPageId = prevPageEl?.id || 'dashboard';
+  const nextPageEl = document.getElementById(resolvedTarget);
+  const pageChanged = Boolean(nextPageEl && prevPageEl !== nextPageEl);
+  const mainEl = document.getElementById('main-content');
+  const shouldSlide = Boolean(
+    pageChanged
+    && prevPageEl
+    && nextPageEl
+    && mainEl
+    && IS_ANDROID
+    && window.innerWidth <= 768
+    && !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  );
+
+  let leaveTop = 0;
+  let leaveLeft = 0;
+  let leaveWidth = 0;
+  let leaveHeaderOffset = 0;
+  if (shouldSlide && prevPageEl && mainEl) {
+    const mainRect = mainEl.getBoundingClientRect();
+    const prevRect = prevPageEl.getBoundingClientRect();
+    const prevHeaderRect = prevPageEl.querySelector<HTMLElement>(':scope > .page-header')?.getBoundingClientRect();
+    leaveTop = prevRect.top - mainRect.top;
+    leaveLeft = prevRect.left - mainRect.left;
+    leaveWidth = prevRect.width;
+    leaveHeaderOffset = prevHeaderRect ? Math.max(0, prevHeaderRect.top - prevRect.top) : 0;
+  }
+
+  clearPageSlideState();
+
+  const consoleExpanded = resolvedTarget === 'dashboard' || resolvedTarget === 'billing-center';
+  const billingExpanded = resolvedTarget === 'billing-center';
+  document.body.classList.toggle('billing-center-active', !document.body.classList.contains('is-desktop') && billingExpanded);
   navItems.forEach(item => {
     const itemTarget = item.getAttribute('data-target');
-    const active = itemTarget === navTarget
-      || (itemTarget === 'dashboard' && target === 'billing-center');
+    const active = itemTarget === resolvedNavTarget
+      || (itemTarget === 'dashboard' && resolvedTarget === 'billing-center');
     item.classList.toggle('active', active);
   });
   navPageLinks.forEach(link => {
-    link.classList.toggle('active', link.dataset.navPageTarget === target);
+    link.classList.toggle('active', link.dataset.navPageTarget === resolvedTarget);
   });
   const nav = document.getElementById('nav');
   nav?.classList.toggle('dashboard-expanded', consoleExpanded);
@@ -2761,18 +2996,62 @@ function activatePage(target: string, navTarget = target) {
     ?.setAttribute('aria-hidden', String(!consoleExpanded));
   nav?.querySelector<HTMLElement>('.nav-billing-tree')
     ?.setAttribute('aria-hidden', String(!billingExpanded));
-  pages.forEach(page => page.classList.toggle('active', page.id === target));
-  routerWorkbench?.onPage(target);
-  rechargeHours.setActive(target === 'billing-center' && activeBillingWorkbenchSection === 'recharge');
-  if (pageChanged) {
-    document.getElementById('main-content')?.scrollTo({ top: 0, behavior: 'auto' });
+
+  const prevOrder = NAV_PAGE_ORDER[prevPageId] ?? 0;
+  const nextOrder = NAV_PAGE_ORDER[resolvedTarget] ?? 0;
+  const forward = nextOrder >= prevOrder;
+
+  pages.forEach(page => {
+    page.classList.toggle('active', page.id === resolvedTarget);
+  });
+
+  if (pageChanged && mainEl) {
+    mainEl.scrollTo({ top: 0, behavior: 'auto' });
+    mainEl.classList.remove('is-scrolled');
   }
-  if (target === 'diagnostics') {
+
+  if (shouldSlide && prevPageEl && nextPageEl) {
+    prevPageEl.style.setProperty('--leave-top', `${leaveTop}px`);
+    prevPageEl.style.setProperty('--leave-left', `${leaveLeft}px`);
+    prevPageEl.style.setProperty('--leave-width', `${leaveWidth}px`);
+    prevPageEl.style.setProperty('--leave-header-offset', `${leaveHeaderOffset}px`);
+    prevPageEl.inert = true;
+    prevPageEl.classList.add(forward ? 'page-slide-leave-left' : 'page-slide-leave-right');
+    nextPageEl.classList.add(forward ? 'page-slide-from-right' : 'page-slide-from-left');
+    activeLeavingPage = prevPageEl;
+    const animTarget = (resolvedTarget === 'billing-center'
+      ? nextPageEl.querySelector<HTMLElement>(':scope > .page-header')
+      : nextPageEl) || nextPageEl;
+    const onAnimEnd = (event: AnimationEvent) => {
+      if (event.target !== animTarget) return;
+      if (event.animationName !== 'pageSlideFromRight' && event.animationName !== 'pageSlideFromLeft') return;
+      clearPageSlideState();
+    };
+    animTarget.addEventListener('animationend', onAnimEnd);
+    const timer = window.setTimeout(clearPageSlideState, 380);
+    cancelPageSlide = () => {
+      window.clearTimeout(timer);
+      animTarget.removeEventListener('animationend', onAnimEnd);
+    };
+  }
+
+  routerWorkbench?.onPage(resolvedTarget);
+  rechargeHours.setActive(resolvedTarget === 'billing-center' && activeBillingWorkbenchSection === 'recharge');
+  if (resolvedTarget === 'diagnostics') {
     void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
   }
-  if (target === 'logs' && logsDirty) renderFilteredLogs();
-  if (target === 'settings') void refreshPermissionHealth();
-  if (target === 'billing-center') {
+  if (resolvedTarget === 'logs' && logsDirty) renderFilteredLogs();
+  if (resolvedTarget === 'settings') {
+    if (requestedSettingsSubpage !== undefined) {
+      openSettingsSubpage(requestedSettingsSubpage, { animate: true, resetScroll: true });
+    } else if (pageChanged) {
+      openSettingsSubpage(null, { animate: false, resetScroll: false });
+    } else {
+      syncSettingsOverviewSummaries();
+    }
+    void refreshPermissionHealth();
+  }
+  if (resolvedTarget === 'billing-center') {
     activateBillingWorkbenchSection(activeBillingWorkbenchSection);
     renderBillingCenter(billingCenterData ? billingOverviewToUserInfo(billingCenterData.overview) : null);
   }
@@ -2780,6 +3059,7 @@ function activatePage(target: string, navTarget = target) {
 
 function handleAndroidBack() {
   const visibleModal = document.querySelector<HTMLElement>('.image-captcha-overlay:not(.hidden)')
+    || document.querySelector<HTMLElement>('.config-qr-overlay:not(.hidden)')
     || document.querySelector<HTMLElement>('.modal-overlay:not(.hidden)');
   if (visibleModal) {
     const dismiss = visibleModal.querySelector<HTMLElement>([
@@ -2804,6 +3084,10 @@ function handleAndroidBack() {
     }
   }
   const activePage = document.querySelector<HTMLElement>('.page.active')?.id;
+  if (activePage === 'settings' && activeSettingsSubpage) {
+    openSettingsSubpage(null);
+    return true;
+  }
   if (activePage && activePage !== 'dashboard') {
     activatePage('dashboard');
     document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, behavior: 'auto' });
@@ -2820,7 +3104,12 @@ function setupNavigation() {
   navItems.forEach(item => {
     item.addEventListener('click', () => {
       const target = item.getAttribute('data-target');
-      if (target) activatePage(target);
+      if (!target) return;
+      if (target === 'settings' && document.getElementById('settings')?.classList.contains('active') && activeSettingsSubpage) {
+        openSettingsSubpage(null);
+        return;
+      }
+      activatePage(target);
     });
   });
   navPageLinks.forEach(link => {
@@ -2835,6 +3124,14 @@ function setupNavigation() {
         activatePage(target);
       }
     });
+  });
+  document.getElementById('btn-settings-back')?.addEventListener('click', () => {
+    openSettingsSubpage(null);
+  });
+  document.getElementById('settings-home')?.addEventListener('click', (event) => {
+    const item = (event.target as HTMLElement).closest<HTMLElement>('[data-settings-target]');
+    const target = item?.dataset.settingsTarget;
+    if (target) openSettingsSubpage(target);
   });
 }
 
@@ -3270,6 +3567,7 @@ function setupEventListeners() {
       vpnMaximumRollbackTimer = null;
     }
     saveSetting('bjut_vpn_compatibility', value);
+    syncSettingsOverviewSummaries();
     const labels: Record<string, string> = {
       minimum: '最低兼容（HTTPS + 系统 DNS）',
       low: '较低兼容（HTTPS + 校园网 DNS）',
@@ -3409,6 +3707,7 @@ function setupEventListeners() {
   settingAutoLogin.addEventListener('change', async (e) => {
     autoLoginEnabled = (e.target as HTMLInputElement).checked;
     saveSetting('bjut_auto_login', autoLoginEnabled.toString());
+    syncSettingsOverviewSummaries();
     log('设置', `自动登录已${autoLoginEnabled ? '开启' : '关闭'}`);
     
     if (window.__TAURI__) {
@@ -3527,12 +3826,12 @@ function setupEventListeners() {
   if (settingMoreOptions && dashboardOverrideOptions) {
     const isMoreOptionsEnabled = localStorage.getItem('bjut_more_options') === 'true';
     settingMoreOptions.checked = isMoreOptionsEnabled;
-    dashboardOverrideOptions.style.display = isMoreOptionsEnabled ? 'block' : 'none';
+    dashboardOverrideOptions.hidden = !isMoreOptionsEnabled;
     
     settingMoreOptions.addEventListener('change', (e) => {
       const enabled = (e.target as HTMLInputElement).checked;
       localStorage.setItem('bjut_more_options', enabled.toString());
-      dashboardOverrideOptions.style.display = enabled ? 'block' : 'none';
+      setVisible(dashboardOverrideOptions, enabled);
       log('设置', `更多控制台选项已${enabled ? '开启' : '关闭'}`);
     });
   }
@@ -3562,6 +3861,7 @@ function setupEventListeners() {
     localStorage.setItem('bjut_accent_color', accent);
     localStorage.setItem('bjut_color_mode', colorMode);
     applyAppearance(theme, accent, colorMode);
+    syncSettingsOverviewSummaries();
     try {
       await syncConfigToRust();
     } catch (error) {
@@ -3674,6 +3974,7 @@ function setupEventListeners() {
     settingUpdateChannel.addEventListener('change', (e) => {
       const channel = e.target.value;
       localStorage.setItem('bjut_update_channel', channel);
+      syncSettingsOverviewSummaries();
       log('设置', `更新通道已设置为 ${channel === 'release' ? '正式版' : '预览版'}`);
     });
   }
@@ -4599,17 +4900,17 @@ function renderAccounts() {
         </div>
         <div class="account-mobile-actions">
           <button class="btn-icon action-edit" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
-          <button class="btn-icon action-default" style="${acc.isDefault ? 'color: var(--text-muted); cursor: not-allowed; opacity: 0.5;' : ''}" data-index="${index}" title="${acc.isDefault ? '已置顶' : '设为默认 (置顶)'}" ${acc.isDefault ? 'disabled' : ''}><i data-lucide="arrow-up-circle"></i></button>
+          <button class="btn-icon action-default" data-index="${index}" title="${acc.isDefault ? '已置顶' : '设为默认 (置顶)'}" ${acc.isDefault ? 'disabled' : ''}><i data-lucide="arrow-up-circle"></i></button>
         </div>
       </div>
       <div class="account-right">
         <div class="account-password">
           <span class="password-text${acc.hasPassword ? '' : ' password-missing'}" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted); display: inline-block; width: 7.5em; text-align: left;"></span>
-          <button class="btn-icon action-toggle-password hide-password" style="padding: 0.2rem;" data-index="${index}" title="临时显示密码"${acc.hasPassword ? '' : ' disabled'}><i data-lucide="eye"></i></button>
+          <button class="btn-icon action-toggle-password hide-password" data-index="${index}" title="临时显示密码"${acc.hasPassword ? '' : ' disabled'}><i data-lucide="eye"></i></button>
         </div>
         <div class="account-desktop-actions">
           <button class="btn-icon action-edit" data-index="${index}" title="编辑"><i data-lucide="edit-2"></i></button>
-          <button class="btn-icon action-default" style="${acc.isDefault ? 'color: var(--text-muted); cursor: not-allowed; opacity: 0.5;' : ''}" data-index="${index}" title="${acc.isDefault ? '已置顶' : '设为默认 (置顶)'}" ${acc.isDefault ? 'disabled' : ''}><i data-lucide="arrow-up-circle"></i></button>
+          <button class="btn-icon action-default" data-index="${index}" title="${acc.isDefault ? '已置顶' : '设为默认 (置顶)'}" ${acc.isDefault ? 'disabled' : ''}><i data-lucide="arrow-up-circle"></i></button>
         </div>
         <button class="btn-icon danger action-delete" data-index="${index}" title="删除"><i data-lucide="trash-2"></i></button>
       </div>
@@ -4816,9 +5117,11 @@ function applyBillingSource(source: BillingSource) {
   updateBillingAccountOptions();
   resetBillingCenterForSelectedAccount();
   if (router) billingCenterAccount.textContent = '--';
-  billingCenterSubtitle.textContent = router && activeBillingWorkbenchSection === 'recharge'
-    ? '路由器计费不包含充值'
-    : billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
+  if (billingCenterSubtitle) {
+    billingCenterSubtitle.textContent = router && activeBillingWorkbenchSection === 'recharge'
+      ? '路由器计费不包含充值'
+      : billingWorkbenchSectionSubtitles[activeBillingWorkbenchSection];
+  }
   billingCenterMessage.textContent = router ? '正在读取路由器计费数据…' : '正在读取当前账号的计费数据…';
   syncBillingCenterMessageVisibility();
   if (router && bridge) billingAccountSelect.setValue(bridge.currentAccount());

@@ -6,7 +6,10 @@
 .traffic-note { color:var(--traffic-muted);font-size:.78rem;line-height:1.6;margin:.4rem 0;overflow-wrap:anywhere; }
 .traffic-content { margin-top:1.2rem; }
 .traffic-scope { display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem;font-size:.85rem; }
-:root .traffic-chart .traffic-scope > button[aria-pressed=true], :root .traffic-chart .traffic-scope > button[aria-pressed=true]:hover:not(:disabled) { color:var(--primary-color,var(--bj-blue,#1584e8));border-color:currentColor;background:color-mix(in srgb,var(--primary-color,var(--bj-blue,#1584e8)) 12%,var(--traffic-surface)); }
+:root .traffic-chart .traffic-scope > button[aria-pressed=true] { color:var(--primary-color,var(--bj-blue,#1584e8));border-color:currentColor;background:color-mix(in srgb,var(--primary-color,var(--bj-blue,#1584e8)) 12%,var(--traffic-surface)); }
+@media (hover: hover) and (pointer: fine) {
+  :root body:not(.is-android) .traffic-chart .traffic-scope > button[aria-pressed=true]:hover:not(:disabled) { color:var(--primary-color,var(--bj-blue,#1584e8));border-color:currentColor;background:color-mix(in srgb,var(--primary-color,var(--bj-blue,#1584e8)) 12%,var(--traffic-surface)); }
+}
 .traffic-controls { display:flex;align-items:end;flex-wrap:wrap;gap:.8rem; }
 .traffic-field { flex:1 1 140px;min-width:0;display:grid;gap:.4rem;font-size:.8rem;color:var(--traffic-muted); }
 .traffic-field:has(.custom-select-options:not([hidden])) { position:relative;z-index:2; }

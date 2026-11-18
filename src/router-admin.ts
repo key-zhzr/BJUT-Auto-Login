@@ -62,7 +62,7 @@ interface FieldControl extends Control { element: HTMLElement; attach?: () => vo
 function createFieldControl(definition:Field, value:string, id?:string): FieldControl {
   if (definition.choices) {
     const wrapper=element('div','','custom-select');wrapper.id=id || `router-editor-select-${++sequence}`;wrapper.setAttribute('aria-label',definition.label);
-    wrapper.innerHTML='<div class="custom-select-trigger"><span></span><span aria-hidden="true">⌄</span></div><div class="custom-select-options"></div>';
+    wrapper.innerHTML='<div class="custom-select-trigger"><span></span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></div><div class="custom-select-options"></div>';
     let select: CustomSelect | null=null;
     return {
       element:wrapper,

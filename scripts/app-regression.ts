@@ -1,8 +1,20 @@
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 // Load the current app markup so this regression page cannot drift from it.
+const memory = new Map<string, string>([['bjut_tos_accepted', 'true'], ['bjut_theme', 'basic'], ['bjut_color_mode', 'light']]);
+const initialScheme = memory.get('bjut_color_mode') === 'dark' ? 'dark' : 'light';
+document.documentElement.dataset.theme = memory.get('bjut_theme') || 'basic';
+document.documentElement.dataset.colorScheme = initialScheme;
+document.documentElement.style.colorScheme = initialScheme;
+const initialBg = initialScheme === 'dark' ? '#0f172a' : '#eef2f7';
+document.documentElement.style.backgroundColor = initialBg;
+document.documentElement.style.setProperty('--prepaint-body-bg', initialBg);
+
 const appDocument = new DOMParser().parseFromString(await (await fetch('/index.html')).text(), 'text/html');
 const styles = Array.from(appDocument.head.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'));
+for (const styleEl of appDocument.head.querySelectorAll('style')) {
+  document.head.append(document.importNode(styleEl, true));
+}
 await Promise.all(styles.map(link => new Promise<void>((resolve, reject) => {
   link.addEventListener('load', () => resolve(), { once: true });
   link.addEventListener('error', () => reject(new Error(`样式加载失败：${link.href}`)), { once: true });
@@ -13,7 +25,6 @@ document.body.replaceChildren(...Array.from(appDocument.body.childNodes));
 
 // This harness has isolated memory-only preferences and synthetic IPC. It cannot
 // read/write the real app's credentials or send any campus or payment request.
-const memory = new Map<string, string>([['bjut_tos_accepted', 'true'], ['bjut_theme', 'basic'], ['bjut_color_mode', 'light']]);
 Object.defineProperty(window, 'localStorage', { value: {
   getItem: (key: string) => memory.get(key) ?? null,
   setItem: (key: string, value: string) => memory.set(key, String(value)),
@@ -349,6 +360,7 @@ button.addEventListener('click',async()=>{
     assert(document.querySelector('.billing-recharge-hours')!.textContent?.includes('08:00'), '充值时段未使用远端北京时间');
     note('通过：充值时段使用网络时间并显示绿色');
     click('[data-target="settings"]');
+    click('[data-settings-target="advanced"]');
     assert(!document.getElementById('btn-export-config-qr'), '设置页仍显示额外备份按钮');
     click('#btn-export-config');
     await wait(()=>!!document.querySelector('#config-transfer-modal:not(.hidden)'));
@@ -366,9 +378,13 @@ button.addEventListener('click',async()=>{
     const pixels = canvas.getContext('2d')!.getImageData(0,0,canvas.width,canvas.height);
     const {default:jsQR} = await import('jsqr');
     assert(jsQR(pixels.data,pixels.width,pixels.height)?.data.startsWith('BJUTALQR1:'),'生成二维码不能解码');
-    click('.config-qr-close');
-    assert(!document.querySelector('.config-qr-overlay'),'关闭后二维码仍驻留');
+    const qrClose = document.querySelector<HTMLButtonElement>('.config-qr-close')!;
+    await wait(() => document.activeElement === qrClose);
+    qrClose.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await wait(()=>!document.querySelector('.config-qr-overlay'));
     note('通过：备份弹窗、3 位密码、按范围导出与二维码解码');
+    click('#btn-settings-back');
+    click('[data-settings-target="router"]');
     click('#btn-router-manual-connect');
     assert(!document.getElementById('router-connect-modal')!.classList.contains('hidden'),'手动连接弹窗未出现');
     (document.getElementById('router-address') as HTMLInputElement).value='https://192.0.2.1';
@@ -399,6 +415,7 @@ button.addEventListener('click',async()=>{
     const hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);
     assert(!!hit&&option.contains(hit),'路由端口账号菜单被卡片裁切或遮挡');portTrigger.click();
     click('[data-target="settings"]');
+    click('[data-settings-target="router"]');
     note('通过：路由端口账号下拉可见，选项不被卡片裁切');
     click('#router-uplink-select .custom-select-trigger'); click('#router-uplink-select [data-value="dorm_b"]');
     click('#router-account-select .custom-select-trigger'); click('#router-account-select [data-value="account2"]');
@@ -486,9 +503,17 @@ button.addEventListener('click',async()=>{
     click('.billing-mobile-nav [data-billing-section-target="upstreams"]');
     await wait(()=>document.querySelectorAll('#router-billing-summary-content .router-billing-card').length===2 && !document.querySelector('#router-billing-summary-content progress'));
     assert(document.querySelector('#router-billing-summary-content .billing-center-summary')!.textContent!.includes('84.25'),'余额汇总未按不同账号计算');
-    const billingNav=document.querySelector<HTMLElement>(mobileLayout?'.billing-mobile-nav':'.nav-billing-tree')!;
-    await wait(()=>{const rect=billingNav.getBoundingClientRect(),limit=mobileLayout?document.getElementById('nav')!.getBoundingClientRect().top:innerHeight;return rect.width>0 && rect.top>=0 && rect.bottom<=limit+1;});
-    if(mobileLayout){
+    const showMobileBillingDock = mobileLayout && window.innerWidth <= 768;
+    const billingNav=document.querySelector<HTMLElement>(showMobileBillingDock?'.billing-mobile-nav':'.nav-billing-tree')!;
+    await wait(()=>{
+      const rect=billingNav.getBoundingClientRect();
+      if(showMobileBillingDock){
+        const primaryNav=document.getElementById('nav')!;
+        return rect.width>0 && rect.top>=0 && rect.bottom<=innerHeight+1 && getComputedStyle(primaryNav).visibility==='hidden';
+      }
+      return rect.width>0 && rect.top>=0 && rect.bottom<=innerHeight+1;
+    });
+    if(showMobileBillingDock){
       const initialTheme=document.documentElement.dataset.theme;
       for(const theme of ['basic','apple27','winui']){
         document.documentElement.dataset.theme=theme;
@@ -532,25 +557,34 @@ button.addEventListener('click',async()=>{
     click('[data-target="logs"]');
     await wait(()=>document.getElementById('router-logs-content')!.textContent!.includes('lan3 认证'));
     click('[data-target="settings"]');
+    click('[data-settings-target="router"]');
     await wait(()=>(document.getElementById('router-service-interval') as HTMLInputElement).value==='20');
     (document.getElementById('router-service-interval') as HTMLInputElement).value='30';
     (document.getElementById('router-settings-form') as HTMLFormElement).requestSubmit();
     await wait(()=>calls.some(call=>call.cmd==='router_request'&&call.payload.operation==='save_settings'&&call.payload.args.interval==='30'));
     note('通过：路由计费统一界面、账号融合、日志与设置保存');
-    (document.getElementById('router-service-advanced') as HTMLDetailsElement).open=true;
+    const advanced = document.getElementById('router-service-advanced') as HTMLDetailsElement;
+    if (!advanced.open) advanced.querySelector('summary')!.click();
+    const routerPanel = advanced.closest<HTMLElement>('.settings-subpage')!;
+    await Promise.all([
+      ...document.getElementById('settings')!.getAnimations(),
+      ...routerPanel.getAnimations(),
+      ...advanced.getAnimations(),
+    ].map(animation => animation.finished.catch(() => undefined)));
     const logDirectory=document.querySelector<HTMLInputElement>('#router-service-more input[aria-label="日志目录"]')!;
     assert(logDirectory.closest<HTMLElement>('.router-setting-item')!.hidden,'系统日志仍显示自定义目录');
     const logLocation = document.querySelector<HTMLElement>('#router-service-more [aria-label="日志保存位置"] .custom-select-trigger')!;
-    const chooseLog = (value: string) => {
+    const chooseLog = async (value: string) => {
       logLocation.scrollIntoView({ block: 'center', behavior: 'instant' });
+      await new Promise(requestAnimationFrame);
       logLocation.click();
-      assert(logLocation.getAttribute('aria-expanded') === 'true', '无法展开日志保存位置菜单');
+      assert(logLocation.getAttribute('aria-expanded') === 'true', `无法展开日志保存位置菜单（${value}）`);
       click(`#router-service-more .custom-select.open [data-value="${value}"]`);
     };
-    chooseLog('file');await wait(()=>!logDirectory.closest<HTMLElement>('.router-setting-item')!.hidden);
-    logDirectory.value='/tmp/qa-draft-log';chooseLog('system');await wait(()=>logDirectory.disabled);
-    chooseLog('file');await wait(()=>!logDirectory.disabled);assert(logDirectory.value==='/tmp/qa-draft-log','切换日志位置丢失目录草稿');
-    chooseLog('system');await wait(()=>logDirectory.disabled);
+    await chooseLog('file');await wait(()=>!logDirectory.closest<HTMLElement>('.router-setting-item')!.hidden);
+    logDirectory.value='/tmp/qa-draft-log';await chooseLog('system');await wait(()=>logDirectory.disabled);
+    await chooseLog('file');await wait(()=>!logDirectory.disabled);assert(logDirectory.value==='/tmp/qa-draft-log','切换日志位置丢失目录草稿');
+    await chooseLog('system');await wait(()=>logDirectory.disabled);
     note('通过：系统日志隐藏目录选项，自定义目录草稿切换后保留');
     await wait(()=>!!document.querySelector('#router-configured-uplinks button'));
     const editUplink=()=>Array.from(document.querySelectorAll<HTMLButtonElement>('#router-configured-uplinks button')).find(button=>button.textContent==='编辑')!.click();

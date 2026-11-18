@@ -333,6 +333,10 @@ export function applyAppearance(
   const theme = applyAppearanceTheme(themeValue, target);
   const accent = applyAccentColor(accentValue, target);
   const { mode, scheme } = applyColorMode(colorModeValue, target);
+  if (target) {
+    target.style.removeProperty?.('background-color');
+    target.style.removeProperty?.('--theme-body-bg');
+  }
   updateThemeColorMeta(target);
   return {
     theme,

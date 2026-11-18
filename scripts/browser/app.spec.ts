@@ -106,12 +106,15 @@ test('first-use guide and tray settings keep reversible drafts',async({page})=>{
   await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
   await expect(page.locator('#qa-run')).toBeVisible();
   await page.locator('[data-target=settings]').first().click();
+  await page.locator('[data-settings-target=advanced]').click();
   await page.locator('#btn-onboarding').click();
   await expect(page.locator('#onboarding-dialog')).toBeVisible();
   await page.locator('#onboarding-dialog').getByRole('button',{name:'下一步',exact:true}).click();
   await expect(page.locator('#onboarding-dialog h4')).toHaveText('选择连接方式');
   await page.keyboard.press('Escape');
   await expect(page.locator('#onboarding-dialog')).toHaveCount(0);
+  await page.locator('#btn-settings-back').click();
+  await page.locator('[data-settings-target=appearance]').click();
   await page.locator('#btn-tray-preferences').click();
   await expect(page.locator('#tray-preferences-dialog')).toBeVisible();
   await page.locator('#tray-preferences-dialog select[name=icon]').selectOption('dot');
@@ -163,6 +166,7 @@ for(const [platform,width,height] of [['macos',1280,900],['android',390,844]] as
     await expect(panel.locator('.traffic-content')).toContainText('可在设置中更改统计范围');
     expect(await page.evaluate(()=>localStorage.getItem('bjut_traffic_monitor_scope'))).toBe('local');
     await page.locator('[data-target=settings]').first().click();
+    await page.locator('[data-settings-target="notifications-usage"]').click();
     await page.locator('input[name=setting-traffic-scope][value=all]').check();
     await page.locator('[data-target=dashboard]').first().click();
     await expect(panel.locator('.traffic-interfaces')).toContainText('其他设备');
@@ -189,6 +193,7 @@ for(const [platform,width,height] of [['macos',1280,900],['android',390,844]] as
     if(platform==='macos'){
       const before=await panel.evaluate(node=>getComputedStyle(node).color);
       await page.locator('[data-target=settings]').first().click();
+      await page.locator('[data-settings-target=appearance]').click();
       await page.locator('#setting-color-mode .custom-select-trigger').click();
       await page.locator('#setting-color-mode .custom-option[data-value=dark]').click();
       await page.locator('[data-target=dashboard]').first().click();
@@ -202,3 +207,250 @@ for(const [platform,width,height] of [['macos',1280,900],['android',390,844]] as
     await panel.getByRole('button',{name:'暂停统计',exact:true}).click();await page.locator('#usage-confirm-dialog').getByRole('button',{name:'暂停统计',exact:true}).click();await expect(panel.locator('.traffic-content')).toBeHidden();
   });
 }
+
+test('settings subpages, diagnostics full-width grid, and Android tablet sidebar without titlebar or hover',async({page})=>{
+  await page.setViewportSize({width:1024,height:768});
+  await page.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button',{name:'隐藏验收面板',exact:true}).click();
+
+  const layout=await page.evaluate(()=>{
+    const titlebar=document.querySelector<HTMLElement>('.titlebar')!;
+    const container=document.querySelector<HTMLElement>('.app-container')!;
+    const nav=document.getElementById('nav')!;
+    return {
+      titlebarDisplay:getComputedStyle(titlebar).display,
+      titlebarHeight:titlebar.getBoundingClientRect().height,
+      containerTop:getComputedStyle(container).paddingTop,
+      navRect:nav.getBoundingClientRect(),
+      overflow:document.documentElement.scrollWidth-window.innerWidth,
+    };
+  });
+  expect(layout.titlebarDisplay).toBe('none');
+  expect(layout.titlebarHeight).toBe(0);
+  expect(layout.containerTop).toBe('0px');
+  expect(layout.navRect.width).toBeGreaterThan(180);
+  expect(layout.navRect.height).toBeGreaterThan(600);
+  expect(layout.overflow).toBeLessThanOrEqual(1);
+
+  await page.locator('[data-target=diagnostics]').first().click();
+  const diagGrid=await page.evaluate(()=>{
+    const grid=document.querySelector<HTMLElement>('.diagnostics-grid')!;
+    const health=document.getElementById('account-health-panel')!;
+    return {gridWidth:grid.getBoundingClientRect().width,healthWidth:health.getBoundingClientRect().width};
+  });
+  expect(Math.abs(diagGrid.gridWidth-diagGrid.healthWidth)).toBeLessThan(2);
+
+  await page.locator('[data-target=settings]').first().click();
+  await expect(page.locator('#settings-home')).toBeVisible();
+  await expect(page.locator('#btn-settings-back')).toBeHidden();
+
+  const settingsItem=page.locator('[data-settings-target=appearance]');
+  const hoverBefore=await settingsItem.evaluate(node=>{
+    const s=getComputedStyle(node);return {bg:s.backgroundColor,transform:s.transform,filter:s.filter};
+  });
+  await settingsItem.hover();
+  const hoverAfter=await settingsItem.evaluate(node=>{
+    const s=getComputedStyle(node);return {bg:s.backgroundColor,transform:s.transform,filter:s.filter};
+  });
+  expect(hoverAfter).toEqual(hoverBefore);
+
+  await settingsItem.click();
+  await expect(page.locator('#btn-settings-back')).toBeVisible();
+  await expect(page.locator('[data-settings-subpage=appearance]')).toBeVisible();
+  const titleAlign=await page.evaluate(async()=>{
+    const settings=document.getElementById('settings')!;
+    await Promise.all(settings.getAnimations({subtree:true}).map(a=>a.finished.catch(()=>{})));
+    const title=document.getElementById('settings-page-title')!.getBoundingClientRect();
+    const card=document.querySelector<HTMLElement>('[data-settings-subpage=appearance] .glass-card')!.getBoundingClientRect();
+    return Math.abs(title.left-card.left);
+  });
+  expect(titleAlign).toBeLessThan(2);
+  await page.locator('#btn-settings-back').click();
+  await expect(page.locator('#settings-home')).toBeVisible();
+
+  await page.setViewportSize({width:390,height:844});
+  const mobileRow=await page.evaluate(()=>{
+    const row=document.querySelector<HTMLElement>('[data-settings-target=router]')!;
+    const copy=row.querySelector<HTMLElement>('.settings-nav-copy')!.getBoundingClientRect();
+    const chevron=row.querySelector<HTMLElement>('.settings-nav-chevron')!.getBoundingClientRect();
+    return {copyRight:copy.right,chevronLeft:chevron.left};
+  });
+  expect(mobileRow.copyRight).toBeLessThanOrEqual(mobileRow.chevronLeft);
+  await page.setViewportSize({width:1024,height:768});
+
+  await page.locator('[data-target=settings]').first().click();
+  await expect(page.locator('#settings-home')).toBeVisible();
+  const backHandled=await page.evaluate(async()=>{
+    document.querySelector<HTMLElement>('[data-settings-target=security]')!.click();
+    const first=window.__handleAndroidBack?.();
+    const homeVisible=!document.getElementById('settings-home')!.hidden;
+    const second=window.__handleAndroidBack?.();
+    return {first,homeVisible,second,dashboardActive:document.getElementById('dashboard')!.classList.contains('active')};
+  });
+  expect(backHandled).toEqual({first:true,homeVisible:true,second:true,dashboardActive:true});
+});
+
+test('light startup mask, full-viewport accounts modal, single billing dock, blur header, slide & switch drag',async({page})=>{
+  await page.emulateMedia({colorScheme:'light'});
+  await page.addInitScript(()=>{
+    localStorage.setItem('bjut_theme','basic');
+    localStorage.setItem('bjut_color_mode','light');
+  });
+  await page.setViewportSize({width:390,height:844});
+  await page.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());
+  await page.goto('http://127.0.0.1:1433/index.html',{waitUntil:'domcontentloaded'});
+  const lightMask=await page.evaluate(()=>{
+    const mask=document.getElementById('app-loading-mask');
+    const maskBg=mask?getComputedStyle(mask).backgroundColor:'';
+    const rootBg=getComputedStyle(document.documentElement).backgroundColor;
+    return {scheme:document.documentElement.dataset.colorScheme,maskBg,rootBg};
+  });
+  expect(lightMask.scheme).toBe('light');
+  expect(lightMask.maskBg).not.toBe('rgb(15, 23, 42)');
+  expect(lightMask.rootBg).not.toBe('rgb(15, 23, 42)');
+
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button',{name:'隐藏验收面板',exact:true}).click();
+
+  expect(await page.locator('.page > .page-header p').count()).toBe(0);
+
+  const selectionAndSlide=await page.evaluate(async()=>{
+    document.querySelector<HTMLElement>('#nav .nav-item[data-target="accounts"]')!.click();
+    const accountsSlideRight=document.getElementById('accounts')!.classList.contains('page-slide-from-right');
+    const dashboardLeaveLeft=document.getElementById('dashboard')!.classList.contains('page-slide-leave-left');
+    document.querySelector<HTMLElement>('#nav .nav-item[data-target="dashboard"]')!.click();
+    const dashboardSlideLeft=document.getElementById('dashboard')!.classList.contains('page-slide-from-left');
+    const accountsLeaveRight=document.getElementById('accounts')!.classList.contains('page-slide-leave-right');
+    const addAccount = document.getElementById('btn-show-add')!;
+    addAccount.focus();
+    const leavingPageIgnoresFocus = document.activeElement !== addAccount;
+    await new Promise(r=>setTimeout(r,420));
+    const settledAnimName=getComputedStyle(document.getElementById('dashboard')!).animationName;
+    document.querySelector<HTMLElement>('#nav .nav-item[data-target="accounts"]')!.click();
+    return {
+      accountsSlideRight,
+      dashboardLeaveLeft,
+      dashboardSlideLeft,
+      accountsLeaveRight,
+      leavingPageIgnoresFocus,
+      settledAnimName,
+      h1Select:getComputedStyle(document.querySelector('#accounts .page-header h1')!).userSelect,
+      btnSelect:getComputedStyle(document.querySelector('#btn-show-add')!).userSelect,
+      logsSelect:getComputedStyle(document.getElementById('logs-content')!).userSelect,
+      inputSelect:getComputedStyle(document.getElementById('acc-username')!).userSelect,
+    };
+  });
+  expect(selectionAndSlide).toEqual({
+    accountsSlideRight:true,
+    dashboardLeaveLeft:true,
+    dashboardSlideLeft:true,
+    accountsLeaveRight:true,
+    leavingPageIgnoresFocus:true,
+    settledAnimName:'none',
+    h1Select:'none',
+    btnSelect:'none',
+    logsSelect:'text',
+    inputSelect:'text',
+  });
+
+  await page.locator('#btn-show-add').click();
+  await expect(page.locator('#add-modal')).toBeVisible();
+  const modalCover=await page.evaluate(()=>{
+    const header=document.querySelector('#accounts .page-header')!.getBoundingClientRect();
+    const nav=document.getElementById('nav')!.getBoundingClientRect();
+    const topHit=document.elementFromPoint(header.left+header.width/2,header.top+header.height/2);
+    const navHit=document.elementFromPoint(nav.left+nav.width/2,nav.top+nav.height/2);
+    return {
+      topCovered:Boolean(topHit?.closest('#add-modal')),
+      navCovered:Boolean(navHit?.closest('#add-modal')),
+      modalParent:document.getElementById('add-modal')?.parentElement?.tagName,
+    };
+  });
+  expect(modalCover).toEqual({topCovered:true,navCovered:true,modalParent:'BODY'});
+  await page.locator('#btn-cancel-add').click();
+  await expect(page.locator('#add-modal')).toBeHidden();
+
+  await page.locator('#nav .nav-item[data-target="dashboard"]').click();
+  await page.locator('#btn-open-billing').click();
+  await expect(page.locator('#billing-center')).toBeVisible();
+  const billingMobile=await page.evaluate(()=>{
+    const nav=document.getElementById('nav')!;
+    const billingDock=document.querySelector<HTMLElement>('.billing-mobile-nav')!;
+    const backBtn=document.getElementById('btn-close-billing')!;
+    const backRect=backBtn.getBoundingClientRect();
+    const dockRect=billingDock.getBoundingClientRect();
+    return {
+      activeBodyClass:document.body.classList.contains('billing-center-active'),
+      primaryNavVisibility:getComputedStyle(nav).visibility,
+      dockVisible:dockRect.width>0 && dockRect.height>0 && dockRect.bottom<=innerHeight+1 && dockRect.top>innerHeight-120,
+      unifiedBackPill:backBtn.classList.contains('settings-back-button') && backRect.height>=36 && getComputedStyle(backBtn).borderRadius==='999px',
+    };
+  });
+  expect(billingMobile).toEqual({
+    activeBodyClass:true,
+    primaryNavVisibility:'hidden',
+    dockVisible:true,
+    unifiedBackPill:true,
+  });
+
+  await page.locator('#btn-close-billing').click();
+  await expect(page.locator('#dashboard')).toBeVisible();
+
+  await page.locator('#nav .nav-item[data-target="settings"]').click();
+  await page.locator('[data-settings-target="appearance"]').click();
+  await page.locator('#setting-theme .custom-select-trigger').click();
+  const dropdownLayer=await page.evaluate(()=>{
+    const options=document.querySelector<HTMLElement>('#setting-theme .custom-select-options')!;
+    const mainEl=document.getElementById('main-content')!;
+    const popoverOpen=options.matches(':popover-open');
+    const style=getComputedStyle(options);
+    return {
+      popoverOpen,
+      position:style.position,
+      optionsScrollbarWidth:style.scrollbarWidth,
+      mainScrollbarWidth:getComputedStyle(mainEl).scrollbarWidth,
+    };
+  });
+  expect(dropdownLayer.popoverOpen).toBe(true);
+  expect(dropdownLayer.position).toBe('fixed');
+  expect(dropdownLayer.optionsScrollbarWidth).toBe('auto');
+  expect(dropdownLayer.mainScrollbarWidth).toBe('auto');
+
+  await page.locator('[data-target="settings"]').first().click();
+  await page.locator('[data-settings-target="automation"]').click();
+  const switchBefore=await page.locator('#setting-auto-login').isChecked();
+  const switchBox=await page.locator('label.switch:has(#setting-auto-login)').boundingBox();
+  expect(switchBox).toBeTruthy();
+  const sy=switchBox!.y+switchBox!.height/2;
+  const startX=switchBefore?switchBox!.x+switchBox!.width-8:switchBox!.x+8;
+  const endX=switchBefore?switchBox!.x+4:switchBox!.x+switchBox!.width-4;
+  await page.mouse.move(startX,sy);
+  await page.mouse.down();
+  await page.mouse.move((startX+endX)/2,sy,{steps:4});
+  await page.mouse.move(endX,sy,{steps:4});
+  await page.mouse.up();
+  expect(await page.locator('#setting-auto-login').isChecked()).toBe(!switchBefore);
+
+  await page.locator('#nav .nav-item[data-target="diagnostics"]').click();
+  const scrollState=await page.evaluate(async()=>{
+    const main=document.getElementById('main-content')!;
+    const header=document.querySelector<HTMLElement>('#diagnostics .page-header')!;
+    main.scrollTop=120;
+    main.dispatchEvent(new Event('scroll'));
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    const scrolled=main.classList.contains('is-scrolled');
+    const blurStyle=getComputedStyle(header,'::after').backdropFilter;
+    const afterVis=getComputedStyle(header,'::after').visibility;
+    main.scrollTop=0;
+    main.dispatchEvent(new Event('scroll'));
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    return {scrolled,blurStyle,afterVis,cleared:!main.classList.contains('is-scrolled')};
+  });
+  expect(scrollState.scrolled).toBe(true);
+  expect(scrollState.blurStyle).toContain('blur(');
+  expect(scrollState.afterVis).toBe('visible');
+  expect(scrollState.cleared).toBe(true);
+});

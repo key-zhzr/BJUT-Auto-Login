@@ -566,9 +566,24 @@
 }
 
 :root[data-theme="apple27"] body.is-desktop #settings > .page-header,
-:root[data-theme="apple27"] body.is-desktop #settings > .settings-container {
-  width: min(100%, 1100px);
+:root[data-theme="apple27"] body.is-desktop #settings > .settings-container,
+:root[data-theme="apple27"] body.is-android #settings > .page-header,
+:root[data-theme="apple27"] body.is-android #settings > .settings-container {
+  width: min(100%, 1040px);
   margin-inline: auto;
+}
+
+:root[data-theme="apple27"] .settings-nav-item {
+  border-radius: max(8px, calc(var(--apple-radius-content) - 4px));
+  border-color: transparent;
+  background: var(--apple-fill);
+}
+
+:root[data-theme="apple27"] .settings-back-button,
+:root[data-theme="apple27"] .billing-back-button {
+  background: var(--apple-fill);
+  border-color: var(--apple-separator);
+  color: var(--apple-label);
 }
 
 /* Concentric nested geometry: inset surfaces are smaller by the same visual
@@ -640,28 +655,52 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  :root[data-theme="apple27"] .btn-secondary:hover:not(:disabled),
-  :root[data-theme="apple27"] .btn-icon:hover:not(:disabled),
-  :root[data-theme="apple27"] .custom-select-trigger:hover,
-  :root[data-theme="apple27"] .nav-item:hover,
-  :root[data-theme="apple27"] .nav-tree-link:hover,
-  :root[data-theme="apple27"] .billing-section-nav-button:hover:not(:disabled) {
+  :root[data-theme="apple27"] body:not(.is-android) .btn-secondary:hover:not(:disabled),
+  :root[data-theme="apple27"] body:not(.is-android) .btn-icon:hover:not(:disabled),
+  :root[data-theme="apple27"] body:not(.is-android) .custom-select-trigger:hover,
+  :root[data-theme="apple27"] body:not(.is-android) .nav-item:hover,
+  :root[data-theme="apple27"] body:not(.is-android) .nav-tree-link:hover,
+  :root[data-theme="apple27"] body:not(.is-android) .billing-section-nav-button:hover:not(:disabled),
+  :root[data-theme="apple27"] body:not(.is-android) .settings-nav-item:hover,
+  :root[data-theme="apple27"] body:not(.is-android) .settings-back-button:hover,
+  :root[data-theme="apple27"] body:not(.is-android) .billing-back-button:hover {
     color: var(--apple-label);
     background-color: var(--apple-fill-hover);
     filter: none;
   }
 
-  :root[data-theme="apple27"] .btn-primary:hover:not(:disabled) {
+  :root[data-theme="apple27"] body:not(.is-android) .btn-primary:hover:not(:disabled) {
     background:
       linear-gradient(rgba(255, 255, 255, 0.24), transparent 58%),
       var(--accent-hover);
     filter: none;
   }
 
-  :root[data-theme="apple27"] .btn:active:not(:disabled),
-  :root[data-theme="apple27"] .nav-item:active,
-  :root[data-theme="apple27"] .nav-tree-link:active {
+  :root[data-theme="apple27"] body:not(.is-android) .btn:active:not(:disabled),
+  :root[data-theme="apple27"] body:not(.is-android) .nav-item:active,
+  :root[data-theme="apple27"] body:not(.is-android) .nav-tree-link:active {
     transform: scale(0.995);
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  :root[data-theme="apple27"] :is(
+    .btn,
+    .btn-icon,
+    .nav-item,
+    .nav-tree-link,
+    .billing-section-nav-button,
+    .billing-back-button,
+    .settings-back-button,
+    .settings-nav-item,
+    .custom-select-trigger,
+    .custom-option,
+    .billing-package-option,
+    .billing-payment-method,
+    summary
+  ):not(:disabled):not([aria-disabled="true"]):active {
+    background-color: var(--apple-fill-pressed);
+    transform: scale(0.975);
   }
 }
 
@@ -671,25 +710,22 @@
   .nav-item,
   .nav-tree-link,
   .billing-section-nav-button,
-  .custom-option,
+  .billing-back-button,
+  .settings-back-button,
+  .settings-nav-item,
   .custom-select-trigger,
+  .custom-option,
   .billing-package-option,
   .billing-payment-method,
-  .account-avatar
-):hover {
-  filter: none;
-  transform: none;
-  transition: none !important;
+  summary
+):not(:disabled):not([aria-disabled="true"]):active {
+  background-color: var(--apple-fill-pressed);
+  transform: scale(0.975);
+  transition: transform 80ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 80ms ease;
 }
 
-@media (hover: none), (pointer: coarse) {
-  :root[data-theme="apple27"] .btn:active:not(:disabled),
-  :root[data-theme="apple27"] .nav-item:active,
-  :root[data-theme="apple27"] .nav-tree-link:active,
-  :root[data-theme="apple27"] .billing-section-nav-button:active:not(:disabled) {
-    background-color: var(--apple-fill-pressed);
-    transform: scale(0.975);
-  }
+:root[data-theme="apple27"] body.is-android .switch:active input:not(:disabled) + .slider {
+  filter: brightness(0.92);
 }
 
 :root[data-theme="apple27"] .btn:focus-visible,
@@ -791,6 +827,22 @@
   box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.24);
 }
 
+:root[data-theme="apple27"] body .switch.is-dragging input + .slider::before,
+:root[data-theme="apple27"] body .switch.is-dragging input + .slider:before {
+  transform: translateX(var(--switch-drag-x, 0px)) !important;
+  transition: none !important;
+}
+
+:root[data-theme="apple27"] body .switch.is-dragging.is-drag-on input + .slider {
+  border-color: transparent !important;
+  background: var(--accent-color) !important;
+}
+
+:root[data-theme="apple27"] body .switch.is-dragging:not(.is-drag-on) input + .slider {
+  border-color: transparent !important;
+  background: var(--apple-fill-strong) !important;
+}
+
 :root[data-theme="apple27"] .switch input:checked + .slider::before,
 :root[data-theme="apple27"] .switch input:checked + .slider:before {
   transform: translateX(14px);
@@ -839,9 +891,11 @@
   line-height: 1.25;
 }
 
-:root[data-theme="apple27"] .custom-option:hover {
-  color: var(--apple-label);
-  background: var(--apple-fill-hover);
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="apple27"] body:not(.is-android) .custom-option:hover {
+    color: var(--apple-label);
+    background: var(--apple-fill-hover);
+  }
 }
 
 :root[data-theme="apple27"] .custom-option.selected {
@@ -1086,6 +1140,108 @@
   backdrop-filter: blur(14px) saturate(1.22) !important;
 }
 
+/* Android tablet (>= 769px): native sidebar & touch control ergonomics without bottom dock */
+@media (min-width: 769px) {
+  :root[data-theme="apple27"] body.is-android {
+    --theme-card-radius: 16px;
+    --theme-panel-radius: 12px;
+    --theme-control-radius: 12px;
+    --theme-modal-radius: 18px;
+    --theme-control-height: var(--apple-control-height-touch);
+  }
+
+  :root[data-theme="apple27"] body.is-android #nav {
+    padding: 1.25rem 0.72rem;
+    border: 0;
+    border-right: 1px solid var(--apple-separator);
+    border-radius: 0 !important;
+    background: var(--apple-grouped) !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  :root[data-theme="apple27"] body.is-android main {
+    padding-top: 1.5rem;
+  }
+
+  :root[data-theme="apple27"] body.is-android .nav-item {
+    min-height: 44px;
+    padding: 0.5rem 0.7rem;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+
+  :root[data-theme="apple27"] body.is-android .nav-tree-link,
+  :root[data-theme="apple27"] body.is-android .billing-section-nav-button {
+    min-height: 36px;
+    padding: 0.38rem 0.58rem;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+
+  :root[data-theme="apple27"] body.is-android .nav-item.active,
+  :root[data-theme="apple27"] body.is-android .nav-tree-link.active,
+  :root[data-theme="apple27"] body.is-android .billing-section-nav-button.active {
+    color: var(--apple-label);
+    border: 0;
+    background: var(--apple-fill-hover);
+    box-shadow: none;
+    font-weight: 600;
+  }
+
+  :root[data-theme="apple27"] body.is-android :is(
+    .nav-item.active,
+    .nav-tree-link.active,
+    .billing-section-nav-button.active
+  ) > svg:first-child {
+    color: var(--accent-color);
+  }
+
+  :root[data-theme="apple27"] body.is-android #nav.dashboard-expanded .nav-dashboard-parent.active,
+  :root[data-theme="apple27"] body.is-android #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  :root[data-theme="apple27"] body.is-android #nav.dashboard-expanded .nav-dashboard-parent.active > svg:first-child,
+  :root[data-theme="apple27"] body.is-android #nav.billing-active .nav-page-link[data-nav-page-target="billing-center"].active > svg:first-child {
+    color: var(--apple-secondary-label);
+  }
+
+  :root[data-theme="apple27"] body.is-android .btn:not(.btn-icon),
+  :root[data-theme="apple27"] body.is-android input[type="text"],
+  :root[data-theme="apple27"] body.is-android input[type="password"],
+  :root[data-theme="apple27"] body.is-android input[type="number"],
+  :root[data-theme="apple27"] body.is-android input[type="date"],
+  :root[data-theme="apple27"] body.is-android input[type="search"],
+  :root[data-theme="apple27"] body.is-android .custom-select-trigger,
+  :root[data-theme="apple27"] body.is-android .custom-select.form-select .custom-select-trigger {
+    min-height: var(--apple-control-height-touch);
+    height: auto;
+    border-radius: 12px;
+    font-size: 15px;
+  }
+
+  :root[data-theme="apple27"] body.is-android .switch {
+    width: 51px;
+    height: 31px;
+  }
+
+  :root[data-theme="apple27"] body.is-android .slider::before,
+  :root[data-theme="apple27"] body.is-android .slider:before {
+    left: 2px;
+    bottom: 2px;
+    width: 25px;
+    height: 25px;
+  }
+
+  :root[data-theme="apple27"] body.is-android .switch input:checked + .slider::before,
+  :root[data-theme="apple27"] body.is-android .switch input:checked + .slider:before {
+    transform: translateX(20px);
+  }
+}
+
 :root[data-theme="apple27"] body.is-android .custom-select-options,
 :root[data-theme="apple27"] body.is-android .modal-content {
   background: color-mix(in srgb, var(--apple-elevated) 96%, transparent) !important;
@@ -1095,18 +1251,26 @@
 
 /* ---------- Scroll indicators and scroll edges ---------- */
 
-:root[data-theme="apple27"] body.is-desktop {
-  scrollbar-color: var(--theme-scrollbar) transparent;
-  scrollbar-width: thin;
+@supports not selector(::-webkit-scrollbar) {
+  :root[data-theme="apple27"] body.is-desktop {
+    scrollbar-color: var(--theme-scrollbar) transparent;
+    scrollbar-width: thin;
+  }
 }
 
 :root[data-theme="apple27"] body.is-desktop ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
+  background: transparent;
 }
 
-:root[data-theme="apple27"] body.is-desktop ::-webkit-scrollbar-track {
-  background: transparent;
+:root[data-theme="apple27"] body.is-desktop ::-webkit-scrollbar-track,
+:root[data-theme="apple27"] body.is-desktop ::-webkit-scrollbar-track-piece,
+:root[data-theme="apple27"] body.is-desktop ::-webkit-scrollbar-corner,
+:root[data-theme="apple27"] body.is-desktop ::-webkit-scrollbar-button {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
 :root[data-theme="apple27"] body.is-desktop ::-webkit-scrollbar-thumb {
@@ -1127,7 +1291,7 @@
 
 /* ---------- Motion ---------- */
 
-:root[data-theme="apple27"] .page.active {
+:root[data-theme="apple27"] .page.active:not(.page-slide-from-right):not(.page-slide-from-left) {
   animation: apple27PageEnter var(--apple-duration-standard) var(--apple-ease-standard);
 }
 
@@ -1154,7 +1318,9 @@
 
 :root[data-theme="apple27"] .nav-tree-chevron,
 :root[data-theme="apple27"] .billing-collapse-chevron,
-:root[data-theme="apple27"] .custom-select-trigger i {
+:root[data-theme="apple27"] .disclosure-chevron,
+:root[data-theme="apple27"] .custom-select-trigger i,
+:root[data-theme="apple27"] .custom-select-trigger svg {
   transition: transform var(--apple-duration-standard) var(--apple-ease-spring);
 }
 
@@ -1223,6 +1389,9 @@
 
   :root[data-theme="apple27"] .page.active,
   :root[data-theme="apple27"] .billing-section-enter,
+  :root[data-theme="apple27"] .settings-home-enter,
+  :root[data-theme="apple27"] .settings-subpage-enter,
+  :root[data-theme="apple27"] .diagnostic-step-enter,
   :root[data-theme="apple27"] .modal-content,
   :root[data-theme="apple27"] .custom-select-options,
   :root[data-theme="apple27"] .btn:active,
