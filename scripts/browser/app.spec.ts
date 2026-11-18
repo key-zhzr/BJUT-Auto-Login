@@ -1,4 +1,88 @@
 import {test,expect} from '@playwright/test';
+for (const platform of ['macos', 'android']) {
+  test(`an open dropdown follows its anchor on a narrow ${platform} window`, async ({page}) => {
+    await page.setViewportSize({width: 1024, height: 768});
+    await page.goto(`http://127.0.0.1:1433/scripts/app-regression.html?platform=${platform}`);
+    await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+    await page.locator('[data-target=settings]').first().click();
+    const appearance = page.locator('[data-settings-target=appearance]');
+    if (await appearance.isVisible()) await appearance.click();
+    if (platform === 'android') {
+      await page.addStyleTag({content: `
+        body.is-android #nav { transition: width 160ms ease, height 160ms ease !important; }
+        @media (min-width: 769px) { body.is-android #nav { height: 100vh; } }
+      `});
+    }
+    const select = page.locator('#setting-theme');
+    const trigger = select.getByRole('combobox');
+    const options = select.getByRole('listbox');
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
+    await expect(options).toBeVisible();
+    const geometry = () => select.evaluate(element => {
+      const trigger = element.querySelector('.custom-select-trigger')!.getBoundingClientRect();
+      const menu = element.querySelector('.custom-select-options')!;
+      const bounds = menu.getBoundingClientRect();
+      return {
+        triggerLeft: Math.round(trigger.left), triggerRight: Math.round(trigger.right),
+        menuLeft: Math.round(bounds.left), menuRight: Math.round(bounds.right),
+        inside: bounds.left >= 0 && bounds.right <= innerWidth + 1 && bounds.top >= 0 && bounds.bottom <= innerHeight + 1,
+        gap: Math.min(Math.abs(bounds.top - trigger.bottom), Math.abs(trigger.top - bounds.bottom)),
+        open: menu.matches(':popover-open'),
+      };
+    });
+    const before = await geometry();
+    expect(before.open).toBe(true);
+    await page.setViewportSize({width: 390, height: 844});
+    await page.locator('#nav').evaluate(async nav => {
+      await new Promise(requestAnimationFrame);
+      await Promise.all(nav.getAnimations().map(animation => animation.finished.catch(() => undefined)));
+    });
+    await expect.poll(async () => {
+      const after = await geometry();
+      return after.open && after.inside && after.gap <= 8 && Math.abs(after.triggerLeft - after.menuLeft) <= 1
+        && Math.abs(after.triggerRight - after.menuRight) <= 1 && after.triggerLeft !== before.triggerLeft;
+    }).toBe(true);
+    await trigger.press('End');
+    await trigger.press('Enter');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+}
+
+test('app update checks detect a newer build of the installed version', async ({page}) => {
+  const base = 'https://github.com/key-zhzr/BJUT-Auto-Login/releases';
+  const download = `${base}/download/v0.1.6`;
+  const packageName = 'BJUT-Auto-Login_0.1.6_Windows_x64.exe';
+  let releaseReads = 0;
+  await page.route('https://api.github.com/repos/key-zhzr/BJUT-Auto-Login/releases?per_page=10', route => {
+    releaseReads++;
+    return route.fulfill({json: [{
+      tag_name: 'v0.1.6', name: 'v0.1.6', body: '更新说明', html_url: `${base}/tag/v0.1.6`,
+      prerelease: false, draft: false,
+      assets: [
+        {name: 'latest.json', browser_download_url: `${download}/latest.json`, size: 100},
+        {name: packageName, browser_download_url: `${download}/${packageName}`, size: 1024},
+      ],
+    }]});
+  });
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=windows');
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await page.locator('[data-target=settings]').first().click();
+  const about = page.locator('[data-settings-target=about]');
+  if (await about.isVisible()) await about.click();
+  await expect(page.locator('#app-build-time')).toHaveAttribute('datetime', '2026-11-17T16:00:00.000Z');
+  const check = page.locator('#btn-check-update');
+  await check.click();
+  await expect(page.locator('#alert-modal')).toContainText('当前已是最新版本');
+  await page.locator('#btn-alert-ok').click();
+  await check.click();
+  await expect(page.locator('#update-modal-title')).toHaveText('发现同版本新构建 v0.1.6');
+  await expect(page.locator('#update-modal-meta')).toContainText('当前编译时间');
+  await expect(page.locator('#update-modal-meta')).toContainText('更新包编译时间');
+  await expect(page.locator('#btn-update-confirm')).toBeVisible();
+  expect(releaseReads).toBe(1);
+});
+
 test('layout motion in all themes',async({page})=>{
   await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
   await expect(page.locator('#qa-run')).toBeVisible();

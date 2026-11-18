@@ -20,6 +20,8 @@ Object.defineProperty(window, 'localStorage', { value: {
   removeItem: (key: string) => memory.delete(key), clear: () => memory.clear(),
 } });
 const platform = new URL(location.href).searchParams.get('platform');
+const installedBuildTimestamp = 1_794_931_200;
+let updateManifestReads = 0;
 const mobileLayout = platform === 'android';
 Object.defineProperty(document,'hidden',{configurable:true,value:false});
 Object.defineProperty(navigator, 'userAgent', { value: mobileLayout ? 'Mozilla/5.0 (Linux; Android 15) Mobile MockApp' : platform === 'macos' ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) MockApp' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MockApp' });
@@ -181,7 +183,18 @@ mockIPC(async (cmd, payload: any = {}) => {
   if (cmd === 'get_network_schedule') return {intervalSeconds:15,interfacePollSeconds:4,reason:'模拟检查'};
   if (cmd === 'get_current_network_state') return {state:'BjutCampus',loginType:'lgn-wired',ip:'172.26.1.2',ssid:'',bssid:'',timestamp:'测试'};
   if (cmd === 'get_countdown_status') return {status:'ticking',seconds:15};
-  if (cmd === 'get_update_target') return {currentVersion:'test',platform:mobileLayout?'android':'windows',arch:mobileLayout?'aarch64':'x86_64'};
+  if (cmd === 'get_update_target') return {
+    currentVersion: '0.1.6',
+    currentBuildTimestamp: installedBuildTimestamp,
+    platform: mobileLayout ? 'android' : platform === 'macos' ? 'macos' : 'windows',
+    arch: mobileLayout ? 'arm64' : 'x64',
+    format: mobileLayout ? 'apk' : platform === 'macos' ? 'dmg' : 'exe',
+  };
+  if (cmd === 'fetch_official_update_manifest') return {
+    version: '0.1.6',
+    build_timestamp: installedBuildTimestamp + 60 * Math.min(updateManifestReads++, 1),
+    platforms: {},
+  };
   if (['get_logs','get_network_events','get_account_health','get_recoverable_recharges'].includes(cmd)) return [];
   if (cmd === 'plugin:window|is_visible' || cmd === 'plugin:window|is_focused') return true;
   if (cmd === 'plugin:window|is_minimized') return false;
@@ -527,7 +540,13 @@ button.addEventListener('click',async()=>{
     (document.getElementById('router-service-advanced') as HTMLDetailsElement).open=true;
     const logDirectory=document.querySelector<HTMLInputElement>('#router-service-more input[aria-label="日志目录"]')!;
     assert(logDirectory.closest<HTMLElement>('.router-setting-item')!.hidden,'系统日志仍显示自定义目录');
-    const chooseLog=(value:string)=>{click('#router-service-more [aria-label="日志保存位置"] .custom-select-trigger');click(`#router-service-more .custom-select.open [data-value="${value}"]`);};
+    const logLocation = document.querySelector<HTMLElement>('#router-service-more [aria-label="日志保存位置"] .custom-select-trigger')!;
+    const chooseLog = (value: string) => {
+      logLocation.scrollIntoView({ block: 'center', behavior: 'instant' });
+      logLocation.click();
+      assert(logLocation.getAttribute('aria-expanded') === 'true', '无法展开日志保存位置菜单');
+      click(`#router-service-more .custom-select.open [data-value="${value}"]`);
+    };
     chooseLog('file');await wait(()=>!logDirectory.closest<HTMLElement>('.router-setting-item')!.hidden);
     logDirectory.value='/tmp/qa-draft-log';chooseLog('system');await wait(()=>logDirectory.disabled);
     chooseLog('file');await wait(()=>!logDirectory.disabled);assert(logDirectory.value==='/tmp/qa-draft-log','切换日志位置丢失目录草稿');

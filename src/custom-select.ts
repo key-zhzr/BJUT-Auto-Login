@@ -1,6 +1,8 @@
 export class CustomSelect {
   private static openInstance: CustomSelect | null = null;
   private static outsideHandlerInstalled = false;
+  private static layoutObserver: ResizeObserver | null = null;
+  private static placementFrame: number | null = null;
   element: HTMLElement;
   trigger: HTMLElement;
   triggerSpan: HTMLSpanElement;
@@ -18,8 +20,95 @@ export class CustomSelect {
   onChangeCallbacks: ((value: string) => void)[] = [];
 
   private options() { return this.allOptions.filter(option => option.getAttribute('aria-disabled') !== 'true'); }
-  close() {
-    if (CustomSelect.openInstance === this) CustomSelect.openInstance = null;
+  private usePopover() {
+    return typeof (this.optionsContainer as HTMLElement & { showPopover?: () => void }).showPopover === 'function';
+  }
+  private hideOptions() {
+    const popover = this.optionsContainer as HTMLElement & { hidePopover?: () => void };
+    if (typeof popover.hidePopover === 'function' && this.optionsContainer.matches(':popover-open')) {
+      try { popover.hidePopover(); } catch {}
+    }
+    this.optionsContainer.hidden = true;
+    this.optionsContainer.inert = true;
+    this.optionsContainer.style.top = '';
+    this.optionsContainer.style.bottom = '';
+    this.optionsContainer.style.left = '';
+    this.optionsContainer.style.width = '';
+  }
+  private positionMenu(): boolean {
+    const trigger = this.trigger.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft ?? 0;
+    const width = viewport?.width ?? document.documentElement.clientWidth;
+    const right = left + width;
+    const viewportTop = viewport?.offsetTop ?? 0;
+    const scroller = this.element.closest<HTMLElement>('main, .modal-content');
+    const bounds = scroller?.getBoundingClientRect();
+    let top = Math.max(bounds?.top ?? 0, viewportTop);
+    let bottom = Math.min(bounds?.bottom ?? window.innerHeight, viewportTop + (viewport?.height ?? window.innerHeight));
+    if (scroller?.tagName === 'MAIN') {
+      const header = this.element.closest('.page')?.querySelector('.page-header');
+      if (header && !header.contains(this.element)) top = Math.max(top, header.getBoundingClientRect().bottom);
+      const dock = this.element.closest('#billing-center')?.querySelector('.billing-mobile-nav');
+      for (const nav of [document.querySelector('body:not(.is-desktop) #nav'), dock]) {
+        if (!nav) continue;
+        const style = getComputedStyle(nav);
+        const rect = nav.getBoundingClientRect();
+        // A sidebar can retain its full height while animating into a bottom dock.
+        if (style.position === 'fixed' && style.visibility === 'visible' && rect.height > 0 && rect.width > rect.height
+          && rect.right > trigger.left && rect.left < trigger.right) {
+          bottom = Math.min(bottom, rect.top);
+        }
+      }
+    }
+    if (!trigger.width || !trigger.height || !width || trigger.right <= left || trigger.left >= right
+      || trigger.bottom <= top || trigger.top >= bottom) return false;
+
+    const below = Math.max(0, bottom - trigger.bottom - 12);
+    const above = Math.max(0, trigger.top - top - 12);
+    const desired = Math.min(220, this.optionsContainer.scrollHeight || 220);
+    const opensUp = below < desired && above > below;
+    const available = opensUp ? above : below;
+    if (!available) return false;
+    this.element.classList.toggle('opens-up', opensUp);
+    const { style } = this.optionsContainer;
+    style.maxHeight = `${Math.min(220, available)}px`;
+    if (this.usePopover()) {
+      const menuWidth = Math.min(trigger.width, width);
+      const gap = document.documentElement.dataset.theme === 'apple27' ? 6 : document.documentElement.dataset.theme === 'winui' ? 4 : 5;
+      style.left = `${Math.max(left, Math.min(trigger.left, right - menuWidth))}px`;
+      style.width = `${menuWidth}px`;
+      style.top = opensUp ? 'auto' : `${trigger.bottom + gap}px`;
+      style.bottom = opensUp ? `${window.innerHeight - trigger.top + gap}px` : 'auto';
+    }
+    return true;
+  }
+  private static schedulePlacement(): void {
+    if (!CustomSelect.openInstance || CustomSelect.placementFrame !== null) return;
+    CustomSelect.placementFrame = requestAnimationFrame(() => {
+      CustomSelect.placementFrame = null;
+      const current = CustomSelect.openInstance;
+      if (current && !current.positionMenu()) current.close(true);
+    });
+  }
+  private observeMenuLayout(): void {
+    const observer = CustomSelect.layoutObserver;
+    if (!observer) return;
+    const scroller = this.element.closest('main, .modal-content');
+    const header = this.element.closest('.page')?.querySelector('.page-header');
+    const billingDock = this.element.closest('#billing-center')?.querySelector('.billing-mobile-nav');
+    for (const element of [this.trigger, scroller, header, document.getElementById('nav'), billingDock]) {
+      if (element) observer.observe(element, { box: 'border-box' });
+    }
+  }
+  static closeOpen(): void {
+    CustomSelect.openInstance?.close();
+  }
+  close(immediate = false) {
+    if (CustomSelect.openInstance === this) {
+      CustomSelect.openInstance = null;
+      CustomSelect.layoutObserver?.disconnect();
+    }
     if (this.scrollFrame !== null) { cancelAnimationFrame(this.scrollFrame); this.scrollFrame = null; }
     if (!this.element.classList.contains('open')) return;
     this.element.classList.remove('open'); this.trigger.setAttribute('aria-expanded', 'false');
@@ -28,13 +117,23 @@ export class CustomSelect {
     this.highlightedOption = null;
     this.optionsContainer.inert = true;
     if (this.closeTimer !== null) window.clearTimeout(this.closeTimer);
+    if (immediate) {
+      this.closeTimer = null;
+      this.hideOptions();
+      return;
+    }
     const style = getComputedStyle(this.optionsContainer);
     const milliseconds = (value: string) => Math.max(0, ...value.split(',').map(part => Number.parseFloat(part) * (part.trim().endsWith('ms') ? 1 : 1000)));
     const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : milliseconds(style.transitionDuration) + milliseconds(style.transitionDelay);
-    this.closeTimer = window.setTimeout(() => {
+    const finishClose = () => {
       this.closeTimer = null;
-      if (!this.element.classList.contains('open')) this.optionsContainer.hidden = true;
-    }, duration);
+      if (!this.element.classList.contains('open')) this.hideOptions();
+    };
+    if (duration <= 0) {
+      finishClose();
+      return;
+    }
+    this.closeTimer = window.setTimeout(finishClose, duration);
   }
   private highlight(index: number, keyboard = true) {
     const options = this.options(); if (!options.length) return;
@@ -70,32 +169,21 @@ export class CustomSelect {
     this.element.classList.add('menu-positioning');
     this.optionsContainer.hidden = false;
     this.optionsContainer.inert = false;
-    const trigger = this.trigger.getBoundingClientRect();
-    const scroller = this.element.closest<HTMLElement>('main, .modal-content');
-    const bounds = scroller?.getBoundingClientRect();
-    const viewport = window.visualViewport;
-    let top = Math.max(bounds?.top ?? 0, viewport?.offsetTop ?? 0);
-    let bottom = Math.min(bounds?.bottom ?? window.innerHeight, (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight));
-    if(scroller?.tagName === 'MAIN') {
-      const header = this.element.closest('.page')?.querySelector('.page-header');
-      if(header) top = Math.max(top, header.getBoundingClientRect().bottom);
-      const nav = document.querySelector<HTMLElement>('body:not(.is-desktop) #nav');
-      if(nav && getComputedStyle(nav).position === 'fixed' && nav.getBoundingClientRect().height > 0) {
-        bottom = Math.min(bottom, nav.getBoundingClientRect().top);
-      }
+    if (this.usePopover() && !this.optionsContainer.matches(':popover-open')) {
+      try { (this.optionsContainer as HTMLElement & { showPopover: () => void }).showPopover(); } catch {}
     }
-    const below = Math.max(0, bottom - trigger.bottom - 12);
-    const above = Math.max(0, trigger.top - top - 12);
     // Resolve placement while the flyout is invisible. Keep that placement on
     // exit too; changing top/bottom halfway through a transform causes a jump.
-    this.element.classList.remove('open');
-    const desired = Math.min(220, this.optionsContainer.scrollHeight || 220);
-    const opensUp = below < desired && above > below;
-    this.element.classList.toggle('opens-up', opensUp);
-    this.optionsContainer.style.maxHeight = `${Math.min(220, opensUp ? above : below)}px`;
+    if (!this.positionMenu()) {
+      this.element.classList.remove('menu-positioning');
+      this.hideOptions();
+      CustomSelect.openInstance = null;
+      return;
+    }
     this.optionsContainer.getBoundingClientRect();
     this.element.classList.remove('menu-positioning');
     this.element.classList.add('open'); this.trigger.setAttribute('aria-expanded', 'true');
+    this.observeMenuLayout();
     this.scrollPositions = new WeakMap();
     for (let parent = this.element.parentElement; parent; parent = parent.parentElement) {
       this.scrollPositions.set(parent, {top: parent.scrollTop, left: parent.scrollLeft});
@@ -122,6 +210,7 @@ export class CustomSelect {
     this.trigger = this.element.querySelector('.custom-select-trigger')!;
     this.triggerSpan = this.trigger.querySelector('span')!;
     this.optionsContainer = this.element.querySelector('.custom-select-options')!;
+    if (this.usePopover()) this.optionsContainer.setAttribute('popover', 'manual');
     this.optionsContainer.hidden = true;
     this.optionsContainer.inert = true;
     this.trigger.tabIndex = 0; this.trigger.setAttribute('role', 'combobox');
@@ -174,7 +263,12 @@ export class CustomSelect {
       this.onChangeCallbacks.forEach(callback => callback(value));
     });
     if (!CustomSelect.outsideHandlerInstalled) {
-      document.addEventListener('click', () => CustomSelect.openInstance?.close());
+      document.addEventListener('click', CustomSelect.closeOpen);
+      const schedulePlacement = CustomSelect.schedulePlacement;
+      if (typeof ResizeObserver !== 'undefined') CustomSelect.layoutObserver = new ResizeObserver(schedulePlacement);
+      window.addEventListener('resize', schedulePlacement);
+      window.visualViewport?.addEventListener('resize', schedulePlacement);
+      window.visualViewport?.addEventListener('scroll', schedulePlacement);
       document.addEventListener('scroll', event => {
         const current = CustomSelect.openInstance;
         if (current && event.target instanceof Element && !current.optionsContainer.contains(event.target)

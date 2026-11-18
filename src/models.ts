@@ -179,6 +179,7 @@ export interface OfficialUpdateManifest {
   version: string;
   notes?: string;
   pub_date?: string;
+  build_timestamp?: number;
   platforms?: Record<string, {
     url: string;
     signature: string;
@@ -190,6 +191,7 @@ export interface UpdateTarget {
   arch: string;
   format: string;
   currentVersion: string;
+  currentBuildTimestamp?: number;
 }
 
 export interface UpdateProgress {

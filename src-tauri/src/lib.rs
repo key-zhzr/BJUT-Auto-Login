@@ -1448,6 +1448,7 @@ struct UpdateTarget {
     arch: String,
     format: String,
     current_version: String,
+    current_build_timestamp: u64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
@@ -2732,6 +2733,7 @@ fn get_update_target(app: tauri::AppHandle) -> UpdateTarget {
         arch: arch.to_string(),
         format: format.to_string(),
         current_version: app.package_info().version.to_string(),
+        current_build_timestamp: update_metadata::build_timestamp(),
     }
 }
 
@@ -3157,6 +3159,9 @@ async fn download_and_install_update(
         .updater_builder()
         .endpoints(vec![endpoint])
         .map_err(|error| error.to_string())?
+        .header("cache-control", "no-cache")
+        .map_err(|error| error.to_string())?
+        .version_comparator(|current, remote| !remote.version.cmp_precedence(&current).is_lt())
         .build()
         .map_err(|error| error.to_string())?;
     let update = updater
@@ -3164,6 +3169,19 @@ async fn download_and_install_update(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "签名更新清单未提供适用于当前设备的新版本".to_string())?;
+    // Match the frontend check using the manifest just fetched for installation.
+    // The plugin's comparator cannot see custom fields until it returns Update.
+    let candidate = update
+        .version
+        .parse()
+        .map_err(|_| "签名更新清单版本号无效")?;
+    if !update_metadata::is_newer_release(
+        app.package_info().version.cmp_precedence(&candidate),
+        update_metadata::build_timestamp(),
+        update.raw_json["build_timestamp"].as_u64(),
+    ) {
+        return Err("签名更新清单未提供比当前应用更新的版本或构建".into());
+    }
     let _download_guard = state.update_download.begin()?;
     let bytes =
         controlled_update_download(&app, &state.update_download, update.download_url.clone())

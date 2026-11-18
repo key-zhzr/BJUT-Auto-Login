@@ -4,7 +4,7 @@ import type {
   OfficialUpdateManifest,
   UpdateTarget,
 } from './models.ts';
-import { buildExpectedUpdateAssetName } from './update-utils.ts';
+import { buildExpectedUpdateAssetName, compareVersions, isBuildTimestamp } from './update-utils.ts';
 
 const RELEASES_API = 'https://api.github.com/repos/key-zhzr/BJUT-Auto-Login/releases';
 const RELEASES_CACHE_KEY = 'bjut_github_releases_cache_v1';
@@ -147,7 +147,6 @@ function normalizeManifestVersion(version: string): string {
 export function releaseFromOfficialManifest(
   manifest: OfficialUpdateManifest,
   target: UpdateTarget,
-  manifestUrl: string,
 ): GitHubRelease {
   const version = normalizeManifestVersion(manifest.version);
   const tagName = `v${version}`;
@@ -172,9 +171,42 @@ export function releaseFromOfficialManifest(
       },
       {
         name: 'latest.json',
-        browser_download_url: manifestUrl,
+        browser_download_url: `${releaseBase}/latest.json`,
         size: 0,
       },
     ],
   };
+}
+
+export async function getReleaseUpdate(
+  release: GitHubRelease,
+  target: UpdateTarget,
+  readManifest: (url: string) => Promise<OfficialUpdateManifest>,
+  manifest?: OfficialUpdateManifest,
+): Promise<{ sameVersion: boolean; buildTimestamp?: number } | null> {
+  const order = compareVersions(target.currentVersion, release.tag_name);
+  if (order === null || order > 0) return null;
+
+  const sameVersion = order === 0;
+  const installed = target.currentBuildTimestamp;
+  if (sameVersion) {
+    if (!isBuildTimestamp(installed)) return null;
+    if (!manifest) {
+      const manifestAsset = release.assets.find(asset => asset.name === 'latest.json');
+      if (!manifestAsset) return null;
+      // Always read the current manifest, even if the GitHub release list
+      // came from cache. A rebuilt release keeps the same asset URL.
+      manifest = await readManifest(manifestAsset.browser_download_url);
+    }
+  }
+
+  if (manifest && normalizeManifestVersion(manifest.version) !== normalizeManifestVersion(release.tag_name)) {
+    throw new Error('官方更新清单的版本与发布标签不一致');
+  }
+  const timestamp = manifest?.build_timestamp;
+  const buildTimestamp = isBuildTimestamp(timestamp) ? timestamp : undefined;
+  if (sameVersion && !(isBuildTimestamp(installed) && buildTimestamp !== undefined && buildTimestamp > installed)) {
+    return null;
+  }
+  return { sameVersion, buildTimestamp };
 }

@@ -3,7 +3,7 @@ import { marked } from 'marked';
 
 import type { GitHubReleaseAsset, UpdateTarget } from './models';
 
-export function isVersionNewer(current: string, latest: string): boolean {
+export function compareVersions(current: string, latest: string): -1 | 0 | 1 | null {
   const parseVersion = (value: string) => {
     const match = value.trim().match(
       /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
@@ -20,7 +20,7 @@ export function isVersionNewer(current: string, latest: string): boolean {
   };
   const currentVersion = parseVersion(current);
   const latestVersion = parseVersion(latest);
-  if (!currentVersion || !latestVersion) return false;
+  if (!currentVersion || !latestVersion) return null;
   for (
     let index = 0;
     index < currentVersion.core.length;
@@ -28,11 +28,11 @@ export function isVersionNewer(current: string, latest: string): boolean {
   ) {
     const currentPart = currentVersion.core[index];
     const latestPart = latestVersion.core[index];
-    if (latestPart > currentPart) return true;
-    if (currentPart > latestPart) return false;
+    if (latestPart > currentPart) return -1;
+    if (currentPart > latestPart) return 1;
   }
-  if (currentVersion.prerelease.length === 0) return false;
-  if (latestVersion.prerelease.length === 0) return true;
+  if (currentVersion.prerelease.length === 0) return latestVersion.prerelease.length === 0 ? 0 : 1;
+  if (latestVersion.prerelease.length === 0) return -1;
   for (
     let index = 0;
     index < Math.max(currentVersion.prerelease.length, latestVersion.prerelease.length);
@@ -40,19 +40,30 @@ export function isVersionNewer(current: string, latest: string): boolean {
   ) {
     const currentPart = currentVersion.prerelease[index];
     const latestPart = latestVersion.prerelease[index];
-    if (currentPart === undefined) return true;
-    if (latestPart === undefined) return false;
+    if (currentPart === undefined) return -1;
+    if (latestPart === undefined) return 1;
     if (currentPart === latestPart) continue;
     const currentNumber = /^\d+$/.test(currentPart) ? BigInt(currentPart) : null;
     const latestNumber = /^\d+$/.test(latestPart) ? BigInt(latestPart) : null;
-    if (currentNumber !== null && latestNumber !== null) return latestNumber > currentNumber;
+    if (currentNumber !== null && latestNumber !== null) return latestNumber > currentNumber ? -1 : 1;
     // SemVer 2.0.0: numeric identifiers always have lower precedence than
     // non-numeric identifiers.
-    if (currentNumber !== null) return true;
-    if (latestNumber !== null) return false;
-    return latestPart > currentPart;
+    if (currentNumber !== null) return -1;
+    if (latestNumber !== null) return 1;
+    return latestPart > currentPart ? -1 : 1;
   }
-  return false;
+  return 0;
+}
+
+export function isBuildTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value)
+    && value > 0 && value <= 253_402_300_799;
+}
+
+export function formatBuildTimestamp(timestamp: number): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'medium', timeStyle: 'medium', hourCycle: 'h23',
+  }).format(timestamp * 1000);
 }
 
 export function selectUpdateAsset(

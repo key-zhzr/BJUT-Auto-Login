@@ -98,6 +98,7 @@
 }
 :root[data-theme="apple27"] .custom-select { --closed-menu-scale: .985; }
 :root[data-theme] .custom-select.menu-positioning .custom-select-options {
+  display: block !important;
   transition: none !important;
   opacity: 0 !important;
   visibility: hidden !important;

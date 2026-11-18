@@ -21,8 +21,9 @@ assert.deepEqual(routerBillingSummary([
 assert.equal(routerBillingSummary([routerJob({state:'ready',account:'one',totalFlow:'-1',remainingFlow:'unlimited'})]).totalFlow,null);
 console.log('Router counters and deduplicated billing regression cases passed');
 
-const { isVersionNewer } = await import('../src/update-utils.ts');
+const { compareVersions } = await import('../src/update-utils.ts');
 const {
+  getReleaseUpdate,
   loadGitHubReleases,
   releaseFromOfficialManifest,
 } = await import('../src/update-source.ts');
@@ -54,7 +55,7 @@ const cases = [
 
 for (const [current, latest, expected] of cases) {
   assert.equal(
-    isVersionNewer(current, latest),
+    compareVersions(current, latest) === -1,
     expected,
     `${current} -> ${latest}`,
   );
@@ -138,21 +139,54 @@ const syntheticRelease = releaseFromOfficialManifest({
   arch: 'arm64',
   format: 'apk',
   currentVersion: '0.1.5',
-}, 'https://github.com/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json');
+});
 assert.equal(syntheticRelease.tag_name, 'v0.1.6');
 assert.equal(syntheticRelease.assets[0].name, 'BJUT-Auto-Login_0.1.6_Android_arm64.apk');
 assert.equal(syntheticRelease.assets[1].name, 'latest.json');
+assert.equal(syntheticRelease.assets[1].browser_download_url, 'https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/v0.1.6/latest.json');
 assert.equal(syntheticRelease.assets[0].size, 0); // Legacy manifests need a header lookup.
 const manifestAsset = syntheticRelease.assets[0];
 const fromSizedManifest = (asset) => releaseFromOfficialManifest({
   version: '0.1.6', platforms: {}, assets: [asset],
-}, { platform: 'android', arch: 'arm64', format: 'apk', currentVersion: '0.1.5' }, 'https://github.com/key-zhzr/BJUT-Auto-Login/releases/latest/download/latest.json').assets[0].size;
+}, { platform: 'android', arch: 'arm64', format: 'apk', currentVersion: '0.1.5' }).assets[0].size;
 assert.equal(fromSizedManifest({ ...manifestAsset, size: 12_345_678 }), 12_345_678);
 assert.equal(fromSizedManifest({ ...manifestAsset, size: -1 }), 0);
 assert.equal(fromSizedManifest({ ...manifestAsset, size: '12345678' }), 0);
 assert.equal(fromSizedManifest({ ...manifestAsset, size: 12_345_678, name: 'different.apk' }), 0);
 assert.equal(fromSizedManifest({ ...manifestAsset, size: 12_345_678, browser_download_url: 'https://example.com/package.apk' }), 0);
 console.log('GitHub release fallback regression cases passed');
+
+const installed = {
+  platform: 'android', arch: 'arm64', format: 'apk', currentVersion: '0.1.6',
+  currentBuildTimestamp: 1_794_931_200,
+};
+const fixtures = { ...releaseFixture, assets: syntheticRelease.assets };
+const older = () => { throw new Error('Older releases should not fetch a manifest'); };
+assert.equal(await getReleaseUpdate({ ...fixtures, tag_name: 'v0.1.5' }, installed, older), null);
+assert.equal(await getReleaseUpdate({ ...fixtures, tag_name: 'invalid' }, installed, older), null);
+const officialManifest = build_timestamp => ({ version: '0.1.6', build_timestamp, platforms: {} });
+assert.deepEqual(await getReleaseUpdate({ ...fixtures, tag_name: 'v0.1.7' }, installed, older, {
+  ...officialManifest(installed.currentBuildTimestamp - 1), version: '0.1.7',
+}), { sameVersion: false, buildTimestamp: installed.currentBuildTimestamp - 1 });
+assert.deepEqual(await getReleaseUpdate({ ...fixtures, tag_name: 'v0.1.7' }, installed, older), {
+  sameVersion: false, buildTimestamp: undefined,
+});
+assert.equal(await getReleaseUpdate(fixtures, { ...installed, currentBuildTimestamp: undefined }, older), null);
+assert.equal(await getReleaseUpdate(releaseFixture, installed, older), null);
+assert.equal(await getReleaseUpdate(fixtures, installed, older, {
+  ...officialManifest(undefined), pub_date: '2026-11-20T00:00:00Z',
+}), null);
+for (const stamp of [installed.currentBuildTimestamp - 1, installed.currentBuildTimestamp, '1794931260', 0, 1e13]) {
+  assert.equal(await getReleaseUpdate(fixtures, installed, older, officialManifest(stamp)), null);
+}
+assert.deepEqual(await getReleaseUpdate(fixtures, installed, async url => {
+  assert.equal(url, syntheticRelease.assets[1].browser_download_url);
+  return officialManifest(installed.currentBuildTimestamp + 1);
+}), { sameVersion: true, buildTimestamp: installed.currentBuildTimestamp + 1 });
+await assert.rejects(getReleaseUpdate(fixtures, installed, older, {
+  ...officialManifest(installed.currentBuildTimestamp + 1), version: '0.1.5',
+}), /清单的版本与发布标签不一致/);
+console.log('Build timestamp regression cases passed');
 
 const paymentUrl = 'weixin://wap/pay?prepayid%3Dwx1234567890&package=123&noncestr=abc123&timestamp=1784697242&sign=BgAAyf6IiX7aEIMn';
 assert.equal(isTrustedWechatLaunchUrl(paymentUrl), true);

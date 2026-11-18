@@ -57,8 +57,8 @@ import {
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
 import { requestNetworkTrustApproval, showNetworkTrustListModal } from './network-trust';
 import { applyConfiguredUiText, UI_TEXT } from './ui-text';
-import { formatBytes, isVersionNewer, renderReleaseNotes, selectUpdateAsset } from './update-utils';
-import { loadGitHubReleases, releaseFromOfficialManifest } from './update-source';
+import { formatBuildTimestamp, formatBytes, isBuildTimestamp, renderReleaseNotes, selectUpdateAsset } from './update-utils';
+import { getReleaseUpdate, loadGitHubReleases, releaseFromOfficialManifest } from './update-source';
 import {
   buildWechatPaymentRelayUrl,
   createWechatPaymentRelaySession,
@@ -573,6 +573,8 @@ async function showUpdateDialog(
   options: {
     reinstall?: boolean;
     installAvailable?: boolean;
+    sameVersion?: boolean;
+    buildTimestamp?: number;
   } = {},
 ): Promise<'install' | 'browser' | null> {
   const modal = document.getElementById('update-modal');
@@ -590,14 +592,21 @@ async function showUpdateDialog(
 
   const reinstall = options.reinstall === true;
   const installAvailable = options.installAvailable !== false;
-  document.getElementById('update-modal-title')!.textContent = reinstall
-    ? `重新安装 ${release.tag_name}`
-    : `发现新版本 ${release.tag_name}`;
+  const title = reinstall ? '重新安装' : options.sameVersion ? '发现同版本新构建' : '发现新版本';
+  document.getElementById('update-modal-title')!.textContent = `${title} ${release.tag_name}`;
   const signedInstallerHint = installAvailable && target.platform !== 'android'
     ? ' · 应用内安装将使用签名更新包'
     : '';
+  const buildTimes = [];
+  if (isBuildTimestamp(target.currentBuildTimestamp)) {
+    buildTimes.push(`当前编译时间 ${formatBuildTimestamp(target.currentBuildTimestamp)}`);
+  }
+  if (isBuildTimestamp(options.buildTimestamp)) {
+    buildTimes.push(`更新包编译时间 ${formatBuildTimestamp(options.buildTimestamp)}`);
+  }
+  const buildDetails = buildTimes.length ? ` · ${buildTimes.join(' · ')}` : '';
   const meta = document.getElementById('update-modal-meta')!;
-  const showSize = (size: string) => { meta.textContent = `当前 v${target.currentVersion} · ${target.platform}/${target.arch} · 完整安装包 ${asset.name} · ${size}${signedInstallerHint}`; };
+  const showSize = (size: string) => { meta.textContent = `当前 v${target.currentVersion} · ${target.platform}/${target.arch}${buildDetails} · 完整安装包 ${asset.name} · ${size}${signedInstallerHint}`; };
   showSize(asset.size > 0 ? formatBytes(asset.size) : '正在读取大小…');
   notes.innerHTML = await renderReleaseNotes(release.body || '');
   notes.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => {
@@ -2045,6 +2054,11 @@ async function init() {
       .then(target => {
         const versionLabel = document.getElementById('app-version');
         if (versionLabel) versionLabel.textContent = `v${target.currentVersion}`;
+        const buildTime = document.querySelector<HTMLTimeElement>('#app-build-time');
+        if (buildTime && isBuildTimestamp(target.currentBuildTimestamp)) {
+          buildTime.dateTime = new Date(target.currentBuildTimestamp * 1000).toISOString();
+          buildTime.textContent = formatBuildTimestamp(target.currentBuildTimestamp);
+        }
       })
       .catch(error => console.warn('Failed to query application version:', error));
   }
@@ -3720,6 +3734,8 @@ function setupEventListeners() {
           throw new Error('仅应用内支持自动更新');
         }
         const target = await invoke<UpdateTarget>('get_update_target');
+        const readManifest = (url: string) => invoke<OfficialUpdateManifest>('fetch_official_update_manifest', { url });
+        let manifest: OfficialUpdateManifest | undefined;
         let releases: GitHubRelease[];
         try {
           const loaded = await loadGitHubReleases(10);
@@ -3731,10 +3747,8 @@ function setupEventListeners() {
             : `https://github.com/key-zhzr/BJUT-Auto-Login/releases/download/${encodeURIComponent(
               await invoke<string>('fetch_latest_official_release_tag'),
             )}/latest.json`;
-          const manifest = await invoke<OfficialUpdateManifest>('fetch_official_update_manifest', {
-            url: manifestUrl,
-          });
-          releases = [releaseFromOfficialManifest(manifest, target, manifestUrl)];
+          manifest = await readManifest(manifestUrl);
+          releases = [releaseFromOfficialManifest(manifest, target)];
           log(
             '系统',
             `${String(apiError)}；已改用 GitHub 官方发布订阅和签名更新清单`,
@@ -3755,7 +3769,8 @@ function setupEventListeners() {
         }
 
         const latestRelease = targetReleases[0];
-        if (!isVersionNewer(target.currentVersion, latestRelease.tag_name)) {
+        const update = await getReleaseUpdate(latestRelease, target, readManifest, manifest);
+        if (!update) {
           await customAlert(`当前已是最新版本 (v${target.currentVersion})！`);
           log('系统', `检查更新完毕，当前版本 v${target.currentVersion} 已是最新`);
           return;
@@ -3775,10 +3790,10 @@ function setupEventListeners() {
           log('系统', `版本 ${latestRelease.tag_name} 缺少 Tauri 签名更新清单`, 'error');
         }
 
-        log('系统', `发现新版本: ${latestRelease.tag_name}，匹配安装包 ${asset.name}`, 'success');
+        log('系统', `发现${update.sameVersion ? '同版本新构建' : '新版本'} ${latestRelease.tag_name}，匹配安装包 ${asset.name}`, 'success');
         const installAvailable = target.platform === 'android'
           || (target.platform !== 'ios' && Boolean(signedManifest));
-        const choice = await showUpdateDialog(latestRelease, target, asset, { installAvailable });
+        const choice = await showUpdateDialog(latestRelease, target, asset, { installAvailable, ...update });
         if (!choice) return;
         if (choice === 'browser') {
           await openUrl(asset.browser_download_url);
@@ -3835,7 +3850,7 @@ function setupEventListeners() {
         const manifest = await invoke<OfficialUpdateManifest>('fetch_official_update_manifest', {
           url: manifestUrl,
         });
-        const release = releaseFromOfficialManifest(manifest, target, manifestUrl);
+        const release = releaseFromOfficialManifest(manifest, target);
         if (release.tag_name.replace(/^v/i, '') !== currentTag) {
           throw new Error(`官方更新清单版本 ${release.tag_name} 与当前版本 v${currentTag} 不一致`);
         }
@@ -3849,6 +3864,7 @@ function setupEventListeners() {
         const choice = await showUpdateDialog(release, target, asset, {
           reinstall: true,
           installAvailable,
+          buildTimestamp: manifest.build_timestamp,
         });
         if (!choice) return;
         if (choice === 'browser') {

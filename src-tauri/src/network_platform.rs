@@ -98,7 +98,11 @@ pub(crate) fn macos_read_command(program: &str, args: &[&str]) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_command_output(program: &str, args: &[&str], timeout: std::time::Duration) -> Option<String> {
+fn macos_command_output(
+    program: &str,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Option<String> {
     use std::{
         io::{ErrorKind, Read},
         os::{fd::OwnedFd, unix::net::UnixStream},

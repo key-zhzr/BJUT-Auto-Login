@@ -1,3 +1,21 @@
+pub(crate) fn build_timestamp() -> u64 {
+    env!("BJUT_BUILD_TIMESTAMP")
+        .parse()
+        .expect("build script provides a valid timestamp")
+}
+
+#[cfg(any(desktop, test))]
+pub(crate) fn is_newer_release(
+    version_order: std::cmp::Ordering,
+    installed_timestamp: u64,
+    remote_timestamp: Option<u64>,
+) -> bool {
+    version_order.is_lt()
+        || (version_order.is_eq()
+            && remote_timestamp
+                .is_some_and(|stamp| stamp > installed_timestamp && stamp <= 253_402_300_799))
+}
+
 fn content_size(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> Option<u64> {
     let value = if status == reqwest::StatusCode::PARTIAL_CONTENT {
         let range = headers.get(reqwest::header::CONTENT_RANGE)?.to_str().ok()?;
@@ -70,6 +88,21 @@ pub(crate) async fn asset_size(url: String) -> Result<Option<u64>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_newer_builds_can_update_the_same_version() {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        let installed = 1_794_931_200;
+        assert!(build_timestamp() > 0);
+        assert!(is_newer_release(Less, installed, None));
+        assert!(is_newer_release(Less, installed, Some(installed - 1)));
+        assert!(is_newer_release(Equal, installed, Some(installed + 1)));
+        assert!(!is_newer_release(Equal, installed, Some(installed)));
+        assert!(!is_newer_release(Equal, installed, Some(installed - 1)));
+        assert!(!is_newer_release(Equal, installed, None));
+        assert!(!is_newer_release(Equal, installed, Some(u64::MAX)));
+        assert!(!is_newer_release(Greater, installed, Some(installed + 1)));
+    }
+
     #[test]
     fn range_metadata_reports_the_full_file_not_the_one_byte_response() {
         use reqwest::{header::*, StatusCode};
