@@ -4083,12 +4083,14 @@ body.is-android .custom-select:not(.open) .custom-select-options {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
-body.is-android nav {
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.025), transparent 55%),
-    rgba(15, 23, 42, 0.96);
+@media (min-width: 769px) {
+  body.is-android nav {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.025), transparent 55%),
+      rgba(15, 23, 42, 0.96);
+  }
 }
 body.is-android .custom-select-options {
   background: rgba(24, 31, 52, 0.985);

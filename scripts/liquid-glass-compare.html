@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>液态玻璃四版本演进同屏对比（V1 → V4）</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef2f7;
+      --card: #ffffff;
+      --border: rgba(15, 23, 42, 0.12);
+      --text: #0f172a;
+      --muted: #475569;
+      --accent: #2563eb;
+    }
+    :root[data-scheme="dark"] {
+      color-scheme: dark;
+      --bg: #0b1220;
+      --card: #151e30;
+      --border: rgba(255, 255, 255, 0.14);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #60a5fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 18px 20px 28px;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .subtitle {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    button {
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 7px 14px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover {
+      border-color: var(--accent);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(390px, 1fr));
+      gap: 18px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+    .variant-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+    }
+    .card-head {
+      width: 100%;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .card-title {
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .card-meta {
+      margin-top: 2px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .open-link {
+      flex: 0 0 auto;
+      padding: 4px 10px;
+      border-radius: 999px;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      border: 1px solid var(--border);
+    }
+    .phone-frame {
+      width: 390px;
+      height: 780px;
+      border: 1px solid var(--border);
+      border-radius: 26px;
+      overflow: hidden;
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+    }
+    .phone-frame iframe {
+      display: block;
+      width: 390px;
+      height: 780px;
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>液态玻璃底栏光学演进对比（V1 → V4）</h1>
+      <p class="subtitle">每个画框均为可交互 390×780 手机视口，可直接按住底栏左右拖动、跨边缘拉伸或点击“滚动背景文字到底栏后”比对折射差异</p>
+    </div>
+    <div class="controls">
+      <button id="toggle-scheme" type="button">切换浅色 / 深色</button>
+      <button id="toggle-scroll" type="button">滚动背景文字到底栏后</button>
+      <button id="reset-scroll" type="button">回到顶部</button>
+    </div>
+  </header>
+
+  <section class="grid" aria-label="四个历史版本液态玻璃同屏对比">
+    <article class="variant-card" data-variant="v1">
+      <div class="card-head">
+        <div>
+          <div class="card-title">V1 · 初版连续 Snell (1× + Mask)</div>
+          <div class="card-meta">1× 法线 · Mask+feMerge · 水滴 30 / 23 / 16 · 底栏 20 / 13 / 5</div>
+        </div>
+        <a class="open-link" href="/scripts/liquid-glass-v1.html" target="_blank" rel="noopener">单独打开</a>
+      </div>
+      <div class="phone-frame">
+        <iframe title="液态玻璃 V1 模拟页" src="/scripts/liquid-glass-v1.html?platform=android&embed=1"></iframe>
+      </div>
+    </article>
+
+    <article class="variant-card" data-variant="v2">
+      <div class="card-head">
+        <div>
+          <div class="card-title">V2 · 2× 超采样 + 缓入波峰</div>
+          <div class="card-meta">2× 法线 · Mask+feMerge · 水滴 21.5 / 19 / 16.5 · 底栏 19 / 13 / 6</div>
+        </div>
+        <a class="open-link" href="/scripts/liquid-glass-v2.html" target="_blank" rel="noopener">单独打开</a>
+      </div>
+      <div class="phone-frame">
+        <iframe title="液态玻璃 V2 模拟页" src="/scripts/liquid-glass-v2.html?platform=android&embed=1"></iframe>
+      </div>
+    </article>
+
+    <article class="variant-card" data-variant="v3">
+      <div class="card-head">
+        <div>
+          <div class="card-title">V3 · 当前实现</div>
+          <div class="card-meta">2× 法线 · 无 Mask 直出 · 水滴 17.5 / 15.5 / 13.5 · 底栏 20 / 13 / 5</div>
+        </div>
+        <a class="open-link" href="/scripts/liquid-glass-v3.html" target="_blank" rel="noopener">单独打开</a>
+      </div>
+      <div class="phone-frame">
+        <iframe title="液态玻璃 V3 模拟页" src="/scripts/liquid-glass-v3.html?platform=android&embed=1"></iframe>
+      </div>
+    </article>
+
+    <article class="variant-card" data-variant="v4">
+      <div class="card-head">
+        <div>
+          <div class="card-title">V4 · 较弱折射对照</div>
+          <div class="card-meta">2× 法线 · 无 Mask 直出 · 水滴 12.4 / 10.6 / 8.8 · 底栏 20 / 13 / 5</div>
+        </div>
+        <a class="open-link" href="/scripts/liquid-glass-v4.html" target="_blank" rel="noopener">单独打开</a>
+      </div>
+      <div class="phone-frame">
+        <iframe title="液态玻璃 V4 模拟页" src="/scripts/liquid-glass-v4.html?platform=android&embed=1"></iframe>
+      </div>
+    </article>
+  </section>
+
+  <script>
+    const frames = () => Array.from(document.querySelectorAll('iframe'));
+    let currentScheme = 'light';
+
+    function broadcast(message) {
+      for (const frame of frames()) {
+        frame.contentWindow?.postMessage({ type: 'liquid-compare', ...message }, '*');
+      }
+    }
+
+    document.getElementById('toggle-scheme').addEventListener('click', () => {
+      currentScheme = currentScheme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.scheme = currentScheme;
+      broadcast({ colorScheme: currentScheme });
+    });
+
+    document.getElementById('toggle-scroll').addEventListener('click', () => {
+      broadcast({ scrollTop: 140 });
+    });
+
+    document.getElementById('reset-scroll').addEventListener('click', () => {
+      broadcast({ scrollTop: 0 });
+    });
+  </script>
+</body>
+</html>

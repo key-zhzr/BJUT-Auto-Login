@@ -1110,38 +1110,6 @@
     transform: translateX(20px);
   }
 
-  :root[data-theme="apple27"] body:not(.is-desktop) #nav,
-  :root[data-theme="apple27"] body:not(.is-desktop) .billing-mobile-nav {
-    border: 1px solid var(--apple-separator);
-    border-radius: 20px;
-    background: var(--apple-glass-strong);
-    box-shadow: var(--apple-glass-shadow);
-    -webkit-backdrop-filter:
-      blur(22px) saturate(var(--apple-glass-saturation));
-    backdrop-filter:
-      blur(22px) saturate(var(--apple-glass-saturation));
-  }
-
-  :root[data-theme="apple27"] body:not(.is-desktop) #nav .nav-item,
-  :root[data-theme="apple27"] body:not(.is-desktop) .billing-mobile-nav .billing-section-nav-button {
-    min-height: 0;
-    height: 100%;
-    padding: 0.34rem 0.08rem;
-    border-radius: 15px;
-    color: var(--apple-secondary-label);
-    font-size: 11px;
-    font-weight: 500;
-  }
-
-  :root[data-theme="apple27"] body:not(.is-desktop) #nav .nav-item.active,
-  :root[data-theme="apple27"] body:not(.is-desktop) .billing-mobile-nav .billing-section-nav-button.active {
-    color: var(--accent-color);
-    border-color: transparent;
-    background: rgba(var(--accent-rgb), 0.14);
-    box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.12);
-    font-weight: 600;
-  }
-
   :root[data-theme="apple27"] body:not(.is-desktop) .custom-option {
     min-height: var(--apple-hit-target-touch);
     padding: 0.68rem 2.4rem 0.68rem 0.9rem;
@@ -1197,13 +1165,6 @@
   box-shadow: var(--apple-content-shadow);
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-}
-
-:root[data-theme="apple27"] body.is-android #nav,
-:root[data-theme="apple27"] body.is-android .billing-mobile-nav {
-  background: color-mix(in srgb, var(--apple-elevated) 92%, transparent) !important;
-  -webkit-backdrop-filter: blur(14px) saturate(1.22) !important;
-  backdrop-filter: blur(14px) saturate(1.22) !important;
 }
 
 /* Android tablet (>= 769px): native sidebar & touch control ergonomics without bottom dock */

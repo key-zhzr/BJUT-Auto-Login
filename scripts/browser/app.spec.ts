@@ -838,3 +838,871 @@ test('android phone onboarding jumps pages with spotlight and arrow indicator', 
   await expect(page.locator('#onboarding-dialog')).toHaveCount(0);
   await expect(page.locator('#dashboard.active')).toBeVisible();
 });
+
+test('liquid glass docks refract the live backdrop and follow drag gestures', async ({page}, testInfo) => {
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+
+  await page.setViewportSize({width: 390, height: 844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  for (const theme of ['basic', 'apple27', 'winui']) {
+    await page.evaluate(t => {
+      document.documentElement.dataset.theme = t;
+      document.documentElement.dataset.colorScheme = 'light';
+    }, theme);
+    await page.waitForTimeout(80);
+    const dockMetrics = await page.evaluate(() => {
+      const nav = document.getElementById('nav')!;
+      const pill = nav.querySelector<HTMLElement>('.nav-liquid-pill')!;
+      const droplet = nav.querySelector<HTMLElement>('.nav-liquid-droplet')!;
+      const activeItem = nav.querySelector<HTMLElement>('.nav-item.active')!;
+      const ns = getComputedStyle(nav);
+      const afterStyle = getComputedStyle(nav, '::after');
+      const nr = nav.getBoundingClientRect();
+      const pr = pill.getBoundingClientRect();
+      const ar = activeItem.getBoundingClientRect();
+      const backdrop = afterStyle.backdropFilter
+        || (afterStyle as unknown as {webkitBackdropFilter: string}).webkitBackdropFilter
+        || ns.backdropFilter
+        || '';
+      return {
+        radius: ns.borderTopLeftRadius,
+        backdrop,
+        pillOpacity: getComputedStyle(pill).opacity,
+        dropletVisibility: getComputedStyle(droplet).visibility,
+        alignedX: Math.abs(pr.left - ar.left),
+        alignedY: Math.abs(pr.top - ar.top),
+        widthDiff: Math.abs(pr.width - ar.width),
+        height: Math.round(nr.height),
+      };
+    });
+    expect(dockMetrics.radius, theme).toBe('999px');
+    expect(dockMetrics.backdrop, theme).toContain('blur(');
+    expect(dockMetrics.height, theme).toBe(62);
+    expect(dockMetrics.pillOpacity, theme).toBe('1');
+    expect(dockMetrics.dropletVisibility, theme).toBe('hidden');
+    expect(dockMetrics.alignedX, theme).toBeLessThan(2);
+    expect(dockMetrics.alignedY, theme).toBeLessThan(2);
+    expect(dockMetrics.widthDiff, theme).toBeLessThan(2);
+  }
+
+  // A neutral backdrop makes color introduced by the rim itself measurable.
+  const optics = await page.evaluate(() => {
+    const nav = document.getElementById('nav')!;
+    const rect = nav.getBoundingClientRect();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'dock-backdrop-test';
+    backdrop.style.cssText = `position:fixed;inset:${rect.top - 4}px 0 0;z-index:700;pointer-events:none;`
+      + 'background:repeating-linear-gradient(#101010 0 8px,#f4f4f4 8px 16px)';
+    document.body.append(backdrop);
+    const clip = {x: Math.round(rect.left + rect.width * 0.3), y: Math.round(rect.top), width: 1, height: 16};
+    return {clip, filter: getComputedStyle(nav, '::after').backdropFilter};
+  });
+  expect(optics.filter).toContain('#dock-main-glass');
+  const refracted = await page.screenshot({clip: optics.clip, scale: 'css'});
+  const withoutLens = await page.addStyleTag({content: '#nav::after{backdrop-filter:blur(1.5px) saturate(1.25) !important}'});
+  const plain = await page.screenshot({clip: optics.clip, scale: 'css'});
+  const differences = await page.evaluate(async ([before, after]) => {
+    const pixels = async (png: string) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${png}`;
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const context = canvas.getContext('2d')!;
+      context.drawImage(img, 0, 0);
+      return context.getImageData(0, 0, img.width, img.height).data;
+    };
+    const [a, b] = await Promise.all([pixels(before), pixels(after)]);
+    return Array.from({length: 16}, (_, y) => {
+      const start = 4 * y;
+      const span = (colors: Uint8ClampedArray) => {
+        const channels = colors.subarray(start, start + 3);
+        return Math.max(...channels) - Math.min(...channels);
+      };
+      return {redShift: Math.abs(a[start] - b[start]), dispersion: span(b) - span(a)};
+    });
+  }, [plain.toString('base64'), refracted.toString('base64')]);
+  expect(Math.max(...differences.slice(2, 8).map(pixel => pixel.redShift))).toBeGreaterThan(22);
+  expect(Math.max(...differences.slice(2, 8).map(pixel => pixel.dispersion))).toBeGreaterThan(14);
+  expect(Math.max(...differences.slice(11, 15).map(pixel => pixel.redShift))).toBeLessThan(5);
+  await withoutLens.evaluate(style => style.remove());
+  await page.locator('#dock-backdrop-test').evaluate(element => element.remove());
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'basic';
+    document.documentElement.dataset.colorScheme = 'light';
+    document.getElementById('main-content')!.scrollTop = 140;
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({path: testInfo.outputPath('dock-light.png')});
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.colorScheme = 'dark';
+  });
+  await page.waitForTimeout(150);
+  await page.screenshot({path: testInfo.outputPath('dock-dark.png')});
+
+  const firstTabDark = await page.locator('#nav .nav-item[data-target="dashboard"]').boundingBox();
+  await page.mouse.move(firstTabDark!.x + firstTabDark!.width / 2, firstTabDark!.y + firstTabDark!.height / 2);
+  await page.mouse.down();
+  await expect.poll(() => page.locator('#nav').evaluate(node => ({
+    lift: Number((node as HTMLElement).style.getPropertyValue('--dock-lift')),
+    glow: Number((node as HTMLElement).style.getPropertyValue('--dock-press-glow')),
+  }))).toMatchObject({lift: expect.any(Number), glow: expect.any(Number)});
+  await page.waitForTimeout(420);
+  await page.screenshot({path: testInfo.outputPath('dock-dark-press.png')});
+  await page.mouse.up();
+  await page.waitForTimeout(380);
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.colorScheme = 'light';
+    document.getElementById('main-content')!.scrollTop = 140;
+  });
+
+  // Interactive press-and-drag scrubbing across bottom dock tabs (dashboard -> diagnostics)
+  const tabBoxes = await page.evaluate(() => {
+    const start = document.querySelector<HTMLElement>('#nav .nav-item[data-target="dashboard"]')!.getBoundingClientRect();
+    const accounts = document.querySelector<HTMLElement>('#nav .nav-item[data-target="accounts"]')!.getBoundingClientRect();
+    const target = document.querySelector<HTMLElement>('#nav .nav-item[data-target="diagnostics"]')!.getBoundingClientRect();
+    const logs = document.querySelector<HTMLElement>('#nav .nav-item[data-target="logs"]')!.getBoundingClientRect();
+    const settings = document.querySelector<HTMLElement>('#nav .nav-item[data-target="settings"]')!.getBoundingClientRect();
+    return {
+      sx: start.left + start.width / 2,
+      sy: start.top + start.height / 2,
+      ax: accounts.left + accounts.width / 2,
+      tx: target.left + target.width / 2,
+      ty: target.top + target.height / 2,
+      lx: logs.left + logs.width / 2,
+      rx: settings.left + settings.width / 2,
+      tabHeight: start.height,
+      straddleX: (start.right + accounts.left) / 2,
+    };
+  });
+  await page.mouse.move(tabBoxes.sx, tabBoxes.sy);
+  await page.mouse.down();
+  const dock = page.locator('#nav');
+  const lifted = dock.locator('.nav-liquid-droplet');
+  await expect.poll(() => dock.evaluate(async nav => {
+    const el = nav as HTMLElement;
+    const lens = nav.querySelector('.nav-liquid-droplet')!;
+    const a = lens.getBoundingClientRect();
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const b = lens.getBoundingClientRect();
+    const lift = Number(el.style.getPropertyValue('--dock-lift'));
+    const glow = Number(el.style.getPropertyValue('--dock-press-glow'));
+    return lift >= 0.99 && glow > 0.9 && Math.abs(b.width - a.width) < 0.15 && Math.abs(b.height - a.height) < 0.15;
+  })).toBe(true);
+  const pressProps = await dock.evaluate(nav => {
+    const el = nav as HTMLElement;
+    const lens = nav.querySelector('.nav-liquid-droplet')!;
+    const navRect = nav.getBoundingClientRect();
+    const lensRect = lens.getBoundingClientRect();
+    const bar = new DOMMatrixReadOnly(getComputedStyle(nav, '::after').transform);
+    const diag = nav.querySelector('.nav-item[data-target="diagnostics"]')!;
+    const item = new DOMMatrixReadOnly(getComputedStyle(diag).transform);
+    const dash = nav.querySelector('.nav-item[data-target="dashboard"]')!;
+    const recess = nav.querySelector('.nav-liquid-bar-recess')!;
+    const recessSurface = nav.querySelector('.nav-liquid-bar-recess-surface')!;
+    const recessMat = new DOMMatrixReadOnly(getComputedStyle(recessSurface).transform);
+    return {
+      glow: Number(el.style.getPropertyValue('--dock-press-glow')),
+      mag: Number(el.style.getPropertyValue('--dock-item-mag')),
+      centerDy: Math.abs((lensRect.top + lensRect.height / 2) - (navRect.top + navRect.height / 2)),
+      barScaleX: bar.a,
+      barScaleY: bar.d,
+      barTx: bar.m41,
+      barTy: bar.m42,
+      itemScaleX: item.a,
+      itemScaleY: item.d,
+      dashClip: getComputedStyle(dash).clipPath,
+      barCutout: getComputedStyle(nav, '::after').clipPath,
+      recessVisible: getComputedStyle(recess).visibility === 'visible' && getComputedStyle(recess).clipPath.startsWith('inset('),
+      recessScaleY: recessMat.d,
+    };
+  });
+  expect(pressProps.glow).toBeGreaterThan(0.9);
+  expect(pressProps.mag).toBeGreaterThan(1.08);
+  expect(pressProps.centerDy).toBeLessThan(0.75);
+  expect(pressProps.barScaleX).toBeGreaterThan(1.02);
+  expect(pressProps.barScaleY).toBeGreaterThan(1.02);
+  expect(Math.abs(pressProps.itemScaleX - pressProps.barScaleX)).toBeLessThan(0.005);
+  expect(Math.abs(pressProps.itemScaleY - pressProps.barScaleY)).toBeLessThan(0.005);
+  expect(pressProps.barTx).toBe(0);
+  expect(pressProps.barTy).toBe(0);
+  expect(pressProps.dashClip).toMatch(/^path\(/);
+  expect(pressProps.barCutout).toMatch(/^path\(/);
+  expect(pressProps.recessVisible).toBe(true);
+  expect(pressProps.recessScaleY).toBeLessThan(pressProps.barScaleY - 0.08);
+
+  const heldBox = (await lifted.boundingBox())!;
+  const heldWidth = heldBox.width;
+  const heldHeight = heldBox.height;
+
+  // During fast horizontal sliding inside the dock, droplet flattens slightly shorter than big glass while big glass + icons keep press swell without translating.
+  const sweepWatcher = dock.evaluate((nav, spec) => new Promise<{
+    frames: number;
+    peakWidth: number;
+    minHeight: number;
+    barHeight: number;
+    maxAspect: number;
+    allOk: boolean;
+  }>(resolve => {
+    const lens = nav.querySelector('.nav-liquid-droplet')!;
+    const diag = nav.querySelector('.nav-item[data-target="diagnostics"]')!;
+    let frames = 0;
+    let peakWidth = 0;
+    let minHeight = Infinity;
+    let barHeight = nav.getBoundingClientRect().height;
+    let maxAspect = 0;
+    let allOk = true;
+    const deadline = performance.now() + 200;
+    const tick = () => {
+      frames++;
+      const rect = lens.getBoundingClientRect();
+      const lensMatrix = new DOMMatrixReadOnly(getComputedStyle(lens).transform);
+      const bar = new DOMMatrixReadOnly(getComputedStyle(nav, '::after').transform);
+      barHeight = nav.getBoundingClientRect().height;
+      const item = new DOMMatrixReadOnly(getComputedStyle(diag).transform);
+      peakWidth = Math.max(peakWidth, rect.width);
+      minHeight = Math.min(minHeight, rect.height);
+      maxAspect = Math.max(maxAspect, rect.width / rect.height);
+      const ok = lensMatrix.b === 0
+        && lensMatrix.c === 0
+        && bar.a > 1.02 && bar.d > 1.02
+        && Math.abs(item.a - bar.a) < 0.005
+        && bar.m41 === 0 && bar.m42 === 0
+        && Math.abs(item.m41 - bar.m41) < 0.5 && Math.abs(item.m42 - bar.m42) < 0.5
+        && rect.height >= spec.tabHeight - 0.5;
+      if (!ok) allOk = false;
+      if (performance.now() < deadline) {
+        requestAnimationFrame(tick);
+      } else {
+        resolve({frames, peakWidth, minHeight, barHeight, maxAspect, allOk});
+      }
+    };
+    requestAnimationFrame(tick);
+  }), {tabHeight: tabBoxes.tabHeight});
+  await page.mouse.move(tabBoxes.rx, tabBoxes.ty, {steps: 6});
+  const sweep = await sweepWatcher;
+  expect(sweep.frames).toBeGreaterThan(3);
+  expect(sweep.allOk).toBe(true);
+  expect(sweep.maxAspect).toBeLessThan(2.4);
+  expect(sweep.peakWidth - heldWidth).toBeGreaterThan(8);
+  expect(sweep.minHeight).toBeLessThan(sweep.barHeight - 1);
+  await page.mouse.move(tabBoxes.tx, tabBoxes.ty, {steps: 4});
+
+  // When stationary on the target tab, the droplet settles back to press-in-place proportions.
+  await expect.poll(() => dock.evaluate(async (nav, held) => {
+    const lens = nav.querySelector('.nav-liquid-droplet')!;
+    const a = lens.getBoundingClientRect();
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const b = lens.getBoundingClientRect();
+    const bar = new DOMMatrixReadOnly(getComputedStyle(nav, '::after').transform);
+    return Math.abs(a.width - held.heldWidth) < 0.8
+      && Math.abs(b.width - held.heldWidth) < 0.8
+      && Math.abs(a.height - held.heldHeight) < 0.8
+      && Math.abs(b.height - held.heldHeight) < 0.8
+      && Math.abs(b.width - a.width) < 0.15
+      && bar.m41 === 0
+      && bar.m42 === 0;
+  }, {heldWidth, heldHeight})).toBe(true);
+  const dragState = await page.evaluate(() => {
+    const nav = document.getElementById('nav')!;
+    const droplet = nav.querySelector<HTMLElement>('.nav-liquid-droplet')!;
+    const pill = nav.querySelector<HTMLElement>('.nav-liquid-pill')!;
+    const accentLayer = nav.querySelector<HTMLElement>('.nav-liquid-accent-layer')!;
+    const dash = nav.querySelector<HTMLElement>('.nav-item[data-target="dashboard"]')!;
+    const diag = nav.querySelector<HTMLElement>('.nav-item[data-target="diagnostics"]')!;
+    return {
+      isDragging: nav.classList.contains('is-liquid-dragging'),
+      dropletActive: nav.classList.contains('is-droplet-active'),
+      dropletVisibility: getComputedStyle(droplet).visibility,
+      pillOpacity: getComputedStyle(pill).opacity,
+      dropletProtrudes: droplet.getBoundingClientRect().height > nav.getBoundingClientRect().height + 2,
+      overlaysLabels: Number(getComputedStyle(droplet).zIndex) > Number(getComputedStyle(accentLayer).zIndex)
+        && Number(getComputedStyle(accentLayer).zIndex) > Number(getComputedStyle(diag).zIndex),
+      diagHovered: diag.dataset.liquidHover === 'true',
+      baseNeutral: getComputedStyle(dash).color === getComputedStyle(diag).color,
+      accentClipped: getComputedStyle(accentLayer).visibility === 'visible'
+        && getComputedStyle(accentLayer).clipPath.startsWith('inset('),
+    };
+  });
+  expect(dragState).toEqual({
+    isDragging: true,
+    dropletActive: true,
+    dropletVisibility: 'visible',
+    pillOpacity: '0',
+    dropletProtrudes: true,
+    overlaysLabels: true,
+    diagHovered: true,
+    baseNeutral: true,
+    accentClipped: true,
+  });
+  await page.screenshot({path: testInfo.outputPath('dock-drag.png')});
+
+  // Big glass and icons shift together only after cursor exits the dock beyond the dead-zone.
+  for (const probe of [
+    {x: tabBoxes.tx, y: tabBoxes.ty - 100, expectY: true, expectX: false},
+    {x: tabBoxes.tx, y: tabBoxes.ty + 60, expectY: true, expectX: false},
+    {x: 389, y: tabBoxes.ty, expectY: false, expectX: true},
+  ]) {
+    await page.mouse.move(probe.x, probe.y, {steps: 4});
+    await expect.poll(() => dock.evaluate((nav, spec) => {
+      const lens = nav.querySelector('.nav-liquid-droplet')!;
+      const diag = nav.querySelector('.nav-item[data-target="diagnostics"]')!;
+      const lensMatrix = new DOMMatrixReadOnly(getComputedStyle(lens).transform);
+      const bar = new DOMMatrixReadOnly(getComputedStyle(nav, '::after').transform);
+      const item = new DOMMatrixReadOnly(getComputedStyle(diag).transform);
+      const yOk = !spec.expectY || (Math.abs(bar.m42) > 0.5 && Math.abs(bar.m42) <= 3.5);
+      const xOk = !spec.expectX || (bar.m41 > 0.5 && bar.m41 <= 6);
+      return lensMatrix.b === 0
+        && lensMatrix.c === 0
+        && yOk
+        && xOk
+        && Math.abs(item.m41 - bar.m41) < 0.5
+        && Math.abs(item.m42 - bar.m42) < 0.5;
+    }, probe)).toBe(true);
+  }
+
+  // Straddling two tabs clips accent color cleanly over both overlapping icons/labels.
+  await page.mouse.move(tabBoxes.straddleX, tabBoxes.ty, {steps: 6});
+  await expect.poll(() => dock.evaluate(nav => {
+    const lens = nav.querySelector('.nav-liquid-droplet')!.getBoundingClientRect();
+    const dash = nav.querySelector('.nav-item[data-target="dashboard"]')!.getBoundingClientRect();
+    const acc = nav.querySelector('.nav-item[data-target="accounts"]')!.getBoundingClientRect();
+    const accentLayer = nav.querySelector('.nav-liquid-accent-layer')!;
+    return getComputedStyle(accentLayer).visibility === 'visible'
+      && lens.left < dash.right - 8
+      && lens.right > acc.left + 8;
+  })).toBe(true);
+  await page.screenshot({path: testInfo.outputPath('dock-straddle.png')});
+
+  await page.mouse.move(tabBoxes.tx, tabBoxes.ty, {steps: 4});
+  // Wait for stationary settle before release, then verify every frame keeps accent color without flashing neutral and both big glass & icons/text jelly-rebound.
+  await expect.poll(() => dock.evaluate((nav, held) => {
+    const rect = nav.querySelector('.nav-liquid-droplet')!.getBoundingClientRect();
+    return Math.abs(rect.width - held.heldWidth) < 1 && Math.abs(rect.height - held.heldHeight) < 1;
+  }, {heldWidth, heldHeight})).toBe(true);
+  const releaseWatcher = page.evaluate(() => new Promise<{frames: number; flashed: boolean; minBarScaleY: number; minItemScaleY: number; details: unknown[]}>(resolve => {
+    const nav = document.getElementById('nav')!;
+    const diag = nav.querySelector<HTMLElement>('.nav-item[data-target="diagnostics"]')!;
+    const accentLayer = nav.querySelector<HTMLElement>('.nav-liquid-accent-layer')!;
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--accent-color, var(--primary-color))';
+    document.body.append(probe);
+    const accentColor = getComputedStyle(probe).color;
+    probe.remove();
+    const details: unknown[] = [];
+    let flashed = false;
+    let minBarScaleY = 1;
+    let minItemScaleY = 1;
+    let frames = 0;
+    const deadline = performance.now() + 380;
+    const tick = () => {
+      frames++;
+      const active = nav.classList.contains('is-droplet-active');
+      const tr = getComputedStyle(nav, '::after').transform;
+      if (tr && tr !== 'none') {
+        minBarScaleY = Math.min(minBarScaleY, new DOMMatrixReadOnly(tr).d);
+      }
+      const itemTr = getComputedStyle(diag).transform;
+      if (itemTr && itemTr !== 'none') {
+        minItemScaleY = Math.min(minItemScaleY, new DOMMatrixReadOnly(itemTr).d);
+      }
+      const layerVis = getComputedStyle(accentLayer).visibility;
+      const layerOpacity = parseFloat(getComputedStyle(accentLayer).opacity);
+      const clip = getComputedStyle(accentLayer).clipPath;
+      const diagColor = getComputedStyle(diag).color;
+      if (active) {
+        if (layerVis !== 'visible' || layerOpacity < 0.99 || !clip.startsWith('inset(')) {
+          flashed = true;
+          details.push({frames, active, layerVis, layerOpacity, clip, diagColor});
+        }
+      } else if (diag.classList.contains('active') && diagColor !== accentColor) {
+        flashed = true;
+        details.push({frames, active, diagActive: true, diagColor, accentColor});
+      }
+      if (performance.now() < deadline || active) {
+        requestAnimationFrame(tick);
+      } else {
+        resolve({frames, flashed, minBarScaleY, minItemScaleY, details});
+      }
+    };
+    requestAnimationFrame(tick);
+  }));
+  await page.mouse.up();
+  const releaseCheck = await releaseWatcher;
+  expect(releaseCheck.flashed, JSON.stringify(releaseCheck.details)).toBe(false);
+  expect(releaseCheck.frames).toBeGreaterThan(2);
+  expect(releaseCheck.minBarScaleY).toBeLessThan(0.999);
+  expect(releaseCheck.minItemScaleY).toBeLessThan(0.999);
+  await expect(page.locator('#diagnostics.active')).toBeVisible();
+  await expect(lifted).toBeHidden();
+  await expect.poll(() => dock.evaluate(node => getComputedStyle(node, '::after').transform)).toBe('none');
+  const settledClean = await dock.evaluate(nav => {
+    const diag = nav.querySelector<HTMLElement>('.nav-item[data-target="diagnostics"]')!;
+    const recess = nav.querySelector<HTMLElement>('.nav-liquid-bar-recess')!;
+    return {
+      barCutout: getComputedStyle(nav, '::after').clipPath,
+      recessVisibility: getComputedStyle(recess).visibility,
+      diagClip: getComputedStyle(diag).clipPath,
+      diagTransform: getComputedStyle(diag).transform,
+    };
+  });
+  expect(settledClean).toEqual({
+    barCutout: 'none',
+    recessVisibility: 'hidden',
+    diagClip: 'none',
+    diagTransform: 'none',
+  });
+
+  // Releasing while the big glass is displaced outside the dock must keep the settled active pill perfectly aligned.
+  await page.mouse.move(tabBoxes.tx, tabBoxes.ty);
+  await page.mouse.down();
+  await page.mouse.move(tabBoxes.ax - 20, tabBoxes.ty - 110, {steps: 6});
+  await expect.poll(() => dock.evaluate(nav => Math.abs(new DOMMatrixReadOnly(getComputedStyle(nav, '::after').transform).m42))).toBeGreaterThan(1);
+  await page.mouse.up();
+  await expect(page.locator('#accounts.active')).toBeVisible();
+  await expect.poll(() => dock.evaluate(node => getComputedStyle(node, '::after').transform)).toBe('none');
+  const postDisplacedPill = await page.evaluate(() => {
+    const nav = document.getElementById('nav')!;
+    const pill = nav.querySelector<HTMLElement>('.nav-liquid-pill')!.getBoundingClientRect();
+    const active = nav.querySelector<HTMLElement>('.nav-item.active')!.getBoundingClientRect();
+    return {dx: Math.abs(pill.left - active.left), dy: Math.abs(pill.top - active.top)};
+  });
+  expect(postDisplacedPill.dx).toBeLessThan(1);
+  expect(postDisplacedPill.dy).toBeLessThan(1);
+
+  // Short-dwell diagonal quick swipe still switches to the destination tab.
+  await page.locator('#nav .nav-item[data-target="dashboard"]').click();
+  await expect(lifted).toBeHidden();
+  await page.mouse.move(tabBoxes.sx, tabBoxes.sy);
+  await page.mouse.down();
+  await page.mouse.move(tabBoxes.sx + 4, tabBoxes.sy - 16, {steps: 1});
+  await page.mouse.move(tabBoxes.ax, tabBoxes.sy - 45, {steps: 1});
+  await page.mouse.up();
+  await expect(page.locator('#accounts.active')).toBeVisible();
+  await page.locator('#nav .nav-item[data-target="diagnostics"]').click();
+  await expect(lifted).toBeHidden();
+  const settledAfterDrag = await page.evaluate(() => {
+    const nav = document.getElementById('nav')!;
+    const pill = nav.querySelector<HTMLElement>('.nav-liquid-pill')!;
+    const droplet = nav.querySelector<HTMLElement>('.nav-liquid-droplet')!;
+    const diag = nav.querySelector<HTMLElement>('.nav-item[data-target="diagnostics"]')!;
+    return {
+      alignedX: Math.abs(pill.getBoundingClientRect().left - diag.getBoundingClientRect().left),
+      dropletVisibility: getComputedStyle(droplet).visibility,
+      pillOpacity: getComputedStyle(pill).opacity,
+    };
+  });
+  expect(settledAfterDrag.alignedX).toBeLessThan(2);
+  expect(settledAfterDrag.dropletVisibility).toBe('hidden');
+  expect(settledAfterDrag.pillOpacity).toBe('1');
+
+  // Rotating or resizing during a press should not commit a stale tab.
+  await page.mouse.move(tabBoxes.sx, tabBoxes.sy);
+  await page.mouse.down();
+  await expect(page.locator('#nav .nav-liquid-droplet')).toBeVisible();
+  await page.setViewportSize({width: 900, height: 650});
+  await page.mouse.up();
+  await expect(page.locator('#diagnostics.active')).toBeVisible();
+  await expect(page.locator('#nav')).not.toHaveClass(/is-liquid-previewing|is-droplet-active/);
+  await page.setViewportSize({width: 390, height: 844});
+
+  await page.locator('#nav .nav-item[data-target="dashboard"]').click();
+  await expect(lifted).toBeHidden();
+
+  // Rubber-band overscroll past the rightmost tab extends the droplet and stretches the dock.
+  const overscrollEnd = await page.evaluate(() => {
+    const start = document.querySelector<HTMLElement>('#nav .nav-item[data-target="dashboard"]')!.getBoundingClientRect();
+    const settings = document.querySelector<HTMLElement>('#nav .nav-item[data-target="settings"]')!.getBoundingClientRect();
+    return {
+      sx: start.left + start.width / 2,
+      sy: start.top + start.height / 2,
+      settingsRight: settings.right,
+    };
+  });
+  await page.mouse.move(overscrollEnd.sx, overscrollEnd.sy);
+  await page.mouse.down();
+  await page.mouse.move(389, overscrollEnd.sy, {steps: 14});
+  await expect.poll(() => dock.evaluate((nav, settingsRight) => {
+    const lens = nav.querySelector('.nav-liquid-droplet')!.getBoundingClientRect();
+    const bar = new DOMMatrixReadOnly(getComputedStyle(nav, '::after').transform);
+    return lens.right - settingsRight > 4 && lens.right <= 390 && bar.m41 > 0.5;
+  }, overscrollEnd.settingsRight)).toBe(true);
+  await page.screenshot({path: testInfo.outputPath('dock-overscroll.png')});
+
+  // Edge holds with small pointer tremors must not twitch droplet dimensions at right or left edge.
+  for (const edgeXs of [[389, 386, 389, 387, 389], [2, 5, 2, 4, 2]]) {
+    await page.mouse.move(edgeXs[0], overscrollEnd.sy, {steps: 6});
+    await expect.poll(() => dock.evaluate(async (nav, held) => {
+      const lens = nav.querySelector('.nav-liquid-droplet')!;
+      const a = lens.getBoundingClientRect();
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      const b = lens.getBoundingClientRect();
+      return Math.abs(a.width - held.heldWidth) < 0.6
+        && Math.abs(b.width - held.heldWidth) < 0.6
+        && Math.abs(a.height - held.heldHeight) < 0.6
+        && Math.abs(b.height - held.heldHeight) < 0.6
+        && Math.abs(b.width - a.width) < 0.15
+        && Math.abs(b.height - a.height) < 0.15;
+    }, {heldWidth, heldHeight})).toBe(true);
+    const widths: number[] = [];
+    const heights: number[] = [];
+    for (const ex of edgeXs) {
+      await page.mouse.move(ex, overscrollEnd.sy);
+      const box = await dock.evaluate(async nav => {
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const r = nav.querySelector('.nav-liquid-droplet')!.getBoundingClientRect();
+        return {width: r.width, height: r.height};
+      });
+      widths.push(box.width);
+      heights.push(box.height);
+    }
+    expect(Math.max(...widths) - Math.min(...widths)).toBeLessThan(1.5);
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(1.5);
+  }
+
+  await page.mouse.move(389, overscrollEnd.sy, {steps: 6});
+  await page.mouse.up();
+  await expect(page.locator('#settings.active')).toBeVisible();
+  await expect(lifted).toBeHidden();
+  await expect.poll(() => dock.evaluate(node => getComputedStyle(node, '::after').transform)).toBe('none');
+
+  await page.locator('#nav .nav-item[data-target="dashboard"]').click();
+  await expect(lifted).toBeHidden();
+  await page.locator('#btn-open-billing').click();
+  await expect(page.locator('#billing-center')).toBeVisible();
+  await page.locator('.billing-mobile-nav [data-billing-section-target="records"]').click();
+  await expect(page.locator('.billing-mobile-nav .nav-liquid-droplet')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => {
+    const dock = document.querySelector<HTMLElement>('.billing-mobile-nav')!;
+    const pill = dock.querySelector<HTMLElement>('.nav-liquid-pill')!;
+    const active = dock.querySelector<HTMLElement>('.billing-section-nav-button.active')!;
+    return Math.abs(pill.getBoundingClientRect().left - active.getBoundingClientRect().left);
+  })).toBeLessThan(2);
+  const billingMetrics = await page.evaluate(() => {
+    const dock = document.querySelector<HTMLElement>('.billing-mobile-nav')!;
+    const pill = dock.querySelector<HTMLElement>('.nav-liquid-pill')!;
+    const active = dock.querySelector<HTMLElement>('.billing-section-nav-button.active')!;
+    const pr = pill.getBoundingClientRect();
+    const ar = active.getBoundingClientRect();
+    const afterStyle = getComputedStyle(dock, '::after');
+    return {
+      radius: getComputedStyle(dock).borderTopLeftRadius,
+      backdrop: afterStyle.backdropFilter || getComputedStyle(dock).backdropFilter || '',
+      alignedX: Math.abs(pr.left - ar.left),
+    };
+  });
+  expect(billingMetrics.radius).toBe('999px');
+  expect(billingMetrics.backdrop).toContain('#dock-billing-glass');
+  expect(billingMetrics.alignedX).toBeLessThan(2);
+  await page.screenshot({path: testInfo.outputPath('dock-billing.png')});
+
+  await page.emulateMedia({reducedMotion: 'reduce'});
+  await page.locator('.billing-mobile-nav [data-billing-section-target="services"]').click();
+  await expect(page.locator('.billing-mobile-nav [data-billing-section-target="services"]')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.billing-mobile-nav .nav-liquid-droplet')).toBeHidden();
+  await page.emulateMedia({reducedMotion: 'no-preference'});
+});
+
+test('the moving lens refracts icon and label strokes in its annulus', async ({page}, testInfo) => {
+  await page.setViewportSize({width: 390, height: 844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android&no-router');
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/);
+  for (const selector of ['#nav', '.billing-mobile-nav']) {
+    if (selector.startsWith('.')) await page.locator('#btn-open-billing').click();
+    const dock = page.locator(selector);
+    const tabs = dock.locator('.nav-item:visible, .billing-section-nav-button:visible');
+    const [first, second] = await Promise.all([tabs.nth(0).boundingBox(), tabs.nth(1).boundingBox()]);
+    const y = first!.y + first!.height / 2;
+    // The glass crosses the second tab while the finger is between destinations.
+    const x = second!.x + second!.width / 2 + second!.width * 0.66;
+    await page.mouse.move(first!.x + first!.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y, {steps: 8});
+    const lens = dock.locator('.nav-liquid-droplet');
+    await expect(lens).toBeVisible();
+    await expect.poll(() => lens.evaluate(async el => {
+      const before = el.style.transform;
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      return el.style.transform === before;
+    })).toBe(true);
+    const ink = await tabs.nth(1).evaluate(el => [el.querySelector('svg')!, el.querySelector('span')!].map(node => {
+      const {x,y,width,height} = node.getBoundingClientRect();
+      return {x, y, width, height};
+    }));
+    const rect = (await lens.boundingBox())!;
+    const clip = {
+      x: Math.floor(Math.min(rect.x, ink[0].x, ink[1].x)),
+      y: Math.floor(rect.y),
+      width: Math.ceil(rect.width + second!.width),
+      height: Math.ceil(rect.height),
+    };
+    const stem = selector === '#nav' ? 'main' : 'billing';
+    await page.screenshot({path: testInfo.outputPath(`${stem}-ink.png`), clip, scale: 'css'});
+    // A uniform background isolates light split by the actual navigation ink.
+    const neutral = await page.addStyleTag({content: `${selector}::after {background: #eee !important;backdrop-filter:none !important}
+      ${selector} :is(.nav-item,.billing-section-nav-button) {transition:none !important;color:#222 !important}`});
+    const distorted = await page.screenshot({clip, scale: 'css'});
+    const noLens = await page.addStyleTag({content: `${selector} .nav-liquid-droplet {backdrop-filter:none !important}`});
+    const plain = await page.screenshot({clip, scale: 'css'});
+    const stats = await page.evaluate(async ({samples, clip, ink, rect}) => {
+      const [a,b] = await Promise.all(samples.map(async data => {
+        const image = new Image();
+        image.src = 'data:image/png;base64,' + data;
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(image,0,0);
+        return ctx.getImageData(0,0,image.width,image.height).data;
+      }));
+      const changedInk = [0,0];
+      let centerChange = 0;
+      for (let y=0; y<clip.height; y++) for (let x=0; x<clip.width; x++) {
+        const index = 4*(y*clip.width+x);
+        const changes = [0,1,2].map(c => a[index+c]-b[index+c]);
+        const px = x+clip.x+0.5, py = y+clip.y+0.5;
+        const radius = Math.hypot((px-rect.x)/rect.width*2-1, (py-rect.y)/rect.height*2-1);
+        if (radius < 0.55) centerChange = Math.max(centerChange, ...changes.map(Math.abs));
+        if (radius < 0.6 || radius > 0.97 || Math.max(...changes)-Math.min(...changes)<24) continue;
+        ink.forEach((box, i) => {
+          if (px>=box.x && px<box.x+box.width && py>=box.y && py<box.y+box.height) changedInk[i]++;
+        });
+      }
+      return {changedInk,centerChange};
+    }, {samples:[distorted.toString('base64'),plain.toString('base64')], clip, ink, rect});
+    expect(stats.changedInk[0], stem+' icon').toBeGreaterThan(6);
+    expect(stats.changedInk[1], stem+' label').toBeGreaterThan(6);
+    expect(stats.centerChange, stem+' clear center').toBeLessThan(5);
+    await neutral.evaluate(el => el.remove());
+    await noLens.evaluate(el => el.remove());
+    // Return to the first destination before releasing.
+    await page.mouse.move(first!.x+first!.width/2, y);
+    await page.mouse.up();
+  }
+});
+
+test('fast dock releases switch pages even when the last move is coalesced', async ({page}) => {
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+  await page.setViewportSize({width: 390, height: 844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android&no-router');
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/);
+
+  const releaseAcross = (from: string, to: string, deliverMove: boolean) => page.evaluate(({from, to, deliverMove}) => {
+    const source = document.querySelector<HTMLElement>(from)!;
+    const destination = document.querySelector<HTMLElement>(to)!;
+    const pointer = {bubbles: true, pointerId: 20, pointerType: 'touch', isPrimary: true};
+    const position = (element: HTMLElement) => {
+      const box = element.getBoundingClientRect();
+      return {clientX: box.left + box.width / 2, clientY: box.top + box.height / 2};
+    };
+    source.dispatchEvent(new PointerEvent('pointerdown', {...pointer, ...position(source), buttons: 1}));
+    if (deliverMove) {
+      source.dispatchEvent(new PointerEvent('pointermove', {...pointer, ...position(destination), buttons: 1}));
+    }
+    source.dispatchEvent(new PointerEvent('pointerup', {...pointer, ...position(destination)}));
+  }, {from, to, deliverMove});
+
+  // No animation frame or move listener runs between press and lift.
+  await releaseAcross('#nav [data-target="dashboard"]', '#nav [data-target="logs"]', false);
+  expect(await page.locator('#logs.active').count()).toBe(1);
+  await releaseAcross('#nav [data-target="logs"]', '#nav [data-target="dashboard"]', true);
+  expect(await page.locator('#dashboard.active').count()).toBe(1);
+
+  // Mouse pointermove with buttons === 0 during release must commit instead of bouncing back.
+  await page.evaluate(() => {
+    const source = document.querySelector<HTMLElement>('#nav [data-target="dashboard"]')!;
+    const destination = document.querySelector<HTMLElement>('#nav [data-target="diagnostics"]')!;
+    const pos = (el: HTMLElement) => {
+      const box = el.getBoundingClientRect();
+      return {clientX: box.left + box.width / 2, clientY: box.top + box.height / 2};
+    };
+    const common = {bubbles: true, pointerId: 21, pointerType: 'mouse', isPrimary: true, button: 0};
+    source.dispatchEvent(new PointerEvent('pointerdown', {...common, ...pos(source), buttons: 1}));
+    source.dispatchEvent(new PointerEvent('pointermove', {...common, ...pos(destination), buttons: 0}));
+  });
+  await expect(page.locator('#diagnostics.active')).toBeVisible();
+
+  // Rapid zero-pause Playwright mouse swipe switches cleanly on release.
+  const swipeBoxes = await page.evaluate(() => {
+    const diag = document.querySelector<HTMLElement>('#nav [data-target="diagnostics"]')!.getBoundingClientRect();
+    const dash = document.querySelector<HTMLElement>('#nav [data-target="dashboard"]')!.getBoundingClientRect();
+    return {
+      dx: diag.left + diag.width / 2,
+      dy: diag.top + diag.height / 2,
+      tx: dash.left + dash.width / 2,
+      ty: dash.top + dash.height / 2,
+    };
+  });
+  await page.mouse.move(swipeBoxes.dx, swipeBoxes.dy);
+  await page.mouse.down();
+  await page.mouse.move(swipeBoxes.tx, swipeBoxes.ty, {steps: 2});
+  await page.mouse.up();
+  await expect(page.locator('#dashboard.active')).toBeVisible();
+
+  await page.locator('#btn-open-billing').click();
+  await expect(page.locator('#billing-center.active')).toBeVisible();
+  const billing = '.billing-mobile-nav';
+  await releaseAcross(`${billing} [data-billing-section-target="overview"]`, `${billing} [data-billing-section-target="records"]`, false);
+  expect(await page.locator(`${billing} [aria-selected="true"]`).getAttribute('data-billing-section-target')).toBe('records');
+});
+
+test('touch scrubbing stays inside a narrow screen and leaves taps available after cancellation', async ({browser}) => {
+  const context = await browser.newContext({
+    viewport: {width: 320, height: 740},
+    deviceScaleFactor: 2,
+    isMobile: true,
+    hasTouch: true,
+  });
+  try {
+    const page = await context.newPage();
+    await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+    await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android&no-router');
+    await page.getByRole('button', {name: '隐藏验收面板', exact: true}).tap();
+    await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/);
+
+    const tab = (target: string) => page.locator(`#nav .nav-item[data-target="${target}"]`);
+    const center = async (target: string) => {
+      const rect = (await tab(target).boundingBox())!;
+      return {x: rect.x + rect.width / 2, y: rect.y + rect.height / 2};
+    };
+    const client = await context.newCDPSession(page);
+    const dock = page.locator('#nav');
+    const lens = dock.locator('.nav-liquid-droplet');
+    const start = await center('dashboard');
+    const end = await center('settings');
+    await client.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [start]});
+    await client.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [end]});
+    await expect(dock).toHaveClass(/is-liquid-dragging/);
+    await client.send('Input.dispatchTouchEvent', {type: 'touchCancel', touchPoints: []});
+    await expect(page.locator('#dashboard.active')).toBeVisible();
+    await expect(lens).toBeHidden();
+
+    await client.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [start]});
+    await client.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [{x: 319, y: end.y}]});
+    await expect(tab('settings')).toHaveAttribute('data-liquid-hover', 'true');
+    await expect(lens).toBeVisible();
+    await expect.poll(async () => {
+      const box = (await lens.boundingBox())!;
+      return box.x + box.width;
+    }).toBeGreaterThan(292);
+    const box = (await lens.boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(320);
+    await client.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+    await expect(page.locator('#settings.active')).toBeVisible();
+    await tab('accounts').tap();
+    await expect(page.locator('#accounts.active')).toBeVisible();
+
+    await client.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [await center('accounts')]});
+    await client.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [await center('diagnostics')]});
+    await client.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+    await expect(page.locator('#diagnostics.active')).toBeVisible();
+
+    await client.send('Emulation.setEmulatedMedia', {features: [{name: 'prefers-reduced-transparency', value: 'reduce'}]});
+    await expect.poll(() => dock.evaluate(node => getComputedStyle(node, '::after').backdropFilter)).toBe('none');
+  } finally {
+    await context.close();
+  }
+});
+
+test('desktop and tablet sidebar indicators stay aligned through layout changes', async ({page}) => {
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+  // Windows desktop and its narrow rail keep the sliding sidebar pill.
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=windows');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  await page.locator('#nav .nav-item[data-target="accounts"]').click();
+  await page.waitForTimeout(420);
+  const desktopSidebarAligned = await page.evaluate(() => {
+    const pill = document.querySelector<HTMLElement>('#nav .nav-liquid-pill')!.getBoundingClientRect();
+    const accounts = document.querySelector<HTMLElement>('#nav .nav-item[data-target="accounts"]')!.getBoundingClientRect();
+    return {
+      topDiff: Math.abs(pill.top - accounts.top),
+      heightDiff: Math.abs(pill.height - accounts.height),
+      pillVisible: pill.width > 100 && pill.height > 24,
+    };
+  });
+  expect(desktopSidebarAligned.pillVisible).toBe(true);
+  expect(desktopSidebarAligned.topDiff).toBeLessThan(2);
+  expect(desktopSidebarAligned.heightDiff).toBeLessThan(2);
+  await page.setViewportSize({width: 680, height: 600});
+  await expect.poll(async () => page.evaluate(() => {
+    const pill = document.querySelector<HTMLElement>('#nav .nav-liquid-pill')!.getBoundingClientRect();
+    const accounts = document.querySelector<HTMLElement>('#nav .nav-item[data-target="accounts"]')!.getBoundingClientRect();
+    return Math.abs(pill.top - accounts.top) < 2 && Math.abs(pill.width - accounts.width) < 2;
+  })).toBe(true);
+
+  await page.setViewportSize({width: 900, height: 650});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/);
+  await page.locator('#nav .nav-item[data-target="accounts"]').click();
+  await expect.poll(async () => page.evaluate(() => {
+    const pill = document.querySelector<HTMLElement>('#nav .nav-liquid-pill')!.getBoundingClientRect();
+    const accounts = document.querySelector<HTMLElement>('#nav .nav-item[data-target="accounts"]')!.getBoundingClientRect();
+    return Math.abs(pill.top - accounts.top) < 2 && Math.abs(pill.width - accounts.width) < 2;
+  })).toBe(true);
+});
+
+test('macOS native NSGlassEffectView bridge syncs sidebar underlay', async ({page}) => {
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos&macosNativeGlass=1');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.macosNativeGlass)).toBe('ns-glass-effect');
+  await expect.poll(() => page.evaluate(() => {
+    const slots = ((window as any).__MACOS_GLASS_SLOTS__ || []) as Array<{id: string; placement: string; visible: boolean; x: number; y: number; width: number; height: number}>;
+    const underlay = slots.find(slot => slot.id === 'sidebar-underlay');
+    if (!underlay || !underlay.visible || underlay.placement !== 'underlay') return null;
+    const navRect = document.getElementById('nav')!.getBoundingClientRect();
+    const navBg = getComputedStyle(document.getElementById('nav')!).backgroundColor;
+    const mainBg = getComputedStyle(document.getElementById('main-content')!).backgroundColor;
+    return {
+      dx: Math.abs(underlay.x - navRect.left),
+      dy: Math.abs(underlay.y - navRect.top),
+      dw: Math.abs(underlay.width - navRect.width),
+      dh: Math.abs(underlay.height - navRect.height),
+      navBg,
+      mainBgOpaque: mainBg !== 'rgba(0, 0, 0, 0)' && mainBg !== 'transparent',
+    };
+  })).toEqual({
+    dx: expect.any(Number),
+    dy: expect.any(Number),
+    dw: expect.any(Number),
+    dh: expect.any(Number),
+    navBg: 'rgba(0, 0, 0, 0)',
+    mainBgOpaque: true,
+  });
+
+  const diffs = await page.evaluate(() => {
+    const slot = ((window as any).__MACOS_GLASS_SLOTS__ as any[]).find(s => s.id === 'sidebar-underlay');
+    const navRect = document.getElementById('nav')!.getBoundingClientRect();
+    return {
+      dx: Math.abs(slot.x - navRect.left),
+      dy: Math.abs(slot.y - navRect.top),
+      dw: Math.abs(slot.width - navRect.width),
+      dh: Math.abs(slot.height - navRect.height),
+    };
+  });
+  expect(diffs.dx).toBeLessThan(2);
+  expect(diffs.dy).toBeLessThan(2);
+  expect(diffs.dw).toBeLessThan(2);
+  expect(diffs.dh).toBeLessThan(2);
+});

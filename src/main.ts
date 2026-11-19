@@ -30,6 +30,7 @@ import { NetworkExperience } from './network-experience';
 import { LoginProgressView } from './login-progress-view';
 import { renderNetworkEvents } from './network-events-view';
 import { setupKeyboardNavigation } from './keyboard-navigation';
+import { setupLiquidNav, syncLiquidNav } from './liquid-nav';
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Bell, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
@@ -2747,6 +2748,7 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
   });
+  syncLiquidNav({ animate: changed });
   syncBillingCenterMessageVisibility();
   rechargeHours.setActive(document.getElementById('billing-center')!.classList.contains('active')
     && activeBillingWorkbenchSection === 'recharge');
@@ -3063,6 +3065,7 @@ function activatePage(target: string, navTarget = target) {
     activateBillingWorkbenchSection(activeBillingWorkbenchSection);
     renderBillingCenter(billingCenterData ? billingOverviewToUserInfo(billingCenterData.overview) : null);
   }
+  syncLiquidNav({ animate: true });
 }
 
 function handleAndroidBack() {
@@ -3141,6 +3144,7 @@ function setupNavigation() {
     const target = item?.dataset.settingsTarget;
     if (target) openSettingsSubpage(target);
   });
+  setupLiquidNav();
 }
 
 // Event Listeners
@@ -5110,6 +5114,7 @@ function applyBillingSource(source: BillingSource) {
   const router = source === 'router';
   document.querySelectorAll<HTMLElement>('[data-router-billing-only]').forEach(element=>element.hidden=!router);
   if(!router && activeBillingWorkbenchSection==='upstreams')activateBillingWorkbenchSection('overview');
+  requestAnimationFrame(() => syncLiquidNav({ animate: false }));
   const bridge = getRouterBillingBridge();
   const webvpn = document.getElementById('btn-billing-webvpn') as HTMLButtonElement | null;
   const direct = document.getElementById('btn-billing-direct') as HTMLButtonElement | null;

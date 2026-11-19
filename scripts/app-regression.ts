@@ -37,7 +37,11 @@ const installedBuildTimestamp = 1_794_931_200;
 let updateManifestReads = 0;
 const mobileLayout = platform === 'android';
 Object.defineProperty(document,'hidden',{configurable:true,value:false});
-Object.defineProperty(navigator, 'userAgent', { value: mobileLayout ? 'Mozilla/5.0 (Linux; Android 15) Mobile MockApp' : platform === 'macos' ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) MockApp' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MockApp' });
+const mockPlatform = mobileLayout ? 'Linux; Android 15' : platform === 'macos'
+  ? 'Macintosh; Intel Mac OS X 10_15_7' : 'Windows NT 10.0; Win64; x64';
+Object.defineProperty(navigator, 'userAgent', {
+  value: navigator.userAgent.replace(/\([^)]*\)/, `(${mockPlatform})`) + ' MockApp',
+});
 (window as any).__TAURI__ = {};
 mockWindows('main');
 const now = () => performance.now();
@@ -234,6 +238,16 @@ mockIPC(async (cmd, payload: any = {}) => {
     return {stage:'ready',challengeId:null,message:'校外连接已就绪'};
   }
   if (cmd === 'query_billing_records') return {kind:payload.query.kind,page:1,pageSize:10,table};
+  if (cmd === 'get_macos_liquid_glass_capabilities') {
+    if (platform === 'macos' && fixtureOptions.has('macosNativeGlass')) {
+      return { supported: true, engine: 'ns-glass-effect', interactiveSupported: true };
+    }
+    return { supported: false, engine: 'none', interactiveSupported: false };
+  }
+  if (cmd === 'sync_macos_liquid_glass') {
+    (window as any).__MACOS_GLASS_SLOTS__ = payload.slots ?? [];
+    return null;
+  }
   return null;
 }, {shouldMockEvents:true});
 await import('../src/main');

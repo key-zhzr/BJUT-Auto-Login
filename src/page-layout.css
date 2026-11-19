@@ -297,3 +297,453 @@
 
 :root[data-theme] #billing-center.is-uplink-summary .billing-account-picker { display:none; }
 :root[data-theme] #billing-center.is-uplink-summary .billing-header-tools { display:flex;justify-content:flex-end; }
+
+/* ==========================================================================
+   Navigation dock and sliding selection indicator
+   ========================================================================== */
+:root[data-theme] #nav .nav-items {
+  position: relative;
+}
+
+:root[data-theme] .nav-liquid-pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  border-radius: var(--theme-control-radius, 10px);
+  will-change: transform, width, height, opacity;
+  transition:
+    transform 320ms cubic-bezier(0.22, 1.2, 0.36, 1),
+    width 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms ease;
+}
+
+:root[data-theme] .nav-liquid-pill.no-pill-transition {
+  transition: opacity 120ms ease !important;
+}
+
+:root[data-theme] .nav-liquid-pill-inner {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  border: 1px solid rgba(var(--accent-rgb, var(--primary-rgb)), 0.22);
+  background: linear-gradient(
+    180deg,
+    rgba(var(--accent-rgb, var(--primary-rgb)), 0.2) 0%,
+    rgba(var(--accent-rgb, var(--primary-rgb)), 0.12) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -1px 0 rgba(var(--accent-rgb, var(--primary-rgb)), 0.08),
+    0 4px 12px rgba(var(--accent-rgb, var(--primary-rgb)), 0.12);
+  transition:
+    transform 220ms cubic-bezier(0.22, 1.25, 0.36, 1),
+    filter 180ms ease,
+    background 200ms ease,
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+:root[data-theme][data-color-scheme="dark"] .nav-liquid-pill-inner {
+  border-color: rgba(var(--accent-rgb, var(--primary-rgb)), 0.32);
+  background: linear-gradient(
+    180deg,
+    rgba(var(--accent-rgb, var(--primary-rgb)), 0.28) 0%,
+    rgba(var(--accent-rgb, var(--primary-rgb)), 0.16) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    0 4px 14px rgba(var(--accent-rgb, var(--primary-rgb)), 0.22);
+}
+
+:root[data-theme] #nav .nav-item,
+:root[data-theme] #nav .nav-tree-link,
+:root[data-theme] .billing-mobile-nav .billing-section-nav-button {
+  position: relative;
+  z-index: 2;
+}
+
+:root[data-theme] .has-liquid-pill :is(.nav-item.active, .nav-tree-link.active, .billing-section-nav-button.active) {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Desktop & Tablet Sidebar Glass Specular Polish + Apple / WinUI Harmonization */
+@media (min-width: 769px) {
+  :root[data-theme] #nav {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38);
+  }
+  :root[data-theme][data-color-scheme="dark"] #nav {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+  :root[data-theme="apple27"] #nav .nav-items > .nav-liquid-pill:not(.is-parent-pill) .nav-liquid-pill-inner {
+    border-color: rgba(255, 255, 255, 0.26);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-color) 86%, #ffffff 14%) 0%,
+      var(--accent-color) 100%
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.42),
+      0 4px 12px rgba(var(--accent-rgb), 0.26);
+  }
+  :root[data-theme="apple27"] #nav .nav-items > .nav-liquid-pill.is-parent-pill .nav-liquid-pill-inner {
+    border-color: var(--theme-border);
+    background: var(--theme-hover-bg);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  }
+  :root[data-theme="winui"] #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
+    border-color: var(--win-control-stroke-rest);
+    background: var(--win-control-fill-hover);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.34),
+      0 2px 6px rgba(0, 0, 0, 0.04);
+  }
+  :root[data-theme="winui"][data-color-scheme="dark"] #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 2px 8px rgba(0, 0, 0, 0.22);
+  }
+}
+
+/* Narrow Desktop Rail (Tier 1) */
+@media (max-width: 768px) {
+  :root[data-theme] body.is-desktop #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
+    border-radius: var(--theme-control-radius, 10px);
+  }
+  :root[data-theme="apple27"] body.is-desktop #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
+    border-color: rgba(255, 255, 255, 0.26);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-color) 86%, #ffffff 14%) 0%,
+      var(--accent-color) 100%
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.42),
+      0 4px 12px rgba(var(--accent-rgb), 0.26);
+  }
+  :root[data-theme="winui"] body.is-desktop #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
+    border-color: var(--win-control-stroke-rest);
+    background: var(--win-control-fill-hover);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  }
+}
+
+:root[data-theme] .has-liquid-pill .nav-liquid-pill { opacity: 1; }
+:root[data-theme] .nav-liquid-accent-layer { display: none; position: absolute; pointer-events: none; }
+:root[data-theme] .nav-liquid-droplet { display: none; }
+:root[data-theme] .nav-liquid-bar-recess { display: none; }
+
+@media (max-width: 768px) {
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) {
+    --dock-edge: rgba(35, 48, 69, 0.14);
+    --dock-tint: rgba(251, 252, 255, 0.53);
+    --dock-highlight: rgba(255, 255, 255, 0.84);
+    --dock-shade: rgba(44, 60, 82, 0.12);
+    --dock-press-sheen: 0.22;
+    --dock-pill-tint: rgba(var(--accent-rgb, var(--primary-rgb)), 0.15);
+    --dock-droplet-rim:
+      inset 0 0 0 0.75px rgba(15, 23, 42, 0.11),
+      inset 0 1.5px 1px rgba(255, 255, 255, 0.92),
+      inset 0 -1.2px 1px rgba(255, 255, 255, 0.56);
+    --dock-droplet-shadow:
+      0 10px 24px -6px rgba(15, 23, 42, 0.16),
+      0 2px 6px rgba(15, 23, 42, 0.08);
+  }
+
+  :root[data-theme][data-color-scheme="dark"] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) {
+    --dock-edge: rgba(255, 255, 255, 0.17);
+    --dock-tint: rgba(18, 24, 35, 0.62);
+    --dock-highlight: rgba(255, 255, 255, 0.24);
+    --dock-shade: rgba(0, 0, 0, 0.38);
+    --dock-press-sheen: 0.13;
+    --dock-pill-tint: rgba(var(--accent-rgb, var(--primary-rgb)), 0.25);
+    --dock-droplet-rim:
+      inset 0 0 0 0.75px rgba(255, 255, 255, 0.24),
+      inset 0 1.5px 1px rgba(255, 255, 255, 0.34),
+      inset 0 -1px 1px rgba(255, 255, 255, 0.14);
+    --dock-droplet-shadow:
+      0 12px 28px -6px rgba(0, 0, 0, 0.48),
+      0 2px 8px rgba(0, 0, 0, 0.28);
+  }
+
+  :root[data-theme] body:not(.is-desktop) #nav,
+  :root[data-theme] body:not(.is-desktop).billing-center-active .billing-mobile-nav {
+    position: fixed;
+    inset: auto 0 max(0.625rem, env(safe-area-inset-bottom));
+    width: min(calc(100% - clamp(1.25rem, 6.2vw, 2.5rem)), 32rem);
+    height: 3.875rem;
+    padding: 0.25rem;
+    margin: 0 auto;
+    overflow: visible;
+    border: 0;
+    border-radius: 999px;
+    background: transparent !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    box-shadow: none;
+    transform: none;
+    transition: none;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  :root[data-theme] body:not(.is-desktop).billing-center-active #nav {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: none;
+  }
+
+  /* The bar samples the page. The raised lens also samples the tab artwork. */
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border-radius: inherit;
+    border: 1px solid var(--dock-edge);
+    background: var(--theme-card-solid);
+    box-shadow:
+      inset 0 1px 0 var(--dock-highlight),
+      inset 0 0 0 1px rgba(255, 255, 255, calc(var(--dock-press-glow, 0) * 0.16)),
+      0 8px 23px -4px var(--dock-shade);
+    transform-origin: center center;
+    transform: var(--dock-bar-shape, none);
+    clip-path: var(--dock-bar-cutout, none);
+    pointer-events: none;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border-radius: inherit;
+    overflow: visible;
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-bar-recess {
+    visibility: visible;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    border: 1px solid var(--dock-edge);
+    background: var(--theme-card-solid);
+    box-shadow:
+      inset 0 1px 0 var(--dock-highlight),
+      inset 0 0 0 1px rgba(255, 255, 255, calc(var(--dock-press-glow, 0) * 0.16)),
+      0 8px 23px -4px var(--dock-shade);
+    transform-origin: center center;
+    pointer-events: none;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-accent-layer {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    overflow: visible;
+    visibility: hidden;
+    pointer-events: none;
+    opacity: 1;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-accent-layer {
+    visibility: visible;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-accent-item {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.19rem;
+    padding: 0.25rem 0.06rem;
+    font-size: 0.67rem;
+    font-weight: 500;
+    line-height: 1.1;
+    color: var(--accent-color, var(--primary-color));
+    transform-origin: center center;
+    transform: var(--dock-content-shift, translate3d(0, 0, 0)) scale(var(--dock-item-mag, 1));
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 4;
+    visibility: hidden;
+    pointer-events: none;
+    box-sizing: border-box;
+    border-radius: 999px;
+    background: transparent;
+    opacity: clamp(0, calc(var(--dock-lift, 0) * 2.4), 1);
+    box-shadow: var(--dock-droplet-rim), var(--dock-droplet-shadow);
+  }
+
+  @supports ((backdrop-filter: blur(5px)) or (-webkit-backdrop-filter: blur(5px))) {
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav)::after,
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
+      background:
+        linear-gradient(
+          180deg,
+          rgba(255, 255, 255, calc(var(--dock-press-glow, 0) * var(--dock-press-sheen, 0.18))),
+          rgba(255, 255, 255, calc(var(--dock-press-glow, 0) * var(--dock-press-sheen, 0.18) * 0.65))
+        ),
+        var(--dock-tint);
+      -webkit-backdrop-filter: blur(5px) saturate(1.25);
+      backdrop-filter: var(--dock-backdrop, blur(5px) saturate(1.25));
+    }
+
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
+      -webkit-backdrop-filter: blur(1px);
+      backdrop-filter: var(--dock-lens-backdrop, blur(1px));
+    }
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-droplet {
+    visibility: visible;
+  }
+
+  :root[data-theme] body:not(.is-desktop) #nav .nav-items {
+    z-index: 1;
+    overflow: visible;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
+    border-radius: 999px;
+    transform-origin: center center;
+    transition: none;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).has-liquid-pill .nav-liquid-pill {
+    opacity: max(0, 1 - var(--dock-lift, 0) * 2.2);
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill-inner {
+    border: 0;
+    background: var(--dock-pill-tint);
+    box-shadow: none;
+  }
+
+  :root[data-theme] body:not(.is-desktop) #nav .nav-item,
+  :root[data-theme] body:not(.is-desktop).billing-center-active #billing-center .billing-mobile-nav .billing-section-nav-button {
+    border-radius: 999px;
+    border: 0;
+    min-height: 0;
+    height: 100%;
+    gap: 0.19rem;
+    padding: 0.25rem 0.06rem;
+    font-size: 0.67rem;
+    font-weight: 500;
+    line-height: 1.1;
+    color: var(--text-main);
+    background: transparent;
+    box-shadow: none;
+    transform-origin: center center;
+    transform: var(--dock-item-transform, var(--dock-content-shift, none));
+    transition: none !important;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav .nav-item, #billing-center .billing-mobile-nav .billing-section-nav-button):active {
+    transform: var(--dock-item-transform, var(--dock-content-shift, none));
+    filter: none;
+    transition: none !important;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop) #nav .nav-item::before,
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-mobile-nav .billing-section-nav-button::before {
+    display: none;
+  }
+
+  :root[data-theme] body:not(.is-desktop) #nav .nav-item > svg:not(.nav-tree-chevron),
+  :root[data-theme] body:not(.is-desktop) #nav .nav-liquid-accent-item > svg {
+    width: 23px;
+    height: 23px;
+  }
+
+  :root[data-theme] body:not(.is-desktop).billing-center-active .billing-mobile-nav .billing-section-nav-button > svg,
+  :root[data-theme] body:not(.is-desktop).billing-center-active .billing-mobile-nav .nav-liquid-accent-item > svg {
+    width: 21px;
+    height: 21px;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(
+    #nav:not(.is-droplet-active) .nav-item.active,
+    #billing-center .billing-mobile-nav:not(.is-droplet-active) .billing-section-nav-button.active
+  ) {
+    color: var(--accent-color, var(--primary-color));
+    font-weight: 500;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, #billing-center .billing-mobile-nav).is-droplet-active :is(.nav-item, .billing-section-nav-button) {
+    color: var(--text-main);
+    font-weight: 500;
+  }
+
+  :root[data-theme] body:not(.is-desktop) main,
+  :root[data-theme] body:not(.is-desktop).billing-center-active main {
+    padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav)::after,
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--theme-card-solid);
+    border-color: var(--theme-border-strong);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme] .nav-liquid-pill,
+  :root[data-theme] .nav-liquid-pill-inner,
+  :root[data-theme] body:not(.is-desktop) :is(#nav .nav-item, .billing-mobile-nav .billing-section-nav-button),
+  :root[data-theme] body:not(.is-desktop) :is(#nav .nav-item, .billing-mobile-nav .billing-section-nav-button) > svg {
+    transition: none !important;
+  }
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-liquid-previewing [data-liquid-hover] > svg {
+    transform: none;
+  }
+}
+
+/* Native AppKit NSGlassEffectView / NSVisualEffectView macOS integration */
+:root[data-theme][data-macos-native-glass]:has(> body.is-desktop.is-macos),
+:root[data-theme][data-macos-native-glass] body.is-desktop.is-macos {
+  background: transparent !important;
+}
+
+:root[data-theme][data-macos-native-glass] body.is-desktop.is-macos #main-content {
+  background: var(--theme-body-bg) !important;
+}
+
+:root[data-theme][data-macos-native-glass] body.is-desktop.is-macos #nav {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+:root[data-theme][data-macos-native-glass="ns-glass-effect"] body:not(.is-desktop).is-macos :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}

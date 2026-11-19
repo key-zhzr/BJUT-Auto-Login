@@ -1060,14 +1060,14 @@ html:root[data-theme] {
 @media (max-width: 768px) {
   :root[data-theme="apple27"] body.is-android #nav,
   :root[data-theme="apple27"] body.is-android .billing-mobile-nav {
-    border-radius: 13px;
+    border-radius: 999px;
   }
 
   :root[data-theme="apple27"] body.is-android #nav .nav-item.active,
   :root[data-theme="apple27"] body.is-android .billing-mobile-nav .billing-section-nav-button.active {
     color: var(--accent-color);
     border-color: transparent;
-    background: rgba(var(--accent-rgb), 0.16);
+    background: transparent;
     box-shadow: none;
   }
 }

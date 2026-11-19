@@ -14,6 +14,7 @@ mod cookie_jar;
 mod dual_stack;
 mod log_redaction;
 mod login_progress;
+mod macos_liquid_glass;
 #[cfg(any(target_os = "macos", test))]
 mod macos_network;
 mod month_end;
@@ -8866,7 +8867,9 @@ pub fn run() {
             reinstall_current_version,
             log_from_js,
             set_background_state,
-            get_current_network_state
+            get_current_network_state,
+            macos_liquid_glass::get_macos_liquid_glass_capabilities,
+            macos_liquid_glass::sync_macos_liquid_glass
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

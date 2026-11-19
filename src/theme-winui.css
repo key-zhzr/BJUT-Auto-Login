@@ -1116,8 +1116,6 @@
 }
 
 :root[data-theme="winui"] body.is-android :is(
-  #nav,
-  .billing-mobile-nav,
   .glass-card,
   .account-item,
   .diagnostic-panel,
@@ -1131,8 +1129,6 @@
 }
 
 :root[data-theme="winui"] body.is-android :is(
-  #nav,
-  .billing-mobile-nav,
   .glass-card,
   .account-item,
   .diagnostic-panel,
@@ -1141,6 +1137,15 @@
 ) {
   background: var(--theme-card-solid);
   box-shadow: none;
+}
+
+@media (min-width: 769px) {
+  :root[data-theme="winui"] body.is-android #nav {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    background: var(--theme-card-solid);
+    box-shadow: none;
+  }
 }
 
 :root[data-theme="winui"] body.is-android :is(
@@ -1173,28 +1178,6 @@
 }
 
 @media (max-width: 768px) {
-  :root[data-theme="winui"] body.is-android #nav {
-    border-radius: var(--win-radius-card);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-  }
-
-  :root[data-theme="winui"] body.is-android #nav .nav-item {
-    min-height: 48px;
-    height: 100%;
-    gap: var(--win-space-1);
-    padding: var(--win-space-1) 2px;
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  :root[data-theme="winui"] body.is-android #nav .nav-item.active::before {
-    top: calc(50% + 1px);
-    left: 50%;
-    width: 16px;
-    height: 3px;
-    transform: translateX(-50%);
-  }
-
   /* Single mobile dock: entering billing center swaps the primary navigation
      for billing sections to reclaim bottom viewport space. */
   :root[data-theme="winui"] body:not(.is-desktop).billing-center-active main {
@@ -1205,48 +1188,8 @@
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
-    transform: translateX(-50%) translateY(16px);
+    transform: translateY(16px);
     transition: opacity 140ms ease, transform 140ms ease;
-  }
-
-  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-mobile-nav {
-    position: fixed;
-    top: auto;
-    bottom: max(0.65rem, env(safe-area-inset-bottom));
-    left: 50%;
-    right: auto;
-    z-index: 810;
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    width: min(calc(100% - 1.5rem), 34rem);
-    height: 4.55rem;
-    margin: 0;
-    padding: 0.38rem;
-    overflow: visible;
-    border-radius: var(--win-radius-card);
-    transform: translateX(-50%) translateZ(0);
-    background: var(--win-layer-default);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-  }
-
-  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-section-nav-button {
-    min-height: 0;
-    height: 100%;
-    flex-direction: column;
-    justify-content: center;
-    gap: var(--win-space-1);
-    padding: var(--win-space-1) 2px;
-    border-radius: var(--win-radius-control);
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-section-nav-button.active::before {
-    top: calc(50% + 1px);
-    left: 50%;
-    width: 16px;
-    height: 3px;
-    transform: translateX(-50%);
   }
 }
 
