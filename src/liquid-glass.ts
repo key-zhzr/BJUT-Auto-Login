@@ -108,17 +108,41 @@ function createNormalMap(width: number, height: number, profile: LensProfile) {
 }
 
 let filterDefs: SVGDefsElement | undefined;
+const prewarmProbes = new Map<string, HTMLElement>();
 
-function updateLens(id: string, width: number, height: number, profile: LensProfile) {
+function prewarmBackdropFilter(filterId: string, filterUrl: string) {
+  const previous = prewarmProbes.get(filterId);
+  if (previous) {
+    previous.remove();
+    prewarmProbes.delete(filterId);
+  }
+  const probe = document.createElement('div');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.cssText = 'position:fixed;left:0;top:0;width:4px;height:4px;border-radius:2px;opacity:0.001;pointer-events:none;z-index:2147483647';
+  probe.style.setProperty('-webkit-backdrop-filter', filterUrl);
+  probe.style.backdropFilter = filterUrl;
+  document.body.append(probe);
+  prewarmProbes.set(filterId, probe);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (probe.isConnected) probe.remove();
+        if (prewarmProbes.get(filterId) === probe) prewarmProbes.delete(filterId);
+      });
+    });
+  });
+}
+
+function updateLens(id: string, width: number, height: number, profile: LensProfile): 'updated' | 'cached' | 'failed' {
   const w = Math.round(width);
   const h = Math.round(height);
-  if (w < 2 || h < 2) return false;
+  if (w < 2 || h < 2) return 'failed';
   const geometry = `${w}x${h}`;
   const previous = document.getElementById(id);
-  if (previous?.getAttribute('data-geometry') === geometry) return true;
+  if (previous?.getAttribute('data-geometry') === geometry) return 'cached';
 
   const map = createNormalMap(w, h, profile);
-  if (!map) return false;
+  if (!map) return 'failed';
   if (!filterDefs) {
     const holder = svg('svg', {
       width: 0,
@@ -199,7 +223,7 @@ function updateLens(id: string, width: number, height: number, profile: LensProf
 
   if (previous) previous.replaceWith(filter);
   else filterDefs.append(filter);
-  return true;
+  return 'updated';
 }
 
 export function updateDockGlass(host: HTMLElement, dock: DOMRect, lensWidth: number, lensHeight: number) {
@@ -221,10 +245,16 @@ export function updateDockGlass(host: HTMLElement, dock: DOMRect, lensWidth: num
   const name = host.id === 'nav' ? 'main' : 'billing';
   const surface = `dock-${name}-glass`;
   const lens = `dock-${name}-lens`;
-  if (updateLens(surface, dock.width, dock.height, barProfile)) {
+  const surfaceResult = updateLens(surface, dock.width, dock.height, barProfile);
+  if (surfaceResult !== 'failed') {
     host.style.setProperty('--dock-backdrop', `url("#${surface}") blur(1.5px) saturate(1.28)`);
   }
-  if (updateLens(lens, lensWidth, lensHeight, dropletProfile)) {
-    host.style.setProperty('--dock-lens-backdrop', `url("#${lens}")`);
+  const lensResult = updateLens(lens, lensWidth, lensHeight, dropletProfile);
+  if (lensResult !== 'failed') {
+    const lensUrl = `url("#${lens}")`;
+    host.style.setProperty('--dock-lens-backdrop', lensUrl);
+    if (lensResult === 'updated') {
+      prewarmBackdropFilter(lens, lensUrl);
+    }
   }
 }

@@ -438,6 +438,7 @@
 :root[data-theme] .has-liquid-pill .nav-liquid-pill { opacity: 1; }
 :root[data-theme] .nav-liquid-accent-layer { display: none; position: absolute; pointer-events: none; }
 :root[data-theme] .nav-liquid-droplet { display: none; }
+:root[data-theme] .nav-liquid-bar-surface { display: none; }
 :root[data-theme] .nav-liquid-bar-recess { display: none; }
 
 @media (max-width: 768px) {
@@ -504,8 +505,8 @@
   }
 
   /* The bar samples the page. The raised lens also samples the tab artwork. */
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav)::after {
-    content: "";
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface {
+    display: block;
     position: absolute;
     inset: 0;
     z-index: 0;
@@ -514,12 +515,28 @@
     background: var(--theme-card-solid);
     box-shadow:
       inset 0 1px 0 var(--dock-highlight),
-      inset 0 0 0 1px rgba(255, 255, 255, calc(var(--dock-press-glow, 0) * 0.16)),
       0 8px 23px -4px var(--dock-shade);
     transform-origin: center center;
-    transform: var(--dock-bar-shape, none);
-    clip-path: var(--dock-bar-cutout, none);
     pointer-events: none;
+    will-change: transform;
+    contain: layout style;
+  }
+
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-glow,
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-glow {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    will-change: opacity;
+    contain: strict;
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, var(--dock-press-sheen, 0.18)),
+      rgba(255, 255, 255, calc(var(--dock-press-sheen, 0.18) * 0.65))
+    );
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
   }
 
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess {
@@ -531,6 +548,7 @@
     overflow: visible;
     visibility: hidden;
     pointer-events: none;
+    contain: layout style;
   }
 
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-bar-recess {
@@ -543,12 +561,11 @@
     border-radius: inherit;
     border: 1px solid var(--dock-edge);
     background: var(--theme-card-solid);
-    box-shadow:
-      inset 0 1px 0 var(--dock-highlight),
-      inset 0 0 0 1px rgba(255, 255, 255, calc(var(--dock-press-glow, 0) * 0.16)),
-      0 8px 23px -4px var(--dock-shade);
+    box-shadow: inset 0 1px 0 var(--dock-highlight);
     transform-origin: center center;
     pointer-events: none;
+    will-change: transform;
+    contain: layout style;
   }
 
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-accent-layer {
@@ -560,6 +577,7 @@
     visibility: hidden;
     pointer-events: none;
     opacity: 1;
+    contain: layout style;
   }
 
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-accent-layer {
@@ -579,9 +597,10 @@
     line-height: 1.1;
     color: var(--accent-color, var(--primary-color));
     transform-origin: center center;
-    transform: var(--dock-content-shift, translate3d(0, 0, 0)) scale(var(--dock-item-mag, 1));
     pointer-events: none;
     white-space: nowrap;
+    will-change: transform;
+    contain: layout style;
   }
 
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
@@ -595,22 +614,24 @@
     box-sizing: border-box;
     border-radius: 999px;
     background: transparent;
-    opacity: clamp(0, calc(var(--dock-lift, 0) * 2.4), 1);
+    opacity: 0;
     box-shadow: var(--dock-droplet-rim), var(--dock-droplet-shadow);
+    will-change: transform, opacity;
+    contain: layout style;
   }
 
   @supports ((backdrop-filter: blur(5px)) or (-webkit-backdrop-filter: blur(5px))) {
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav)::after,
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
-      background:
-        linear-gradient(
-          180deg,
-          rgba(255, 255, 255, calc(var(--dock-press-glow, 0) * var(--dock-press-sheen, 0.18))),
-          rgba(255, 255, 255, calc(var(--dock-press-glow, 0) * var(--dock-press-sheen, 0.18) * 0.65))
-        ),
-        var(--dock-tint);
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface {
+      background: var(--dock-tint);
       -webkit-backdrop-filter: blur(5px) saturate(1.25);
       backdrop-filter: var(--dock-backdrop, blur(5px) saturate(1.25));
+    }
+
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav):is(.is-droplet-active, .is-bar-animating) .nav-liquid-bar-surface,
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
+      background: var(--dock-tint);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
     }
 
     :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
@@ -632,10 +653,8 @@
     border-radius: 999px;
     transform-origin: center center;
     transition: none;
-  }
-
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).has-liquid-pill .nav-liquid-pill {
-    opacity: max(0, 1 - var(--dock-lift, 0) * 2.2);
+    will-change: transform, opacity;
+    contain: layout style;
   }
 
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill-inner {
@@ -659,12 +678,13 @@
     background: transparent;
     box-shadow: none;
     transform-origin: center center;
-    transform: var(--dock-item-transform, var(--dock-content-shift, none));
     transition: none !important;
+    will-change: transform;
+    contain: layout style;
   }
 
   :root[data-theme] body:not(.is-desktop) :is(#nav .nav-item, #billing-center .billing-mobile-nav .billing-section-nav-button):active {
-    transform: var(--dock-item-transform, var(--dock-content-shift, none));
+    transform: none;
     filter: none;
     transition: none !important;
   }
@@ -706,7 +726,7 @@
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav)::after,
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -727,22 +747,7 @@
   }
 }
 
-/* Native AppKit NSGlassEffectView / NSVisualEffectView macOS integration */
-:root[data-theme][data-macos-native-glass]:has(> body.is-desktop.is-macos),
-:root[data-theme][data-macos-native-glass] body.is-desktop.is-macos {
-  background: transparent !important;
-}
-
-:root[data-theme][data-macos-native-glass] body.is-desktop.is-macos #main-content {
-  background: var(--theme-body-bg) !important;
-}
-
-:root[data-theme][data-macos-native-glass] body.is-desktop.is-macos #nav {
-  background: transparent !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-}
-
+/* Native AppKit NSGlassEffectView mobile droplet overlay integration */
 :root[data-theme][data-macos-native-glass="ns-glass-effect"] body:not(.is-desktop).is-macos :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;

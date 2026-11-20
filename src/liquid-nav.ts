@@ -39,13 +39,22 @@ interface TabLayoutBox {
   top: number;
   width: number;
   height: number;
+  inkHalfW: number;
+  inkHalfH: number;
+  lastTransform: string;
+  lastMirrorTransform: string;
+  lastClipPath: string;
+  lastOpacity: string;
 }
 
 interface PillState {
   container: HTMLElement;
   host: HTMLElement;
+  barSurface: HTMLElement;
+  barGlow: HTMLElement;
   barRecess: HTMLElement;
   barRecessSurface: HTMLElement;
+  barRecessGlow: HTMLElement;
   pill: HTMLElement;
   pillInner: HTMLElement;
   accentLayer: HTMLElement;
@@ -79,6 +88,19 @@ interface PillState {
   deformVel: number;
   lastBarX: number;
   lastBarY: number;
+  lastPillW: number;
+  lastPillH: number;
+  lastPillOpacity: string;
+  lastDropletActive: boolean;
+  lastBarAnimating: boolean;
+  lastGlowOpacity: string;
+  lastBarTransform: string;
+  lastBarCutout: string;
+  lastRecessClip: string;
+  lastRecessTransform: string;
+  lastAccentClip: string;
+  lastDropletOpacity: string;
+  lastDropletTransform: string;
   containerLeftInHost: number;
   containerTopInHost: number;
   top: number;
@@ -295,21 +317,60 @@ function buildStadiumHolePath(
   return `path(evenodd, "${outer} ${hole}")`;
 }
 
+function setCachedStyle(
+  element: HTMLElement,
+  prop: 'transform' | 'clipPath' | 'opacity',
+  previous: string,
+  next: string,
+): string {
+  if (previous === next) return previous;
+  element.style[prop] = next;
+  return next;
+}
+
+function isRectInsideStadium(
+  rectLeft: number,
+  rectTop: number,
+  rectRight: number,
+  rectBottom: number,
+  cx: number,
+  cy: number,
+  halfW: number,
+  halfH: number,
+  radius: number,
+  margin: number,
+): boolean {
+  const safeR = radius - margin;
+  if (safeR <= 1) return false;
+  const straightX = Math.max(0, halfW - radius);
+  const straightY = Math.max(0, halfH - radius);
+  const dx = Math.max(0, Math.max(Math.abs(rectLeft - cx), Math.abs(rectRight - cx)) - straightX);
+  const dy = Math.max(0, Math.max(Math.abs(rectTop - cy), Math.abs(rectBottom - cy)) - straightY);
+  return dx * dx + dy * dy <= safeR * safeR;
+}
+
 function clearTabCutouts(state: PillState) {
   for (const entry of state.accentTabs) {
-    if (entry.element.style.clipPath) entry.element.style.clipPath = '';
+    entry.lastClipPath = setCachedStyle(entry.element, 'clipPath', entry.lastClipPath, '');
+    entry.lastOpacity = setCachedStyle(entry.element, 'opacity', entry.lastOpacity, '');
   }
 }
 
 function clearTabVisuals(state: PillState) {
   clearTabCutouts(state);
   for (const entry of state.accentTabs) {
-    entry.element.style.removeProperty('--dock-item-transform');
-    entry.mirror.style.transform = '';
+    entry.lastTransform = setCachedStyle(entry.element, 'transform', entry.lastTransform, '');
+    entry.lastMirrorTransform = setCachedStyle(entry.mirror, 'transform', entry.lastMirrorTransform, '');
   }
-  state.barRecess.style.clipPath = '';
-  state.barRecessSurface.style.transform = '';
-  state.host.style.removeProperty('--dock-bar-cutout');
+  state.lastRecessClip = setCachedStyle(state.barRecess, 'clipPath', state.lastRecessClip, '');
+  state.lastRecessTransform = setCachedStyle(state.barRecessSurface, 'transform', state.lastRecessTransform, '');
+  state.lastBarCutout = setCachedStyle(state.barSurface, 'clipPath', state.lastBarCutout, '');
+  state.lastBarTransform = setCachedStyle(state.barSurface, 'transform', state.lastBarTransform, '');
+  state.lastAccentClip = setCachedStyle(state.accentLayer, 'clipPath', state.lastAccentClip, '');
+  state.lastDropletTransform = setCachedStyle(state.droplet, 'transform', state.lastDropletTransform, '');
+  state.lastDropletOpacity = setCachedStyle(state.droplet, 'opacity', state.lastDropletOpacity, '');
+  state.lastGlowOpacity = setCachedStyle(state.barGlow, 'opacity', state.lastGlowOpacity, '');
+  state.barRecessGlow.style.opacity = '';
 }
 
 function syncAccentLayer(state: PillState) {
@@ -332,12 +393,31 @@ function syncAccentLayer(state: PillState) {
     const top = rect.top - bounds.top + container.scrollTop;
     const iconSvg = tab.querySelector<SVGElement>(':scope > svg:not(.nav-tree-chevron)');
     const labelSpan = tab.querySelector<HTMLElement>(':scope > span');
+    // Measure actual icon + label ink bounds once on layout sync so fully-covered tabs skip path() cutouts.
+    const tabCx = rect.left + rect.width / 2;
+    const tabCy = rect.top + rect.height / 2;
+    let inkHalfW = rect.width / 2;
+    let inkHalfH = rect.height / 2;
+    if (iconSvg || labelSpan) {
+      let maxDx = 0;
+      let maxDy = 0;
+      for (const child of [iconSvg, labelSpan]) {
+        if (!child) continue;
+        const cb = child.getBoundingClientRect();
+        maxDx = Math.max(maxDx, Math.abs(cb.left - tabCx), Math.abs(cb.right - tabCx));
+        maxDy = Math.max(maxDy, Math.abs(cb.top - tabCy), Math.abs(cb.bottom - tabCy));
+      }
+      inkHalfW = Math.min(rect.width / 2, maxDx + 1.5);
+      inkHalfH = Math.min(rect.height / 2, maxDy + 1.5);
+    }
     return {
       tab,
       left,
       top,
       width: rect.width,
       height: rect.height,
+      inkHalfW,
+      inkHalfH,
       sig: `${Math.round(left)}:${Math.round(top)}:${Math.round(rect.width)}:${Math.round(rect.height)}:${iconSvg ? 's' : 'n'}:${labelSpan?.textContent || ''}`,
     };
   });
@@ -345,12 +425,14 @@ function syncAccentLayer(state: PillState) {
   const signature = `${Math.round(bounds.width)}x${Math.round(bounds.height)}|${entries.map(e => e.sig).join(';')}`;
   if (signature === state.accentSignature && state.accentTabs.length === entries.length) {
     state.accentTabs = entries.map((entry, index) => ({
+      ...state.accentTabs[index],
       element: entry.tab,
-      mirror: state.accentTabs[index].mirror,
       left: entry.left,
       top: entry.top,
       width: entry.width,
       height: entry.height,
+      inkHalfW: entry.inkHalfW,
+      inkHalfH: entry.inkHalfH,
     }));
     return;
   }
@@ -380,6 +462,12 @@ function syncAccentLayer(state: PillState) {
       top: entry.top,
       width: entry.width,
       height: entry.height,
+      inkHalfW: entry.inkHalfW,
+      inkHalfH: entry.inkHalfH,
+      lastTransform: '',
+      lastMirrorTransform: '',
+      lastClipPath: '',
+      lastOpacity: '',
     });
   }
   state.accentTabs = nextTabs;
@@ -422,45 +510,36 @@ function syncNativeDropletSlot(host: HTMLElement, droplet: HTMLElement, visible:
   });
 }
 
-function syncSidebarUnderlaySlot(nav: HTMLElement, visible: boolean) {
-  if (!isMacosNativeGlassActive()) return;
-  const navRect = nav.getBoundingClientRect();
-  const cornerRadius = parseFloat(getComputedStyle(nav).borderTopLeftRadius) || 0;
-  setMacosGlassSlot('sidebar-underlay', {
-    id: 'sidebar-underlay',
-    placement: 'underlay',
-    x: navRect.left,
-    y: navRect.top,
-    width: navRect.width,
-    height: navRect.height,
-    cornerRadius,
-    style: 'regular',
-    visible: visible && navRect.width > 1 && navRect.height > 1,
-  });
-}
-
 function paintDockSurface(
   state: PillState,
   pullX: number,
   pullY: number,
 ): { barX: number; barY: number; pressScale: number; barScaleX: number; barScaleY: number } {
-  const {host, barBox, lift} = state;
+  const {host, barSurface, barGlow, barRecessGlow, barBox, lift} = state;
   const clampedLift = Math.max(0, lift);
-  host.style.setProperty('--dock-lift', clampedLift.toFixed(3));
-  host.style.setProperty('--dock-press-glow', Math.max(0, Math.min(1.15, state.barScale)).toFixed(3));
-  if (clampedLift > 0) {
-    host.style.setProperty('--dock-item-mag', (1 + ITEM_MAG_GAIN * Math.min(1.06, clampedLift)).toFixed(4));
-  } else {
-    host.style.removeProperty('--dock-item-mag');
+  const dropletActive = clampedLift > 0;
+  if (dropletActive !== state.lastDropletActive) {
+    state.lastDropletActive = dropletActive;
+    host.classList.toggle('is-droplet-active', dropletActive);
   }
-  host.classList.toggle('is-droplet-active', clampedLift > 0);
+  const rawGlow = Math.max(0, Math.min(1, state.barScale));
+  const nextGlow = rawGlow > 0.002 ? rawGlow.toFixed(3) : '';
+  if (nextGlow !== state.lastGlowOpacity) {
+    state.lastGlowOpacity = nextGlow;
+    barGlow.style.opacity = nextGlow;
+    barRecessGlow.style.opacity = nextGlow;
+  }
   const pullMag = Math.hypot(pullX, pullY);
   const hasPull = pullMag >= 0.02;
   const hasScale = Math.abs(state.barScale) >= 0.002;
+  const barAnimating = dropletActive || hasPull || hasScale;
+  if (barAnimating !== state.lastBarAnimating) {
+    state.lastBarAnimating = barAnimating;
+    host.classList.toggle('is-bar-animating', barAnimating);
+  }
   if (!barBox || (!hasPull && !hasScale)) {
-    host.style.removeProperty('--dock-bar-shape');
-    host.style.removeProperty('--dock-content-shift');
-    host.style.removeProperty('--dock-bar-cutout');
+    state.lastBarTransform = setCachedStyle(barSurface, 'transform', state.lastBarTransform, '');
+    state.lastBarCutout = setCachedStyle(barSurface, 'clipPath', state.lastBarCutout, '');
     state.lastBarX = 0;
     state.lastBarY = 0;
     return { barX: 0, barY: 0, pressScale: 1, barScaleX: 1, barScaleY: 1 };
@@ -483,19 +562,15 @@ function paintDockSurface(
   const stretchX = hasPull ? Math.min(0.016, (Math.abs(barX) / barBox.width) * 0.75) : 0;
   const barScaleX = pressScale + stretchX;
   const barScaleY = pressScale - stretchX * 0.35;
-  host.style.setProperty('--dock-bar-shape', `translate3d(${barX}px, ${barY}px, 0) scale(${barScaleX}, ${barScaleY})`);
-  if (hasPull) {
-    host.style.setProperty('--dock-content-shift', `translate3d(${barX}px, ${barY}px, 0)`);
-  } else {
-    host.style.removeProperty('--dock-content-shift');
-  }
+  const barTransform = `translate3d(${barX.toFixed(2)}px, ${barY.toFixed(2)}px, 0) scale(${barScaleX.toFixed(4)}, ${barScaleY.toFixed(4)})`;
+  state.lastBarTransform = setCachedStyle(barSurface, 'transform', state.lastBarTransform, barTransform);
   state.lastBarX = barX;
   state.lastBarY = barY;
   return { barX, barY, pressScale, barScaleX, barScaleY };
 }
 
 function paintHorizontalPill(state: PillState) {
-  const {host, pill, accentLayer, droplet, barRecess, barRecessSurface, x, width, top, height} = state;
+  const {host, barSurface, pill, accentLayer, droplet, barRecess, barRecessSurface, x, width, top, height} = state;
   const lift = Math.max(0, state.lift);
   const pullWeight = state.pressed ? lift : Math.min(1, lift + Math.hypot(state.pullX, state.pullY) * 0.08);
   const pullX = state.pullX * pullWeight;
@@ -506,35 +581,40 @@ function paintHorizontalPill(state: PillState) {
   const dockCenterY = state.dockHeight / 2;
   const pillRadX = (x + width / 2 - dockCenterX) * (pressScale - 1);
   const pillRadY = (top + height / 2 - dockCenterY) * (pressScale - 1);
-  pill.style.width = `${width}px`;
-  pill.style.height = `${height}px`;
-  pill.style.transform = `translate3d(${x + barX + pillRadX}px, ${top + barY + pillRadY}px, 0) scale(${pressScale})`;
+  if (Math.abs(width - state.lastPillW) > 0.05) {
+    state.lastPillW = width;
+    pill.style.width = `${width}px`;
+  }
+  if (Math.abs(height - state.lastPillH) > 0.05) {
+    state.lastPillH = height;
+    pill.style.height = `${height}px`;
+  }
+  const nextPillOpacity = lift > 0 ? Math.max(0, 1 - lift * 2.2).toFixed(3) : '';
+  state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, nextPillOpacity);
+  pill.style.transform = `translate3d(${(x + barX + pillRadX).toFixed(2)}px, ${(top + barY + pillRadY).toFixed(2)}px, 0) scale(${pressScale.toFixed(4)})`;
 
   const itemTransforms = state.accentTabs.map(entry => {
     const radX = (entry.left + entry.width / 2 - dockCenterX) * (pressScale - 1);
     const radY = (entry.top + entry.height / 2 - dockCenterY) * (pressScale - 1);
     const itemTx = barX + radX;
     const itemTy = barY + radY;
-    if (Math.abs(itemTx) > 0.01 || Math.abs(itemTy) > 0.01 || Math.abs(pressScale - 1) > 0.0002) {
-      entry.element.style.setProperty(
-        '--dock-item-transform',
-        `translate3d(${itemTx.toFixed(2)}px, ${itemTy.toFixed(2)}px, 0) scale(${pressScale.toFixed(4)})`,
-      );
-    } else {
-      entry.element.style.removeProperty('--dock-item-transform');
-    }
+    const nextTransform = Math.abs(itemTx) > 0.01 || Math.abs(itemTy) > 0.01 || Math.abs(pressScale - 1) > 0.0002
+      ? `translate3d(${itemTx.toFixed(2)}px, ${itemTy.toFixed(2)}px, 0) scale(${pressScale.toFixed(4)})`
+      : '';
+    entry.lastTransform = setCachedStyle(entry.element, 'transform', entry.lastTransform, nextTransform);
     return { itemTx, itemTy };
   });
 
   if (!lift) {
-    droplet.style.transform = '';
-    accentLayer.style.clipPath = '';
-    barRecess.style.clipPath = '';
-    barRecessSurface.style.transform = '';
-    host.style.removeProperty('--dock-bar-cutout');
+    state.lastDropletTransform = setCachedStyle(droplet, 'transform', state.lastDropletTransform, '');
+    state.lastDropletOpacity = setCachedStyle(droplet, 'opacity', state.lastDropletOpacity, '');
+    state.lastAccentClip = setCachedStyle(accentLayer, 'clipPath', state.lastAccentClip, '');
+    state.lastRecessClip = setCachedStyle(barRecess, 'clipPath', state.lastRecessClip, '');
+    state.lastRecessTransform = setCachedStyle(barRecessSurface, 'transform', state.lastRecessTransform, '');
+    state.lastBarCutout = setCachedStyle(barSurface, 'clipPath', state.lastBarCutout, '');
     clearTabCutouts(state);
     for (const entry of state.accentTabs) {
-      entry.mirror.style.transform = '';
+      entry.lastMirrorTransform = setCachedStyle(entry.mirror, 'transform', entry.lastMirrorTransform, '');
     }
     syncNativeDropletSlot(host, droplet, false);
     return;
@@ -565,14 +645,18 @@ function paintHorizontalPill(state: PillState) {
   const lensHeight = Math.max(1, Math.min(lensHeightRaw, 2 * (state.bottomEdge - middleY)));
   const left = middle - state.lensWidth / 2;
   const y = middleY - state.lensHeight / 2;
-  droplet.style.transform = `translate3d(${left}px, ${y}px, 0) scale(${lensWidth / state.lensWidth}, ${lensHeight / state.lensHeight})`;
+  const nextDropletTransform = `translate3d(${left.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${(lensWidth / state.lensWidth).toFixed(4)}, ${(lensHeight / state.lensHeight).toFixed(4)})`;
+  state.lastDropletTransform = setCachedStyle(droplet, 'transform', state.lastDropletTransform, nextDropletTransform);
+  const nextDropletOpacity = Math.max(0, Math.min(1, lift * 2.4)).toFixed(3);
+  state.lastDropletOpacity = setCachedStyle(droplet, 'opacity', state.lastDropletOpacity, nextDropletOpacity);
 
   const clipTop = middleY - lensHeight / 2;
   const clipLeft = middle - lensWidth / 2;
   const clipRight = state.dockWidth - (middle + lensWidth / 2);
   const clipBottom = state.dockHeight - (middleY + lensHeight / 2);
   const clipRadius = Math.min(lensWidth / 2, lensHeight / 2);
-  accentLayer.style.clipPath = `inset(${clipTop.toFixed(2)}px ${clipRight.toFixed(2)}px ${clipBottom.toFixed(2)}px ${clipLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
+  const nextAccentClip = `inset(${clipTop.toFixed(2)}px ${clipRight.toFixed(2)}px ${clipBottom.toFixed(2)}px ${clipLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
+  state.lastAccentClip = setCachedStyle(accentLayer, 'clipPath', state.lastAccentClip, nextAccentClip);
 
   if (state.barBox) {
     const barW = state.barBox.width;
@@ -581,12 +665,14 @@ function paintHorizontalPill(state: PillState) {
     const hTop = clipTop + state.containerTopInHost;
     const hRight = barW - (hLeft + lensWidth);
     const hBottom = barH - (hTop + lensHeight);
-    barRecess.style.clipPath = `inset(${hTop.toFixed(2)}px ${hRight.toFixed(2)}px ${hBottom.toFixed(2)}px ${hLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
+    const nextRecessClip = `inset(${hTop.toFixed(2)}px ${hRight.toFixed(2)}px ${hBottom.toFixed(2)}px ${hLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
+    state.lastRecessClip = setCachedStyle(barRecess, 'clipPath', state.lastRecessClip, nextRecessClip);
 
     const recessFactor = visualLift * (1 - Math.max(0, deform));
     const recessScaleY = 1 - 0.176 * recessFactor;
     const recessScaleX = 1 - 0.0204 * recessFactor;
-    barRecessSurface.style.transform = `translate3d(${barX}px, ${barY}px, 0) scale(${barScaleX * recessScaleX}, ${barScaleY * recessScaleY})`;
+    const nextRecessTransform = `translate3d(${barX.toFixed(2)}px, ${barY.toFixed(2)}px, 0) scale(${(barScaleX * recessScaleX).toFixed(4)}, ${(barScaleY * recessScaleY).toFixed(4)})`;
+    state.lastRecessTransform = setCachedStyle(barRecessSurface, 'transform', state.lastRecessTransform, nextRecessTransform);
 
     const hcX = hLeft + lensWidth / 2;
     const hcY = hTop + lensHeight / 2;
@@ -594,42 +680,64 @@ function paintHorizontalPill(state: PillState) {
     const localCy = barH / 2 + (hcY - barY - barH / 2) / barScaleY;
     const localW = lensWidth / barScaleX;
     const localH = lensHeight / barScaleY;
-    host.style.setProperty(
-      '--dock-bar-cutout',
-      buildStadiumHolePath(
-        -32,
-        -32,
-        barW + 32,
-        barH + 32,
-        localCx - localW / 2,
-        localCy - localH / 2,
-        localW,
-        localH,
-        clipRadius / barScaleX,
-        clipRadius / barScaleY,
-      ),
+    const nextCutout = buildStadiumHolePath(
+      -32,
+      -32,
+      barW + 32,
+      barH + 32,
+      localCx - localW / 2,
+      localCy - localH / 2,
+      localW,
+      localH,
+      clipRadius / barScaleX,
+      clipRadius / barScaleY,
     );
+    state.lastBarCutout = setCachedStyle(barSurface, 'clipPath', state.lastBarCutout, nextCutout);
   }
 
   const itemMag = 1 + ITEM_MAG_GAIN * visualLift;
+  const mirrorScale = (pressScale * itemMag).toFixed(4);
   state.accentTabs.forEach((entry, index) => {
     const { itemTx, itemTy } = itemTransforms[index];
-    entry.mirror.style.transform = `translate3d(${itemTx.toFixed(2)}px, ${itemTy.toFixed(2)}px, 0) scale(${(pressScale * itemMag).toFixed(4)})`;
+    const nextMirrorTransform = `translate3d(${itemTx.toFixed(2)}px, ${itemTy.toFixed(2)}px, 0) scale(${mirrorScale})`;
+    entry.lastMirrorTransform = setCachedStyle(entry.mirror, 'transform', entry.lastMirrorTransform, nextMirrorTransform);
 
-    const tabVisLeft = entry.left + entry.width / 2 + itemTx - (entry.width * pressScale) / 2;
-    const tabVisRight = tabVisLeft + entry.width * pressScale;
-    if (clipLeft + lensWidth <= tabVisLeft - 4 || clipLeft >= tabVisRight + 4) {
-      if (entry.element.style.clipPath) entry.element.style.clipPath = '';
-      return;
-    }
     const eCx = entry.left + entry.width / 2 + itemTx;
     const eCy = entry.top + entry.height / 2 + itemTy;
+    const tabVisLeft = eCx - (entry.width * pressScale) / 2;
+    const tabVisRight = tabVisLeft + entry.width * pressScale;
+    if (clipLeft + lensWidth <= tabVisLeft - 4 || clipLeft >= tabVisRight + 4) {
+      entry.lastOpacity = setCachedStyle(entry.element, 'opacity', entry.lastOpacity, '');
+      entry.lastClipPath = setCachedStyle(entry.element, 'clipPath', entry.lastClipPath, '');
+      return;
+    }
+
+    const inkHalfW = entry.inkHalfW * pressScale;
+    const inkHalfH = entry.inkHalfH * pressScale;
+    if (isRectInsideStadium(
+      eCx - inkHalfW,
+      eCy - inkHalfH,
+      eCx + inkHalfW,
+      eCy + inkHalfH,
+      middle,
+      middleY,
+      lensWidth / 2,
+      lensHeight / 2,
+      clipRadius,
+      1,
+    )) {
+      entry.lastOpacity = setCachedStyle(entry.element, 'opacity', entry.lastOpacity, '0');
+      entry.lastClipPath = setCachedStyle(entry.element, 'clipPath', entry.lastClipPath, '');
+      return;
+    }
+
+    entry.lastOpacity = setCachedStyle(entry.element, 'opacity', entry.lastOpacity, '');
     const localCx = entry.width / 2 + (middle - eCx) / pressScale;
     const localCy = entry.height / 2 + (middleY - eCy) / pressScale;
     const localW = lensWidth / pressScale;
     const localH = lensHeight / pressScale;
     const localR = clipRadius / pressScale;
-    entry.element.style.clipPath = buildStadiumHolePath(
+    const nextClip = buildStadiumHolePath(
       -32,
       -32,
       entry.width + 32,
@@ -641,6 +749,7 @@ function paintHorizontalPill(state: PillState) {
       localR,
       localR,
     );
+    entry.lastClipPath = setCachedStyle(entry.element, 'clipPath', entry.lastClipPath, nextClip);
   });
 
   syncNativeDropletSlot(host, droplet, lift > 0.02);
@@ -802,10 +911,8 @@ function positionPill(state: PillState, animate: boolean) {
     state.deformVel = 0;
     clearTabVisuals(state);
     paintDockSurface(state, 0, 0);
-    state.accentLayer.style.clipPath = '';
-    pill.style.opacity = '0';
+    state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, '0');
     host.classList.remove('has-liquid-pill');
-    if (isPrimary) syncSidebarUnderlaySlot(host, false);
     return;
   }
 
@@ -823,7 +930,7 @@ function positionPill(state: PillState, animate: boolean) {
   }
 
   pill.classList.toggle('is-parent-pill', resolved.isParentPill);
-  pill.style.opacity = '';
+  state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, '');
   host.classList.add('has-liquid-pill');
 
   if (horizontal) {
@@ -836,8 +943,6 @@ function positionPill(state: PillState, animate: boolean) {
       || Math.abs(target.height - state.height) > 0.25;
     if (state.pressed && !dockResized && !changed) return;
     if (state.pressed) state.cancelPress?.();
-
-    if (isPrimary) syncSidebarUnderlaySlot(host, false);
 
     const wasHorizontal = state.dockWidth > 0;
     state.lastKey = resolved.key;
@@ -894,15 +999,15 @@ function positionPill(state: PillState, animate: boolean) {
   state.deformVel = 0;
   clearTabVisuals(state);
   paintDockSurface(state, 0, 0);
-  state.accentLayer.style.clipPath = '';
   if (isPrimary) {
-    syncSidebarUnderlaySlot(host, isBoxVisible(host));
     syncNativeDropletSlot(host, state.droplet, false);
   }
 
   // Preserve the sliding desktop and tablet sidebar indicator.
   const transition = animate && state.lastKey.startsWith('v:') && !reducedMotion.matches;
   pill.classList.toggle('no-pill-transition', !transition);
+  state.lastPillW = target.width;
+  state.lastPillH = target.height;
   pill.style.width = `${target.width}px`;
   pill.style.height = `${target.height}px`;
   pill.style.transform = `translate3d(${left}px, ${top}px, 0)`;
@@ -1122,13 +1227,23 @@ function attachDragScrub(state: PillState) {
 }
 
 function registerPillHost(container: HTMLElement, host: HTMLElement, tag: 'li' | 'div') {
+  const barSurface = document.createElement('div');
+  barSurface.className = 'nav-liquid-bar-surface';
+  barSurface.setAttribute('aria-hidden', 'true');
+  const barGlow = document.createElement('span');
+  barGlow.className = 'nav-liquid-bar-glow';
+  barSurface.append(barGlow);
+
   const barRecess = document.createElement('div');
   barRecess.className = 'nav-liquid-bar-recess';
   barRecess.setAttribute('aria-hidden', 'true');
   const barRecessSurface = document.createElement('span');
   barRecessSurface.className = 'nav-liquid-bar-recess-surface';
+  const barRecessGlow = document.createElement('span');
+  barRecessGlow.className = 'nav-liquid-bar-recess-glow';
+  barRecessSurface.append(barRecessGlow);
   barRecess.append(barRecessSurface);
-  host.prepend(barRecess);
+  host.prepend(barSurface, barRecess);
 
   const pill = document.createElement(tag);
   pill.className = 'nav-liquid-pill';
@@ -1147,12 +1262,15 @@ function registerPillHost(container: HTMLElement, host: HTMLElement, tag: 'li' |
   container.prepend(pill, accentLayer, droplet);
 
   const state: PillState = {
-    container, host, barRecess, barRecessSurface, pill, pillInner, accentLayer, accentSignature: '', accentTabs: [], droplet,
+    container, host, barSurface, barGlow, barRecess, barRecessSurface, barRecessGlow, pill, pillInner, accentLayer, accentSignature: '', accentTabs: [], droplet,
     lastKey: '', pressed: false, dragging: false, glideUntil: 0, frame: 0, lastFrame: 0,
     x: 0, width: 0, targetX: 0, targetWidth: 0, velocity: 0, lift: 0, liftVel: 0,
     barScale: 0, barScaleVel: 0,
     overscrollX: 0, pullX: 0, pullY: 0, pullVelX: 0, pullVelY: 0, targetPullX: 0, targetPullY: 0,
     deform: 0, deformVel: 0, lastBarX: 0, lastBarY: 0,
+    lastPillW: 0, lastPillH: 0, lastPillOpacity: '', lastDropletActive: false, lastBarAnimating: false,
+    lastGlowOpacity: '', lastBarTransform: '', lastBarCutout: '', lastRecessClip: '',
+    lastRecessTransform: '', lastAccentClip: '', lastDropletOpacity: '', lastDropletTransform: '',
     containerLeftInHost: 0, containerTopInHost: 0,
     top: 0, height: 0, dockWidth: 0, dockHeight: 0, leftRoom: 0, rightEdge: 0, bottomEdge: 0,
     barBox: null, lensWidth: 0, lensHeight: 0,
@@ -1167,6 +1285,7 @@ export function syncLiquidNav(options: {animate?: boolean} = {}) {
 
 export function setupLiquidNav() {
   if (initialized) return;
+  if ((window as Window & { __SKIP_LIQUID_NAV__?: boolean }).__SKIP_LIQUID_NAV__) return;
   initialized = true;
   const nav = document.getElementById('nav');
   const items = nav?.querySelector<HTMLElement>('.nav-items');
@@ -1204,15 +1323,18 @@ export function setupLiquidNav() {
   observeLayout.observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
   observeLayout.observe(document.body, {attributes: true, attributeFilter: ['class']});
 
-  const observeSurfaceOverlays = new MutationObserver(() => {
-    if (isMacosNativeGlassActive()) flushMacosLiquidGlass();
+  void initMacosLiquidGlass().then(() => {
+    syncInstant();
+    if (isMacosNativeGlassActive()) {
+      const observeSurfaceOverlays = new MutationObserver(() => {
+        flushMacosLiquidGlass();
+      });
+      observeSurfaceOverlays.observe(document.body, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'hidden'],
+      });
+    }
   });
-  observeSurfaceOverlays.observe(document.body, {
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['class', 'hidden'],
-  });
-
-  void initMacosLiquidGlass().then(() => syncInstant());
   syncInstant();
 }
