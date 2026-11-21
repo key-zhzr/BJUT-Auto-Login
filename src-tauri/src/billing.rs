@@ -2586,7 +2586,10 @@ async fn build_account_discovery_client(
 
     #[cfg(not(target_os = "android"))]
     if let Some(route_context) = route_context {
-        builder = builder.local_address(IpAddr::V4(route_context.physical_ipv4()));
+        let address = route_context.physical_ipv4().ok_or_else(|| {
+            BillingError::Network("当前接口没有可用于计费登录的 IPv4 地址".to_string())
+        })?;
+        builder = builder.local_address(IpAddr::V4(address));
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             builder = builder.interface(route_context.interface_name());
@@ -2599,7 +2602,7 @@ async fn build_account_discovery_client(
 
     if !matches!(compatibility, VpnCompatibility::Minimum) {
         let (lgn_addresses, billing_addresses) = if compatibility == VpnCompatibility::Low {
-            let source = route_context.map(PortalRouteContext::physical_ipv4);
+            let source = route_context.and_then(PortalRouteContext::physical_ipv4);
             let (lgn, billing) = futures_util::future::join(
                 query_campus_dns_ipv4(LGN_HOST, source),
                 query_campus_dns_ipv4(BILLING_HOST, source),

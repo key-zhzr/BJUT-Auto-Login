@@ -1,4 +1,4 @@
-import { clearDockGlassProbes, updateDockGlass } from './liquid-glass';
+import { updateDockGlass } from './liquid-glass';
 import {
   flushMacosLiquidGlass,
   getMacosNativeGlassEngine,
@@ -10,6 +10,10 @@ import {
 const mobileWidth = window.matchMedia('(max-width: 768px)');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const reducedTransparency = window.matchMedia('(prefers-reduced-transparency: reduce)');
+let viewportWidth = window.innerWidth;
+let viewportHeight = window.innerHeight;
+let isReducedMotion = reducedMotion.matches;
+let isReducedTransparency = reducedTransparency.matches;
 const LENS_WIDTH_GAIN = 28;
 const LENS_HEIGHT_GAIN = 22;
 const OVERSCROLL_LIMIT_X = 14;
@@ -92,6 +96,7 @@ interface PillState {
   lastPillW: number;
   lastPillH: number;
   lastPillOpacity: string;
+  lastPillVisibility: string;
   lastDropletActive: boolean;
   lastBarAnimating: boolean;
   lastGlowOpacity: string;
@@ -115,6 +120,9 @@ interface PillState {
   lensWidth: number;
   lensHeight: number;
   syncSeq: number;
+  warmedGeometry: string;
+  warmupFrame: number;
+  warmingUp: boolean;
 }
 
 function stepSpring(
@@ -321,7 +329,7 @@ function buildStadiumHolePath(
 
 function setCachedStyle(
   element: HTMLElement,
-  prop: 'transform' | 'clipPath' | 'opacity',
+  prop: 'transform' | 'clipPath' | 'opacity' | 'visibility',
   previous: string,
   next: string,
 ): string {
@@ -375,6 +383,138 @@ function clearTabVisuals(state: PillState) {
   state.barRecessGlow.style.opacity = '';
 }
 
+function cancelWarmup(state: PillState) {
+  if (state.warmupFrame) {
+    cancelAnimationFrame(state.warmupFrame);
+    state.warmupFrame = 0;
+  }
+  if (!state.warmingUp) return;
+  state.warmingUp = false;
+  state.barSurface.style.clipPath = '';
+  state.barRecess.style.visibility = '';
+  state.barRecess.style.opacity = '';
+  state.barRecess.style.clipPath = '';
+  state.barRecessSurface.style.transform = '';
+  state.accentLayer.style.visibility = '';
+  state.accentLayer.style.opacity = '';
+  state.accentLayer.style.clipPath = '';
+  state.droplet.style.visibility = '';
+  state.droplet.style.opacity = '';
+  state.droplet.style.transform = '';
+  state.pill.style.opacity = '';
+  state.lastBarCutout = '';
+  state.lastRecessClip = '';
+  state.lastRecessTransform = '';
+  state.lastAccentClip = '';
+  state.lastDropletOpacity = '';
+  state.lastDropletTransform = '';
+  state.lastPillOpacity = '';
+  for (const entry of state.accentTabs) {
+    entry.element.style.clipPath = '';
+    entry.lastClipPath = '';
+  }
+}
+
+function scheduleDropletWarmup(state: PillState) {
+  if (
+    isReducedTransparency
+    || isReducedMotion
+    || document.hidden
+    || !state.dockWidth
+    || !state.barBox
+    || !state.accentTabs.length
+    || state.pressed
+    || state.dragging
+    || state.frame
+  ) {
+    return;
+  }
+  const warmKey = `${Math.round(state.barBox.width)}x${Math.round(state.barBox.height)}:${Math.round(state.lensWidth)}x${Math.round(state.lensHeight)}`;
+  if (state.warmedGeometry === warmKey) return;
+
+  cancelWarmup(state);
+  state.warmupFrame = requestAnimationFrame(() => {
+    state.warmupFrame = 0;
+    if (
+      state.pressed
+      || state.dragging
+      || state.frame
+      || !state.dockWidth
+      || !state.barBox
+      || !state.accentTabs.length
+      || isReducedTransparency
+      || isReducedMotion
+      || document.hidden
+    ) {
+      return;
+    }
+
+    const activeTab = state.accentTabs.find(tab => tab.element.classList.contains('active')) || state.accentTabs[0];
+    const barW = state.barBox.width;
+    const barH = state.barBox.height;
+    const lensW = state.lensWidth;
+    const lensH = state.lensHeight;
+    if (barW < 2 || barH < 2 || lensW < 2 || lensH < 2) return;
+
+    state.warmingUp = true;
+    const middle = activeTab.left + activeTab.width / 2;
+    const middleY = barH / 2 - state.containerTopInHost;
+    const clipLeft = Math.max(0, middle - lensW / 2);
+    const clipTop = middleY - lensH / 2;
+    const clipRight = Math.max(0, state.dockWidth - (clipLeft + lensW));
+    const clipBottom = Math.max(0, state.dockHeight - (clipTop + lensH));
+    const clipRadius = Math.min(lensW / 2, lensH / 2);
+    const clipInset = `inset(${clipTop.toFixed(2)}px ${clipRight.toFixed(2)}px ${clipBottom.toFixed(2)}px ${clipLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
+
+    const holeCx = Math.max(2, Math.min(barW - 2, middle + state.containerLeftInHost));
+    const holeCy = barH / 2;
+    state.barSurface.style.clipPath = buildStadiumHolePath(-32, -32, barW + 32, barH + 32, holeCx - 1, holeCy - 1, 2, 2, 1, 1);
+    activeTab.element.style.clipPath = buildStadiumHolePath(
+      -32,
+      -32,
+      activeTab.width + 32,
+      activeTab.height + 32,
+      activeTab.width / 2 - 1,
+      activeTab.height / 2 - 1,
+      2,
+      2,
+      1,
+      1,
+    );
+
+    const hLeft = Math.max(0, clipLeft + state.containerLeftInHost);
+    const hTop = clipTop + state.containerTopInHost;
+    const hRight = Math.max(0, barW - (hLeft + lensW));
+    const hBottom = Math.max(0, barH - (hTop + lensH));
+    state.barRecess.style.visibility = 'visible';
+    state.barRecess.style.opacity = '0.005';
+    state.barRecess.style.clipPath = `inset(${hTop.toFixed(2)}px ${hRight.toFixed(2)}px ${hBottom.toFixed(2)}px ${hLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
+    state.barRecessSurface.style.transform = 'translate3d(0px, 0px, 0) scale(0.99, 0.90)';
+
+    state.accentLayer.style.visibility = 'visible';
+    state.accentLayer.style.opacity = '0.005';
+    state.accentLayer.style.clipPath = clipInset;
+
+    const dropletLeft = middle - lensW / 2;
+    const dropletTop = middleY - lensH / 2;
+    state.droplet.style.visibility = 'visible';
+    state.droplet.style.opacity = '0.005';
+    state.droplet.style.transform = `translate3d(${dropletLeft.toFixed(2)}px, ${dropletTop.toFixed(2)}px, 0) scale(1, 1)`;
+    state.pill.style.opacity = '0.995';
+
+    state.warmupFrame = requestAnimationFrame(() => {
+      state.warmupFrame = requestAnimationFrame(() => {
+        state.warmupFrame = 0;
+        cancelWarmup(state);
+        state.warmedGeometry = warmKey;
+        if (!state.pressed && !state.dragging && !state.frame && state.dockWidth) {
+          paintHorizontalPill(state);
+        }
+      });
+    });
+  });
+}
+
 function syncAccentLayer(state: PillState) {
   const {container, accentLayer} = state;
   const tabs = getHorizontalTabs(container);
@@ -420,7 +560,7 @@ function syncAccentLayer(state: PillState) {
       height: rect.height,
       inkHalfW,
       inkHalfH,
-      sig: `${Math.round(left)}:${Math.round(top)}:${Math.round(rect.width)}:${Math.round(rect.height)}:${iconSvg ? 's' : 'n'}:${labelSpan?.textContent || ''}`,
+      sig: `${Math.round(left)}:${Math.round(top)}:${Math.round(rect.width)}:${Math.round(rect.height)}:${iconSvg ? iconSvg.getAttribute('data-icon-engine') || 's' : 'n'}:${labelSpan?.textContent || ''}`,
     };
   });
 
@@ -547,17 +687,17 @@ function paintDockSurface(
     return { barX: 0, barY: 0, pressScale: 1, barScaleX: 1, barScaleY: 1 };
   }
   const minBarX = -Math.max(0, barBox.left - EDGE_CLEARANCE);
-  const maxBarX = Math.max(0, window.innerWidth - barBox.right - EDGE_CLEARANCE);
+  const maxBarX = Math.max(0, viewportWidth - barBox.right - EDGE_CLEARANCE);
   const barX = hasPull ? Math.max(minBarX, Math.min(maxBarX, pullX)) : 0;
-  const maxBarY = Math.max(0, window.innerHeight - barBox.bottom - EDGE_CLEARANCE);
+  const maxBarY = Math.max(0, viewportHeight - barBox.bottom - EDGE_CLEARANCE);
   const barY = hasPull ? Math.max(-PULL_LIMIT_Y, Math.min(maxBarY, pullY)) : 0;
   const maxPressScaleX = Math.max(
     0,
-    ((Math.min(barBox.left, window.innerWidth - barBox.right) - EDGE_CLEARANCE) * 2) / barBox.width,
+    ((Math.min(barBox.left, viewportWidth - barBox.right) - EDGE_CLEARANCE) * 2) / barBox.width,
   );
   const maxPressScaleY = Math.max(
     0,
-    ((window.innerHeight - barBox.bottom - EDGE_CLEARANCE) * 2) / barBox.height,
+    ((viewportHeight - barBox.bottom - EDGE_CLEARANCE) * 2) / barBox.height,
   );
   const maxPressScale = Math.min(BAR_PRESS_SCALE_MAX, maxPressScaleX, maxPressScaleY);
   const pressScale = 1 + maxPressScale * state.barScale;
@@ -591,7 +731,10 @@ function paintHorizontalPill(state: PillState) {
     state.lastPillH = height;
     pill.style.height = `${height}px`;
   }
-  const nextPillOpacity = lift > 0 ? Math.max(0, 1 - lift * 2.2).toFixed(3) : '';
+  const pillAlpha = lift > 0 ? Math.max(0, 1 - lift * 2.2) : 1;
+  const nextPillVisibility = pillAlpha <= 0.001 ? 'hidden' : '';
+  state.lastPillVisibility = setCachedStyle(pill, 'visibility', state.lastPillVisibility, nextPillVisibility);
+  const nextPillOpacity = lift > 0 ? pillAlpha.toFixed(3) : '';
   state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, nextPillOpacity);
   pill.style.transform = `translate3d(${(x + barX + pillRadX).toFixed(2)}px, ${(top + barY + pillRadY).toFixed(2)}px, 0) scale(${pressScale.toFixed(4)})`;
 
@@ -764,6 +907,7 @@ function stopHorizontalMotion(state: PillState) {
 }
 
 function snapHorizontalPill(state: PillState) {
+  cancelWarmup(state);
   stopHorizontalMotion(state);
   state.x = state.targetX;
   state.width = state.targetWidth;
@@ -785,7 +929,7 @@ function snapHorizontalPill(state: PillState) {
 }
 
 function moveHorizontalPill(state: PillState) {
-  if (reducedMotion.matches) {
+  if (isReducedMotion) {
     snapHorizontalPill(state);
     return;
   }
@@ -807,7 +951,7 @@ function moveHorizontalPill(state: PillState) {
       state.glideUntil = 0;
     }
 
-    const liftTarget = !reducedTransparency.matches && (state.pressed || glideLift) ? 1 : 0;
+    const liftTarget = !isReducedTransparency && (state.pressed || glideLift) ? 1 : 0;
     [state.lift, state.liftVel] = stepSpring(
       state.lift,
       state.liftVel,
@@ -821,7 +965,7 @@ function moveHorizontalPill(state: PillState) {
       state.liftVel = 0;
     }
 
-    const barScaleTarget = !reducedTransparency.matches && state.pressed ? 1 : 0;
+    const barScaleTarget = !isReducedTransparency && state.pressed ? 1 : 0;
     [state.barScale, state.barScaleVel] = stepSpring(
       state.barScale,
       state.barScaleVel,
@@ -893,12 +1037,18 @@ function moveHorizontalPill(state: PillState) {
 
 function positionPill(state: PillState, animate: boolean) {
   state.syncSeq += 1;
+  viewportWidth = window.innerWidth;
+  viewportHeight = window.innerHeight;
+  isReducedMotion = reducedMotion.matches;
+  isReducedTransparency = reducedTransparency.matches;
   const {container, host, pill, pillInner} = state;
   const isPrimary = host.id === 'nav';
   const resolved = isPrimary ? resolvePrimaryNavActiveTarget(container) : resolveBillingDockActiveTarget(container);
   if (!resolved.target) {
     state.cancelPress?.();
+    cancelWarmup(state);
     stopHorizontalMotion(state);
+    state.warmedGeometry = '';
     state.lastKey = '';
     state.dockWidth = 0;
     state.dockHeight = 0;
@@ -914,8 +1064,8 @@ function positionPill(state: PillState, animate: boolean) {
     state.deformVel = 0;
     clearTabVisuals(state);
     paintDockSurface(state, 0, 0);
-    clearDockGlassProbes(host);
     state.barRecessSurface.style.borderRadius = '';
+    state.lastPillVisibility = setCachedStyle(pill, 'visibility', state.lastPillVisibility, 'hidden');
     state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, '0');
     host.classList.remove('has-liquid-pill');
     return;
@@ -935,6 +1085,7 @@ function positionPill(state: PillState, animate: boolean) {
   }
 
   pill.classList.toggle('is-parent-pill', resolved.isParentPill);
+  state.lastPillVisibility = setCachedStyle(pill, 'visibility', state.lastPillVisibility, '');
   state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, '');
   host.classList.add('has-liquid-pill');
 
@@ -954,8 +1105,8 @@ function positionPill(state: PillState, animate: boolean) {
     state.dockWidth = bounds.width;
     state.dockHeight = bounds.height;
     state.leftRoom = bounds.left - EDGE_CLEARANCE;
-    state.rightEdge = window.innerWidth - bounds.left - EDGE_CLEARANCE;
-    state.bottomEdge = window.innerHeight - bounds.top - EDGE_CLEARANCE;
+    state.rightEdge = viewportWidth - bounds.left - EDGE_CLEARANCE;
+    state.bottomEdge = viewportHeight - bounds.top - EDGE_CLEARANCE;
     state.barBox = host.getBoundingClientRect();
     state.containerLeftInHost = bounds.left - state.barBox.left;
     state.containerTopInHost = bounds.top - state.barBox.top;
@@ -982,8 +1133,10 @@ function positionPill(state: PillState, animate: boolean) {
       state.lensHeight = target.height + LENS_HEIGHT_GAIN;
       state.droplet.style.width = `${state.lensWidth}px`;
       state.droplet.style.height = `${state.lensHeight}px`;
-      if (reducedTransparency.matches) {
-        clearDockGlassProbes(host);
+      state.warmedGeometry = '';
+      if (isReducedTransparency) {
+        host.style.removeProperty('--dock-backdrop');
+        host.style.removeProperty('--dock-lens-backdrop');
       } else {
         updateDockGlass(host, state.barBox, state.lensWidth, state.lensHeight);
       }
@@ -999,11 +1152,16 @@ function positionPill(state: PillState, animate: boolean) {
     } else {
       snapHorizontalPill(state);
     }
+    if (!state.pressed && !state.frame) {
+      scheduleDropletWarmup(state);
+    }
     return;
   }
 
   state.cancelPress?.();
+  cancelWarmup(state);
   stopHorizontalMotion(state);
+  state.warmedGeometry = '';
   state.dockWidth = 0;
   state.dockHeight = 0;
   state.lift = 0;
@@ -1018,14 +1176,13 @@ function positionPill(state: PillState, animate: boolean) {
   state.deformVel = 0;
   clearTabVisuals(state);
   paintDockSurface(state, 0, 0);
-  clearDockGlassProbes(host);
   state.barRecessSurface.style.borderRadius = '';
   if (isPrimary) {
     syncNativeDropletSlot(host, state.droplet, false);
   }
 
   // Preserve the sliding desktop and tablet sidebar indicator.
-  const transition = animate && state.lastKey.startsWith('v:') && !reducedMotion.matches;
+  const transition = animate && state.lastKey.startsWith('v:') && !isReducedMotion;
   pill.classList.toggle('no-pill-transition', !transition);
   state.lastPillW = target.width;
   state.lastPillH = target.height;
@@ -1154,10 +1311,10 @@ function attachDragScrub(state: PillState) {
 
     const barBox = state.barBox;
     if (barBox) {
-      const marginX = Math.min(barBox.left, window.innerWidth - barBox.right);
+      const marginX = Math.min(barBox.left, viewportWidth - barBox.right);
       const deadzoneX = Math.min(18, Math.max(4, marginX * 0.4));
       const deadzoneTop = 20;
-      const deadzoneBottom = Math.min(16, Math.max(4, (window.innerHeight - barBox.bottom) * 0.4));
+      const deadzoneBottom = Math.min(16, Math.max(4, (viewportHeight - barBox.bottom) * 0.4));
       const outsideX = event.clientX < barBox.left - deadzoneX
         ? event.clientX - (barBox.left - deadzoneX)
         : event.clientX > barBox.right + deadzoneX
@@ -1212,6 +1369,7 @@ function attachDragScrub(state: PillState) {
   host.addEventListener('pointerdown', event => {
     if (pointerId !== null || !event.isPrimary || event.button !== 0 || !isHorizontalMobileDock()) return;
     ignoredClick = null;
+    cancelWarmup(state);
     if (!state.dockWidth) return;
     const canReuseTabs = Boolean(
       state.barBox
@@ -1307,12 +1465,13 @@ function registerPillHost(container: HTMLElement, host: HTMLElement, tag: 'li' |
     barScale: 0, barScaleVel: 0,
     overscrollX: 0, pullX: 0, pullY: 0, pullVelX: 0, pullVelY: 0, targetPullX: 0, targetPullY: 0,
     deform: 0, deformVel: 0, lastBarX: 0, lastBarY: 0,
-    lastPillW: 0, lastPillH: 0, lastPillOpacity: '', lastDropletActive: false, lastBarAnimating: false,
+    lastPillW: 0, lastPillH: 0, lastPillOpacity: '', lastPillVisibility: '', lastDropletActive: false, lastBarAnimating: false,
     lastGlowOpacity: '', lastBarTransform: '', lastBarCutout: '', lastRecessClip: '',
     lastRecessTransform: '', lastAccentClip: '', lastDropletOpacity: '', lastDropletTransform: '',
     containerLeftInHost: 0, containerTopInHost: 0,
     top: 0, height: 0, dockWidth: 0, dockHeight: 0, leftRoom: 0, rightEdge: 0, bottomEdge: 0,
     barBox: null, lensWidth: 0, lensHeight: 0, syncSeq: 0,
+    warmedGeometry: '', warmupFrame: 0, warmingUp: false,
   };
   controllers.push(state);
   attachDragScrub(state);
@@ -1336,21 +1495,30 @@ export function setupLiquidNav() {
   const cancelAndSync = () => {
     for (const state of controllers) {
       state.cancelPress?.();
+      cancelWarmup(state);
       stopHorizontalMotion(state);
     }
     syncInstant();
   };
-  window.addEventListener('resize', cancelAndSync);
+  window.addEventListener('resize', () => {
+    viewportWidth = window.innerWidth;
+    viewportHeight = window.innerHeight;
+    cancelAndSync();
+  });
   window.addEventListener('blur', cancelAndSync);
-  reducedMotion.addEventListener('change', cancelAndSync);
+  reducedMotion.addEventListener('change', () => {
+    isReducedMotion = reducedMotion.matches;
+    cancelAndSync();
+  });
   reducedTransparency.addEventListener('change', () => {
-    if (reducedTransparency.matches) {
-      clearDockGlassProbes();
-    } else if (isHorizontalMobileDock()) {
-      for (const state of controllers) {
-        if (state.dockWidth && state.barBox) {
-          updateDockGlass(state.host, state.barBox, state.lensWidth, state.lensHeight);
-        }
+    isReducedTransparency = reducedTransparency.matches;
+    for (const state of controllers) {
+      if (isReducedTransparency) {
+        state.warmedGeometry = '';
+        state.host.style.removeProperty('--dock-backdrop');
+        state.host.style.removeProperty('--dock-lens-backdrop');
+      } else if (isHorizontalMobileDock() && state.dockWidth && state.barBox) {
+        updateDockGlass(state.host, state.barBox, state.lensWidth, state.lensHeight);
       }
     }
     cancelAndSync();
@@ -1358,11 +1526,14 @@ export function setupLiquidNav() {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       cancelAndSync();
-      clearDockGlassProbes();
-    } else if (isHorizontalMobileDock() && !reducedTransparency.matches) {
+      for (const state of controllers) {
+        state.warmedGeometry = '';
+      }
+    } else if (isHorizontalMobileDock() && !isReducedTransparency) {
       for (const state of controllers) {
         if (state.dockWidth && state.barBox) {
           updateDockGlass(state.host, state.barBox, state.lensWidth, state.lensHeight);
+          scheduleDropletWarmup(state);
         }
       }
     }
@@ -1378,7 +1549,14 @@ export function setupLiquidNav() {
       if (event.target === tree) syncInstant();
     });
   }
-  const observeLayout = new MutationObserver(syncInstant);
+  const layoutClassKey = () => `${document.documentElement.dataset.theme ?? ''}|${document.body.className.replace(/\bis-page-sliding\b/g, '').trim()}`;
+  let lastLayoutKey = layoutClassKey();
+  const observeLayout = new MutationObserver(() => {
+    const nextKey = layoutClassKey();
+    if (nextKey === lastLayoutKey) return;
+    lastLayoutKey = nextKey;
+    syncInstant();
+  });
   observeLayout.observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
   observeLayout.observe(document.body, {attributes: true, attributeFilter: ['class']});
 

@@ -40,7 +40,13 @@ impl DualStackReport {
         }
     }
     pub(crate) fn online(&self) -> bool {
-        self.ipv4.status == "reachable" || self.ipv6.status == "reachable"
+        self.online_for(crate::portal_auth::AuthStack::Auto)
+    }
+    pub(crate) fn online_for(&self, stack: crate::portal_auth::AuthStack) -> bool {
+        stack.matches(
+            self.ipv4.status == "reachable",
+            self.ipv6.status == "reachable",
+        )
     }
     pub(crate) fn invalidate(&mut self, reason: &str) {
         for family in [&mut self.ipv4, &mut self.ipv6] {

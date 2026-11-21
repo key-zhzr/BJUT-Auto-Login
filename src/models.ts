@@ -29,6 +29,7 @@ export interface BackendConfig {
   traffic_retention?: {minuteHours:number;hourDays:number;dayDays:number;storageMb?:number};
   prefer_remaining_flow?: boolean;
   preferred_interface?: string;
+  auth_stack?: 'auto' | 'ipv4' | 'ipv6' | 'dual';
   adaptive_network_checks?: boolean;
   accounts?: Partial<AccountView>[];
   auto_login: boolean;

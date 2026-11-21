@@ -22,6 +22,50 @@ mod dorm_tls;
 mod lgn_ipv6_windows;
 
 pub(crate) const AMBIGUOUS_LOGIN_RESULT: &str = "认证结果暂无法确认";
+pub(crate) const IPV6_ONLY_LOGOUT: &str =
+    "IPv6 单栈会话无法常规注销。停止该接口的流量后，计费系统通常在约 20 分钟后清理会话。";
+static IPV6_ONLY_SESSION: std::sync::Mutex<Option<(String, Ipv6Addr)>> =
+    std::sync::Mutex::new(None);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum AuthStack {
+    #[default]
+    Auto,
+    Ipv4,
+    Ipv6,
+    Dual,
+}
+
+impl AuthStack {
+    #[cfg(target_os = "android")]
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Ipv4 => "ipv4",
+            Self::Ipv6 => "ipv6",
+            Self::Dual => "dual",
+        }
+    }
+
+    pub(crate) fn from_network(network: &Value) -> Self {
+        match network["authStack"].as_str() {
+            Some("ipv4") => Self::Ipv4,
+            Some("ipv6") => Self::Ipv6,
+            Some("dual") => Self::Dual,
+            _ => Self::Auto,
+        }
+    }
+
+    pub(crate) fn matches(self, ipv4: bool, ipv6: bool) -> bool {
+        match self {
+            Self::Auto => ipv4 || ipv6,
+            Self::Ipv4 => ipv4,
+            Self::Ipv6 => ipv6,
+            Self::Dual => ipv4 && ipv6,
+        }
+    }
+}
 
 /// The physical route that was observed together with the current network
 /// identity. Portal probes and credential-bearing requests must share this
@@ -29,21 +73,38 @@ pub(crate) const AMBIGUOUS_LOGIN_RESULT: &str = "认证结果暂无法确认";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PortalRouteContext {
     interface_name: String,
-    physical_ipv4: Ipv4Addr,
+    physical_ipv4: Option<Ipv4Addr>,
+    campus_ipv6: Vec<Ipv6Addr>,
+    stack: AuthStack,
 }
 
 impl PortalRouteContext {
+    #[cfg(test)]
     pub(crate) fn new(interface_name: &str, physical_ipv4: &str) -> Result<Self, String> {
+        Self::from_link(interface_name, physical_ipv4, Vec::new(), AuthStack::Auto)
+    }
+
+    pub(crate) fn from_link(
+        interface_name: &str,
+        physical_ipv4: &str,
+        campus_ipv6: Vec<Ipv6Addr>,
+        stack: AuthStack,
+    ) -> Result<Self, String> {
         let interface_name = interface_name.trim();
         if interface_name.is_empty() {
             return Err("无法确定校园网认证所用的物理接口".to_string());
         }
-        let physical_ipv4 = usable_physical_ipv4(physical_ipv4).ok_or_else(|| {
-            "校园网认证所用的物理接口 IPv4 无效；已拒绝使用 VPN/TUN Fake-IP".to_string()
-        })?;
+        let physical_ipv4 = usable_physical_ipv4(physical_ipv4);
+        if physical_ipv4.is_none() && campus_ipv6.is_empty() {
+            return Err(
+                "认证网卡没有可用的物理 IPv4 或校园 IPv6 地址；VPN/TUN Fake-IP 无效".to_string(),
+            );
+        }
         Ok(Self {
             interface_name: interface_name.to_string(),
             physical_ipv4,
+            campus_ipv6,
+            stack,
         })
     }
 
@@ -52,8 +113,38 @@ impl PortalRouteContext {
         &self.interface_name
     }
 
-    pub(crate) fn physical_ipv4(&self) -> Ipv4Addr {
+    pub(crate) fn physical_ipv4(&self) -> Option<Ipv4Addr> {
         self.physical_ipv4
+    }
+
+    pub(crate) fn ipv6_only(&self) -> bool {
+        self.stack == AuthStack::Ipv6
+            || (self.stack == AuthStack::Auto && self.physical_ipv4.is_none())
+    }
+
+    pub(crate) fn has_ipv6_only_session(&self) -> bool {
+        self.ipv6_only()
+            || IPV6_ONLY_SESSION
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|(interface, ip)| {
+                    *interface == self.interface_name && self.campus_ipv6.contains(ip)
+                })
+    }
+
+    pub(crate) fn uses_lgn6(&self, login_type: &LoginType) -> bool {
+        self.ipv6_only() || (self.stack == AuthStack::Dual && *login_type == LoginType::Type2)
+    }
+
+    pub(crate) fn validate_selected_addresses(&self) -> Result<(), String> {
+        if matches!(self.stack, AuthStack::Ipv6 | AuthStack::Dual) && self.campus_ipv6.is_empty() {
+            return Err("认证网卡尚未取得校园 IPv6 地址，未提交认证".to_string());
+        }
+        if matches!(self.stack, AuthStack::Ipv4 | AuthStack::Dual) && self.physical_ipv4.is_none() {
+            return Err("认证网卡尚未取得所选模式需要的 IPv4 地址，未提交认证".to_string());
+        }
+        Ok(())
     }
 }
 
@@ -154,13 +245,15 @@ fn login_type_hint(ssid: &str) -> Option<LoginType> {
 }
 
 fn lgn_wired_route_hint(route_context: Option<&PortalRouteContext>) -> bool {
-    route_context.is_some_and(|context| {
-        let octets = context.physical_ipv4().octets();
-        // The supplied lgn wired capture uses 172.26.33.0/24, together with
-        // BJUT IPv6/DNS. Keep the automatic hint at the enclosing 172.26/16
-        // campus client range; an actual lgn response is still mandatory.
-        octets[0] == 172 && octets[1] == 26
-    })
+    route_context
+        .and_then(PortalRouteContext::physical_ipv4)
+        .is_some_and(|address| {
+            let octets = address.octets();
+            // The supplied lgn wired capture uses 172.26.33.0/24, together with
+            // BJUT IPv6/DNS. Keep the automatic hint at the enclosing 172.26/16
+            // campus client range; an actual lgn response is still mandatory.
+            octets[0] == 172 && octets[1] == 26
+        })
 }
 
 fn login_probe_candidates(
@@ -226,7 +319,10 @@ pub(crate) async fn portal_client(
     {
         let route_context = route_context
             .ok_or_else(|| "未取得同一物理接口的网络路由，已停止校园网网关请求".to_string())?;
-        builder = builder.local_address(IpAddr::V4(route_context.physical_ipv4()));
+        let address = route_context
+            .physical_ipv4()
+            .ok_or_else(|| "认证网卡没有可用的 IPv4 地址".to_string())?;
+        builder = builder.local_address(IpAddr::V4(address));
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             builder = builder.interface(route_context.interface_name());
@@ -265,7 +361,7 @@ pub(crate) async fn portal_client(
             VpnCompatibility::Low | VpnCompatibility::High
         )
     {
-        let dns_source = route_context.map(PortalRouteContext::physical_ipv4);
+        let dns_source = route_context.and_then(PortalRouteContext::physical_ipv4);
         for (host, fixed_addresses) in hosts {
             let addresses = if compatibility == VpnCompatibility::Low
                 && *login_type != LoginType::Type1
@@ -318,6 +414,7 @@ fn bind_lgn_ipv6_route_for(
     let builder = builder.interface(route_context.interface_name());
     #[cfg(target_os = "windows")]
     let builder = builder.local_address(IpAddr::V6(lgn_ipv6_windows::source_ipv6(
+        route_context.interface_name(),
         route_context.physical_ipv4(),
         destination,
     )?));
@@ -471,7 +568,7 @@ fn login_readiness_probe_urls(
     let urls = portal_probe_urls_for_route(
         compatibility,
         login_type,
-        route_context.map(PortalRouteContext::physical_ipv4),
+        route_context.and_then(PortalRouteContext::physical_ipv4),
     );
     if *login_type != LoginType::Type3 {
         return urls;
@@ -602,7 +699,9 @@ async fn probe_login_type(
     route_context: Option<&PortalRouteContext>,
 ) -> LoginTypeDetection {
     let mut probes = vec![probe_primary_portal(compatibility, &login_type, route_context).boxed()];
-    if login_type == LoginType::Type3 {
+    if login_type == LoginType::Type3
+        && route_context.is_none_or(|route| route.stack != AuthStack::Ipv4)
+    {
         // IPv4 campus DNS failure must not prevent independent IPv6 evidence
         // from being observed. Neither branch waits for the other's client.
         probes.push(
@@ -735,7 +834,7 @@ async fn probe_type1_http_portal_only(
     };
     let url = type1_probe_url(
         DORM_HTTP_LOGIN,
-        route_context.map(PortalRouteContext::physical_ipv4),
+        route_context.and_then(PortalRouteContext::physical_ipv4),
     );
     let Ok(response) = client
         .get(&url)
@@ -827,6 +926,29 @@ pub(crate) async fn detect_login_type_details_rust(
     transport: &str,
     route_context: Option<&PortalRouteContext>,
 ) -> LoginTypeDetection {
+    if let Some(route) = route_context {
+        let candidate = if transport.eq_ignore_ascii_case("wifi") {
+            login_type_hint(ssid)
+        } else if transport.eq_ignore_ascii_case("ethernet") && route.ipv6_only() {
+            Some(match route.physical_ipv4() {
+                Some(ip) if ip.octets()[0] == 10 => LoginType::Type1,
+                _ => LoginType::Type3,
+            })
+        } else {
+            None
+        };
+        if let Some(candidate) = candidate.filter(|candidate| route.uses_lgn6(candidate)) {
+            let ready = !route.campus_ipv6.is_empty()
+                && discover_lgn_ipv6(compatibility, NETWORK_PROBE_TIMEOUT, route_context)
+                    .await
+                    .is_ok();
+            return if ready {
+                LoginTypeDetection::from_probe(candidate, PortalProbeResult::LoginReady)
+            } else {
+                LoginTypeDetection::not_detected()
+            };
+        }
+    }
     let probes = login_probe_candidates(ssid, transport, route_context)
         .into_iter()
         .map(|candidate| probe_login_type(compatibility, candidate, route_context));
@@ -963,8 +1085,11 @@ fn lgn_login_url(
     pass: &str,
     local_ipv4: &str,
     observed_ipv6: &str,
+    stack: AuthStack,
+    via_lgn6: bool,
 ) -> Result<Url, String> {
-    let mut url = Url::parse("https://lgn.bjut.edu.cn:802/eportal/portal/login")
+    let host = if via_lgn6 { LGN6_HOST } else { LGN_HOST };
+    let mut url = Url::parse(&format!("https://{host}:802/eportal/portal/login"))
         .map_err(|error| error.to_string())?;
     let account = if user.starts_with(",0,") {
         user.to_string()
@@ -984,7 +1109,15 @@ fn lgn_login_url(
         ("wlan_ac_name", String::new()),
         ("authex_enable", String::new()),
         ("jsVersion", LGN_JS_VERSION.to_string()),
-        ("login_ip_type", "0".to_string()),
+        (
+            "login_ip_type",
+            match stack {
+                AuthStack::Ipv4 => "1",
+                AuthStack::Ipv6 => "2",
+                AuthStack::Auto | AuthStack::Dual => "0",
+            }
+            .to_string(),
+        ),
         ("terminal_type", "3".to_string()),
         ("lang", "zh-cn".to_string()),
         ("program_index", LGN_PROGRAM_INDEX.to_string()),
@@ -1003,8 +1136,8 @@ fn lgn_login_url(
     Ok(url)
 }
 
-fn lgn_logout_url(local_ipv4: &str, observed_ipv6: &str) -> Result<Url, String> {
-    let mut url = Url::parse("https://lgn.bjut.edu.cn:802/eportal/portal/logout")
+fn lgn_logout_url(local_ipv4: &str, observed_ipv6: &str, host: &str) -> Result<Url, String> {
+    let mut url = Url::parse(&format!("https://{host}:802/eportal/portal/logout"))
         .map_err(|error| error.to_string())?;
     let fields = [
         ("callback", "dr1008"),
@@ -1055,7 +1188,10 @@ fn login_source_ipv4(
     network_label: &str,
 ) -> Result<String, String> {
     if let Some(route_context) = route_context {
-        return Ok(route_context.physical_ipv4().to_string());
+        return route_context
+            .physical_ipv4()
+            .map(|address| address.to_string())
+            .ok_or_else(|| format!("{network_label}登录需要认证网卡的 IPv4 地址"));
     }
 
     #[cfg(not(target_os = "android"))]
@@ -1088,19 +1224,23 @@ async fn login_lgn_once(
     before_submit: &(dyn Fn() -> Result<(), String> + Sync),
 ) -> Result<(bool, String), String> {
     let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn 有线")?;
-    // The captured browser performs a read-only getipv6 request, then exactly
-    // one encrypted ePortal login with both addresses. /V6 and legacy form
-    // posts are not part of this protocol and can create a separate session.
-    let (observed_ipv6, diagnostic) =
+    let stack = route_context.map_or(AuthStack::Auto, |route| route.stack);
+    let (observed_ipv6, diagnostic) = if stack == AuthStack::Ipv4 {
+        (String::new(), "已提交 IPv4 单栈认证".to_string())
+    } else {
         match discover_lgn_ipv6(compatibility, Duration::from_secs(5), route_context).await {
             Ok((address, source)) => (address, format!("已提交 IPv4+IPv6 联动认证（{source}）")),
+            Err(error) if stack == AuthStack::Dual => {
+                return Err(format!("双栈认证未提交，无法获取校园 IPv6 地址：{error}"));
+            }
             Err(error) => (
                 String::new(),
                 format!("IPv6 地址发现失败，已提交单 IPv4 认证：{error}"),
             ),
-        };
+        }
+    };
     before_submit()?;
-    let login_url = lgn_login_url(user, pass, &local_ipv4, &observed_ipv6)?;
+    let login_url = lgn_login_url(user, pass, &local_ipv4, &observed_ipv6, stack, false)?;
     match get_jsonp_login(
         eportal_client,
         login_url,
@@ -1119,11 +1259,68 @@ async fn login_lgn_once(
     }
 }
 
+async fn login_lgn6_once(
+    user: &str,
+    pass: &str,
+    compatibility: VpnCompatibility,
+    route: &PortalRouteContext,
+    before_submit: &(dyn Fn() -> Result<(), String> + Sync),
+) -> Result<(bool, String), String> {
+    let (stack, ipv4, label) = if route.ipv6_only() {
+        (AuthStack::Ipv6, String::new(), "IPv6 单栈认证")
+    } else {
+        let ipv4 = login_source_ipv4(Some(route), "", "双栈认证")?;
+        if wlgn_ipv4_session_online(route).await {
+            return Err("当前已有 wlgn IPv4 会话。请先用 IPv4 模式注销，再进行双栈认证，以免占用两个设备名额。".to_string());
+        }
+        (AuthStack::Dual, ipv4, "IPv4+IPv6 联动认证")
+    };
+    let (ipv6, _, client) =
+        discover_lgn_ipv6_client(compatibility, Duration::from_secs(5), Some(route)).await?;
+    let address = ipv6
+        .parse::<Ipv6Addr>()
+        .ok()
+        .filter(|address| route.campus_ipv6.contains(address))
+        .ok_or_else(|| "lgn6 返回的 IPv6 不属于当前认证网卡，已停止提交".to_string())?;
+    let url = lgn_login_url(user, pass, &ipv4, &ipv6, stack, true)?;
+    before_submit()?;
+    match get_jsonp_login(&client, url, LGN6_ROOT, label, None, None).await {
+        Ok((true, message)) if stack == AuthStack::Ipv6 => {
+            *IPV6_ONLY_SESSION.lock().unwrap() = Some((route.interface_name.clone(), address));
+            Ok((true, format!("{message}；{label}。{IPV6_ONLY_LOGOUT}")))
+        }
+        Ok((success, message)) => Ok((success, format!("{message}；{label}"))),
+        Err(error) if login_result_is_ambiguous(&error) => Err(error),
+        Err(error) => Err(format!("{AMBIGUOUS_LOGIN_RESULT}：{error}；{label}")),
+    }
+}
+
+async fn wlgn_ipv4_session_online(route: &PortalRouteContext) -> bool {
+    let Ok(client) = portal_client(VpnCompatibility::High, &LoginType::Type2, NETWORK_PROBE_TIMEOUT, Some(route)).await else {
+        return false;
+    };
+    let Ok(url) = Url::parse(&format!("{WIFI_HTTPS_REFERER}drcom/chkstatus?callback=dr1002&jsVersion=4.1&v={}&lang=zh", random_request_id())) else {
+        return false;
+    };
+    get_jsonp_login(&client, url, WIFI_HTTPS_REFERER, "wlgn 会话查询", None, None)
+        .await.is_ok_and(|(online, _)| online)
+}
+
 async fn discover_lgn_ipv6(
     compatibility: VpnCompatibility,
     timeout: Duration,
     route_context: Option<&PortalRouteContext>,
 ) -> Result<(String, &'static str), String> {
+    discover_lgn_ipv6_client(compatibility, timeout, route_context)
+        .await
+        .map(|(address, source, _)| (address, source))
+}
+
+async fn discover_lgn_ipv6_client(
+    compatibility: VpnCompatibility,
+    timeout: Duration,
+    route_context: Option<&PortalRouteContext>,
+) -> Result<(String, &'static str, Client), String> {
     let addresses: Vec<_> = if compatibility == VpnCompatibility::Minimum {
         vec![None]
     } else {
@@ -1150,7 +1347,8 @@ async fn discover_lgn_ipv6(
                         address,
                         *native_tls,
                     )?;
-                    fetch_lgn_observed_ipv6(&client).await
+                    let (observed, source) = fetch_lgn_observed_ipv6(&client).await?;
+                    Ok::<_, String>((observed, source, client))
                 });
             }
         }
@@ -1261,7 +1459,7 @@ fn parse_lgn_page_ipv6(text: &str) -> Result<String, String> {
     Err("登录页未包含有效的 BJUT 客户端 IPv6 地址".to_string())
 }
 
-fn is_bjut_client_ipv6(address: &Ipv6Addr) -> bool {
+pub(crate) fn is_bjut_client_ipv6(address: &Ipv6Addr) -> bool {
     let octets = address.octets();
     !address.is_unspecified() && octets[..6] == [0x20, 0x01, 0x0d, 0xa8, 0x02, 0x16]
 }
@@ -1271,6 +1469,7 @@ fn type1_login_url(
     user: &str,
     pass: &str,
     local_ip: &str,
+    ipv6: &str,
 ) -> Result<Url, String> {
     let mut url = Url::parse(login_base).map_err(|error| error.to_string())?;
     let account = if user.to_ascii_lowercase().ends_with("@campus") {
@@ -1284,7 +1483,7 @@ fn type1_login_url(
         .append_pair("user_account", &account)
         .append_pair("user_password", pass)
         .append_pair("wlan_user_ip", local_ip)
-        .append_pair("wlan_user_ipv6", "")
+        .append_pair("wlan_user_ipv6", ipv6)
         .append_pair("wlan_user_mac", "000000000000")
         .append_pair("wlan_ac_ip", "")
         .append_pair("wlan_ac_name", "")
@@ -1426,7 +1625,7 @@ async fn select_type1_tls_host(
     client: &Client,
     route_context: Option<&PortalRouteContext>,
 ) -> Result<&'static str, String> {
-    let physical_ipv4 = route_context.map(PortalRouteContext::physical_ipv4);
+    let physical_ipv4 = route_context.and_then(PortalRouteContext::physical_ipv4);
     for host in dorm_tls::TLS_HOST_CANDIDATES {
         let login_base = type1_https_login_base(host);
         let probe_url = type1_probe_url(&login_base, physical_ipv4);
@@ -1456,24 +1655,6 @@ async fn select_type1_tls_host(
     )
 }
 
-pub(crate) async fn login_to_campus_network_rust(
-    login_type: LoginType,
-    user: &str,
-    pass: &str,
-    compatibility: VpnCompatibility,
-    route_context: Option<&PortalRouteContext>,
-) -> Result<(bool, String), String> {
-    login_with_submission_guard(
-        login_type,
-        user,
-        pass,
-        compatibility,
-        route_context,
-        &|| Ok(()),
-    )
-    .await
-}
-
 pub(crate) async fn login_with_submission_guard(
     login_type: LoginType,
     user: &str,
@@ -1482,6 +1663,23 @@ pub(crate) async fn login_with_submission_guard(
     route_context: Option<&PortalRouteContext>,
     before_submit: &(dyn Fn() -> Result<(), String> + Sync),
 ) -> Result<(bool, String), String> {
+    if let Some(route) = route_context {
+        route.validate_selected_addresses()?;
+        if route.stack == AuthStack::Ipv4
+            && login_type == LoginType::Type1
+            && !route.campus_ipv6.is_empty()
+        {
+            return Err(
+                "bjut-sushe 门户会同时认证 IPv4 和 IPv6，请选择双栈、IPv6 单栈或自动".to_string(),
+            );
+        }
+        if route.uses_lgn6(&login_type) && login_type != LoginType::Unknown {
+            return login_lgn6_once(user, pass, compatibility, route, before_submit).await;
+        }
+        if route.physical_ipv4().is_none() {
+            return Err("当前认证模式需要认证网卡的 IPv4 地址，未提交认证".to_string());
+        }
+    }
     // LGN submits both addresses to HTTPS ePortal, including in Maximum
     // mode. IPv6 discovery uses a separate connector on the same campus link.
     let client_compatibility =
@@ -1528,9 +1726,14 @@ pub(crate) async fn login_with_submission_guard(
                     )
                 };
             before_submit()?;
+            let ipv6 = route_context
+                .filter(|route| route.stack == AuthStack::Dual)
+                .and_then(|route| route.campus_ipv6.first())
+                .map(ToString::to_string)
+                .unwrap_or_default();
             get_jsonp_login(
                 &client,
-                type1_login_url(&login_base, user, pass, &local_ip)?,
+                type1_login_url(&login_base, user, pass, &local_ip, &ipv6)?,
                 &referer,
                 "bjut-sushe 登录",
                 hint,
@@ -1577,6 +1780,32 @@ pub(crate) async fn logout_from_campus_network_rust(
     compatibility: VpnCompatibility,
     route_context: Option<&PortalRouteContext>,
 ) -> Result<(bool, String), String> {
+    if let Some(route) = route_context {
+        if route.has_ipv6_only_session() {
+            return Err(IPV6_ONLY_LOGOUT.to_string());
+        }
+        if route.uses_lgn6(&logout_method) {
+            let local_ipv4 = login_source_ipv4(Some(route), "", "双栈注销")?;
+            let (ipv6, _, client) =
+                discover_lgn_ipv6_client(compatibility, Duration::from_secs(5), Some(route))
+                    .await?;
+            if !ipv6
+                .parse::<Ipv6Addr>()
+                .is_ok_and(|address| route.campus_ipv6.contains(&address))
+            {
+                return Err("lgn6 返回的 IPv6 不属于当前认证网卡".to_string());
+            }
+            return get_jsonp_login(
+                &client,
+                lgn_logout_url(&local_ipv4, &ipv6, LGN6_HOST)?,
+                LGN6_ROOT,
+                "lgn6 双栈注销",
+                None,
+                None,
+            )
+            .await;
+        }
+    }
     let client_compatibility =
         if logout_method == LoginType::Type3 && compatibility == VpnCompatibility::Maximum {
             VpnCompatibility::High
@@ -1643,7 +1872,9 @@ pub(crate) async fn logout_from_campus_network_rust(
         }
         LoginType::Type3 => {
             let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn")?;
-            let (observed_ipv6, diagnostic) =
+            let (observed_ipv6, diagnostic) = if route_context.is_some_and(|route| route.stack == AuthStack::Ipv4) {
+                (String::new(), "已提交 IPv4 单栈注销".to_string())
+            } else {
                 match discover_lgn_ipv6(compatibility, Duration::from_secs(5), route_context).await
                 {
                     Ok((address, _)) => (address, "已提交 IPv4+IPv6 联动注销".to_string()),
@@ -1651,10 +1882,11 @@ pub(crate) async fn logout_from_campus_network_rust(
                         String::new(),
                         format!("IPv6 地址发现失败，已提交单 IPv4 注销：{error}"),
                     ),
-                };
+                }
+            };
             get_jsonp_login(
                 &client,
-                lgn_logout_url(&local_ipv4, &observed_ipv6)?,
+                lgn_logout_url(&local_ipv4, &observed_ipv6, LGN_HOST)?,
                 LGN_REFERER,
                 "lgn 注销",
                 None,
@@ -1727,6 +1959,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_stack_modes_use_the_portal_and_fields_for_that_family() {
+        let ipv6 = "2001:da8:216:2633::10";
+        for (stack, use_lgn6, host, address4, address6, mode) in [
+            (AuthStack::Ipv4, false, LGN_HOST, "172.26.33.104", "", "1"),
+            (AuthStack::Ipv6, true, LGN6_HOST, "", ipv6, "2"),
+            (AuthStack::Dual, true, LGN6_HOST, "10.21.251.10", ipv6, "0"),
+        ] {
+            let url = lgn_login_url(
+                "fixture-account",
+                "fixture-password",
+                address4,
+                address6,
+                stack,
+                use_lgn6,
+            )
+            .unwrap();
+            let fields: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+            assert_eq!(url.host_str(), Some(host));
+            assert_eq!(url.port(), Some(802));
+            assert_eq!(fields["login_ip_type"], eportal_encrypt(mode));
+            assert_eq!(fields["wlan_user_ip"], eportal_encrypt(address4));
+            assert_eq!(fields["wlan_user_ipv6"], eportal_encrypt(address6));
+        }
+        let addresses = vec![ipv6.parse().unwrap()];
+        let pure =
+            PortalRouteContext::from_link("en0", "", addresses.clone(), AuthStack::Auto).unwrap();
+        for protocol in [LoginType::Type1, LoginType::Type2, LoginType::Type3] {
+            assert!(pure.uses_lgn6(&protocol));
+        }
+        let dual = PortalRouteContext::from_link("en0", "10.21.251.10", addresses, AuthStack::Dual)
+            .unwrap();
+        assert!(dual.uses_lgn6(&LoginType::Type2));
+        assert!(!dual.uses_lgn6(&LoginType::Type1));
+        assert!(!dual.uses_lgn6(&LoginType::Type3));
+        let missing =
+            PortalRouteContext::from_link("en0", "10.21.251.10", vec![], AuthStack::Dual).unwrap();
+        assert!(missing.validate_selected_addresses().is_err());
+    }
+
+    #[test]
     fn semantically_valid_jsonp_results_are_required() {
         assert_eq!(
             parse_dr_response(r#"dr1003({"result":1,"msg":"ok"});"#).unwrap(),
@@ -1766,7 +2038,7 @@ mod tests {
 
     #[test]
     fn login_urls_use_the_documented_ports_and_fields() {
-        let dorm = type1_login_url(DORM_HTTP_LOGIN, "25000000", "p!", "10.126.21.113").unwrap();
+        let dorm = type1_login_url(DORM_HTTP_LOGIN, "25000000", "p!", "10.126.21.113", "").unwrap();
         assert_eq!(dorm.port(), Some(801));
         assert_eq!(dorm.scheme(), "http");
         assert!(dorm.as_str().contains("terminal_type=1"));
@@ -1784,6 +2056,7 @@ mod tests {
             "25000000",
             "p!",
             "10.126.21.113",
+            "",
         )
         .unwrap();
         assert_eq!(dorm_https.scheme(), "https");
@@ -1826,7 +2099,7 @@ mod tests {
             .query_pairs()
             .any(|(name, value)| name == "callback" && value == "dr1004"));
 
-        let lgn = lgn_logout_url("172.26.33.104", "2001:db8::1").unwrap();
+        let lgn = lgn_logout_url("172.26.33.104", "2001:db8::1", LGN_HOST).unwrap();
         assert_eq!(lgn.path(), "/eportal/portal/logout");
         assert!(lgn
             .query_pairs()
@@ -1869,8 +2142,11 @@ mod tests {
         assert_eq!(ipv6, fixture["ipv6"].as_str().unwrap());
         let requests = [
             ("discovery", lgn_observed_ipv6_url().unwrap()),
-            ("login", lgn_login_url(user, password, ipv4, &ipv6).unwrap()),
-            ("logout", lgn_logout_url(ipv4, &ipv6).unwrap()),
+            (
+                "login",
+                lgn_login_url(user, password, ipv4, &ipv6, AuthStack::Dual, false).unwrap(),
+            ),
+            ("logout", lgn_logout_url(ipv4, &ipv6, LGN_HOST).unwrap()),
         ];
         for (name, actual) in requests {
             let expected = Url::parse(fixture[name]["url"].as_str().unwrap()).unwrap();
@@ -1900,7 +2176,15 @@ mod tests {
 
     #[test]
     fn lgn_ipv4_fallback_keeps_an_empty_ipv6_field() {
-        let login = lgn_login_url("25000000", "test-password", "192.0.2.10", "").unwrap();
+        let login = lgn_login_url(
+            "25000000",
+            "test-password",
+            "192.0.2.10",
+            "",
+            AuthStack::Auto,
+            false,
+        )
+        .unwrap();
         let pairs: std::collections::HashMap<_, _> = login.query_pairs().into_owned().collect();
         assert_eq!(pairs.get("wlan_user_ipv6").map(String::as_str), Some(""));
         assert_eq!(

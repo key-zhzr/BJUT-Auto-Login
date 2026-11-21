@@ -1,3 +1,8 @@
+declare module '*?raw' {
+  const content: string;
+  export default content;
+}
+
 interface AndroidBridgeApi {
   takeQuickAction?(): string | null;
   updateWidgetStatus?(status: string): void;

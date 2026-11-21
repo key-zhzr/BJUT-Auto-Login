@@ -534,11 +534,11 @@ class KeepAliveService : Service() {
         }
     }
 
-    private fun networkInfoForCheck(fullDetails: Boolean): String {
+    private fun networkInfoForCheck(fullDetails: Boolean, authStack: String): String {
         // NetworkHelper builds SSID/BSSID/IP/interface from one concrete
         // android.net.Network. Never replace its IPv4 with an interface-wide
         // scan because that can mix cellular, VPN and Wi-Fi identities.
-        return NetworkHelper.getNetworkInfo(this, fullDetails)
+        return NetworkHelper.getNetworkInfo(this, fullDetails, authStack)
     }
 
     private fun performHeadlessCheck(reason: String, fullDetails: Boolean) {
@@ -551,7 +551,8 @@ class KeepAliveService : Service() {
                     KeepAliveJournal.append(this, "$engineState，Rust 无界面核心开始执行：$reason", "debug")
                     val config = NetworkHelper.getSecureConfig(this)
                     if (config.isBlank()) throw IllegalStateException("安全存储中没有应用配置")
-                    var networkInfo = networkInfoForCheck(fullDetails)
+                    val authStack = JSONObject(config).optString("auth_stack", "auto")
+                    var networkInfo = networkInfoForCheck(fullDetails, authStack)
                     val initialNetwork = JSONObject(networkInfo)
                     val routeBindingRequired = initialNetwork.optBoolean("routeBindingRequired", false)
                     val routeBindingToken = if (routeBindingRequired) {
@@ -604,7 +605,7 @@ class KeepAliveService : Service() {
                             "检测到可能需要校园网认证，正在发送凭据前读取一次当前 Wi-Fi 身份",
                             "debug"
                         )
-                        val freshNetworkInfo = networkInfoForCheck(true)
+                        val freshNetworkInfo = networkInfoForCheck(true, authStack)
                         val freshNetwork = JSONObject(freshNetworkInfo)
                         val initialNetworkId = initialNetwork.optString("networkId")
                         val freshNetworkId = freshNetwork.optString("networkId")

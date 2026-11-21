@@ -51,6 +51,7 @@ mod update_metadata;
 mod usage_history;
 #[cfg(desktop)]
 mod window_geometry;
+mod windows_backdrop;
 #[cfg(target_os = "windows")]
 mod windows_credentials;
 #[cfg(target_os = "windows")]
@@ -98,6 +99,7 @@ struct WindowsNetworkIdentity {
     ssid: String,
     bssid: String,
     ip: String,
+    ipv6: Vec<String>,
     interface_name: String,
     transport: String,
     wifi_identity_error: String,
@@ -110,18 +112,6 @@ struct WindowsWlanObservation {
     ssid: String,
     bssid: String,
     error: String,
-}
-
-#[cfg(target_os = "windows")]
-#[derive(Default)]
-struct WindowsAdapterIdentity {
-    guid: String,
-    name: String,
-    ip: String,
-    interface_index: u32,
-    operational: bool,
-    has_gateway: bool,
-    ipv4_metric: u32,
 }
 
 #[cfg(target_os = "windows")]
@@ -289,250 +279,48 @@ fn windows_adapter_looks_virtual(name: &str, description: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_physical_adapters(if_type: u32) -> Vec<WindowsAdapterIdentity> {
-    use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
-    use windows::Win32::NetworkManagement::IpHelper::{
-        GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST,
-        GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
-    };
-    use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
-    use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
-
-    let flags = GAA_FLAG_SKIP_ANYCAST
-        | GAA_FLAG_SKIP_MULTICAST
-        | GAA_FLAG_SKIP_DNS_SERVER
-        | GAA_FLAG_INCLUDE_GATEWAYS;
-    let mut byte_count = 0u32;
-    // SAFETY: the first call intentionally provides no buffer so Windows can
-    // return the required allocation size in byte_count.
-    let size_result =
-        unsafe { GetAdaptersAddresses(AF_INET.0 as u32, flags, None, None, &mut byte_count) };
-    if size_result != ERROR_BUFFER_OVERFLOW.0 || byte_count == 0 {
-        return Vec::new();
-    }
-
-    // Use pointer-sized words rather than Vec<u8> so the Windows structures
-    // are correctly aligned when the buffer is cast below.
-    let word_size = std::mem::size_of::<usize>();
-    let word_count = (byte_count as usize).div_ceil(word_size);
-    let mut storage = vec![0usize; word_count];
-    let first_adapter = storage.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
-    // SAFETY: storage is writable, suitably aligned and at least byte_count
-    // bytes long; all linked records remain valid while storage is alive.
-    let query_result = unsafe {
-        GetAdaptersAddresses(
-            AF_INET.0 as u32,
-            flags,
-            None,
-            Some(first_adapter),
-            &mut byte_count,
-        )
-    };
-    if query_result != NO_ERROR.0 {
-        return Vec::new();
-    }
-
-    let mut adapters = Vec::new();
-    let mut adapter_ptr = first_adapter;
-    while !adapter_ptr.is_null() {
-        // SAFETY: adapter_ptr belongs to the linked list returned above.
-        let adapter = unsafe { &*adapter_ptr };
-        // SAFETY: this is the active member of the documented
-        // Length/IfIndex header union.
-        let interface_index = unsafe { adapter.Anonymous1.Anonymous.IfIndex };
-        if adapter.IfType == if_type {
-            // AdapterName is the stable interface GUID used by Native Wi-Fi;
-            // FriendlyName is only for display.
-            let guid = normalize_windows_guid(
-                &unsafe { adapter.AdapterName.to_string() }.unwrap_or_default(),
-            );
-            let mut name = unsafe { adapter.FriendlyName.to_string() }.unwrap_or_default();
-            let description = unsafe { adapter.Description.to_string() }.unwrap_or_default();
-            let physical_address_length =
-                (adapter.PhysicalAddressLength as usize).min(adapter.PhysicalAddress.len());
-            let has_physical_address = physical_address_length >= 6
-                && adapter.PhysicalAddress[..physical_address_length]
-                    .iter()
-                    .any(|octet| *octet != 0);
-            // Some Windows releases and vendor NDIS drivers do not populate
-            // HardwareInterface consistently. A real non-zero MAC on a
-            // non-virtual Ethernet/WLAN adapter is the stable cross-version
-            // fallback. Do not require OperStatus=Up here: several USB docks
-            // expose an assigned unicast IPv4 while reporting Unknown until
-            // after the first routed packet. A coherent per-interface IPv4
-            // below remains mandatory; no global ipconfig guessing is used.
-            if (!windows_interface_is_hardware(interface_index) && !has_physical_address)
-                || windows_adapter_looks_virtual(&name, &description)
-            {
-                adapter_ptr = adapter.Next;
-                continue;
-            }
-            if name.trim().is_empty() {
-                name.clone_from(&description);
-            }
-            if name.trim().is_empty() {
-                name.clone_from(&guid);
-            }
-            let mut address_ptr = adapter.FirstUnicastAddress;
-            while !address_ptr.is_null() {
-                // SAFETY: address_ptr is another linked record owned by storage.
-                let address = unsafe { &*address_ptr };
-                let socket_address = address.Address;
-                if !socket_address.lpSockaddr.is_null()
-                    && socket_address.iSockaddrLength as usize >= std::mem::size_of::<SOCKADDR_IN>()
-                {
-                    // SAFETY: GetAdaptersAddresses was restricted to AF_INET
-                    // and the sockaddr length was checked above.
-                    let ipv4 = unsafe { &*socket_address.lpSockaddr.cast::<SOCKADDR_IN>() };
-                    if ipv4.sin_family == AF_INET {
-                        // SAFETY: S_un_b is the byte view of the IPv4 union.
-                        let octets = unsafe { ipv4.sin_addr.S_un.S_un_b };
-                        let ip = std::net::Ipv4Addr::new(
-                            octets.s_b1,
-                            octets.s_b2,
-                            octets.s_b3,
-                            octets.s_b4,
-                        )
-                        .to_string();
-                        if !name.is_empty() && usable_physical_ipv4(&ip).is_some() {
-                            adapters.push(WindowsAdapterIdentity {
-                                guid: guid.clone(),
-                                name: name.clone(),
-                                ip,
-                                interface_index,
-                                operational: adapter.OperStatus == IfOperStatusUp,
-                                has_gateway: !adapter.FirstGatewayAddress.is_null(),
-                                ipv4_metric: adapter.Ipv4Metric,
-                            });
-                        }
-                    }
-                }
-                address_ptr = address.Next;
-            }
-        }
-        adapter_ptr = adapter.Next;
-    }
-    adapters
-}
-
-#[cfg(target_os = "windows")]
-fn windows_best_route_interface_index(destination: std::net::Ipv4Addr) -> Option<u32> {
-    use windows::Win32::Foundation::NO_ERROR;
-    use windows::Win32::NetworkManagement::IpHelper::{GetBestRoute2, MIB_IPFORWARD_ROW2};
-    use windows::Win32::Networking::WinSock::SOCKADDR_INET;
-
-    let destination = SOCKADDR_INET::from(std::net::SocketAddrV4::new(destination, 0));
-    let mut route = MIB_IPFORWARD_ROW2::default();
-    let mut source = SOCKADDR_INET::default();
-    // SAFETY: all pointers refer to initialized stack values that outlive the
-    // call. With no interface supplied, Windows reports the route it would
-    // actually use for this Type 3 gateway.
-    let result = unsafe { GetBestRoute2(None, 0, None, &destination, 0, &mut route, &mut source) };
-    (result == NO_ERROR && route.InterfaceIndex != 0).then_some(route.InterfaceIndex)
-}
-
-#[cfg(target_os = "windows")]
-fn windows_network_identity(include_wifi_details: bool, preferred: &str) -> WindowsNetworkIdentity {
-    use windows::Win32::NetworkManagement::IpHelper::{IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211};
-
-    let mut identity = WindowsNetworkIdentity::default();
-    let observations = windows_wlan_observations(include_wifi_details);
-    let wifi_adapters: Vec<_> = windows_physical_adapters(IF_TYPE_IEEE80211)
-        .into_iter()
-        .filter(|adapter| preferred.is_empty() || adapter.guid == preferred)
-        .collect();
-    let mut selected_wifi_metric = None;
-
-    for adapter in &wifi_adapters {
-        if let Some(observation) = observations
-            .iter()
-            .find(|observation| observation.guid == adapter.guid)
-        {
-            identity.ssid.clone_from(&observation.ssid);
-            identity.bssid.clone_from(&observation.bssid);
-            identity.wifi_identity_error.clone_from(&observation.error);
-            identity.interface_name.clone_from(&adapter.name);
-            identity.ip.clone_from(&adapter.ip);
-            identity.transport = "wifi".to_string();
-            selected_wifi_metric = Some(adapter.ipv4_metric);
-            break;
-        }
-    }
-    // Even when Windows denies location-sensitive SSID/BSSID access,
-    // WlanEnumInterfaces still supplies the interface GUID. The native IP
-    // Helper match above therefore retains a coherent Wi-Fi adapter/IP while
-    // automatic credential submission fails closed on the missing identity.
-    if identity.ip.is_empty() {
-        if include_wifi_details && identity.wifi_identity_error.is_empty() {
-            identity.wifi_identity_error = observations
-                .first()
-                .map(|observation| observation.error.clone())
-                .filter(|error| !error.is_empty())
-                .unwrap_or_else(|| "wlanInterfaceNotMatched".to_string());
-        }
-    }
-
-    // Prefer the physical Ethernet adapter Windows would actually use for the
-    // Type 3 gateway. This prevents simultaneous campus Wi-Fi from supplying
-    // the URL address while Windows sends over its preferred wired route. If
-    // the route is hidden by a TUN, choose an operational physical adapter by
-    // gateway/metric (or the sole wired adapter). The read-only protocol probe
-    // must still succeed before any credential is sent, so a normal home LAN
-    // is observable in diagnostics without becoming automatically trusted.
-    let wired_adapters: Vec<_> = windows_physical_adapters(IF_TYPE_ETHERNET_CSMACD)
-        .into_iter()
-        .filter(|adapter| preferred.is_empty() || adapter.guid == preferred)
-        .collect();
-    let routed_wired = [
-        std::net::Ipv4Addr::new(10, 21, 251, 3),
-        std::net::Ipv4Addr::new(10, 21, 221, 98),
-        std::net::Ipv4Addr::new(172, 30, 201, 2),
-    ]
-    .into_iter()
-    .filter_map(windows_best_route_interface_index)
-    // A default VPN/TUN route may be returned for the first destination even
-    // while a later campus subnet has a more specific physical route. Keep
-    // evaluating destinations until the route index actually matches one of
-    // the coherent physical Ethernet adapters enumerated above.
-    .find_map(|index| {
-        wired_adapters
-            .iter()
-            .find(|adapter| adapter.interface_index == index)
-    });
-    let campus_wired = wired_adapters
-        .iter()
-        .filter(|adapter| adapter.operational)
-        .find(|adapter| is_campus_wired_ipv4(&adapter.ip))
-        .or_else(|| {
-            wired_adapters
-                .iter()
-                .find(|adapter| is_campus_wired_ipv4(&adapter.ip))
-        });
-    let best_active_wired = wired_adapters
-        .iter()
-        .filter(|adapter| adapter.operational)
-        .min_by_key(|adapter| (!adapter.has_gateway, adapter.ipv4_metric))
-        .or_else(|| {
-            wired_adapters
-                .iter()
-                .filter(|adapter| adapter.has_gateway)
-                .min_by_key(|adapter| adapter.ipv4_metric)
+fn windows_network_identity(
+    include_wifi_details: bool,
+    preferred: &str,
+    stack: AuthStack,
+) -> WindowsNetworkIdentity {
+    let adapters = network_inventory::adapters();
+    let selected = if preferred.is_empty() {
+        network_inventory::select_auth_adapter(&adapters, stack, |adapter, ipv6| {
+            adapter.route_metrics[usize::from(ipv6)]
         })
-        .or_else(|| (wired_adapters.len() == 1).then(|| &wired_adapters[0]));
-    let metric_preferred_wired = best_active_wired.filter(|adapter| {
-        identity.ip.is_empty()
-            || selected_wifi_metric.is_none_or(|wifi_metric| adapter.ipv4_metric <= wifi_metric)
-    });
-    let wired = routed_wired.or(campus_wired).or(metric_preferred_wired);
-    if let Some(adapter) = wired {
-        identity.ssid.clear();
-        identity.bssid.clear();
-        identity.wifi_identity_error.clear();
-        identity.interface_name.clone_from(&adapter.name);
-        identity.ip.clone_from(&adapter.ip);
-        identity.transport = "ethernet".to_string();
+    } else {
+        network_inventory::preferred_adapter(&adapters, preferred)
+    };
+    let Some(selected) = selected else {
+        return WindowsNetworkIdentity::default();
+    };
+    let mut identity = WindowsNetworkIdentity {
+        ip: network_inventory::auth_ipv4(selected),
+        ipv6: selected.ipv6.clone(),
+        interface_name: selected.interface_name.clone(),
+        transport: selected.transport.clone(),
+        ..Default::default()
+    };
+    if selected.transport == "wifi" && include_wifi_details {
+        if let Some(observation) = windows_wlan_observations(true)
+            .into_iter()
+            .find(|observation| observation.guid == selected.id)
+        {
+            identity.ssid = observation.ssid;
+            identity.bssid = observation.bssid;
+            identity.wifi_identity_error = observation.error;
+        } else {
+            identity.wifi_identity_error = "wlanInterfaceNotMatched".to_string();
+        }
     }
     identity
+}
+
+fn auth_stack_for_app(app: &tauri::AppHandle) -> AuthStack {
+    app.try_state::<Arc<AppState>>()
+        .map(|state| state.config.read().unwrap().auth_stack)
+        .unwrap_or_default()
 }
 
 fn preferred_interface_for_app(app: &tauri::AppHandle) -> String {
@@ -583,7 +371,7 @@ fn set_preferred_interface(
         &state,
         "selection",
         if automatic {
-            "已选择自动识别认证网卡，优先校园有线"
+            "已按系统路由优先级自动选择认证网卡"
         } else {
             "已手动指定认证网卡；该网卡断开时会等待恢复"
         },
@@ -598,6 +386,7 @@ fn get_network_info(
     _include_wifi_details: Option<bool>,
 ) -> serde_json::Value {
     let preferred_interface = preferred_interface_for_app(&_app);
+    let auth_stack = auth_stack_for_app(&_app);
     #[cfg(target_os = "android")]
     let _ = &preferred_interface;
     #[cfg(target_os = "android")]
@@ -623,10 +412,13 @@ fn get_network_info(
                         "cn.edu.bjut.al.NetworkHelper".into(),
                     ) {
                         Ok(class) => {
+                            let Ok(stack) = env.new_string(auth_stack.as_str()) else {
+                                return result;
+                            };
                             let method_call = env.call_static_method(
                                 class,
                                 "getNetworkInfo",
-                                "(Landroid/content/Context;Z)Ljava/lang/String;",
+                                "(Landroid/content/Context;ZLjava/lang/String;)Ljava/lang/String;",
                                 &[
                                     jni::objects::JValue::Object(&activity),
                                     jni::objects::JValue::Bool(
@@ -636,6 +428,7 @@ fn get_network_info(
                                             0
                                         },
                                     ),
+                                    jni::objects::JValue::Object(&stack),
                                 ],
                             );
 
@@ -673,6 +466,7 @@ fn get_network_info(
                 }
             }
         }
+        result["authStack"] = serde_json::json!(auth_stack);
         return result;
     }
 
@@ -681,6 +475,7 @@ fn get_network_info(
         let mut ssid = String::new();
         let mut bssid = String::new();
         let mut ip = String::new();
+        let mut ipv6 = Vec::<String>::new();
         let mut interface_name = String::new();
         let mut identity_source = "unverifiedFallback".to_string();
         let mut transport = "unknown".to_string();
@@ -700,10 +495,13 @@ fn get_network_info(
         let lgn_link_configuration = serde_json::Value::Null;
 
         #[cfg(target_os = "macos")]
-        if let Some(selected) = macos_network::physical_identity_for(&preferred_interface) {
+        if let Some(selected) =
+            macos_network::physical_identity_for(&preferred_interface, auth_stack)
+        {
             interface_name = selected.interface;
             ip = selected.ipv4;
-            transport = selected.transport.to_string();
+            ipv6 = selected.ipv6;
+            transport.clone_from(&selected.transport);
             identity_source = "sameInterface".to_string();
             if selected.transport == "wifi" && _include_wifi_details.unwrap_or(true) {
                 if let Ok(client) = corewlan::WiFiClient::shared() {
@@ -734,102 +532,37 @@ fn get_network_info(
             let identity = windows_network_identity(
                 _include_wifi_details.unwrap_or(true),
                 &preferred_interface,
+                auth_stack,
             );
             ssid = identity.ssid;
             bssid = identity.bssid;
             ip = identity.ip;
+            ipv6 = identity.ipv6;
             interface_name = identity.interface_name;
             transport = identity.transport;
             wifi_identity_error = identity.wifi_identity_error;
-            if !ip.is_empty() && !interface_name.is_empty() {
+            if !interface_name.is_empty() {
                 identity_source = "sameInterface".to_string();
             }
         }
 
         #[cfg(target_os = "linux")]
         {
-            if let Ok(output) = std::process::Command::new("nmcli")
-                .args(["-t", "-f", "device,active,ssid,bssid", "dev", "wifi"])
-                .output()
-            {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    let parts = split_nmcli_fields(line);
-                    if parts.len() >= 4 && parts[1] == "yes" {
-                        interface_name = parts[0].clone();
-                        ssid = parts[2].clone();
-                        bssid = parts[3].clone();
-                        if let Ok(output) = std::process::Command::new("ip")
-                            .args([
-                                "-4",
-                                "-o",
-                                "addr",
-                                "show",
-                                "dev",
-                                &interface_name,
-                                "scope",
-                                "global",
-                            ])
-                            .output()
-                        {
-                            let output = String::from_utf8_lossy(&output.stdout);
-                            if let Some(address) = output
-                                .split_whitespace()
-                                .find(|part| part.contains('.') && part.contains('/'))
-                            {
-                                ip = address.split('/').next().unwrap_or("").to_string();
-                                if !ip.is_empty() {
-                                    transport = "wifi".to_string();
-                                    identity_source = "sameInterface".to_string();
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-
-            let route_identity = linux_route_identity("172.30.201.2");
-            if let Some((route_interface, route_ip)) =
-                route_identity.filter(|(route_interface, route_ip)| {
-                    route_interface != &interface_name
-                        && linux_is_physical_ethernet_interface(route_interface)
-                        && is_campus_wired_ipv4(route_ip)
-                })
-            {
-                ssid.clear();
-                bssid.clear();
-                interface_name = route_interface;
-                ip = route_ip;
-                transport = "ethernet".to_string();
-                identity_source = "sameInterface".to_string();
-            } else if let Some((wired_interface, wired_ip)) =
-                linux_campus_wired_identity(&interface_name)
-            {
-                // When a TUN device owns the route, the route query cannot
-                // identify the physical campus Ethernet. Keep the scan
-                // per-interface and prefer that campus address over Wi-Fi.
-                ssid.clear();
-                bssid.clear();
-                interface_name = wired_interface;
-                ip = wired_ip;
-                transport = "ethernet".to_string();
-                identity_source = "sameInterface".to_string();
-            }
-        }
-
-        #[cfg(target_os = "linux")]
-        if !preferred_interface.is_empty() {
             let adapters = network_inventory::adapters();
-            if let Some(selected) =
+            let selected = if preferred_interface.is_empty() {
+                let routes = [false, true].map(network_inventory::linux_default_routes);
+                network_inventory::select_auth_adapter(&adapters, auth_stack, |adapter, ipv6| {
+                    routes[usize::from(ipv6)]
+                        .get(&adapter.interface_name)
+                        .copied()
+                })
+            } else {
                 network_inventory::preferred_adapter(&adapters, &preferred_interface)
-            {
-                if interface_name != selected.interface_name {
-                    ssid.clear();
-                    bssid.clear();
-                }
+            };
+            if let Some(selected) = selected {
                 interface_name.clone_from(&selected.interface_name);
-                ip = selected.ipv4.first().cloned().unwrap_or_default();
+                ip = network_inventory::auth_ipv4(selected);
+                ipv6.clone_from(&selected.ipv6);
                 transport.clone_from(&selected.transport);
                 identity_source = "sameInterface".to_string();
                 if transport == "wifi" && _include_wifi_details.unwrap_or(true) {
@@ -843,6 +576,8 @@ fn get_network_info(
                             "list",
                             "ifname",
                             &interface_name,
+                            "--rescan",
+                            "no",
                         ])
                         .output()
                     {
@@ -856,20 +591,19 @@ fn get_network_info(
                         }
                     }
                 }
-            } else {
-                ssid.clear();
-                bssid.clear();
-                ip.clear();
-                interface_name.clear();
-                transport = "unknown".to_string();
-                identity_source = "unavailable".to_string();
             }
+        }
+
+        if interface_name.is_empty() && !preferred_interface.is_empty() {
+            identity_source = "unavailable".to_string();
         }
 
         serde_json::json!({
             "ssid": ssid,
             "bssid": bssid,
             "ip": ip,
+            "ipv6": ipv6,
+            "authStack": auth_stack,
             "interfaceName": interface_name,
             "identitySource": identity_source,
             "transport": transport,
@@ -1304,27 +1038,35 @@ fn get_local_ip(app: tauri::AppHandle) -> String {
     let _ = &preferred;
     #[cfg(target_os = "windows")]
     {
-        return windows_network_identity(false, &preferred).ip;
+        let identity = windows_network_identity(false, &preferred, auth_stack_for_app(&app));
+        return link_address(identity.ip, &identity.ipv6);
     }
 
     #[cfg(target_os = "android")]
     {
+        let stack = auth_stack_for_app(&app);
+        if stack != AuthStack::Auto {
+            let network = get_network_info(app, Some(false));
+            return network_auth_ip(&network).to_string();
+        }
         return call_android_network_helper_string("getPhysicalNetworkIp");
     }
 
     #[cfg(target_os = "macos")]
     {
-        macos_network::physical_identity_for(&preferred)
-            .map(|identity| identity.ipv4)
+        macos_network::physical_identity_for(&preferred, auth_stack_for_app(&app))
+            .map(|identity| link_address(identity.ipv4, &identity.ipv6))
             .unwrap_or_default()
     }
 
     #[cfg(target_os = "linux")]
     {
         let _ = preferred;
-        get_network_info(app, Some(false))["ip"]
+        let network = get_network_info(app, Some(false));
+        network["ip"]
             .as_str()
-            .unwrap_or("")
+            .filter(|ip| !ip.is_empty())
+            .unwrap_or_else(|| network_auth_ip(&network))
             .to_string()
     }
 
@@ -1337,6 +1079,17 @@ fn get_local_ip(app: tauri::AppHandle) -> String {
     {
         String::new()
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn link_address(ipv4: String, ipv6: &[String]) -> String {
+    if !ipv4.is_empty() {
+        return ipv4;
+    }
+    ipv6.iter()
+        .find(|ip| network_inventory::campus_ipv6(ip).is_some())
+        .cloned()
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -1380,7 +1133,7 @@ use portal_auth::portal_probe_urls;
 use portal_auth::{
     classify_portal_login_failure, detect_login_type_details_rust, diagnose_lgn_ipv6_rust,
     diagnose_login_gateways, lgn_user_info_url, login_result_is_ambiguous,
-    login_to_campus_network_rust, logout_from_campus_network_rust, portal_client, LoginType,
+    logout_from_campus_network_rust, portal_client, AuthStack, LoginType,
     PortalLoginFailureDisposition, PortalRouteContext,
 };
 use std::collections::HashMap;
@@ -1815,43 +1568,49 @@ fn network_identity_is_fresh(network: &serde_json::Value) -> bool {
     }
 }
 
+fn network_campus_ipv6(network: &serde_json::Value) -> Vec<std::net::Ipv6Addr> {
+    let mut addresses: Vec<_> = network["ipv6"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| network_inventory::campus_ipv6(value.as_str()?))
+        .collect();
+    addresses.sort_unstable();
+    addresses.dedup();
+    addresses
+}
+
+fn network_auth_ip(network: &serde_json::Value) -> &str {
+    let ipv4 = network["ip"].as_str().unwrap_or_default();
+    let stack = AuthStack::from_network(network);
+    if stack != AuthStack::Ipv6 && !(stack == AuthStack::Auto && ipv4.is_empty()) {
+        return ipv4;
+    }
+    network["ipv6"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .find(|address| network_inventory::campus_ipv6(address).is_some())
+        .unwrap_or(ipv4)
+}
+
 fn portal_route_context_from_network(
     network: &serde_json::Value,
 ) -> Result<Option<PortalRouteContext>, String> {
-    #[cfg(target_os = "android")]
-    {
-        // Android's Network object is still bound by AndroidWifiRouteGuard (or
-        // by KeepAliveService for the headless core). The route context here is
-        // only the coherent physical interface/IP pair used to build portal
-        // parameters (and the read-only probe URL); portal_client deliberately
-        // does not replace the exact Network binding with an interface socket
-        // option.
-        let interface_name = network
-            .get("interfaceName")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let physical_ipv4 = network
-            .get("ip")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        return PortalRouteContext::new(interface_name, physical_ipv4).map(Some);
-    }
-
     #[cfg(not(target_os = "android"))]
-    {
-        if !network_identity_is_fresh(network) {
-            return Err("网络身份不是来自同一物理接口，已停止校园网网关请求".to_string());
-        }
-        let interface_name = network
-            .get("interfaceName")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let physical_ipv4 = network
-            .get("ip")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        PortalRouteContext::new(interface_name, physical_ipv4).map(Some)
+    if !network_identity_is_fresh(network) {
+        return Err("网络身份不是来自同一物理接口，已停止校园网网关请求".to_string());
     }
+    // Android binds the selected Network before entering the core. Desktop
+    // clients use the interface and per-family addresses from this snapshot.
+    PortalRouteContext::from_link(
+        network["interfaceName"].as_str().unwrap_or_default(),
+        network["ip"].as_str().unwrap_or_default(),
+        network_campus_ipv6(network),
+        AuthStack::from_network(network),
+    )
+    .map(Some)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1862,6 +1621,8 @@ struct NetworkIdentitySnapshot {
     ssid: String,
     bssid: String,
     ip: String,
+    ipv6: Vec<std::net::Ipv6Addr>,
+    auth_stack: AuthStack,
 }
 
 impl NetworkIdentitySnapshot {
@@ -1890,6 +1651,8 @@ impl NetworkIdentitySnapshot {
             ssid: exact_ssid,
             bssid: component("bssid").to_ascii_lowercase().replace('-', ":"),
             ip: component("ip"),
+            ipv6: network_campus_ipv6(network),
+            auth_stack: AuthStack::from_network(network),
         }
     }
 
@@ -1911,7 +1674,13 @@ impl NetworkIdentitySnapshot {
             changed.push("BSSID");
         }
         if self.ip != current.ip {
-            changed.push("IP");
+            changed.push("IPv4");
+        }
+        if self.ipv6 != current.ipv6 {
+            changed.push("IPv6");
+        }
+        if self.auth_stack != current.auth_stack {
+            changed.push("认证地址族");
         }
         changed
     }
@@ -1930,7 +1699,6 @@ fn ensure_same_network_identity(
     }
 }
 
-#[cfg(not(target_os = "android"))]
 fn same_exact_wifi_identity(
     expected_ssid: &str,
     expected_bssid: &str,
@@ -2167,10 +1935,11 @@ fn headless_log(
 #[cfg(target_os = "android")]
 async fn run_headless_network_check(
     config: AppConfig,
-    network: serde_json::Value,
+    mut network: serde_json::Value,
     mut account_health: HashMap<String, AccountHealth>,
     reason: &str,
 ) -> serde_json::Value {
+    network["authStack"] = serde_json::json!(config.auth_stack);
     let mut logs = Vec::new();
     let compatibility = effective_vpn_compatibility(&config);
     let transport = network_transport(&network).to_string();
@@ -2236,7 +2005,7 @@ async fn run_headless_network_check(
     let authentication_online = if connectivity::requires_physical_probe(&network) {
         dual_stack::probe_route_with_updates(&network, true, |_| {})
             .await
-            .online()
+            .online_for(config.auth_stack)
     } else {
         check_internet_from_source(Some(&ip)).await
     };
@@ -2250,7 +2019,10 @@ async fn run_headless_network_check(
         });
     }
 
-    if transport.eq_ignore_ascii_case("wifi") && !identity_fresh && is_campus_local_ip(&ip) {
+    if transport.eq_ignore_ascii_case("wifi")
+        && !identity_fresh
+        && is_campus_local_ip(network_auth_ip(&network))
+    {
         let (status, notification, message_type) = if identity_requested {
             (
                 "blocked",
@@ -2378,7 +2150,7 @@ async fn run_headless_network_check(
         login_type: &login_type,
         ssid: &ssid,
         bssid: &bssid,
-        ip: &ip,
+        ip: network_auth_ip(&network),
         transport: &transport,
         identity_fresh,
         whitelist: &config.whitelist,
@@ -2444,12 +2216,13 @@ async fn run_headless_network_check(
             format!("无界面核心尝试使用账号 {} 自动登录", account.user),
             "info",
         );
-        match login_to_campus_network_rust(
+        match portal_auth::login_with_submission_guard(
             login_type.clone(),
             &account.user,
             &account.pass,
             compatibility,
             portal_route_context.as_ref(),
+            &|| Ok(()),
         )
         .await
         {
@@ -4181,9 +3954,8 @@ fn save_config(
     if new_cfg.android_notification_mode != "separate" {
         new_cfg.android_notification_mode = default_android_notification_mode();
     }
-    if new_cfg.theme == "apple26" {
-        new_cfg.theme = "apple27".to_string();
-    } else if !matches!(new_cfg.theme.as_str(), "basic" | "apple27" | "winui") {
+    // Apple OS 27 is temporarily hidden; normalize persisted selections to basic.
+    if !matches!(new_cfg.theme.as_str(), "basic" | "winui") {
         new_cfg.theme = default_theme();
     }
     if !matches!(
@@ -5024,7 +4796,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                             login_type: &login_type,
                             ssid: &current_ssid,
                             bssid: &current_bssid,
-                            ip: &current_ip,
+                            ip: network_auth_ip(&net_info),
                             transport: &transport,
                             identity_fresh,
                             whitelist: &whitelist,
@@ -5137,12 +4909,36 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                         break;
                                     }
                                     connectivity::invalidate(&app, &state);
-                                    let login_result = login_to_campus_network_rust(
+                                    #[cfg(not(target_os = "android"))]
+                                    let before_submit = || {
+                                        ensure_same_network_identity(
+                                            &trusted_portal_identity,
+                                            &get_network_info(app.clone(), Some(true)),
+                                        )
+                                    };
+                                    #[cfg(target_os = "android")]
+                                    let before_submit = || {
+                                        let latest = get_network_info(app.clone(), Some(true));
+                                        if connectivity::same_network(&net_info, &latest)
+                                            && network_identity_is_fresh(&latest)
+                                            && (transport != "wifi" || same_exact_wifi_identity(
+                                                &current_ssid, &current_bssid,
+                                                latest["ssid"].as_str().unwrap_or_default(),
+                                                latest["bssid"].as_str().unwrap_or_default(),
+                                            ))
+                                        {
+                                            Ok(())
+                                        } else {
+                                            Err("认证前网络或地址族已变化".to_string())
+                                        }
+                                    };
+                                    let login_result = portal_auth::login_with_submission_guard(
                                         login_type.clone(),
                                         &acc.user,
                                         &acc.pass,
                                         compatibility,
                                         portal_route_context.as_ref(),
+                                        &before_submit,
                                     )
                                     .await;
                                     drop(login_guard);
@@ -5472,7 +5268,14 @@ fn sync_config(
     config: AppConfig,
 ) -> Result<(), String> {
     let mut config = config;
-    config.preferred_interface = state.config.read().unwrap().preferred_interface.clone();
+    let stack_changed = {
+        let current = state.config.read().unwrap();
+        config.preferred_interface = current.preferred_interface.clone();
+        config.auth_stack != current.auth_stack
+    };
+    if stack_changed && state.manual_login_in_progress.load(Ordering::SeqCst) {
+        return Err("请等待当前认证操作结束后再切换地址族".to_string());
+    }
     if let Err(error) = save_config(&app, &state, config) {
         rust_log(
             &app,
@@ -5492,6 +5295,7 @@ fn sync_config(
     } else {
         new_cfg.check_interval
     };
+    drop(new_cfg);
     let mobile_data = is_mobile_data_network(&state.last_network_state.lock().unwrap());
     let new_interval = if mobile_data {
         mobile_data_check_interval(configured_interval, is_bg)
@@ -5500,6 +5304,9 @@ fn sync_config(
     };
     if current_val > new_interval {
         state.countdown.store(new_interval, Ordering::SeqCst);
+    }
+    if stack_changed {
+        schedule_network_change_readiness(app, state.inner().clone());
     }
     Ok(())
 }
@@ -6007,6 +5814,9 @@ async fn evaluate_manual_network_trust(
     // this read-only request may safely fall back to the system route so a VPN
     // connected to the accounting network can still expose session data.
     let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
+    if let Some(route) = &portal_route_context {
+        route.validate_selected_addresses()?;
+    }
     let detection = detect_login_type_details_rust(
         compatibility,
         ssid,
@@ -6035,7 +5845,7 @@ async fn evaluate_manual_network_trust(
             login_type: &login_type,
             ssid,
             bssid,
-            ip,
+            ip: network_auth_ip(&network),
             transport,
             identity_fresh: network_identity_is_fresh(&network),
             whitelist: &config.whitelist,
@@ -6245,6 +6055,9 @@ async fn logout_current_session_by_type(
     current_ip: &str,
     route_context: Option<&PortalRouteContext>,
 ) -> Result<String, String> {
+    if route_context.is_some_and(PortalRouteContext::has_ipv6_only_session) {
+        return Err(portal_auth::IPV6_ONLY_LOGOUT.to_string());
+    }
     let mut failures = Vec::new();
     macro_rules! attempt {
         ($future:expr) => {
@@ -6275,6 +6088,10 @@ async fn logout_current_session_by_type(
             ));
         }
         LoginType::Type2 => {
+            if route_context.is_some_and(|route| route.uses_lgn6(login_type)) {
+                return portal_logout_attempt(LoginType::Type2, None, compatibility, route_context)
+                    .await;
+            }
             attempt!(portal_logout_attempt(
                 LoginType::Type3,
                 None,
@@ -6546,6 +6363,9 @@ async fn manual_login_inner(
     let config = state.config.read().unwrap().clone();
     let compatibility = effective_vpn_compatibility(&config);
     let probe_route_context = portal_route_context_from_network(&network_before_probe)?;
+    if let Some(route) = &probe_route_context {
+        route.validate_selected_addresses()?;
+    }
     progress.phase("gateway", "正在确认校园认证网关")?;
     let detection = detect_login_type_details_rust(
         compatibility,
@@ -6601,7 +6421,7 @@ async fn manual_login_inner(
         login_type: &login_type,
         ssid,
         bssid,
-        ip,
+        ip: network_auth_ip(&network),
         transport: network_transport(&network),
         identity_fresh: network_identity_is_fresh(&network),
         whitelist: &config.whitelist,
@@ -6643,6 +6463,16 @@ async fn manual_login_inner(
 
     let switch_context = switch_context.unwrap_or_default();
     let switching_account = switch_context.enabled;
+    if switching_account
+        && portal_route_context
+            .as_ref()
+            .is_some_and(PortalRouteContext::has_ipv6_only_session)
+    {
+        return Ok(ManualLoginResult {
+            success: false,
+            message: portal_auth::IPV6_ONLY_LOGOUT.to_string(),
+        });
+    }
     if switching_account && account_index.is_none() {
         return Ok(ManualLoginResult {
             success: false,
@@ -6708,7 +6538,11 @@ async fn manual_login_inner(
                 message: format!("当前已经使用账号 {} 登录", target.user),
             });
         }
-        if login_type != LoginType::Type2 {
+        if login_type != LoginType::Type2
+            || portal_route_context
+                .as_ref()
+                .is_some_and(|route| route.uses_lgn6(&login_type))
+        {
             progress.submitting("logout", "正在注销旧账号，完成后将切换到所选账号")?;
             let logout_message = logout_current_session_by_type(
                 &login_type,
@@ -7823,20 +7657,17 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
                 return;
             }
             let network = get_network_info(app.clone(), Some(false));
-            let current_ip = network
-                .get("ip")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
-                .trim();
-            if usable_physical_ipv4(current_ip).is_some() {
-                ready_ip = current_ip.to_string();
+            let ipv4 = network["ip"].as_str().and_then(usable_physical_ipv4);
+            let ipv6 = network_campus_ipv6(&network);
+            if AuthStack::from_network(&network).matches(ipv4.is_some(), !ipv6.is_empty()) {
+                ready_ip = network_auth_ip(&network).to_string();
                 progress.phase("已取得物理网卡 IP，准备完整检测", 20);
                 rust_log(
                     &app,
                     &state,
                     "网络",
                     &format!(
-                        "网络变化后第 {attempt} 次检查取得新的物理接口 IPv4：{ready_ip}，开始完整检测"
+                        "网络变化后第 {attempt} 次检查取得新的物理接口地址：{ready_ip}，开始完整检测"
                     ),
                     "info",
                 );
@@ -7850,7 +7681,7 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
                 &app,
                 &state,
                 "网络",
-                &format!("网络变化后第 {attempt}/10 次检查仍未取得物理接口 IPv4"),
+                &format!("网络变化后第 {attempt}/10 次检查仍未取得物理接口地址"),
                 "debug",
             );
         }
@@ -7863,7 +7694,7 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
                 &app,
                 &state,
                 "网络",
-                "网络变化后连续 10 次仍未取得物理接口 IPv4，将执行一次完整检测以更新离线状态",
+                "网络变化后连续 10 次仍未取得所选地址族所需的物理接口地址，将执行一次完整检测以更新离线状态",
                 "info",
             );
         }
@@ -8129,11 +7960,6 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
     let transport = fresh_transport;
     let ssid = fresh_ssid;
     let bssid = fresh_bssid;
-    let ip = network
-        .get("ip")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_string();
     let profile = matching_network_profile(&config, &ssid, &bssid, &detected);
     let login_type = profile
         .as_ref()
@@ -8147,7 +7973,7 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         login_type: &login_type,
         ssid: &ssid,
         bssid: &bssid,
-        ip: &ip,
+        ip: network_auth_ip(&network),
         transport: &transport,
         identity_fresh: network_identity_is_fresh(&network),
         whitelist: &config.whitelist,
@@ -8187,12 +8013,14 @@ async fn tray_manual_login(app: tauri::AppHandle, state: Arc<AppState>) {
         &format!("使用首选账号 {} 执行快捷登录", account.user),
         "info",
     );
-    match login_to_campus_network_rust(
+    let identity = NetworkIdentitySnapshot::capture(&network);
+    match portal_auth::login_with_submission_guard(
         login_type,
         &account.user,
         &account.pass,
         compatibility,
         portal_route_context.as_ref(),
+        &|| ensure_same_network_identity(&identity, &get_network_info(app.clone(), Some(true))),
     )
     .await
     {
@@ -8324,6 +8152,7 @@ pub fn run() {
                 prefer_remaining_flow: false,
                 saved_router: None,
                 preferred_interface: String::new(),
+                auth_stack: AuthStack::Auto,
                 adaptive_network_checks: true,
                 accounts: Vec::new(),
                 auto_login: false,
@@ -8869,7 +8698,8 @@ pub fn run() {
             set_background_state,
             get_current_network_state,
             macos_liquid_glass::get_macos_liquid_glass_capabilities,
-            macos_liquid_glass::sync_macos_liquid_glass
+            macos_liquid_glass::sync_macos_liquid_glass,
+            windows_backdrop::sync_windows_backdrop
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -9033,7 +8863,7 @@ mod tests {
             .unwrap()
             .expect("desktop route context");
         assert_eq!(route.interface_name(), "en0");
-        assert_eq!(route.physical_ipv4().to_string(), "10.26.1.2");
+        assert_eq!(route.physical_ipv4().unwrap().to_string(), "10.26.1.2");
 
         for invalid in [
             serde_json::json!({
@@ -9262,6 +9092,7 @@ mod tests {
                 binding: None,
             }),
             preferred_interface: String::new(),
+            auth_stack: AuthStack::Auto,
             adaptive_network_checks: true,
             accounts: vec![Account {
                 user: "20260001".to_string(),

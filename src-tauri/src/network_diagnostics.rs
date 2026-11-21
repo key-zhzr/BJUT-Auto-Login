@@ -257,15 +257,13 @@ pub(super) async fn run_network_diagnostics(
             if compatibility != VpnCompatibility::Low || wifi_route_failed {
                 return None;
             }
-            let route = portal_route_context.as_ref()?;
+            let address = portal_route_context.as_ref()?.physical_ipv4()?;
             let host = if lgn_wired_hint { LGN_HOST } else { WLGN_HOST };
-            let servers = campus_dns_servers(host, Some(route.physical_ipv4())).join(" / ");
-            Some(
-                match query_campus_dns_ipv4(host, Some(route.physical_ipv4())).await {
-                    Ok(_) => (true, format!("校园 DNS（{servers}）：{host} 解析成功")),
-                    Err(error) => (false, format!("校园 DNS（{servers}）：{error}")),
-                },
-            )
+            let servers = campus_dns_servers(host, Some(address)).join(" / ");
+            Some(match query_campus_dns_ipv4(host, Some(address)).await {
+                Ok(_) => (true, format!("校园 DNS（{servers}）：{host} 解析成功")),
+                Err(error) => (false, format!("校园 DNS（{servers}）：{error}")),
+            })
         };
         let ((mut ok, mut message), campus) =
             futures_util::future::join(public_dns, campus_dns).await;

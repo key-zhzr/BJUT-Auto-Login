@@ -8,6 +8,7 @@ import { RouterMaintenance } from './router-maintenance';
 export interface RouterConfiguration { service: Record<string,string>; uplinks: Record<string,string>[]; networks?: {id:string}[]; }
 type Field = {key:string; label:string; hint?:string; default?:string; min?:number; max?:number; flag?:boolean; secret?:boolean; choices?:[string,string][]};
 const protocols: [string,string][] = [['auto','自动'],['bjut-sushe','bjut-sushe'],['bjut_wifi','bjut_wifi'],['lgn','lgn']];
+const authStacks: [string,string][] = [['auto','自动'],['ipv4','IPv4 单栈'],['ipv6','IPv6 单栈'],['dual','IPv4 + IPv6 双栈']];
 const transport: [string,string][] = [['auto','自动'],['ethernet','有线'],['wifi','Wi-Fi']];
 const fields: Field[] = [
   {key:'enabled',label:'自动登录',hint:'检测到校园网断开时自动登录',flag:true,default:'0'},
@@ -20,6 +21,7 @@ const fields: Field[] = [
   {key:'credential_cooldown',label:'账号拒绝后等待（秒）',hint:'账号被明确拒绝后暂停尝试的时长',default:'600',min:30,max:86400},
   {key:'post_login_delay',label:'登录后复核延迟（秒）',hint:'登录成功后再次核对状态的延迟',default:'2',min:0,max:15},
   {key:'login_type',label:'认证方式',hint:'自动会按当前网络选择协议',default:'auto',choices:protocols},
+  {key:'auth_stack',label:'认证地址族',hint:'IPv6 单栈会话需等待校园网清理',default:'auto',choices:authStacks},
   {key:'transport',label:'上游类型',hint:'上游接口的物理连接类型',default:'auto',choices:transport},
   {key:'compatibility',label:'连接方式',hint:'HTTPS 为推荐的安全连接方式',default:'secure',choices:[['secure','HTTPS'],['legacy_http','旧式 HTTP']]},
   {key:'strict_network',label:'核对校园网身份',hint:'校验 SSID/BSSID 与校园网身份',flag:true,default:'1'},
@@ -142,6 +144,7 @@ export class RouterAdmin {
     const common=document.getElementById('router-service-common')!, more=document.getElementById('router-service-more')!;
     this.maintenance.close();this.controls.forEach(c=>c.close());this.controls.clear();common.replaceChildren();more.replaceChildren();
     for (const definition of fields) {
+      if(definition.key==='auth_stack'&&!this.supports('auth_stack'))continue;
       if(definition.key==='traffic_scope'&&!this.supports('traffic_charts'))continue;
       if (definition.key.startsWith('pushplus_') && !this.supports('pushplus')) continue;
       if(['traffic_monitor','traffic_scope','prefer_remaining_flow'].includes(definition.key)&&!this.supports('device_usage'))continue;
@@ -290,7 +293,8 @@ export class RouterAdmin {
   private editUplink(uplink?:Record<string,string>) {
     const editor=this.createEditor(uplink?'编辑路由上游':'添加路由上游');
     const body=element('div','','router-editor-grid');editor.form.insertBefore(body,editor.fields);
-    const defs:Field[]=[{key:'enabled',label:'启用上游',flag:true,default:'1'}, {key:'network',label:'IPv4 接口'}, {key:'network6',label:'IPv6 接口（留空跟随）'}, {key:'device',label:'IPv4 设备（可选）'}, {key:'device6',label:'IPv6 设备（可选）'}, {key:'source4',label:'IPv4 地址（可选）'}, {key:'source6',label:'IPv6 地址（可选）'}, {key:'transport',label:'上游类型',choices:transport,default:'auto'}, {key:'login_type',label:'认证方式',choices:protocols,default:'auto'}, {key:'expected_ssid',label:'指定 Wi-Fi 名称'}, {key:'expected_bssid',label:'指定 Wi-Fi 地址'}];
+    const defs:Field[]=[{key:'enabled',label:'启用上游',flag:true,default:'1'}, {key:'network',label:'上游网络接口'}, {key:'network6',label:'IPv6 接口（留空跟随）'}, {key:'device',label:'IPv4 设备（可选）'}, {key:'device6',label:'IPv6 设备（可选）'}, {key:'source4',label:'IPv4 地址（可选）'}, {key:'source6',label:'IPv6 地址（可选）'}, {key:'transport',label:'上游类型',choices:transport,default:'auto'}, {key:'login_type',label:'认证方式',choices:protocols,default:'auto'}, {key:'expected_ssid',label:'指定 Wi-Fi 名称'}, {key:'expected_bssid',label:'指定 Wi-Fi 地址'}];
+    if(this.supports('auth_stack'))defs.push({key:'auth_stack',label:'认证地址族',choices:[['','跟随服务设置'],...authStacks]});
     const controls=new Map(defs.map(def=>[def.key,field(body,def,uplink?.[def.key] || def.default || '')]));
     const group=element('fieldset','','router-sync-accounts');group.append(element('legend','自动登录顺序'),element('p','勾选账号并用箭头调整此接口的顺序；不选则跟随账号管理。'));
     const selectedIds=(uplink?.accounts || '').split(/\s+/).filter(Boolean),selected=new Set(selectedIds);

@@ -18,6 +18,7 @@
     "test:browser": "playwright test"
   },
   "dependencies": {
+    "@fluentui/tokens": "^1.0.0-alpha.24",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "~2",
     "@tauri-apps/plugin-barcode-scanner": "^2.4.6",
@@ -32,6 +33,7 @@
     "sortablejs": "^1.15.7"
   },
   "devDependencies": {
+    "@fluentui/svg-icons": "^1.1.347",
     "@playwright/test": "^1.64.1",
     "@tauri-apps/cli": "^2",
     "@types/qrcode": "^1.5.5",

@@ -307,6 +307,22 @@ class NetworkHelper {
                 )
             }
 
+        private fun campusIpv6(link: LinkProperties?): String = link?.linkAddresses
+            ?.firstOrNull { item ->
+                val bytes = item.address.address
+                item.address is java.net.Inet6Address && bytes.size == 16 &&
+                    bytes[0].toInt() == 0x20 && bytes[1].toInt() == 0x01 &&
+                    bytes[2].toInt() == 0x0d && bytes[3] == 0xa8.toByte() &&
+                    bytes[4].toInt() == 0x02 && bytes[5].toInt() == 0x16 &&
+                    ipv6Ready(item)
+            }?.address?.hostAddress?.substringBefore('%').orEmpty()
+
+        private fun ipv6Ready(item: android.net.LinkAddress): Boolean {
+            val unavailable = android.system.OsConstants.IFA_F_DEPRECATED or
+                android.system.OsConstants.IFA_F_TENTATIVE or android.system.OsConstants.IFA_F_DADFAILED
+            return (item.flags and unavailable) == 0
+        }
+
         private fun transportCandidateScore(
             snapshot: PhysicalNetworkSnapshot,
             activeNetwork: Network?
@@ -322,7 +338,8 @@ class NetworkHelper {
             if (snapshot.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
                 score += 5
             }
-            if (usableIpv4(snapshot.linkProperties).isNotEmpty()) score += 2
+            if (usableIpv4(snapshot.linkProperties).isNotEmpty() ||
+                campusIpv6(snapshot.linkProperties).isNotEmpty()) score += 2
             return score
         }
 
@@ -342,7 +359,8 @@ class NetworkHelper {
 
         private fun selectPhysicalSnapshot(
             manager: ConnectivityManager,
-            activeNetwork: Network?
+            activeNetwork: Network?,
+            authStack: String = "auto"
         ): Pair<PhysicalNetworkSnapshot?, PhysicalNetworkSnapshot?> {
             val snapshots = physicalSnapshots(manager)
             val wifi = selectTransportSnapshot(
@@ -355,25 +373,27 @@ class NetworkHelper {
                 activeNetwork,
                 NetworkCapabilities.TRANSPORT_ETHERNET
             )
-            // A campus-wired link is the only valid transport for Type 3 and
-            // should win even while an unrelated Wi-Fi remains associated.
-            // Do not prefer an arbitrary Ethernet adapter: it must carry a
-            // same-Network IPv4 from a known campus range.
-            val campusEthernet = snapshots
-                .asSequence()
-                .filter {
-                    it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-                        && isCampusWiredIpv4(usableIpv4(it.linkProperties))
+            val links = listOfNotNull(wifi, ethernet).filter { link ->
+                usableIpv4(link.linkProperties).isNotEmpty() || campusIpv6(link.linkProperties).isNotEmpty()
+            }
+            val campusLinks = links.filter { link ->
+                isCampusWiredIpv4(usableIpv4(link.linkProperties)) || campusIpv6(link.linkProperties).isNotEmpty()
+            }
+            val candidates = campusLinks.ifEmpty { links }
+            val eligible = candidates.filter { link ->
+                val hasIpv4 = usableIpv4(link.linkProperties).isNotEmpty()
+                val hasIpv6 = campusIpv6(link.linkProperties).isNotEmpty()
+                when (authStack) {
+                    "ipv4" -> hasIpv4
+                    "ipv6" -> hasIpv6
+                    "dual" -> hasIpv4 && hasIpv6
+                    else -> true
                 }
-                .sortedWith(
-                    compareByDescending<PhysicalNetworkSnapshot> {
-                        transportCandidateScore(it, activeNetwork)
-                    }.thenBy { it.network.toString() }
-                )
-                .firstOrNull()
-            val selected = campusEthernet
-                ?: wifi
-                ?: ethernet
+            }.ifEmpty { candidates }
+            val selected = eligible.firstOrNull { it.network == activeNetwork }
+                ?: ethernet?.takeIf { it in eligible }
+                ?: eligible.firstOrNull()
+                ?: wifi ?: ethernet
                 ?: selectTransportSnapshot(
                     snapshots,
                     activeNetwork,
@@ -469,7 +489,7 @@ class NetworkHelper {
         }
 
         @JvmStatic
-        fun getNetworkInfo(context: Context, includeWifiDetails: Boolean): String {
+        fun getNetworkInfo(context: Context, includeWifiDetails: Boolean, authStack: String = "auto"): String {
             try {
                 val appContext = context.applicationContext
                 val connectivityManager = appContext
@@ -485,7 +505,8 @@ class NetworkHelper {
                 // target that Wi-Fi instead of mixing cellular capabilities with wlan0.
                 val (physicalSnapshot, wifiSnapshot) = selectPhysicalSnapshot(
                     connectivityManager,
-                    activeNetwork
+                    activeNetwork,
+                    authStack
                 )
                 val physicalNetwork = physicalSnapshot?.network
                 val wifiNetwork = wifiSnapshot?.network
@@ -515,7 +536,6 @@ class NetworkHelper {
                 val routeBindingRequired = authenticationTransport
                     && physicalNetwork != null
                     && physicalNetwork != activeNetwork
-                    && (!validated || captivePortal)
                 var ssid = ""
                 var bssid = ""
                 var identityFresh = false
@@ -534,8 +554,14 @@ class NetworkHelper {
                     if (!address.isAnyLocalAddress && !address.isLoopbackAddress
                         && !address.isLinkLocalAddress && !address.isMulticastAddress) {
                         if (address is java.net.Inet4Address) ipv4.put(address.hostAddress)
-                        if (address is java.net.Inet6Address) ipv6.put(address.hostAddress?.substringBefore('%'))
+                        if (address is java.net.Inet6Address && ipv6Ready(it)) {
+                            ipv6.put(address.hostAddress?.substringBefore('%'))
+                        }
                     }
+                }
+                if (transport == "ethernet" && (ipString.isNotEmpty() || campusIpv6(physicalLinkProperties).isNotEmpty())) {
+                    identityFresh = true
+                    identityObservedAt = SystemClock.elapsedRealtime()
                 }
 
                 if (includeWifiDetails && transport == "wifi") {
@@ -564,7 +590,8 @@ class NetworkHelper {
                     if (ssid.isEmpty() || bssid.isEmpty()) {
                         wifiIdentityError = "locationPermissionOrServiceUnavailable"
                     }
-                    identityFresh = ssid.isNotEmpty() && bssid.isNotEmpty() && ipString.isNotEmpty()
+                    identityFresh = ssid.isNotEmpty() && bssid.isNotEmpty() &&
+                        (ipString.isNotEmpty() || campusIpv6(physicalLinkProperties).isNotEmpty())
                     if (identityFresh) identityObservedAt = SystemClock.elapsedRealtime()
                 }
                 return JSONObject()
@@ -712,14 +739,14 @@ class NetworkHelper {
             }
         }
 
-        /** IPv4 of the same selected physical Network used by getNetworkInfo(). */
+        /** Address of the same physical Network used by getNetworkInfo(). */
         @JvmStatic
         fun getPhysicalNetworkIp(context: Context): String {
             return try {
                 val manager = context.applicationContext
                     .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val selected = selectPhysicalSnapshot(manager, manager.activeNetwork).first
-                usableIpv4(selected?.linkProperties)
+                usableIpv4(selected?.linkProperties).ifEmpty { campusIpv6(selected?.linkProperties) }
             } catch (_: Exception) {
                 ""
             }

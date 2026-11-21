@@ -5,11 +5,12 @@
 //! credentials may be sent; portal response and trust checks remain separate.
 
 use super::usable_physical_ipv4;
+#[cfg(test)]
 use crate::network_trust::is_campus_local_ip;
 
 /// Type 3 gateways live on 172.30/16, but wired clients use BJUT's regular
 /// campus address ranges. Callers additionally require physical Ethernet.
-#[cfg(any(not(target_os = "android"), test))]
+#[cfg(test)]
 pub(crate) fn is_campus_wired_ipv4(value: &str) -> bool {
     usable_physical_ipv4(value).is_some() && is_campus_local_ip(value)
 }
@@ -45,7 +46,12 @@ pub(crate) fn split_nmcli_fields(line: &str) -> Vec<String> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn macos_route_interface(destination: &str) -> String {
-    macos_read_command("/sbin/route", &["-n", "get", destination])
+    let output = if destination.contains(':') {
+        macos_read_command("/sbin/route", &["-n", "get", "-inet6", destination])
+    } else {
+        macos_read_command("/sbin/route", &["-n", "get", destination])
+    };
+    output
         .lines()
         .find_map(|line| line.trim().strip_prefix("interface:").map(str::trim))
         .unwrap_or_default()
@@ -172,63 +178,4 @@ mod macos_command_tests {
 pub(crate) fn linux_is_physical_interface(interface: &str) -> bool {
     let sysfs = std::path::Path::new("/sys/class/net").join(interface);
     sysfs.join("device").exists()
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn linux_is_physical_ethernet_interface(interface: &str) -> bool {
-    linux_is_physical_interface(interface)
-        && !std::path::Path::new("/sys/class/net")
-            .join(interface)
-            .join("wireless")
-            .exists()
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn linux_route_identity(destination: &str) -> Option<(String, String)> {
-    let output = std::process::Command::new("ip")
-        .args(["-4", "route", "get", destination])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let output = String::from_utf8_lossy(&output.stdout);
-    let fields = output.split_whitespace().collect::<Vec<_>>();
-    let interface = fields
-        .windows(2)
-        .find(|pair| pair[0] == "dev")
-        .map(|pair| pair[1])?;
-    let address = fields
-        .windows(2)
-        .find(|pair| pair[0] == "src")
-        .map(|pair| pair[1])?;
-    (linux_is_physical_interface(interface) && usable_physical_ipv4(address).is_some())
-        .then(|| (interface.to_string(), address.to_string()))
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn linux_campus_wired_identity(excluded_interface: &str) -> Option<(String, String)> {
-    let output = std::process::Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "scope", "global"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            let interface = fields.get(1)?.trim_end_matches(':');
-            if !linux_is_physical_ethernet_interface(interface) || interface == excluded_interface {
-                return None;
-            }
-            let address = fields
-                .windows(2)
-                .find(|pair| pair[0] == "inet")?
-                .get(1)?
-                .split('/')
-                .next()?;
-            is_campus_wired_ipv4(address).then(|| (interface.to_string(), address.to_string()))
-        })
 }

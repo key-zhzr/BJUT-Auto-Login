@@ -47,9 +47,9 @@ function smoothstep(start: number, end: number, value: number) {
 function createNormalMap(width: number, height: number, profile: LensProfile) {
   const cssW = Math.max(2, Math.round(width));
   const cssH = Math.max(2, Math.round(height));
-  // Supersample 2x so curved gradients remain free of staircase quantization on HiDPI screens.
-  const rw = cssW * 2;
-  const rh = cssH * 2;
+  // Match CSS pixel grid so normal-map feImage stays light over GPU compositor IPC.
+  const rw = cssW;
+  const rh = cssH;
 
   const canvas = document.createElement('canvas');
   canvas.width = rw;
@@ -81,9 +81,9 @@ function createNormalMap(width: number, height: number, profile: LensProfile) {
   peak ||= 1;
 
   for (let y = 0; y < rh; y++) {
-    const py = (y + 0.5) / 2 - cssH / 2;
+    const py = y + 0.5 - cssH / 2;
     for (let x = 0; x < rw; x++) {
-      const px = (x + 0.5) / 2 - cssW / 2;
+      const px = x + 0.5 - cssW / 2;
       const nx = Math.sign(px) * Math.max(0, Math.abs(px) - straightX);
       const ny = Math.sign(py) * Math.max(0, Math.abs(py) - straightY);
       const dist = Math.hypot(nx, ny);
@@ -113,37 +113,6 @@ function createNormalMap(width: number, height: number, profile: LensProfile) {
 }
 
 let filterDefs: SVGDefsElement | undefined;
-const keepAliveProbes = new Map<string, HTMLElement>();
-
-function keepBackdropFilterWarm(filterId: string, filterUrl: string) {
-  let probe = keepAliveProbes.get(filterId);
-  if (!probe || !probe.isConnected) {
-    probe?.remove();
-    probe = document.createElement('div');
-    probe.setAttribute('aria-hidden', 'true');
-    probe.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;border-radius:1px;opacity:0.001;pointer-events:none;z-index:1;contain:strict';
-    document.body.append(probe);
-    keepAliveProbes.set(filterId, probe);
-  }
-  probe.style.setProperty('-webkit-backdrop-filter', filterUrl);
-  probe.style.backdropFilter = filterUrl;
-}
-
-export function clearDockGlassProbes(host?: HTMLElement) {
-  if (host) {
-    const name = host.id === 'nav' ? 'main' : 'billing';
-    for (const id of [`dock-${name}-glass`, `dock-${name}-lens`]) {
-      const probe = keepAliveProbes.get(id);
-      if (probe) {
-        probe.remove();
-        keepAliveProbes.delete(id);
-      }
-    }
-    return;
-  }
-  for (const probe of keepAliveProbes.values()) probe.remove();
-  keepAliveProbes.clear();
-}
 
 function updateLens(id: string, width: number, height: number, profile: LensProfile): 'updated' | 'cached' | 'failed' {
   const w = Math.round(width);
@@ -274,20 +243,12 @@ export function updateDockGlass(host: HTMLElement, dock: DOMRect, lensWidth: num
   const surface = `dock-${name}-glass`;
   const surfaceResult = updateLens(surface, dock.width, dock.height, barProfile);
   if (surfaceResult !== 'failed') {
-    const surfaceUrl = `url("#${surface}")`;
-    host.style.setProperty('--dock-backdrop', surfaceUrl);
-    if (!document.hidden) {
-      keepBackdropFilterWarm(surface, surfaceUrl);
-    }
+    host.style.setProperty('--dock-backdrop', `url("#${surface}")`);
   }
 
   const lens = `dock-${name}-lens`;
   const lensResult = updateLens(lens, lensWidth, lensHeight, dropletProfile);
   if (lensResult !== 'failed') {
-    const lensUrl = `url("#${lens}")`;
-    host.style.setProperty('--dock-lens-backdrop', lensUrl);
-    if (!document.hidden) {
-      keepBackdropFilterWarm(lens, lensUrl);
-    }
+    host.style.setProperty('--dock-lens-backdrop', `url("#${lens}")`);
   }
 }

@@ -23,19 +23,22 @@
   --win-space-6: 24px;
   --win-space-8: 32px;
 
-  /* Fluent motion */
-  --win-duration-fast: 83ms;
-  --win-duration-normal: 167ms;
+  /* Fluent 2 motion & shadow fallbacks (overridden by @fluentui/tokens at runtime) */
+  --win-duration-fast: 100ms;
+  --win-duration-normal: 200ms;
   --win-duration-slow: 250ms;
-  --win-ease-enter: cubic-bezier(0, 0, 0, 1);
-  --win-ease-exit: cubic-bezier(1, 0, 1, 1);
+  --win-ease-enter: cubic-bezier(0.1, 0.9, 0.2, 1);
+  --win-ease-exit: cubic-bezier(0.9, 0.1, 1, 0.2);
   --win-ease-standard: cubic-bezier(0.33, 0, 0.67, 1);
 
-  /* Accent fallbacks; a supported WebView receives the generated ramp below. */
+  /* Accent fallbacks; when WinUI is active, @fluentui/tokens populates the full BrandVariants ramp on :root. */
   --win-accent-fill-rest: var(--accent-color);
   --win-accent-fill-hover: var(--accent-hover);
   --win-accent-fill-pressed: var(--accent-hover);
+  --win-accent-fill-selected: var(--accent-hover);
   --win-accent-fill-disabled: var(--accent-color);
+  --win-accent-text-primary: var(--accent-color);
+  --win-accent-on-fill: #ffffff;
 
   /* Preserve the public theme API while using WinUI geometry. */
   --theme-card-radius: var(--win-radius-card);
@@ -72,11 +75,14 @@
   --win-pane-fill: rgba(255, 255, 255, 0.018);
   --win-layer-fill: rgba(255, 255, 255, 0.032);
   --win-layer-fill-alt: rgba(255, 255, 255, 0.045);
-  --win-card-fill: rgba(255, 255, 255, 0.055);
-  --win-card-fill-secondary: rgba(255, 255, 255, 0.034);
-  --win-flyout-fill: rgba(44, 44, 44, 0.88);
+  --win-card-fill: rgba(255, 255, 255, 0.0512);
+  --win-card-fill-secondary: rgba(255, 255, 255, 0.0326);
+  --win-card-stroke: rgba(0, 0, 0, 0.14);
+  --win-surface-stroke-flyout: rgba(0, 0, 0, 0.20);
+  --win-flyout-fill: rgba(44, 44, 44, 0.92);
   --win-flyout-solid: #2c2c2c;
   --win-dialog-fill: #2c2c2c;
+  --win-dialog-footer-fill: #202020;
   --win-smoke-fill: rgba(0, 0, 0, 0.56);
 
   --win-text-primary: rgba(255, 255, 255, 0.956);
@@ -84,22 +90,49 @@
   --win-text-tertiary: rgba(255, 255, 255, 0.544);
   --win-text-disabled: rgba(255, 255, 255, 0.362);
 
+  --win-subtle-fill-hover: rgba(255, 255, 255, 0.0605);
+  --win-subtle-fill-pressed: rgba(255, 255, 255, 0.0419);
+
   --win-control-fill-rest: rgba(255, 255, 255, 0.0605);
-  --win-control-fill-hover: rgba(255, 255, 255, 0.092);
-  --win-control-fill-pressed: rgba(255, 255, 255, 0.125);
-  --win-control-fill-disabled: rgba(255, 255, 255, 0.0303);
-  --win-control-stroke-rest: rgba(255, 255, 255, 0.105);
+  --win-control-fill-hover: rgba(255, 255, 255, 0.0837);
+  --win-control-fill-pressed: rgba(255, 255, 255, 0.0326);
+  --win-control-fill-input-active: rgba(30, 30, 30, 0.70);
+  --win-control-fill-disabled: rgba(255, 255, 255, 0.0419);
+
+  /* ControlElevationBorderBrush & TextControlElevationBorderBrush (Dark) */
+  --win-control-stroke-top: rgba(255, 255, 255, 0.093);
+  --win-control-stroke-rest: rgba(255, 255, 255, 0.0698);
+  --win-control-stroke-bottom: rgba(255, 255, 255, 0.0698);
   --win-control-stroke-strong: rgba(255, 255, 255, 0.19);
+  --win-control-stroke-input-bottom: rgba(255, 255, 255, 0.5442);
+  --win-accent-stroke-top: rgba(255, 255, 255, 0.08);
+  --win-accent-stroke-bottom: rgba(0, 0, 0, 0.14);
   --win-divider-stroke: rgba(255, 255, 255, 0.083);
   --win-focus-outer: #ffffff;
   --win-focus-inner: #000000;
 
+  --win-status-success-bg: rgba(16, 124, 16, 0.18);
+  --win-status-success-fg: #6ccb5f;
+  --win-status-success-border: rgba(108, 203, 95, 0.35);
+  --win-status-warning-bg: rgba(252, 225, 0, 0.14);
+  --win-status-warning-fg: #fce100;
+  --win-status-warning-border: rgba(252, 225, 0, 0.32);
+  --win-status-danger-bg: rgba(196, 43, 28, 0.22);
+  --win-status-danger-fg: #ff99a4;
+  --win-status-danger-border: rgba(255, 153, 164, 0.35);
+  --win-status-info-bg: rgba(255, 255, 255, 0.06);
+  --win-status-info-fg: var(--win-accent-text-primary);
+  --win-status-info-border: rgba(255, 255, 255, 0.14);
+
+  --win-shadow-card:
+    0 0 2px rgba(0, 0, 0, 0.24),
+    0 1px 2px rgba(0, 0, 0, 0.28);
   --win-shadow-flyout:
-    0 8px 20px rgba(0, 0, 0, 0.34),
-    0 2px 6px rgba(0, 0, 0, 0.28);
+    0 8px 16px rgba(0, 0, 0, 0.28),
+    0 0 2px rgba(0, 0, 0, 0.24);
   --win-shadow-dialog:
-    0 24px 48px rgba(0, 0, 0, 0.42),
-    0 2px 8px rgba(0, 0, 0, 0.3);
+    0 32px 64px rgba(0, 0, 0, 0.36),
+    0 0 8px rgba(0, 0, 0, 0.28);
 
   --theme-bg: var(--win-mica-base);
   --theme-body-bg: var(--win-mica-base);
@@ -126,36 +159,66 @@
 
   --win-mica-base: #f3f3f3;
   --win-pane-fill: rgba(255, 255, 255, 0.32);
-  --win-layer-fill: rgba(255, 255, 255, 0.48);
-  --win-layer-fill-alt: rgba(255, 255, 255, 0.62);
-  --win-card-fill: rgba(255, 255, 255, 0.72);
-  --win-card-fill-secondary: rgba(255, 255, 255, 0.46);
-  --win-flyout-fill: rgba(252, 252, 252, 0.88);
+  --win-layer-fill: rgba(255, 255, 255, 0.5);
+  --win-layer-fill-alt: rgba(255, 255, 255, 0.68);
+  --win-card-fill: rgba(255, 255, 255, 0.70);
+  --win-card-fill-secondary: rgba(246, 246, 246, 0.56);
+  --win-card-stroke: rgba(0, 0, 0, 0.0578);
+  --win-surface-stroke-flyout: rgba(0, 0, 0, 0.0578);
+  --win-flyout-fill: rgba(252, 252, 252, 0.92);
   --win-flyout-solid: #fcfcfc;
   --win-dialog-fill: #ffffff;
-  --win-smoke-fill: rgba(0, 0, 0, 0.32);
+  --win-dialog-footer-fill: #f3f3f3;
+  --win-smoke-fill: rgba(0, 0, 0, 0.30);
 
-  --win-text-primary: rgba(0, 0, 0, 0.895);
-  --win-text-secondary: rgba(0, 0, 0, 0.606);
-  --win-text-tertiary: rgba(0, 0, 0, 0.445);
-  --win-text-disabled: rgba(0, 0, 0, 0.361);
+  --win-text-primary: rgba(0, 0, 0, 0.8956);
+  --win-text-secondary: rgba(0, 0, 0, 0.6063);
+  --win-text-tertiary: rgba(0, 0, 0, 0.4458);
+  --win-text-disabled: rgba(0, 0, 0, 0.3614);
 
-  --win-control-fill-rest: rgba(255, 255, 255, 0.72);
-  --win-control-fill-hover: rgba(255, 255, 255, 0.88);
-  --win-control-fill-pressed: rgba(255, 255, 255, 0.98);
-  --win-control-fill-disabled: rgba(255, 255, 255, 0.42);
-  --win-control-stroke-rest: rgba(0, 0, 0, 0.105);
+  --win-subtle-fill-hover: rgba(0, 0, 0, 0.0373);
+  --win-subtle-fill-pressed: rgba(0, 0, 0, 0.0241);
+
+  --win-control-fill-rest: rgba(255, 255, 255, 0.70);
+  --win-control-fill-hover: rgba(249, 249, 249, 0.50);
+  --win-control-fill-pressed: rgba(249, 249, 249, 0.30);
+  --win-control-fill-input-active: #ffffff;
+  --win-control-fill-disabled: rgba(249, 249, 249, 0.30);
+
+  /* ControlElevationBorderBrush & TextControlElevationBorderBrush (Light) */
+  --win-control-stroke-top: rgba(0, 0, 0, 0.0578);
+  --win-control-stroke-rest: rgba(0, 0, 0, 0.0578);
+  --win-control-stroke-bottom: rgba(0, 0, 0, 0.1622);
   --win-control-stroke-strong: rgba(0, 0, 0, 0.19);
-  --win-divider-stroke: rgba(0, 0, 0, 0.083);
+  --win-control-stroke-input-bottom: rgba(0, 0, 0, 0.4458);
+  --win-accent-stroke-top: rgba(255, 255, 255, 0.08);
+  --win-accent-stroke-bottom: rgba(0, 0, 0, 0.40);
+  --win-divider-stroke: rgba(0, 0, 0, 0.0578);
   --win-focus-outer: #000000;
   --win-focus-inner: #ffffff;
 
+  --win-status-success-bg: #dff6dd;
+  --win-status-success-fg: #0f7b0f;
+  --win-status-success-border: rgba(15, 123, 15, 0.25);
+  --win-status-warning-bg: #fff4ce;
+  --win-status-warning-fg: #9d5d00;
+  --win-status-warning-border: rgba(157, 93, 0, 0.25);
+  --win-status-danger-bg: #fde7e9;
+  --win-status-danger-fg: #c42b1c;
+  --win-status-danger-border: rgba(196, 43, 28, 0.25);
+  --win-status-info-bg: rgba(0, 0, 0, 0.03);
+  --win-status-info-fg: var(--win-accent-text-primary);
+  --win-status-info-border: rgba(0, 0, 0, 0.09);
+
+  --win-shadow-card:
+    0 0 2px rgba(0, 0, 0, 0.12),
+    0 1px 2px rgba(0, 0, 0, 0.14);
   --win-shadow-flyout:
-    0 8px 20px rgba(0, 0, 0, 0.14),
-    0 2px 6px rgba(0, 0, 0, 0.09);
+    0 8px 16px rgba(0, 0, 0, 0.14),
+    0 0 2px rgba(0, 0, 0, 0.12);
   --win-shadow-dialog:
-    0 24px 48px rgba(0, 0, 0, 0.2),
-    0 2px 8px rgba(0, 0, 0, 0.1);
+    0 32px 64px rgba(0, 0, 0, 0.18),
+    0 0 8px rgba(0, 0, 0, 0.12);
 
   --theme-bg: var(--win-mica-base);
   --theme-body-bg: var(--win-mica-base);
@@ -210,9 +273,14 @@
   content: none !important;
 }
 
-/* Optional hook for a native Windows system backdrop supplied by the host. */
+/* Native Windows 11 DWM Mica supplied by the Rust host. */
+:root[data-theme="winui"]:has(> body.has-native-system-backdrop),
 :root[data-theme="winui"] body.has-native-system-backdrop {
   background: transparent !important;
+}
+
+:root[data-theme="winui"] body.has-native-system-backdrop nav {
+  background: transparent;
 }
 
 :root[data-theme="winui"] .app-container,
@@ -229,6 +297,13 @@
   box-shadow: none;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+
+:root[data-theme="winui"] .fluent-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+  stroke: none;
 }
 
 :root[data-theme="winui"] .titlebar {
@@ -310,11 +385,11 @@
 :root[data-theme="winui"] .settings-about-card,
 :root[data-theme="winui"] .billing-center-panel,
 :root[data-theme="winui"] .billing-summary-card {
-  border: 1px solid var(--win-divider-stroke);
+  border: 1px solid var(--win-card-stroke);
   border-radius: var(--win-radius-card);
   background: var(--win-card-fill);
   background-image: none;
-  box-shadow: none;
+  box-shadow: var(--win-shadow-card);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -332,7 +407,7 @@
   .permission-health-row,
   .network-profile-row
 ) {
-  border-color: var(--win-divider-stroke);
+  border-color: var(--win-card-stroke);
   border-radius: var(--win-radius-control);
   background: var(--win-card-fill-secondary);
   box-shadow: none;
@@ -478,7 +553,7 @@
   ):hover {
     color: var(--win-text-primary);
     border-color: transparent;
-    background: var(--win-control-fill-hover);
+    background: var(--win-subtle-fill-hover);
   }
 }
 
@@ -486,7 +561,7 @@
 :root[data-theme="winui"] .nav-tree-link:active,
 :root[data-theme="winui"] .billing-section-nav-button:active:not(:disabled) {
   color: var(--win-text-secondary);
-  background: var(--win-control-fill-pressed);
+  background: var(--win-subtle-fill-pressed);
 }
 
 :root[data-theme="winui"] .nav-item.active,
@@ -494,7 +569,7 @@
 :root[data-theme="winui"] .billing-section-nav-button.active {
   color: var(--win-text-primary);
   border-color: transparent;
-  background: var(--win-control-fill-hover);
+  background: var(--win-subtle-fill-hover);
   box-shadow: none;
 }
 
@@ -508,9 +583,22 @@
   width: 3px;
   height: 16px;
   border-radius: 2px;
-  background: var(--win-accent-fill-rest);
-  transform: translateY(-50%);
+  background: var(--win-accent-text-primary, var(--win-accent-fill-rest));
+  transform: translateY(-50%) scaleY(1);
+  transform-origin: center;
+  animation: winui-nav-indicator-in var(--win-duration-normal) var(--win-ease-enter);
   content: "";
+}
+
+@keyframes winui-nav-indicator-in {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) scaleY(0.25);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) scaleY(1);
+  }
 }
 
 @media (min-width: 769px) {
@@ -539,7 +627,7 @@
 }
 
 :root[data-theme="winui"] .settings-nav-item {
-  border: 1px solid var(--win-divider-stroke);
+  border: 1px solid var(--win-card-stroke);
   border-radius: var(--win-radius-control);
   background: var(--win-card-fill-secondary);
 }
@@ -609,11 +697,12 @@
   min-height: var(--win-control-height);
   padding: 5px var(--win-space-3);
   border: 1px solid var(--win-control-stroke-rest);
-  border-bottom-color: var(--win-control-stroke-strong);
+  border-top-color: var(--win-control-stroke-top, var(--win-control-stroke-rest));
+  border-bottom-color: var(--win-control-stroke-bottom, var(--win-control-stroke-strong));
   border-radius: var(--win-radius-control);
   color: var(--win-text-primary);
   background: var(--win-control-fill-rest);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: none;
   font-size: 14px;
   font-weight: 600;
   line-height: 20px;
@@ -627,9 +716,11 @@
 @media (hover: hover) and (pointer: fine) {
   :root[data-theme="winui"] body:not(.is-android) .btn:hover:not(:disabled) {
     color: var(--win-text-primary);
-    border-color: var(--win-control-stroke-strong);
+    border-color: var(--win-control-stroke-rest);
+    border-top-color: var(--win-control-stroke-top, var(--win-control-stroke-strong));
+    border-bottom-color: var(--win-control-stroke-bottom, var(--win-control-stroke-strong));
     background: var(--win-control-fill-hover);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    box-shadow: none;
     transform: none;
   }
 }
@@ -644,26 +735,28 @@
 }
 
 :root[data-theme="winui"] .btn-primary {
-  color: var(--accent-contrast);
-  border-color: transparent;
-  border-bottom-color: rgba(0, 0, 0, 0.28);
+  color: var(--win-accent-on-fill, var(--accent-contrast));
+  border-color: var(--win-accent-stroke-top, transparent);
+  border-bottom-color: var(--win-accent-stroke-bottom, rgba(0, 0, 0, 0.28));
   background: var(--win-accent-fill-rest);
   box-shadow: none;
 }
 
 @media (hover: hover) and (pointer: fine) {
   :root[data-theme="winui"] body:not(.is-android) .btn-primary:hover:not(:disabled) {
-    color: var(--accent-contrast);
-    border-color: transparent;
+    color: var(--win-accent-on-fill, var(--accent-contrast));
+    border-color: var(--win-accent-stroke-top, transparent);
+    border-bottom-color: var(--win-accent-stroke-bottom, rgba(0, 0, 0, 0.28));
     background: var(--win-accent-fill-hover);
   }
 }
 
 :root[data-theme="winui"] .btn-primary:active:not(:disabled) {
-  color: var(--accent-contrast);
+  color: var(--win-accent-on-fill, var(--accent-contrast));
   border-color: transparent;
   background: var(--win-accent-fill-pressed);
   filter: none;
+  transform: none;
 }
 
 :root[data-theme="winui"] .btn:disabled,
@@ -679,6 +772,7 @@
 :root[data-theme="winui"] .btn-primary:disabled,
 :root[data-theme="winui"] .btn-primary[aria-disabled="true"] {
   color: var(--win-text-disabled);
+  border-color: transparent;
   background: var(--win-accent-fill-disabled);
 }
 
@@ -703,7 +797,7 @@
 ) {
   min-height: var(--win-control-height);
   border: 1px solid var(--win-control-stroke-rest);
-  border-bottom-color: var(--win-control-stroke-strong);
+  border-bottom-color: var(--win-control-stroke-input-bottom, var(--win-control-stroke-strong));
   border-radius: var(--win-radius-control);
   color: var(--win-text-primary);
   background: var(--win-control-fill-rest);
@@ -748,7 +842,8 @@
     .traffic-dates input,
     .custom-select-trigger
   ):hover:not(:disabled) {
-    border-color: var(--win-control-stroke-strong);
+    border-color: var(--win-control-stroke-rest);
+    border-bottom-color: var(--win-control-stroke-input-bottom, var(--win-control-stroke-strong));
     background: var(--win-control-fill-hover);
   }
 }
@@ -776,17 +871,17 @@
 :root[data-theme="winui"] .traffic-field select:focus,
 :root[data-theme="winui"] .traffic-dates input:focus,
 :root[data-theme="winui"] .custom-select.open .custom-select-trigger {
-  border-color: var(--win-control-stroke-strong);
-  border-bottom-color: var(--win-accent-fill-rest);
+  border-color: var(--win-control-stroke-rest);
+  border-bottom-color: var(--win-accent-text-primary, var(--win-accent-fill-rest));
   outline: none;
-  background: var(--win-control-fill-rest);
-  box-shadow: inset 0 -2px 0 var(--win-accent-fill-rest);
+  background: var(--win-control-fill-input-active, var(--win-control-fill-rest));
+  box-shadow: inset 0 -2px 0 var(--win-accent-text-primary, var(--win-accent-fill-rest));
 }
 
 :root[data-theme="winui"] .custom-select-options {
   top: calc(100% + var(--win-space-1));
   padding: var(--win-space-1);
-  border: 1px solid var(--win-control-stroke-rest);
+  border: 1px solid var(--win-surface-stroke-flyout, var(--win-control-stroke-rest));
   border-radius: var(--win-radius-overlay);
   color: var(--win-text-primary);
   background: var(--win-flyout-fill);
@@ -827,25 +922,25 @@
 @media (hover: hover) and (pointer: fine) {
   :root[data-theme="winui"] body:not(.is-android) .custom-option:hover {
     color: var(--win-text-primary);
-    background: var(--win-control-fill-hover);
+    background: var(--win-subtle-fill-hover, var(--win-control-fill-hover));
   }
 }
 
 :root[data-theme="winui"] .custom-option.is-focused,
 :root[data-theme="winui"] .custom-option:focus-visible {
   color: var(--win-text-primary);
-  background: var(--win-control-fill-hover);
+  background: var(--win-subtle-fill-hover, var(--win-control-fill-hover));
 }
 
 :root[data-theme="winui"] .custom-option:active {
   color: var(--win-text-secondary);
-  background: var(--win-control-fill-pressed);
+  background: var(--win-subtle-fill-pressed, var(--win-control-fill-pressed));
 }
 
 :root[data-theme="winui"] .custom-option.selected {
   color: var(--win-text-primary);
   border-color: transparent;
-  background: var(--win-control-fill-hover);
+  background: var(--win-subtle-fill-hover, var(--win-control-fill-hover));
   font-weight: 400;
 }
 
@@ -856,7 +951,7 @@
   width: 3px;
   height: 16px;
   border-radius: 2px;
-  background: var(--win-accent-fill-rest);
+  background: var(--win-accent-text-primary, var(--win-accent-fill-rest));
   transform: translateY(-50%);
   content: "";
 }
@@ -876,26 +971,43 @@
 }
 
 :root[data-theme="winui"] .slider::before {
-  bottom: 3px;
+  top: 50%;
+  bottom: auto;
   left: 3px;
   width: 12px;
   height: 12px;
+  border-radius: 999px;
   background: var(--win-text-secondary);
+  transform: translate(0, -50%);
   transition:
+    left var(--win-duration-fast) linear,
     width var(--win-duration-fast) linear,
+    height var(--win-duration-fast) linear,
     background-color var(--win-duration-fast) linear,
     transform var(--win-duration-normal) var(--win-ease-enter);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  :root[data-theme="winui"] body:not(.is-android) .switch:hover .slider::before {
+  :root[data-theme="winui"] body:not(.is-android) .switch:hover input:not(:disabled) + .slider::before {
+    left: 2px;
     width: 14px;
+    height: 14px;
   }
 
-  :root[data-theme="winui"] body:not(.is-android) .switch:hover input:checked + .slider {
+  :root[data-theme="winui"] body:not(.is-android) .switch:hover input:not(:checked):not(:disabled) + .slider {
+    background: var(--win-subtle-fill-hover, var(--win-control-fill-hover));
+  }
+
+  :root[data-theme="winui"] body:not(.is-android) .switch:hover input:checked:not(:disabled) + .slider {
     border-color: var(--win-accent-fill-hover);
     background: var(--win-accent-fill-hover);
   }
+}
+
+:root[data-theme="winui"] .switch:active input:not(:disabled) + .slider::before {
+  left: 2px;
+  width: 17px;
+  height: 14px;
 }
 
 :root[data-theme="winui"] input:checked + .slider {
@@ -904,13 +1016,17 @@
 }
 
 :root[data-theme="winui"] input:checked + .slider::before {
-  background: var(--accent-contrast);
-  transform: translateX(20px);
+  background: var(--win-accent-on-fill, var(--accent-contrast));
+  transform: translate(20px, -50%);
+}
+
+:root[data-theme="winui"] .switch:active input:checked:not(:disabled) + .slider::before {
+  transform: translate(17px, -50%);
 }
 
 :root[data-theme="winui"] body .switch.is-dragging input + .slider::before,
 :root[data-theme="winui"] body .switch.is-dragging input + .slider:before {
-  transform: translateX(var(--switch-drag-x, 0px)) !important;
+  transform: translate(var(--switch-drag-x, 0px), -50%) !important;
   transition: none !important;
 }
 
@@ -975,7 +1091,9 @@
 }
 
 :root[data-theme="winui"] .modal-content {
-  border: 1px solid var(--win-control-stroke-rest);
+  --win-modal-pad: 24px;
+  padding: var(--win-modal-pad);
+  border: 1px solid var(--win-surface-stroke-flyout, var(--win-control-stroke-rest));
   border-radius: var(--win-radius-overlay);
   color: var(--win-text-primary);
   background: var(--win-dialog-fill);
@@ -995,6 +1113,24 @@
 :root[data-theme="winui"] .modal-actions {
   gap: var(--win-space-2);
   margin-top: var(--win-space-6);
+}
+
+:root[data-theme="winui"] :is(
+  .modal-content > .modal-actions:last-child,
+  .modal-content > form:last-child > .modal-actions:last-child
+) {
+  gap: var(--win-space-2);
+  margin: var(--win-space-6) calc(var(--win-modal-pad) * -1) calc(var(--win-modal-pad) * -1);
+  padding: var(--win-space-4) var(--win-modal-pad);
+  border-top: 1px solid var(--win-divider-stroke);
+  border-radius: 0 0 calc(var(--win-radius-overlay) - 1px) calc(var(--win-radius-overlay) - 1px);
+  background: var(--win-dialog-footer-fill);
+}
+
+@media (max-width: 480px) {
+  :root[data-theme="winui"] .modal-content {
+    --win-modal-pad: 18px;
+  }
 }
 
 :root[data-theme="winui"] .page.active:not(.page-slide-from-right):not(.page-slide-from-left) {
@@ -1261,6 +1397,70 @@
 }
 
 /* -------------------------------------------------------------------------- */
+/* Fluent semantic status & badge tokens                                      */
+/* -------------------------------------------------------------------------- */
+
+:root[data-theme="winui"] .account-health-badge.healthy {
+  color: var(--win-status-success-fg);
+  border-color: var(--win-status-success-border);
+  background: var(--win-status-success-bg);
+}
+
+:root[data-theme="winui"] .account-health-badge.cooling_down {
+  color: var(--win-status-info-fg);
+  border-color: var(--win-status-info-border);
+  background: var(--win-status-info-bg);
+}
+
+:root[data-theme="winui"] .account-health-badge.degraded {
+  color: var(--win-status-warning-fg);
+  border-color: var(--win-status-warning-border);
+  background: var(--win-status-warning-bg);
+}
+
+:root[data-theme="winui"] .account-health-badge.needs_attention {
+  color: var(--win-status-danger-fg);
+  border-color: var(--win-status-danger-border);
+  background: var(--win-status-danger-bg);
+}
+
+:root[data-theme="winui"] .diagnostic-kv-val.is-ok {
+  color: var(--win-status-success-fg);
+}
+
+:root[data-theme="winui"] .diagnostic-kv-val.is-warn {
+  color: var(--win-status-warning-fg);
+}
+
+:root[data-theme="winui"] .diagnostic-kv-val.is-error {
+  color: var(--win-status-danger-fg);
+}
+
+:root[data-theme="winui"] .diagnostic-step.success .diagnostic-step-marker {
+  color: var(--win-status-success-fg);
+  border-color: var(--win-status-success-border);
+  background: var(--win-status-success-bg);
+}
+
+:root[data-theme="winui"] .diagnostic-step.warning .diagnostic-step-marker {
+  color: var(--win-status-warning-fg);
+  border-color: var(--win-status-warning-border);
+  background: var(--win-status-warning-bg);
+}
+
+:root[data-theme="winui"] .diagnostic-step.error .diagnostic-step-marker {
+  color: var(--win-status-danger-fg);
+  border-color: var(--win-status-danger-border);
+  background: var(--win-status-danger-bg);
+}
+
+:root[data-theme="winui"] .update-meta-chip.is-accent {
+  color: var(--win-accent-text-primary, var(--win-accent-fill-rest));
+  border-color: var(--win-accent-stroke-subtle, var(--win-divider-stroke));
+  background: var(--win-accent-fill-subtle, var(--win-subtle-fill-hover));
+}
+
+/* -------------------------------------------------------------------------- */
 /* Accessibility preferences                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -1299,7 +1499,10 @@
     .settings-home-enter,
     .settings-subpage-enter,
     .diagnostic-step-enter
-  ) {
+  ),
+  :root[data-theme="winui"] .nav-item.active::before,
+  :root[data-theme="winui"] .nav-tree-link.active::before,
+  :root[data-theme="winui"] .billing-section-nav-button.active::before {
     animation: none !important;
   }
 

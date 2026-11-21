@@ -221,7 +221,8 @@ assert.match(relaySessionUrl.pathname, /^\/p\/[0-9A-Za-z_-]+$/);
 assert.equal(relaySessionUrl.search, '');
 assert.equal(relaySessionUrl.hash, '');
 
-assert.equal(normalizeAppTheme('Apple OS 26'), 'apple27');
+assert.equal(normalizeAppTheme('Apple OS 26'), 'basic');
+assert.equal(normalizeAppTheme('apple27'), 'basic');
 assert.equal(normalizeAppTheme('windows'), 'winui');
 assert.equal(normalizeAppTheme('unsupported-theme'), 'basic');
 assert.equal(normalizeAccentColor('orange'), 'orange');
@@ -311,11 +312,21 @@ const darkAppleBootstrap = runThemeBootstrap({
   bjut_color_mode: 'system',
   bjut_accent_color: 'violet',
 }, true);
-assert.equal(darkAppleBootstrap.dataset.theme, 'apple27');
+assert.equal(darkAppleBootstrap.dataset.theme, 'basic');
 assert.equal(darkAppleBootstrap.dataset.colorScheme, 'dark');
 assert.equal(darkAppleBootstrap.dataset.accent, 'violet');
 assert.equal(darkAppleBootstrap.style.values['--accent-color'], '#8b7cf6');
-assert.equal(darkAppleBootstrap.meta, '#000000');
+assert.equal(darkAppleBootstrap.meta, '#0f172a');
+
+const darkWinuiBootstrap = runThemeBootstrap({
+  bjut_theme: 'winui',
+  bjut_color_mode: 'system',
+  bjut_accent_color: 'blue',
+}, true);
+assert.equal(darkWinuiBootstrap.dataset.theme, 'winui');
+assert.equal(darkWinuiBootstrap.dataset.colorScheme, 'dark');
+assert.equal(darkWinuiBootstrap.dataset.accent, 'blue');
+assert.equal(darkWinuiBootstrap.meta, '#202020');
 
 const fallbackBootstrap = runThemeBootstrap({
   bjut_theme: 'removed-theme',

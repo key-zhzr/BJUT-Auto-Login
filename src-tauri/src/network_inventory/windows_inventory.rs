@@ -2,14 +2,40 @@ use super::NetworkAdapter;
 use std::mem::size_of;
 use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
-    GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST,
-    GAA_FLAG_SKIP_MULTICAST, IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_SOFTWARE_LOOPBACK,
-    IP_ADAPTER_ADDRESSES_LH,
+    FreeMibTable, GetAdaptersAddresses, GetIpForwardTable2, GAA_FLAG_INCLUDE_GATEWAYS,
+    GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_MULTICAST, IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211,
+    IF_TYPE_SOFTWARE_LOOPBACK, IP_ADAPTER_ADDRESSES_LH, MIB_IPFORWARD_TABLE2,
 };
 use windows::Win32::NetworkManagement::Ndis::{IfOperStatusUnknown, IfOperStatusUp};
 use windows::Win32::Networking::WinSock::{
     IpDadStatePreferred, AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_IN, SOCKADDR_IN6,
 };
+
+fn default_route_metrics() -> std::collections::HashMap<(u64, bool), u32> {
+    let mut table = std::ptr::null_mut::<MIB_IPFORWARD_TABLE2>();
+    let mut metrics = std::collections::HashMap::new();
+    // SAFETY: the API owns the returned array of NumEntries rows until FreeMibTable.
+    unsafe {
+        if GetIpForwardTable2(AF_UNSPEC, &mut table) == NO_ERROR && !table.is_null() {
+            let rows = std::ptr::addr_of!((*table).Table).cast();
+            let rows: &[windows::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2] =
+                std::slice::from_raw_parts(rows, (*table).NumEntries as usize);
+            for row in rows
+                .iter()
+                .filter(|row| row.DestinationPrefix.PrefixLength == 0)
+            {
+                let key = (
+                    row.InterfaceLuid.Value,
+                    row.DestinationPrefix.Prefix.si_family == AF_INET6,
+                );
+                let value = metrics.entry(key).or_insert(row.Metric);
+                *value = (*value).min(row.Metric);
+            }
+            FreeMibTable(table.cast());
+        }
+    }
+    metrics
+}
 
 pub(super) fn adapters() -> Vec<NetworkAdapter> {
     let flags = GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST;
@@ -34,6 +60,7 @@ pub(super) fn adapters() -> Vec<NetworkAdapter> {
             return Vec::new();
         }
         let mut entries = Vec::new();
+        let metrics = default_route_metrics();
         let mut ptr = first;
         while !ptr.is_null() {
             // SAFETY: all adapter/address pointers are owned by storage.
@@ -73,6 +100,17 @@ pub(super) fn adapters() -> Vec<NetworkAdapter> {
                 .to_string(),
                 connected: record.OperStatus == IfOperStatusUp,
                 selectable: physical,
+                route_metrics: [false, true].map(|ipv6| {
+                    let metric = if ipv6 {
+                        record.Ipv6Metric
+                    } else {
+                        record.Ipv4Metric
+                    };
+                    metrics
+                        .get(&(unsafe { record.Luid.Value }, ipv6))
+                        .map(|route| route.saturating_add(metric))
+                        .or(Some(u32::MAX / 2 + metric.min(u32::MAX / 2)))
+                }),
                 ..Default::default()
             };
             let mut address_ptr = record.FirstUnicastAddress;

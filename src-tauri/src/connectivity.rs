@@ -1,6 +1,6 @@
 //! Share one read-only probe run across diagnostics, polling and login verification.
 //! Results are scoped to the network and invalidated before authentication changes.
-use crate::{dual_stack, internet_probe, AppState};
+use crate::{dual_stack, internet_probe, portal_auth::AuthStack, AppState};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
@@ -11,6 +11,7 @@ pub(crate) struct Snapshot {
     pub(crate) health: Option<dual_stack::DualStackReport>,
     pub(crate) physical: Option<dual_stack::DualStackReport>,
     pub(crate) require_physical: bool,
+    pub(crate) auth_stack: AuthStack,
     pub(crate) internet: Vec<internet_probe::InternetProbeOutcome>,
     pub(crate) internet_duration_ms: u128,
     pub(crate) complete: bool,
@@ -32,7 +33,9 @@ impl Snapshot {
     pub(crate) fn access_online(&self) -> bool {
         !self.cancelled
             && if self.require_physical {
-                self.physical.as_ref().is_some_and(|health| health.online())
+                self.physical
+                    .as_ref()
+                    .is_some_and(|health| health.online_for(self.auth_stack))
             } else {
                 self.online()
             }
@@ -43,14 +46,18 @@ impl Snapshot {
 }
 
 pub(crate) fn requires_physical_probe(network: &serde_json::Value) -> bool {
-    cfg!(target_os = "android")
-        && matches!(network["transport"].as_str(), Some("wifi" | "ethernet"))
+    matches!(network["transport"].as_str(), Some("wifi" | "ethernet"))
+        && (cfg!(target_os = "android")
+            || AuthStack::from_network(network) != AuthStack::Auto
+            || (network["ip"].as_str() == Some("")
+                && !crate::network_campus_ipv6(network).is_empty()))
 }
 
 pub(crate) fn same_network(left: &serde_json::Value, right: &serde_json::Value) -> bool {
     [
         "interfaceName",
         "ip",
+        "authStack",
         "transport",
         "networkId",
         "physicalNetworkHandle",
@@ -59,6 +66,7 @@ pub(crate) fn same_network(left: &serde_json::Value, right: &serde_json::Value) 
     ]
     .iter()
     .all(|key| left[*key] == right[*key])
+        && crate::network_campus_ipv6(left) == crate::network_campus_ipv6(right)
 }
 
 struct Run {
@@ -215,9 +223,11 @@ pub(crate) fn observe(
     use std::sync::atomic::Ordering;
     let generation = state.network_change_generation.load(Ordering::SeqCst);
     let compatibility = crate::effective_vpn_compatibility(&state.config.read().unwrap());
+    let auth_stack = AuthStack::from_network(network);
     let require_physical = requires_physical_probe(network);
     let adapters = crate::network_inventory::adapters();
-    let require_session = network["lgnWiredHint"].as_bool().unwrap_or(false)
+    let require_session = auth_stack != AuthStack::Ipv6
+        && network["lgnWiredHint"].as_bool().unwrap_or(false)
         && (!crate::preferred_interface_for_app(app).is_empty()
             || adapters
                 .iter()
@@ -230,6 +240,8 @@ pub(crate) fn observe(
         generation,
         network["interfaceName"],
         network["ip"],
+        crate::network_campus_ipv6(network),
+        auth_stack,
         network["routeIp"],
         network["transport"],
         network["networkId"],
@@ -248,6 +260,7 @@ pub(crate) fn observe(
         state.connectivity.update(id, |value| {
             value.require_session = require_session;
             value.require_physical = require_physical;
+            value.auth_stack = auth_stack;
         });
         let app = app.clone();
         let state = state.clone();
@@ -259,7 +272,7 @@ pub(crate) fn observe(
                     // Android Wi-Fi authentication can bind the process while
                     // default-route probes must still use their explicit Network
                     // handles. Only the per-socket family probes are authoritative.
-                    if require_physical {
+                    if cfg!(target_os = "android") && require_physical {
                         return;
                     }
                     let started = Instant::now();

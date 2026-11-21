@@ -38,16 +38,12 @@ export const DEFAULT_COLOR_MODE: AppearanceColorMode = 'system';
 // public/theme-bootstrap.js mirrors these aliases and colors so the loading
 // mask paints with the persisted theme before this module is evaluated.
 
+// Apple OS 27 is temporarily hidden from user selection; theme-apple.css remains preserved.
 export const APPEARANCE_THEME_OPTIONS: readonly AppearanceOption<AppearanceTheme>[] = [
   {
     value: 'basic',
     label: 'Basic',
     description: '沿用 BJUT-AL 原有视觉，并适配系统深色与浅色外观。',
-  },
-  {
-    value: 'apple27',
-    label: 'Apple OS 27',
-    description: '内容使用标准材质，导航与控件采用自适应 Liquid Glass。',
   },
   {
     value: 'winui',
@@ -134,16 +130,16 @@ export const ACCENT_COLOR_OPTIONS: readonly AccentColorOption[] = [
 const THEME_ALIASES: Readonly<Record<string, AppearanceTheme>> = {
   basic: 'basic',
   default: 'basic',
-  // Apple OS 26 was removed. Migrate existing selections to the maintained
-  // Apple appearance instead of unexpectedly falling back to Basic.
-  apple26: 'apple27',
-  'apple-26': 'apple27',
-  'apple-os-26': 'apple27',
-  'apple os 26': 'apple27',
-  apple27: 'apple27',
-  'apple-27': 'apple27',
-  'apple-os-27': 'apple27',
-  'apple os 27': 'apple27',
+  // Apple OS 27 is temporarily hidden. Fall back persisted Apple selections to
+  // Basic so the Settings selector never renders an unselectable raw value.
+  apple26: 'basic',
+  'apple-26': 'basic',
+  'apple-os-26': 'basic',
+  'apple os 26': 'basic',
+  apple27: 'basic',
+  'apple-27': 'basic',
+  'apple-os-27': 'basic',
+  'apple os 27': 'basic',
   winui: 'winui',
   windows: 'winui',
   'windows-ui': 'winui',

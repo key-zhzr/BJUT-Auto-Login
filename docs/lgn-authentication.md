@@ -1,14 +1,26 @@
 # lgn IPv4+IPv6 认证
 
+## 认证地址族
+
+在 App 的「设置 → 自动化与网络检测 → 认证网卡」选择自动、IPv4 单栈、IPv6 单栈或双栈。自动选择校园网卡时会采用系统路由优先级，手动指定网卡时使用该接口。
+
+- IPv6 单栈适用于 `bjut-sushe`、`bjut_wifi` 和有线 `lgn`。当前接口须取得校园 IPv6，认证通过 `lgn6`，IPv4 字段留空。
+- 双栈需要同一认证网卡取得两种地址。`bjut-sushe` 使用宿舍网门户，`bjut_wifi` 通过 `lgn6` 一次联合认证，有线 `lgn` 通过有线门户联合认证。`bjut_wifi` 已有 `wlgn` 会话时，先注销旧会话再联合认证可避免同时占用两个设备名额。
+- IPv4 单栈可通过 `wlgn` 或有线 `lgn`。如果 `bjut-sushe` 接口已取得校园 IPv6，宿舍网门户会同时认证两栈，App 会提示重新选择。
+
+IPv6 单栈会话无法常规注销或换号。停止该接口的流量后，校园网计费系统通常在约 20 分钟后清理会话。
+
+## 有线联合认证
+
 协议依据为 `lgn.bjut.edu.cn-v4+v6-login+logout.har` 中成功的登录、在线记录和注销请求。
 
 1. 从校园网物理接口访问 `https://lgn6.bjut.edu.cn/drcom/getipv6`，读取 JSONP 的 `ip` 字段。这是只读请求，不需要账号密码。
 2. 向 `https://lgn.bjut.edu.cn:802/eportal/portal/login` 发送一次 GET 请求，同时携带物理接口 IPv4 和上一步返回的 IPv6。账号前缀为 `,0,`，`login_ip_type=0`，`jsVersion=4.2.2`。按门户脚本的 XOR `0x16` 规则编码字段，并附加 `encrypt=1`；最后的 `v` 和 `lang=zh` 不编码。
 3. 注销通过同一接口族的 `/eportal/portal/logout`，同时提交两种地址，使用门户规定的固定占位字段 `user_account=drcom`、`user_password=123`，并采用相同编码。
 
-旧版 `/V6` 预认证和表单 POST 不属于这份抓包的认证流程，已移除。登录后以 JSONP `result` 判断结果；提交后无法确认响应时，不自动切换协议或再次提交。若登录前无法发现 IPv6，保留单 IPv4 认证，并在结果中明确说明。
+登录后以 JSONP `result` 判断结果。只有自动模式会在未发现 IPv6 时使用 IPv4 认证。显式选择双栈时，两种地址就绪后才提交。提交后遇到响应不明确时，前端显示认证结果待确认。
 
-IPv6 发现使用独立客户端：reqwest 的 IPv4 源地址绑定会过滤 IPv6 目标，不能直接复用 ePortal 的 IPv4 客户端。macOS/Linux 通过接口绑定保留校园网路由，Windows 对同一 IPv4 所在网卡调用 GetBestRoute2，优先使用系统针对 lgn6 目标推荐的有效 BJUT IPv6，避免枚举顺序选中与浏览器不同的源地址；Android 保留已选择的 Network 绑定。已知 lgn6 网关在同一预算内并发尝试，最低兼容模式保留系统 DNS。Windows 同时尝试原生 TLS 和 rustls 的只读地址发现，两者均保留证书、主机名校验并禁止代理与重定向；认证请求仍只提交一次。
+IPv6 发现使用独立的 IPv6 客户端。macOS/Linux 绑定当前物理接口，Windows 对已确认的网卡调用 GetBestRoute2，优先使用系统针对 lgn6 目标推荐的有效 BJUT IPv6。Android 使用已选择的 Network。已知网关在同一预算内并发尝试，最低兼容模式使用系统 DNS。Windows 同时用原生 TLS 和 rustls 执行只读发现，两者均校验证书与主机名，禁止代理与重定向。认证请求提交一次。
 
 诊断实际获取 IPv6 地址；单纯打开登录页不算地址发现成功。JSONP 不可用时，可只读解析 lgn6 登录页的客户端地址字段。完整地址发现过程有超时限制。
 

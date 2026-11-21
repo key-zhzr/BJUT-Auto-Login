@@ -437,12 +437,14 @@ test('light startup mask, full-viewport accounts modal, single billing dock, blu
       position:style.position,
       optionsScrollbarWidth:style.scrollbarWidth,
       mainScrollbarWidth:getComputedStyle(mainEl).scrollbarWidth,
+      optionValues:Array.from(options.querySelectorAll<HTMLElement>('.custom-option')).map(el=>el.dataset.value),
     };
   });
   expect(dropdownLayer.popoverOpen).toBe(true);
   expect(dropdownLayer.position).toBe('fixed');
   expect(dropdownLayer.optionsScrollbarWidth).toBe('auto');
   expect(dropdownLayer.mainScrollbarWidth).toBe('auto');
+  expect(dropdownLayer.optionValues).toEqual(['basic', 'winui']);
 
   await page.locator('[data-target="settings"]').first().click();
   await page.locator('[data-settings-target="automation"]').click();
@@ -782,6 +784,67 @@ test('windows caption glyphs, 2-tier desktop layout, auto-only scroll anchor, on
   await expect(page.locator('#router-diagnostics-panel')).toHaveCount(0);
   await expect(page.locator('#network-quality-panel')).toHaveCount(0);
   await page.screenshot({path: 'artifacts.local/diagnostics-clean.png'});
+
+  // WinUI Fluent Design fidelity: @fluentui/tokens vars, Fluent SVG icons, active input fill, symmetric switch hover, and clean basic restore
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'winui';
+    document.documentElement.dataset.colorScheme = 'light';
+    document.documentElement.dataset.accent = 'blue';
+  });
+  await expect.poll(async () => page.evaluate(() => {
+    const rootStyle = document.documentElement.style;
+    const navSvg = document.querySelector<SVGSVGElement>('#nav .nav-item svg[data-lucide]');
+    return {
+      accentFillRest: rootStyle.getPropertyValue('--win-accent-fill-rest').trim().toLowerCase(),
+      statusSuccessFg: rootStyle.getPropertyValue('--win-status-success-fg').trim(),
+      shadowDialog: rootStyle.getPropertyValue('--win-shadow-dialog').trim(),
+      iconEngine: navSvg?.getAttribute('data-icon-engine') ?? '',
+      iconViewBox: navSvg?.getAttribute('viewBox') ?? '',
+      titlebarLucideCount: document.querySelectorAll('.titlebar-glyph [data-lucide]').length,
+    };
+  })).toEqual({
+    accentFillRest: '#005fb8',
+    statusSuccessFg: expect.stringMatching(/\S/),
+    shadowDialog: expect.stringMatching(/\S/),
+    iconEngine: 'fluent',
+    iconViewBox: '0 0 20 20',
+    titlebarLucideCount: 0,
+  });
+
+  await page.locator('[data-target=dashboard]').first().click();
+  const focusedWinuiInput = page.locator('#device-usage-panel').getByLabel('开始时间', {exact: true});
+  await focusedWinuiInput.focus();
+  await expect.poll(async () => focusedWinuiInput.evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)');
+
+  await page.locator('[data-target=settings]').first().click();
+  await page.locator('[data-settings-target=appearance]').click();
+  const winuiSwitch = page.locator('label.switch:has(#setting-more-options)');
+  await winuiSwitch.hover();
+  await expect.poll(async () =>
+    winuiSwitch.locator('.slider').evaluate(el => {
+      const thumb = getComputedStyle(el, '::before');
+      return {width: thumb.width, height: thumb.height};
+    }),
+  ).toEqual({width: '14px', height: '14px'});
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.colorScheme = 'dark';
+  });
+  await expect.poll(async () =>
+    page.evaluate(() => document.documentElement.style.getPropertyValue('--win-accent-text-primary').trim().toLowerCase()),
+  ).toBe('#60cdff');
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'basic';
+    document.documentElement.dataset.colorScheme = 'light';
+  });
+  await expect.poll(async () => page.evaluate(() => ({
+    accentFillRest: document.documentElement.style.getPropertyValue('--win-accent-fill-rest').trim(),
+    iconEngine: document.querySelector('#nav .nav-item svg[data-lucide]')?.getAttribute('data-icon-engine') ?? '',
+  }))).toEqual({
+    accentFillRest: '',
+    iconEngine: 'lucide',
+  });
 });
 
 test('android phone onboarding jumps pages with spotlight and arrow indicator', async ({page}) => {
@@ -1070,6 +1133,7 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
       dashClip: getComputedStyle(dash).clipPath,
       barCutout: getComputedStyle(surface).clipPath,
       surfaceBackdrop: getComputedStyle(surface).backdropFilter,
+      pillVisibility: getComputedStyle(nav.querySelector('.nav-liquid-pill')!).visibility,
       recessBackdrop: getComputedStyle(recessSurface).backdropFilter,
       recessVisible: getComputedStyle(recess).visibility === 'visible' && getComputedStyle(recess).clipPath.startsWith('inset('),
       recessScaleX: recessMat.a,
@@ -1093,7 +1157,9 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
   expect(pressProps.dashOpacity).toBe(0);
   expect(pressProps.dashClip).toBe('none');
   expect(pressProps.barCutout).toMatch(/^path\(/);
-  expect(pressProps.surfaceBackdrop).toBe('none');
+  expect(pressProps.surfaceBackdrop).toContain('#dock-main-glass');
+  expect(pressProps.surfaceBackdrop).not.toContain('blur(');
+  expect(pressProps.pillVisibility).toBe('hidden');
   expect(pressProps.recessBackdrop).toBe('none');
   expect(pressProps.recessVisible).toBe(true);
   expect(pressProps.recessScaleY).toBeLessThan(pressProps.barScaleY - 0.08);
@@ -1257,6 +1323,9 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
     const nav = document.getElementById('nav')!;
     const diag = nav.querySelector<HTMLElement>('.nav-item[data-target="diagnostics"]')!;
     const accentLayer = nav.querySelector<HTMLElement>('.nav-liquid-accent-layer')!;
+    const surface = nav.querySelector<HTMLElement>('.nav-liquid-bar-surface')!;
+    const pill = nav.querySelector<HTMLElement>('.nav-liquid-pill')!;
+    const droplet = nav.querySelector<HTMLElement>('.nav-liquid-droplet')!;
     const probe = document.createElement('span');
     probe.style.color = 'var(--accent-color, var(--primary-color))';
     document.body.append(probe);
@@ -1266,18 +1335,32 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
     let flashed = false;
     let minBarScaleY = 1;
     let minItemScaleY = 1;
+    let sawSettledPill = false;
     let frames = 0;
     const deadline = performance.now() + 380;
     const tick = () => {
       frames++;
       const active = nav.classList.contains('is-droplet-active');
-      const tr = getComputedStyle(nav.querySelector('.nav-liquid-bar-surface')!).transform;
+      const tr = getComputedStyle(surface).transform;
       if (tr && tr !== 'none') {
         minBarScaleY = Math.min(minBarScaleY, new DOMMatrixReadOnly(tr).d);
       }
       const itemTr = getComputedStyle(diag).transform;
       if (itemTr && itemTr !== 'none') {
         minItemScaleY = Math.min(minItemScaleY, new DOMMatrixReadOnly(itemTr).d);
+      }
+      const barFilter = getComputedStyle(surface).backdropFilter;
+      if (!barFilter.includes('#dock-main-glass')) {
+        flashed = true;
+        details.push({frames, active, barFilter});
+      }
+      const pillStyle = getComputedStyle(pill);
+      if (pillStyle.visibility === 'visible' && !pillStyle.backdropFilter.includes('blur(')) {
+        flashed = true;
+        details.push({frames, active, pillVis: pillStyle.visibility, pillFilter: pillStyle.backdropFilter});
+      }
+      if (!active && getComputedStyle(droplet).visibility === 'hidden' && pillStyle.visibility === 'visible') {
+        sawSettledPill = true;
       }
       const layerVis = getComputedStyle(accentLayer).visibility;
       const layerOpacity = parseFloat(getComputedStyle(accentLayer).opacity);
@@ -1295,6 +1378,10 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
       if (performance.now() < deadline || active) {
         requestAnimationFrame(tick);
       } else {
+        if (!sawSettledPill) {
+          flashed = true;
+          details.push({frames, active, sawSettledPill});
+        }
         resolve({frames, flashed, minBarScaleY, minItemScaleY, details});
       }
     };

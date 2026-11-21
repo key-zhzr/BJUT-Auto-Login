@@ -33,11 +33,14 @@ import { setupKeyboardNavigation } from './keyboard-navigation';
 import { setupLiquidNav, syncLiquidNav } from './liquid-nav';
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Bell, Check, CheckCircle, ChevronDown, ChevronUp,
-  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, createIcons, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
+  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
   Fingerprint, History, Home, Info, LayoutDashboard, Loader, LogIn, MessageSquareWarning, Minimize2, Minus, MonitorSmartphone, Palette, Pause, Play, Plus, Power, Route, Router, Smartphone,
   QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Trash2, User, UserSearch, Users, Wifi,
   WalletCards, WifiOff, X,
 } from 'lucide';
+import { refreshAllThemeIcons, renderThemeIcons } from './winui-icons';
+import { syncWinuiFluentTokens } from './winui-fluent-tokens';
+import { syncWindowsBackdrop } from './windows-backdrop';
 import Sortable from 'sortablejs';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -94,7 +97,33 @@ const icons = {
 };
 
 function renderIcons(root: Element | Document | DocumentFragment = document) {
-  createIcons({ icons, root });
+  renderThemeIcons(root, icons);
+}
+
+let lastWinuiEngineActive: boolean | null = null;
+let lastWinuiBackdropKey = '';
+let windowsBackdropReady: Promise<unknown> = Promise.resolve();
+
+function syncWinuiThemeRuntime(): void {
+  const root = document.documentElement;
+  const theme = normalizeAppTheme(root.dataset.theme);
+  const accent = normalizeAccentColor(root.dataset.accent);
+  const colorScheme = root.dataset.colorScheme === 'dark' ? 'dark' : 'light';
+
+  syncWinuiFluentTokens(theme, accent, colorScheme, root);
+
+  const backdropKey = `${theme}:${colorScheme}`;
+  if (backdropKey !== lastWinuiBackdropKey) {
+    lastWinuiBackdropKey = backdropKey;
+    windowsBackdropReady = syncWindowsBackdrop(theme, colorScheme);
+  }
+
+  const nextWinuiIcons = theme === 'winui';
+  if (lastWinuiEngineActive !== nextWinuiIcons) {
+    lastWinuiEngineActive = nextWinuiIcons;
+    refreshAllThemeIcons(icons);
+    syncLiquidNav({ animate: false });
+  }
 }
 
 applyAppearance(
@@ -102,6 +131,16 @@ applyAppearance(
   normalizeAccentColor(localStorage.getItem('bjut_accent_color')),
   normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode')),
 );
+syncWinuiThemeRuntime();
+
+if (typeof MutationObserver !== 'undefined') {
+  new MutationObserver(() => {
+    syncWinuiThemeRuntime();
+  }).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme', 'data-color-scheme', 'data-accent'],
+  });
+}
 
 observeSystemColorScheme(() => {
   if (normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode')) !== 'system') return;
@@ -110,6 +149,7 @@ observeSystemColorScheme(() => {
     normalizeAccentColor(localStorage.getItem('bjut_accent_color')),
     'system',
   );
+  syncWinuiThemeRuntime();
 });
 
 if (IS_ANDROID) {
@@ -206,7 +246,7 @@ function concealTransientWebviewPasswords() {
 
 async function revealAppWindow() {
   if (appWindowRevealed) return;
-  await macosDockPolicyReady;
+  await Promise.all([macosDockPolicyReady, windowsBackdropReady]);
   if (window.__TAURI__) {
     try {
       await invoke('frontend_ready');
@@ -848,6 +888,7 @@ function syncConfigToRust(): Promise<void> {
     prefer_remaining_flow:localStorage.getItem('bjut_prefer_remaining_flow')==='true',
     accounts: getAccounts().map(account => ({ ...account })),
     preferred_interface: localStorage.getItem('bjut_preferred_interface') || '',
+    auth_stack: localStorage.getItem('bjut_auth_stack') || 'auto',
     adaptive_network_checks: localStorage.getItem('bjut_adaptive_network_checks') !== 'false',
     auto_login: localStorage.getItem('bjut_auto_login') === 'true',
     check_interval: parseInt(localStorage.getItem('bjut_check_interval') || '15', 10),
@@ -964,6 +1005,7 @@ async function loadConfigFromRust(): Promise<boolean> {
       isDisabled: account.isDisabled === true,
     }));
     localStorage.setItem('bjut_preferred_interface', config.preferred_interface || '');
+    localStorage.setItem('bjut_auth_stack', config.auth_stack || 'auto');
     localStorage.setItem('bjut_adaptive_network_checks', String(config.adaptive_network_checks !== false));
     (document.getElementById('setting-adaptive-network') as HTMLInputElement).checked = config.adaptive_network_checks !== false;
     localStorage.setItem('bjut_auto_login', config.auto_login.toString());
@@ -1028,6 +1070,7 @@ async function loadConfigFromRust(): Promise<boolean> {
     const settingMacosDock = document.getElementById('setting-macos-dock') as HTMLInputElement | null;
     if (settingMacosDock) settingMacosDock.checked = loadedMacosDockVisible;
     settingLogLevel.value = config.log_level;
+    settingAuthStack.value = localStorage.getItem('bjut_auth_stack') || 'auto';
     settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
     scheduleVpnMaximumRollback();
     settingUsageAlerts.checked = config.usage_alerts !== false;
@@ -1786,6 +1829,7 @@ let overrideAccountSelect: CustomSelect;
 let overrideMethodSelect: CustomSelect;
 let settingUpdateChannel: CustomSelect;
 let settingVpnCompatibility: CustomSelect;
+let settingAuthStack: CustomSelect;
 let settingAndroidNotificationMode: CustomSelect;
 let logSessionFilter: CustomSelect;
 let logLevelFilter: CustomSelect;
@@ -1964,6 +2008,7 @@ async function init() {
   settingUpdateChannel = new CustomSelect('setting-update-channel');
   settingLogLevel = new CustomSelect('setting-log-level');
   settingVpnCompatibility = new CustomSelect('setting-vpn-compatibility');
+  settingAuthStack = new CustomSelect('setting-auth-stack');
   settingAndroidNotificationMode = new CustomSelect('setting-android-notification-mode');
   logSessionFilter = new CustomSelect('log-session-filter');
   logLevelFilter = new CustomSelect('log-level-filter');
@@ -2094,6 +2139,7 @@ async function init() {
   settingAccentColor.value = normalizeAccentColor(localStorage.getItem('bjut_accent_color'));
   settingColorMode.value = normalizeAppearanceColorMode(localStorage.getItem('bjut_color_mode'));
   settingLogLevel.value = localStorage.getItem('bjut_log_level') || 'info';
+  settingAuthStack.value = localStorage.getItem('bjut_auth_stack') || 'auto';
   settingVpnCompatibility.value = localStorage.getItem('bjut_vpn_compatibility') || 'high';
   settingUpdateChannel.value = localStorage.getItem('bjut_update_channel') || 'release';
   syncSettingsOverviewSummaries();
@@ -3645,6 +3691,18 @@ function setupEventListeners() {
   });
   settingUsageAlerts.addEventListener('change', () => saveUsageAlertSetting(settingUsageAlerts.checked));
   settingAndroidNotifyUsageAlerts.addEventListener('change', () => saveUsageAlertSetting(settingAndroidNotifyUsageAlerts.checked));
+  settingAuthStack.addEventListener('change', async () => {
+    const previous = localStorage.getItem('bjut_auth_stack') || 'auto';
+    const next = settingAuthStack.value || 'auto';
+    localStorage.setItem('bjut_auth_stack', next);
+    try {
+      await syncConfigToRust();
+    } catch (error) {
+      localStorage.setItem('bjut_auth_stack', previous);
+      settingAuthStack.value = previous;
+      void customAlert(`认证地址族保存失败：${String(error)}`);
+    }
+  });
   settingVpnCompatibility.addEventListener('change', async () => {
     const value = settingVpnCompatibility.value || 'high';
     const previous = localStorage.getItem('bjut_vpn_compatibility') || 'high';

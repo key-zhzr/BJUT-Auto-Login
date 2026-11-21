@@ -83,6 +83,8 @@ pub(crate) struct AppConfig {
     pub(crate) saved_router: Option<SavedRouter>,
     #[serde(default)]
     pub(crate) preferred_interface: String,
+    #[serde(default)]
+    pub(crate) auth_stack: crate::portal_auth::AuthStack,
     #[serde(default = "default_true")]
     pub(crate) adaptive_network_checks: bool,
     #[serde(default)]

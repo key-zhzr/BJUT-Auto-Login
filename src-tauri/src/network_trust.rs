@@ -313,6 +313,9 @@ pub(crate) fn remove_network_trust(
 }
 
 pub(crate) fn is_campus_local_ip(ip: &str) -> bool {
+    if ip.contains(':') {
+        return crate::network_inventory::campus_ipv6(ip).is_some();
+    }
     let octets: Vec<u8> = ip
         .split('.')
         .map(str::parse::<u8>)

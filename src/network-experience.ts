@@ -126,7 +126,7 @@ export class NetworkExperience {
       }
       row.append(marker, text); rowParent.append(row);
     };
-    if (inventory.selectionSupported) addRow('', '自动选择', '优先校园有线，随当前连接自动识别', !inventory.preferredInterface, true);
+    if (inventory.selectionSupported) addRow('', '自动选择', '按系统路由优先级选择可用认证网卡', !inventory.preferredInterface, true);
     const adapters = [...inventory.adapters].sort((a, b) => Number(b.selected) - Number(a.selected) || Number(b.connected) - Number(a.connected));
     for (const adapter of adapters) {
       rowParent = !adapter.connected && adapter.id !== inventory.preferredInterface ? disconnectedList : this.list;
@@ -142,7 +142,8 @@ export class NetworkExperience {
           `IPv6 ${adapter.ipv6.length ? '已取得地址' : '--'}`,
         ],
         inventory.preferredInterface === adapter.id,
-        adapter.selectable && adapter.connected && adapter.ipv4.length > 0,
+        adapter.selectable && adapter.connected && (adapter.ipv4.length > 0
+          || adapter.ipv6.some(address => /^2001:0?da8:0?216:/i.test(address))),
         adapter.selected,
       );
     }
@@ -154,7 +155,7 @@ export class NetworkExperience {
     const selected = inventory.adapters.find(adapter => adapter.selected);
     element('network-selection-caption').textContent = selected ? `当前认证网卡：${selected.name}${selected.name === selected.interfaceName ? '' : `（${selected.interfaceName}）`}`
       : inventory.preferredInterface ? '指定网卡不可用，认证已暂停' : '尚未取得可用于认证的网卡';
-    if (!inventory.selectionSupported) this.showMessage('Android 由系统选择校园 Wi-Fi；下方同时展示其他网络。');
+    if (!inventory.selectionSupported) this.showMessage('Android 按系统网络优先级选择校园 Wi-Fi 或有线接口。');
     this.updateBusy();
     if (focused !== undefined) Array.from(this.list.querySelectorAll<HTMLButtonElement>('button')).find(button => button.dataset.adapterId === focused && !button.disabled)?.focus({preventScroll:true});
   }

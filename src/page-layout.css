@@ -625,9 +625,7 @@
   }
 
   @supports ((backdrop-filter: blur(5px)) or (-webkit-backdrop-filter: blur(5px))) {
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface,
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
@@ -637,12 +635,12 @@
       background: var(--dock-tint);
     }
 
-    :root[data-theme] body:not(.is-desktop):not(.is-page-sliding) :is(#nav, .billing-mobile-nav):not(.is-droplet-active):not(.is-bar-animating) .nav-liquid-bar-surface {
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface {
       -webkit-backdrop-filter: var(--dock-backdrop, none);
       backdrop-filter: var(--dock-backdrop, none);
     }
 
-    :root[data-theme] body:not(.is-desktop):not(.is-page-sliding) :is(#nav, .billing-mobile-nav):not(.is-droplet-active):not(.is-bar-animating) .nav-liquid-pill {
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
       -webkit-backdrop-filter: blur(10px) saturate(1.3);
       backdrop-filter: blur(10px) saturate(1.3);
     }

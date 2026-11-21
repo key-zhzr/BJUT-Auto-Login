@@ -5,17 +5,18 @@
 (() => {
   'use strict';
   const root = document.documentElement;
+  // Keep Apple themes mapped to basic while Apple OS 27 is temporarily hidden.
   const themeAliases = {
     basic: 'basic',
     default: 'basic',
-    apple26: 'apple27',
-    'apple-26': 'apple27',
-    'apple-os-26': 'apple27',
-    'apple os 26': 'apple27',
-    apple27: 'apple27',
-    'apple-27': 'apple27',
-    'apple-os-27': 'apple27',
-    'apple os 27': 'apple27',
+    apple26: 'basic',
+    'apple-26': 'basic',
+    'apple-os-26': 'basic',
+    'apple os 26': 'basic',
+    apple27: 'basic',
+    'apple-27': 'basic',
+    'apple-os-27': 'basic',
+    'apple os 27': 'basic',
     winui: 'winui',
     windows: 'winui',
     'windows-ui': 'winui',
@@ -78,7 +79,7 @@
 
   const meta = document.querySelector('meta[name="theme-color"]');
   const lightBackground = theme === 'apple27' ? '#f2f2f7' : theme === 'winui' ? '#f3f3f3' : '#eef2f7';
-  const darkBackground = theme === 'basic' ? '#0f172a' : '#000000';
+  const darkBackground = theme === 'winui' ? '#202020' : theme === 'apple27' ? '#000000' : '#0f172a';
   const initialBackground = scheme === 'dark' ? darkBackground : lightBackground;
   root.style.backgroundColor = initialBackground;
   root.style.setProperty('--prepaint-body-bg', initialBackground);

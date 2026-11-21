@@ -1,5 +1,6 @@
 //! Read-only interface inventory. A saved selection is resolved exactly and
 //! never falls back to a different adapter when the chosen link disappears.
+use crate::portal_auth::{is_bjut_client_ipv6, AuthStack};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -21,6 +22,9 @@ pub(crate) struct NetworkAdapter {
     pub(crate) selectable: bool,
     #[serde(default)]
     pub(crate) selected: bool,
+    #[cfg(target_os = "windows")]
+    #[serde(skip)]
+    pub(crate) route_metrics: [Option<u32>; 2],
 }
 
 pub(crate) fn router_gateways() -> Vec<String> {
@@ -80,15 +84,84 @@ pub(crate) fn preferred_adapter<'a>(
     adapters: &'a [NetworkAdapter],
     preferred: &str,
 ) -> Option<&'a NetworkAdapter> {
-    adapters.iter().find(|adapter| {
-        adapter.id == preferred
-            && adapter.selectable
-            && adapter.connected
-            && adapter
-                .ipv4
+    adapters
+        .iter()
+        .find(|adapter| adapter.id == preferred && auth_candidate(adapter))
+}
+
+pub(crate) fn auth_ipv4(adapter: &NetworkAdapter) -> String {
+    let addresses = adapter
+        .ipv4
+        .iter()
+        .filter(|ip| crate::usable_physical_ipv4(ip).is_some());
+    addresses
+        .clone()
+        .find(|ip| crate::network_trust::is_campus_local_ip(ip))
+        .or_else(|| addresses.into_iter().next())
+        .cloned()
+        .unwrap_or_default()
+}
+
+pub(crate) fn campus_ipv6(address: &str) -> Option<std::net::Ipv6Addr> {
+    address.parse().ok().filter(is_bjut_client_ipv6)
+}
+
+pub(crate) fn auth_candidate(adapter: &NetworkAdapter) -> bool {
+    adapter.selectable
+        && adapter.connected
+        && (!auth_ipv4(adapter).is_empty()
+            || adapter
+                .ipv6
                 .iter()
-                .any(|ip| crate::usable_physical_ipv4(ip).is_some())
-    })
+                .any(|address| campus_ipv6(address).is_some()))
+}
+
+pub(crate) fn select_auth_adapter(
+    adapters: &[NetworkAdapter],
+    stack: AuthStack,
+    metric: impl Fn(&NetworkAdapter, bool) -> Option<u32>,
+) -> Option<&NetworkAdapter> {
+    adapters
+        .iter()
+        .filter(|adapter| auth_candidate(adapter))
+        .min_by_key(|adapter| {
+            let ip = auth_ipv4(adapter);
+            let ipv6 = adapter.ipv6.iter().any(|ip| campus_ipv6(ip).is_some());
+            let campus = crate::network_trust::is_campus_local_ip(&ip) || ipv6;
+            let family_score = |v6| metric(adapter, v6).unwrap_or(u32::MAX);
+            let primary = match stack {
+                AuthStack::Ipv6 => family_score(true),
+                AuthStack::Auto if ip.is_empty() => family_score(true),
+                _ => family_score(false),
+            };
+            (
+                !campus,
+                !stack.matches(!ip.is_empty(), ipv6),
+                primary,
+                adapter.transport != "ethernet",
+                adapter.id.as_str(),
+            )
+        })
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn linux_default_routes(ipv6: bool) -> std::collections::HashMap<String, u32> {
+    let family = if ipv6 { "-6" } else { "-4" };
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&read("ip", &["-j", family, "route", "show", "default"]))
+            .unwrap_or_default();
+    let mut routes = std::collections::HashMap::new();
+    for row in rows {
+        if let Some(name) = row["dev"].as_str() {
+            let metric = row["metric"]
+                .as_u64()
+                .and_then(|m| u32::try_from(m).ok())
+                .unwrap_or(0);
+            let current = routes.entry(name.to_string()).or_insert(metric);
+            *current = (*current).min(metric);
+        }
+    }
+    routes
 }
 
 #[cfg(target_os = "macos")]

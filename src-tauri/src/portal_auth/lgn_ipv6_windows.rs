@@ -13,7 +13,8 @@ use windows::Win32::Networking::WinSock::{
 };
 
 pub(super) fn source_ipv6(
-    physical_ipv4: Ipv4Addr,
+    interface_name: &str,
+    physical_ipv4: Option<Ipv4Addr>,
     destination: Ipv6Addr,
 ) -> Result<Ipv6Addr, String> {
     let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
@@ -52,6 +53,10 @@ pub(super) fn source_ipv6(
             // SAFETY: all linked adapter/address records are owned by storage,
             // which remains alive throughout traversal.
             let adapter = unsafe { &*adapter_ptr };
+            let name = unsafe { adapter.FriendlyName.to_string() }.unwrap_or_default();
+            let description = unsafe { adapter.Description.to_string() }.unwrap_or_default();
+            let matches_name =
+                name == interface_name || (name.is_empty() && description == interface_name);
             let mut owns_ipv4 = false;
             let mut ipv6 = Vec::new();
             let mut address_ptr = adapter.FirstUnicastAddress;
@@ -72,8 +77,9 @@ pub(super) fn source_ipv6(
                         let addr = unsafe { &*socket.lpSockaddr.cast::<SOCKADDR_IN>() };
                         // SAFETY: S_un_b is the byte view of the IPv4 union.
                         let bytes = unsafe { addr.sin_addr.S_un.S_un_b };
-                        owns_ipv4 |= Ipv4Addr::new(bytes.s_b1, bytes.s_b2, bytes.s_b3, bytes.s_b4)
-                            == physical_ipv4;
+                        owns_ipv4 |= Some(Ipv4Addr::new(
+                            bytes.s_b1, bytes.s_b2, bytes.s_b3, bytes.s_b4,
+                        )) == physical_ipv4;
                     } else if family == AF_INET6
                         && socket.iSockaddrLength as usize >= size_of::<SOCKADDR_IN6>()
                         && address.DadState == IpDadStatePreferred
@@ -90,7 +96,7 @@ pub(super) fn source_ipv6(
                 }
                 address_ptr = address.Next;
             }
-            if owns_ipv4 {
+            if matches_name && (physical_ipv4.is_none() || owns_ipv4) {
                 // Ask Windows to choose the source for this destination on
                 // this exact adapter. The first enumerated address may be a
                 // stable address while browsers use a temporary IPv6 address.
@@ -121,11 +127,11 @@ pub(super) fn source_ipv6(
                 return ipv6
                     .into_iter()
                     .next()
-                    .ok_or_else(|| "校园网 IPv4 所在接口没有可用的 BJUT IPv6 地址".to_string());
+                    .ok_or_else(|| "认证网卡没有可用的 BJUT IPv6 地址".to_string());
             }
             adapter_ptr = adapter.Next;
         }
-        return Err("未找到校园网 IPv4 所在的物理接口".to_string());
+        return Err("未找到当前认证所用的物理接口".to_string());
     }
     Err("读取 IPv6 地址时网络接口发生变化，请重试".to_string())
 }

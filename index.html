@@ -1020,7 +1020,7 @@
                 <div class="setting-item">
                   <div class="setting-info">
                     <h4>界面主题</h4>
-                    <p>Basic 保留项目视觉；Apple OS 27 与 WinUI 分别遵循 Liquid Glass 和 Fluent 材质层级。</p>
+                    <p>Basic 保留项目视觉；WinUI 遵循 Windows 11 Fluent 材质层级。</p>
                   </div>
                   <div class="custom-select" id="setting-theme" aria-label="界面主题">
                     <div class="custom-select-trigger" tabindex="0">
@@ -1029,7 +1029,6 @@
                     </div>
                     <div class="custom-select-options">
                       <div class="custom-option selected" data-value="basic">Basic</div>
-                      <div class="custom-option" data-value="apple27">Apple OS 27</div>
                       <div class="custom-option" data-value="winui">WinUI</div>
                     </div>
                   </div>
@@ -1166,6 +1165,21 @@
                 </div>
                 <div id="network-adapter-list" class="network-adapter-list" role="radiogroup" aria-label="认证使用的网卡"></div>
                 <p id="network-adapter-message" role="status" hidden></p>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <h4>认证地址族</h4>
+                    <p>IPv6 单栈会话需等待校园网清理。bjut-sushe 已取得 IPv6 时，宿舍网门户会同时认证两栈。</p>
+                  </div>
+                  <div class="custom-select" id="setting-auth-stack" aria-label="认证地址族">
+                    <div class="custom-select-trigger" tabindex="0"><span>自动</span><i data-lucide="chevron-down"></i></div>
+                    <div class="custom-select-options">
+                      <div class="custom-option selected" data-value="auto">自动</div>
+                      <div class="custom-option" data-value="ipv4">IPv4 单栈</div>
+                      <div class="custom-option" data-value="ipv6">IPv6 单栈</div>
+                      <div class="custom-option" data-value="dual">IPv4 + IPv6 双栈</div>
+                    </div>
+                  </div>
+                </div>
               </section>
 
               <div class="settings-group glass-card">

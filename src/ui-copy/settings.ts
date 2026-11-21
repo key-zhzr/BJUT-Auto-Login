@@ -28,7 +28,7 @@ export const SETTINGS_COPY = {
   items: {
     'setting-theme': {
       title: '界面主题',
-      description: 'Basic 保留项目视觉；Apple OS 27 与 WinUI 分别遵循 Liquid Glass 和 Fluent 材质层级。',
+      description: 'Basic 保留项目视觉；WinUI 遵循 Windows 11 Fluent 材质层级。',
     },
     'setting-color-mode': {
       title: '明暗模式',
