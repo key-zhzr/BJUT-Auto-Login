@@ -324,7 +324,7 @@ mod tests {
                     adapter("en7", "ethernet", "172.26.99.10"),
                 ],
                 AuthStack::Auto,
-                || Default::default(),
+                Default::default,
             )
             .unwrap();
             assert_eq!(selected.interface, "en7");
@@ -338,7 +338,7 @@ mod tests {
         let disconnected = select_identity(
             &[adapter("en0", "wifi", "192.168.1.10")],
             AuthStack::Auto,
-            || Default::default(),
+            Default::default,
         )
         .unwrap();
         assert_eq!(disconnected.transport, "wifi");
@@ -371,7 +371,7 @@ mod tests {
                 adapter("en9", "ethernet", "172.26.88.11"),
             ],
             AuthStack::Auto,
-            || Default::default(),
+            Default::default,
         )
         .unwrap();
         assert!(crate::network_ip_observation_changed(
@@ -393,7 +393,7 @@ mod tests {
         assert!(select_identity(
             &[adapter("en0", "wifi", ""), adapter("en7", "ethernet", "")],
             AuthStack::Auto,
-            || Default::default(),
+            Default::default,
         )
         .is_none());
     }

@@ -1296,14 +1296,32 @@ async fn login_lgn6_once(
 }
 
 async fn wlgn_ipv4_session_online(route: &PortalRouteContext) -> bool {
-    let Ok(client) = portal_client(VpnCompatibility::High, &LoginType::Type2, NETWORK_PROBE_TIMEOUT, Some(route)).await else {
+    let Ok(client) = portal_client(
+        VpnCompatibility::High,
+        &LoginType::Type2,
+        NETWORK_PROBE_TIMEOUT,
+        Some(route),
+    )
+    .await
+    else {
         return false;
     };
-    let Ok(url) = Url::parse(&format!("{WIFI_HTTPS_REFERER}drcom/chkstatus?callback=dr1002&jsVersion=4.1&v={}&lang=zh", random_request_id())) else {
+    let Ok(url) = Url::parse(&format!(
+        "{WIFI_HTTPS_REFERER}drcom/chkstatus?callback=dr1002&jsVersion=4.1&v={}&lang=zh",
+        random_request_id()
+    )) else {
         return false;
     };
-    get_jsonp_login(&client, url, WIFI_HTTPS_REFERER, "wlgn 会话查询", None, None)
-        .await.is_ok_and(|(online, _)| online)
+    get_jsonp_login(
+        &client,
+        url,
+        WIFI_HTTPS_REFERER,
+        "wlgn 会话查询",
+        None,
+        None,
+    )
+    .await
+    .is_ok_and(|(online, _)| online)
 }
 
 async fn discover_lgn_ipv6(
@@ -1872,7 +1890,9 @@ pub(crate) async fn logout_from_campus_network_rust(
         }
         LoginType::Type3 => {
             let local_ipv4 = login_source_ipv4(route_context, "172.30.201.2:802", "lgn")?;
-            let (observed_ipv6, diagnostic) = if route_context.is_some_and(|route| route.stack == AuthStack::Ipv4) {
+            let (observed_ipv6, diagnostic) = if route_context
+                .is_some_and(|route| route.stack == AuthStack::Ipv4)
+            {
                 (String::new(), "已提交 IPv4 单栈注销".to_string())
             } else {
                 match discover_lgn_ipv6(compatibility, Duration::from_secs(5), route_context).await

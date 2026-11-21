@@ -670,7 +670,7 @@ class KeepAliveService : Service() {
                         }
                     }
                     val checkedNetwork = JSONObject(networkInfo)
-                    val latestNetwork = JSONObject(networkInfoForCheck(false))
+                    val latestNetwork = JSONObject(networkInfoForCheck(false, authStack))
                     if (listOf("networkId", "physicalNetworkHandle", "defaultNetworkId", "defaultNetworkHandle", "ip", "transport")
                         .any { checkedNetwork.optString(it) != latestNetwork.optString(it) }) {
                         result = JSONObject()

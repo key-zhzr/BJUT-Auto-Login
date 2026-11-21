@@ -4,6 +4,7 @@
 //! orchestration code easier to audit. These helpers never decide whether
 //! credentials may be sent; portal response and trust checks remain separate.
 
+#[cfg(any(target_os = "macos", test))]
 use super::usable_physical_ipv4;
 #[cfg(test)]
 use crate::network_trust::is_campus_local_ip;

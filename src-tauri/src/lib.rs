@@ -4921,11 +4921,13 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                         let latest = get_network_info(app.clone(), Some(true));
                                         if connectivity::same_network(&net_info, &latest)
                                             && network_identity_is_fresh(&latest)
-                                            && (transport != "wifi" || same_exact_wifi_identity(
-                                                &current_ssid, &current_bssid,
-                                                latest["ssid"].as_str().unwrap_or_default(),
-                                                latest["bssid"].as_str().unwrap_or_default(),
-                                            ))
+                                            && (transport != "wifi"
+                                                || same_exact_wifi_identity(
+                                                    &current_ssid,
+                                                    &current_bssid,
+                                                    latest["ssid"].as_str().unwrap_or_default(),
+                                                    latest["bssid"].as_str().unwrap_or_default(),
+                                                ))
                                         {
                                             Ok(())
                                         } else {
