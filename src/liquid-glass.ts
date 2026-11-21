@@ -3,24 +3,29 @@ const CHANNELS = ['red', 'green', 'blue'] as const;
 
 interface LensProfile {
   bevel: number;
+  maxBevelRatio: number;
   entryStop: number;
   rimPower: number;
   scaleR: number;
   scaleG: number;
   scaleB: number;
+  achromatic?: boolean;
 }
 
 const barProfile: LensProfile = {
-  bevel: 9,
-  entryStop: 0.14,
-  rimPower: 1.75,
-  scaleR: 20,
-  scaleG: 13,
-  scaleB: 5,
+  bevel: 9.5,
+  maxBevelRatio: 0.34,
+  entryStop: 0.12,
+  rimPower: 1.65,
+  scaleR: 26,
+  scaleG: 26,
+  scaleB: 26,
+  achromatic: true,
 };
 
 const dropletProfile: LensProfile = {
-  bevel: 14,
+  bevel: 8.4,
+  maxBevelRatio: 0.216,
   entryStop: 0.34,
   rimPower: 1.5,
   scaleR: 17.5,
@@ -66,7 +71,7 @@ function createNormalMap(width: number, height: number, profile: LensProfile) {
   const radius = Math.min(cssW, cssH) / 2;
   const straightX = cssW / 2 - radius;
   const straightY = cssH / 2 - radius;
-  const bevel = Math.min(profile.bevel, radius * 0.36);
+  const bevel = Math.min(profile.bevel, radius * profile.maxBevelRatio);
 
   let peak = 0;
   for (let s = 1; s < 100; s++) {
@@ -108,29 +113,36 @@ function createNormalMap(width: number, height: number, profile: LensProfile) {
 }
 
 let filterDefs: SVGDefsElement | undefined;
-const prewarmProbes = new Map<string, HTMLElement>();
+const keepAliveProbes = new Map<string, HTMLElement>();
 
-function prewarmBackdropFilter(filterId: string, filterUrl: string) {
-  const previous = prewarmProbes.get(filterId);
-  if (previous) {
-    previous.remove();
-    prewarmProbes.delete(filterId);
+function keepBackdropFilterWarm(filterId: string, filterUrl: string) {
+  let probe = keepAliveProbes.get(filterId);
+  if (!probe || !probe.isConnected) {
+    probe?.remove();
+    probe = document.createElement('div');
+    probe.setAttribute('aria-hidden', 'true');
+    probe.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;border-radius:1px;opacity:0.001;pointer-events:none;z-index:1;contain:strict';
+    document.body.append(probe);
+    keepAliveProbes.set(filterId, probe);
   }
-  const probe = document.createElement('div');
-  probe.setAttribute('aria-hidden', 'true');
-  probe.style.cssText = 'position:fixed;left:0;top:0;width:4px;height:4px;border-radius:2px;opacity:0.001;pointer-events:none;z-index:2147483647';
   probe.style.setProperty('-webkit-backdrop-filter', filterUrl);
   probe.style.backdropFilter = filterUrl;
-  document.body.append(probe);
-  prewarmProbes.set(filterId, probe);
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (probe.isConnected) probe.remove();
-        if (prewarmProbes.get(filterId) === probe) prewarmProbes.delete(filterId);
-      });
-    });
-  });
+}
+
+export function clearDockGlassProbes(host?: HTMLElement) {
+  if (host) {
+    const name = host.id === 'nav' ? 'main' : 'billing';
+    for (const id of [`dock-${name}-glass`, `dock-${name}-lens`]) {
+      const probe = keepAliveProbes.get(id);
+      if (probe) {
+        probe.remove();
+        keepAliveProbes.delete(id);
+      }
+    }
+    return;
+  }
+  for (const probe of keepAliveProbes.values()) probe.remove();
+  keepAliveProbes.clear();
 }
 
 function updateLens(id: string, width: number, height: number, profile: LensProfile): 'updated' | 'cached' | 'failed' {
@@ -177,49 +189,61 @@ function updateLens(id: string, width: number, height: number, profile: LensProf
     }),
   );
 
-  const scales = [profile.scaleR, profile.scaleG, profile.scaleB];
-  CHANNELS.forEach((channel, index) => {
+  if (profile.achromatic) {
     filter.append(
       svg('feDisplacementMap', {
         in: 'SourceGraphic',
         in2: 'map',
-        scale: scales[index],
+        scale: profile.scaleG,
         xChannelSelector: 'R',
         yChannelSelector: 'G',
-        result: `${channel}Displaced`,
       }),
     );
+  } else {
+    const scales = [profile.scaleR, profile.scaleG, profile.scaleB];
+    CHANNELS.forEach((channel, index) => {
+      filter.append(
+        svg('feDisplacementMap', {
+          in: 'SourceGraphic',
+          in2: 'map',
+          scale: scales[index],
+          xChannelSelector: 'R',
+          yChannelSelector: 'G',
+          result: `${channel}Displaced`,
+        }),
+      );
 
-    const matrix = new Array<number>(20).fill(0);
-    matrix[index * 6] = 1;
-    matrix[18] = 1;
+      const matrix = new Array<number>(20).fill(0);
+      matrix[index * 6] = 1;
+      matrix[18] = 1;
+      filter.append(
+        svg('feColorMatrix', {
+          in: `${channel}Displaced`,
+          type: 'matrix',
+          values: matrix.join(' '),
+          result: `${channel}Channel`,
+        }),
+      );
+    });
+
     filter.append(
-      svg('feColorMatrix', {
-        in: `${channel}Displaced`,
-        type: 'matrix',
-        values: matrix.join(' '),
-        result: `${channel}Channel`,
+      svg('feComposite', {
+        in: 'redChannel',
+        in2: 'greenChannel',
+        operator: 'arithmetic',
+        k2: 1,
+        k3: 1,
+        result: 'redGreen',
+      }),
+      svg('feComposite', {
+        in: 'redGreen',
+        in2: 'blueChannel',
+        operator: 'arithmetic',
+        k2: 1,
+        k3: 1,
       }),
     );
-  });
-
-  filter.append(
-    svg('feComposite', {
-      in: 'redChannel',
-      in2: 'greenChannel',
-      operator: 'arithmetic',
-      k2: 1,
-      k3: 1,
-      result: 'redGreen',
-    }),
-    svg('feComposite', {
-      in: 'redGreen',
-      in2: 'blueChannel',
-      operator: 'arithmetic',
-      k2: 1,
-      k3: 1,
-    }),
-  );
+  }
 
   if (previous) previous.replaceWith(filter);
   else filterDefs.append(filter);
@@ -236,25 +260,34 @@ export function updateDockGlass(host: HTMLElement, dock: DOMRect, lensWidth: num
   }
 
   const radius = Math.min(lensWidth, lensHeight) / 2;
-  const bevel = Math.min(dropletProfile.bevel, radius * 0.36);
+  const bevel = Math.min(dropletProfile.bevel, radius * dropletProfile.maxBevelRatio);
   host.style.setProperty('--dock-lens-bevel', `${bevel}px`);
+  const name = host.id === 'nav' ? 'main' : 'billing';
   // Syntax support alone does not guarantee SVG backdrop compositing.
   if (!/Chrome|Chromium|Edg\//.test(navigator.userAgent)
-    || !CSS.supports('backdrop-filter', 'url("#dock-lens")')) return;
+    || !CSS.supports('backdrop-filter', 'url("#dock-lens")')) {
+    host.style.removeProperty('--dock-backdrop');
+    document.getElementById(`dock-${name}-glass`)?.remove();
+    return;
+  }
 
-  const name = host.id === 'nav' ? 'main' : 'billing';
   const surface = `dock-${name}-glass`;
-  const lens = `dock-${name}-lens`;
   const surfaceResult = updateLens(surface, dock.width, dock.height, barProfile);
   if (surfaceResult !== 'failed') {
-    host.style.setProperty('--dock-backdrop', `url("#${surface}") blur(1.5px) saturate(1.28)`);
+    const surfaceUrl = `url("#${surface}")`;
+    host.style.setProperty('--dock-backdrop', surfaceUrl);
+    if (!document.hidden) {
+      keepBackdropFilterWarm(surface, surfaceUrl);
+    }
   }
+
+  const lens = `dock-${name}-lens`;
   const lensResult = updateLens(lens, lensWidth, lensHeight, dropletProfile);
   if (lensResult !== 'failed') {
     const lensUrl = `url("#${lens}")`;
     host.style.setProperty('--dock-lens-backdrop', lensUrl);
-    if (lensResult === 'updated') {
-      prewarmBackdropFilter(lens, lensUrl);
+    if (!document.hidden) {
+      keepBackdropFilterWarm(lens, lensUrl);
     }
   }
 }

@@ -861,16 +861,21 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
       const activeItem = nav.querySelector<HTMLElement>('.nav-item.active')!;
       const ns = getComputedStyle(nav);
       const surfaceStyle = getComputedStyle(nav.querySelector('.nav-liquid-bar-surface')!);
+      const pillStyle = getComputedStyle(pill);
       const nr = nav.getBoundingClientRect();
       const pr = pill.getBoundingClientRect();
       const ar = activeItem.getBoundingClientRect();
-      const backdrop = surfaceStyle.backdropFilter
+      const surfaceBackdrop = surfaceStyle.backdropFilter
         || (surfaceStyle as unknown as {webkitBackdropFilter: string}).webkitBackdropFilter
-        || ns.backdropFilter
+        || 'none';
+      const pillBackdrop = pillStyle.backdropFilter
+        || (pillStyle as unknown as {webkitBackdropFilter: string}).webkitBackdropFilter
         || '';
       return {
         radius: ns.borderTopLeftRadius,
-        backdrop,
+        surfaceBackdrop,
+        pillBackdrop,
+        hasBarSvgFilter: Boolean(document.getElementById('dock-main-glass')),
         pillOpacity: getComputedStyle(pill).opacity,
         dropletVisibility: getComputedStyle(droplet).visibility,
         alignedX: Math.abs(pr.left - ar.left),
@@ -880,7 +885,10 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
       };
     });
     expect(dockMetrics.radius, theme).toBe('999px');
-    expect(dockMetrics.backdrop, theme).toContain('blur(');
+    expect(dockMetrics.surfaceBackdrop, theme).toContain('#dock-main-glass');
+    expect(dockMetrics.surfaceBackdrop, theme).not.toContain('blur(');
+    expect(dockMetrics.pillBackdrop, theme).toContain('blur(');
+    expect(dockMetrics.hasBarSvgFilter, theme).toBe(true);
     expect(dockMetrics.height, theme).toBe(62);
     expect(dockMetrics.pillOpacity, theme).toBe('1');
     expect(dockMetrics.dropletVisibility, theme).toBe('hidden');
@@ -889,23 +897,34 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
     expect(dockMetrics.widthDiff, theme).toBeLessThan(2);
   }
 
-  // A neutral backdrop makes color introduced by the rim itself measurable.
+  // Big dock rim refracts background achromatically without blur or color fringe; its interior stays clear while the active pill blurs.
   const optics = await page.evaluate(() => {
     const nav = document.getElementById('nav')!;
+    const active = nav.querySelector<HTMLElement>('.nav-item.active')!.getBoundingClientRect();
     const rect = nav.getBoundingClientRect();
     const backdrop = document.createElement('div');
     backdrop.id = 'dock-backdrop-test';
     backdrop.style.cssText = `position:fixed;inset:${rect.top - 4}px 0 0;z-index:700;pointer-events:none;`
       + 'background:repeating-linear-gradient(#101010 0 8px,#f4f4f4 8px 16px)';
     document.body.append(backdrop);
-    const clip = {x: Math.round(rect.left + rect.width * 0.3), y: Math.round(rect.top), width: 1, height: 16};
-    return {clip, filter: getComputedStyle(nav.querySelector('.nav-liquid-bar-surface')!).backdropFilter};
+    return {
+      barClip: {x: Math.round(rect.left + rect.width * 0.35), y: Math.round(rect.top), width: 1, height: 16},
+      pillClip: {x: Math.round(active.left + active.width * 0.25), y: Math.round(active.top + 4), width: 1, height: 16},
+      barFilter: getComputedStyle(nav.querySelector('.nav-liquid-bar-surface')!).backdropFilter,
+      pillFilter: getComputedStyle(nav.querySelector('.nav-liquid-pill')!).backdropFilter,
+      hasBarSvgFilter: Boolean(document.getElementById('dock-main-glass')),
+    };
   });
-  expect(optics.filter).toContain('#dock-main-glass');
-  const refracted = await page.screenshot({clip: optics.clip, scale: 'css'});
-  const withoutLens = await page.addStyleTag({content: '#nav > .nav-liquid-bar-surface{backdrop-filter:blur(1.5px) saturate(1.25) !important}'});
-  const plain = await page.screenshot({clip: optics.clip, scale: 'css'});
-  const differences = await page.evaluate(async ([before, after]) => {
+  expect(optics.hasBarSvgFilter).toBe(true);
+  expect(optics.barFilter).toContain('#dock-main-glass');
+  expect(optics.barFilter).not.toContain('blur(');
+  expect(optics.pillFilter).toContain('blur(');
+  const barSample = await page.screenshot({clip: optics.barClip, scale: 'css'});
+  const pillBlurred = await page.screenshot({clip: optics.pillClip, scale: 'css'});
+  const withoutGlassFilters = await page.addStyleTag({content: '#nav .nav-liquid-bar-surface,#nav .nav-liquid-pill{backdrop-filter:none !important;-webkit-backdrop-filter:none !important}'});
+  const barPlain = await page.screenshot({clip: optics.barClip, scale: 'css'});
+  const pillPlain = await page.screenshot({clip: optics.pillClip, scale: 'css'});
+  const opticsStats = await page.evaluate(async ([barAfterPng, barBeforePng, pillAfterPng, pillBeforePng]) => {
     const pixels = async (png: string) => {
       const img = new Image();
       img.src = `data:image/png;base64,${png}`;
@@ -917,20 +936,39 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
       context.drawImage(img, 0, 0);
       return context.getImageData(0, 0, img.width, img.height).data;
     };
-    const [a, b] = await Promise.all([pixels(before), pixels(after)]);
-    return Array.from({length: 16}, (_, y) => {
-      const start = 4 * y;
-      const span = (colors: Uint8ClampedArray) => {
-        const channels = colors.subarray(start, start + 3);
-        return Math.max(...channels) - Math.min(...channels);
-      };
-      return {redShift: Math.abs(a[start] - b[start]), dispersion: span(b) - span(a)};
-    });
-  }, [plain.toString('base64'), refracted.toString('base64')]);
-  expect(Math.max(...differences.slice(2, 8).map(pixel => pixel.redShift))).toBeGreaterThan(22);
-  expect(Math.max(...differences.slice(2, 8).map(pixel => pixel.dispersion))).toBeGreaterThan(14);
-  expect(Math.max(...differences.slice(11, 15).map(pixel => pixel.redShift))).toBeLessThan(5);
-  await withoutLens.evaluate(style => style.remove());
+    const [barAfter, barBefore, pillAfter, pillBefore] = await Promise.all([
+      pixels(barAfterPng),
+      pixels(barBeforePng),
+      pixels(pillAfterPng),
+      pixels(pillBeforePng),
+    ]);
+    let maxBarRimShift = 0;
+    let maxBarInteriorShift = 0;
+    let maxBarEdgeShift = 0;
+    for (let y = 0; y < 16; y++) {
+      const s = 4 * y;
+      const diff = Math.max(
+        Math.abs(barAfter[s] - barBefore[s]),
+        Math.abs(barAfter[s + 1] - barBefore[s + 1]),
+        Math.abs(barAfter[s + 2] - barBefore[s + 2]),
+      );
+      if (y >= 1 && y <= 8) maxBarRimShift = Math.max(maxBarRimShift, diff);
+      if (y >= 11) maxBarInteriorShift = Math.max(maxBarInteriorShift, diff);
+      const span = (d: Uint8ClampedArray) => Math.max(d[s], d[s + 1], d[s + 2]) - Math.min(d[s], d[s + 1], d[s + 2]);
+      maxBarEdgeShift = Math.max(maxBarEdgeShift, Math.abs(span(barAfter) - span(barBefore)));
+    }
+    let maxPillBlurDiff = 0;
+    for (let y = 0; y < 16; y++) {
+      const s = 4 * y;
+      maxPillBlurDiff = Math.max(maxPillBlurDiff, Math.abs(pillAfter[s] - pillBefore[s]));
+    }
+    return {maxBarRimShift, maxBarInteriorShift, maxBarEdgeShift, maxPillBlurDiff};
+  }, [barSample.toString('base64'), barPlain.toString('base64'), pillBlurred.toString('base64'), pillPlain.toString('base64')]);
+  expect(opticsStats.maxBarRimShift).toBeGreaterThan(20);
+  expect(opticsStats.maxBarInteriorShift).toBeLessThanOrEqual(4);
+  expect(opticsStats.maxBarEdgeShift).toBeLessThanOrEqual(3);
+  expect(opticsStats.maxPillBlurDiff).toBeGreaterThan(20);
+  await withoutGlassFilters.evaluate(style => style.remove());
   await page.locator('#dock-backdrop-test').evaluate(element => element.remove());
 
   await page.evaluate(() => {
@@ -1010,12 +1048,18 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
     const accentDash = nav.querySelectorAll('.nav-liquid-accent-item')[0]!;
     const accentMat = new DOMMatrixReadOnly(getComputedStyle(accentDash).transform);
     const recess = nav.querySelector('.nav-liquid-bar-recess')!;
-    const recessSurface = nav.querySelector('.nav-liquid-bar-recess-surface')!;
+    const recessSurface = nav.querySelector<HTMLElement>('.nav-liquid-bar-recess-surface')!;
     const recessMat = new DOMMatrixReadOnly(getComputedStyle(recessSurface).transform);
+    const barW = (surface as HTMLElement).offsetWidth;
+    const barH = (surface as HTMLElement).offsetHeight;
+    const recessRadiusParts = getComputedStyle(recessSurface).borderTopLeftRadius.split(/\s+/).map(parseFloat);
+    const rPreX = recessRadiusParts[0] || 0;
+    const rPreY = recessRadiusParts[1] ?? rPreX;
     return {
       glow: Number(getComputedStyle(glowEl).opacity),
       mag: accentMat.a / bar.a,
       centerDy: Math.abs((lensRect.top + lensRect.height / 2) - (navRect.top + navRect.height / 2)),
+      lensBevel: parseFloat(getComputedStyle(nav).getPropertyValue('--dock-lens-bevel')),
       barScaleX: bar.a,
       barScaleY: bar.d,
       barTx: bar.m41,
@@ -1028,12 +1072,18 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
       surfaceBackdrop: getComputedStyle(surface).backdropFilter,
       recessBackdrop: getComputedStyle(recessSurface).backdropFilter,
       recessVisible: getComputedStyle(recess).visibility === 'visible' && getComputedStyle(recess).clipPath.startsWith('inset('),
+      recessScaleX: recessMat.a,
       recessScaleY: recessMat.d,
+      recessShrinkPxX: (1 - recessMat.a / bar.a) * barW,
+      recessShrinkPxY: (1 - recessMat.d / bar.d) * barH,
+      recessCapDiff: Math.abs(rPreX * recessMat.a - rPreY * recessMat.d),
     };
   });
   expect(pressProps.glow).toBeGreaterThan(0.9);
   expect(pressProps.mag).toBeGreaterThan(1.08);
   expect(pressProps.centerDy).toBeLessThan(0.75);
+  expect(pressProps.lensBevel).toBeGreaterThan(6);
+  expect(pressProps.lensBevel).toBeLessThanOrEqual(9);
   expect(pressProps.barScaleX).toBeGreaterThan(1.02);
   expect(pressProps.barScaleY).toBeGreaterThan(1.02);
   expect(Math.abs(pressProps.itemScaleX - pressProps.barScaleX)).toBeLessThan(0.005);
@@ -1047,6 +1097,9 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
   expect(pressProps.recessBackdrop).toBe('none');
   expect(pressProps.recessVisible).toBe(true);
   expect(pressProps.recessScaleY).toBeLessThan(pressProps.barScaleY - 0.08);
+  expect(pressProps.recessScaleX).toBeLessThan(pressProps.barScaleX - 0.025);
+  expect(Math.abs(pressProps.recessShrinkPxX - pressProps.recessShrinkPxY)).toBeLessThan(0.6);
+  expect(pressProps.recessCapDiff).toBeLessThan(0.8);
 
   const heldBox = (await lifted.boundingBox())!;
   const heldWidth = heldBox.width;
@@ -1411,14 +1464,20 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
     const pr = pill.getBoundingClientRect();
     const ar = active.getBoundingClientRect();
     const surfaceStyle = getComputedStyle(dock.querySelector('.nav-liquid-bar-surface')!);
+    const pillStyle = getComputedStyle(pill);
     return {
       radius: getComputedStyle(dock).borderTopLeftRadius,
-      backdrop: surfaceStyle.backdropFilter || getComputedStyle(dock).backdropFilter || '',
+      surfaceBackdrop: surfaceStyle.backdropFilter || 'none',
+      pillBackdrop: pillStyle.backdropFilter || '',
+      hasBarSvgFilter: Boolean(document.getElementById('dock-billing-glass')),
       alignedX: Math.abs(pr.left - ar.left),
     };
   });
   expect(billingMetrics.radius).toBe('999px');
-  expect(billingMetrics.backdrop).toContain('#dock-billing-glass');
+  expect(billingMetrics.surfaceBackdrop).toContain('#dock-billing-glass');
+  expect(billingMetrics.surfaceBackdrop).not.toContain('blur(');
+  expect(billingMetrics.pillBackdrop).toContain('blur(');
+  expect(billingMetrics.hasBarSvgFilter).toBe(true);
   expect(billingMetrics.alignedX).toBeLessThan(2);
   await page.screenshot({path: testInfo.outputPath('dock-billing.png')});
 
@@ -1627,7 +1686,10 @@ test('touch scrubbing stays inside a narrow screen and leaves taps available aft
     await expect(page.locator('#diagnostics.active')).toBeVisible();
 
     await client.send('Emulation.setEmulatedMedia', {features: [{name: 'prefers-reduced-transparency', value: 'reduce'}]});
-    await expect.poll(() => dock.evaluate(node => getComputedStyle(node.querySelector('.nav-liquid-bar-surface')!).backdropFilter)).toBe('none');
+    await expect.poll(() => dock.evaluate(node => ({
+      bar: getComputedStyle(node.querySelector('.nav-liquid-bar-surface')!).backdropFilter,
+      pill: getComputedStyle(node.querySelector('.nav-liquid-pill')!).backdropFilter,
+    }))).toEqual({bar: 'none', pill: 'none'});
   } finally {
     await context.close();
   }

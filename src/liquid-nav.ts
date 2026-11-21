@@ -1,4 +1,4 @@
-import { updateDockGlass } from './liquid-glass';
+import { clearDockGlassProbes, updateDockGlass } from './liquid-glass';
 import {
   flushMacosLiquidGlass,
   getMacosNativeGlassEngine,
@@ -31,6 +31,7 @@ const PULL_RETURN_OMEGA = 19;
 const PULL_RETURN_ZETA = 0.54;
 const ITEM_MAG_GAIN = 0.11;
 const BAR_PRESS_SCALE_MAX = 0.032;
+const RECESS_SHRINK_Y = 0.176;
 
 interface TabLayoutBox {
   element: HTMLElement;
@@ -113,6 +114,7 @@ interface PillState {
   barBox: DOMRect | null;
   lensWidth: number;
   lensHeight: number;
+  syncSeq: number;
 }
 
 function stepSpring(
@@ -669,8 +671,8 @@ function paintHorizontalPill(state: PillState) {
     state.lastRecessClip = setCachedStyle(barRecess, 'clipPath', state.lastRecessClip, nextRecessClip);
 
     const recessFactor = visualLift * (1 - Math.max(0, deform));
-    const recessScaleY = 1 - 0.176 * recessFactor;
-    const recessScaleX = 1 - 0.0204 * recessFactor;
+    const recessScaleY = 1 - RECESS_SHRINK_Y * recessFactor;
+    const recessScaleX = 1 - (barH / Math.max(1, barW)) * RECESS_SHRINK_Y * recessFactor;
     const nextRecessTransform = `translate3d(${barX.toFixed(2)}px, ${barY.toFixed(2)}px, 0) scale(${(barScaleX * recessScaleX).toFixed(4)}, ${(barScaleY * recessScaleY).toFixed(4)})`;
     state.lastRecessTransform = setCachedStyle(barRecessSurface, 'transform', state.lastRecessTransform, nextRecessTransform);
 
@@ -890,6 +892,7 @@ function moveHorizontalPill(state: PillState) {
 }
 
 function positionPill(state: PillState, animate: boolean) {
+  state.syncSeq += 1;
   const {container, host, pill, pillInner} = state;
   const isPrimary = host.id === 'nav';
   const resolved = isPrimary ? resolvePrimaryNavActiveTarget(container) : resolveBillingDockActiveTarget(container);
@@ -911,6 +914,8 @@ function positionPill(state: PillState, animate: boolean) {
     state.deformVel = 0;
     clearTabVisuals(state);
     paintDockSurface(state, 0, 0);
+    clearDockGlassProbes(host);
+    state.barRecessSurface.style.borderRadius = '';
     state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, '0');
     host.classList.remove('has-liquid-pill');
     return;
@@ -959,13 +964,27 @@ function positionPill(state: PillState, animate: boolean) {
     state.top = top;
     state.height = target.height;
     state.overscrollX = 0;
-    syncAccentLayer(state);
-    if (sizeChanged || !wasHorizontal || !host.style.getPropertyValue('--dock-backdrop')) {
+    const needsAccentSync = sizeChanged
+      || !wasHorizontal
+      || !state.accentTabs.length
+      || state.accentTabs.some(entry => !entry.element.isConnected);
+    if (needsAccentSync) {
+      syncAccentLayer(state);
+    }
+    if (sizeChanged || !wasHorizontal || !host.style.getPropertyValue('--dock-backdrop') || !host.style.getPropertyValue('--dock-lens-backdrop')) {
+      const barW = Math.max(1, state.barBox.width);
+      const barH = Math.max(1, state.barBox.height);
+      const fullScaleY = 1 - RECESS_SHRINK_Y;
+      const fullScaleX = 1 - (barH / barW) * RECESS_SHRINK_Y;
+      const preRadiusX = (barH / 2) * (fullScaleY / fullScaleX);
+      state.barRecessSurface.style.borderRadius = `${preRadiusX.toFixed(2)}px / ${(barH / 2).toFixed(2)}px`;
       state.lensWidth = target.width + LENS_WIDTH_GAIN;
       state.lensHeight = target.height + LENS_HEIGHT_GAIN;
       state.droplet.style.width = `${state.lensWidth}px`;
       state.droplet.style.height = `${state.lensHeight}px`;
-      if (!reducedTransparency.matches) {
+      if (reducedTransparency.matches) {
+        clearDockGlassProbes(host);
+      } else {
         updateDockGlass(host, state.barBox, state.lensWidth, state.lensHeight);
       }
     }
@@ -999,6 +1018,8 @@ function positionPill(state: PillState, animate: boolean) {
   state.deformVel = 0;
   clearTabVisuals(state);
   paintDockSurface(state, 0, 0);
+  clearDockGlassProbes(host);
+  state.barRecessSurface.style.borderRadius = '';
   if (isPrimary) {
     syncNativeDropletSlot(host, state.droplet, false);
   }
@@ -1169,12 +1190,16 @@ function attachDragScrub(state: PillState) {
     const shouldSwitch = Boolean(targetTab && !targetTab.classList.contains('active') && isBoxVisible(targetTab));
     const switchingOnTap = !dragged && shouldSwitch;
     cancel(dragged || shouldSwitch, switchingOnTap);
+    const seqBefore = state.syncSeq;
     if (shouldSwitch && targetTab) {
-      if (switchingOnTap) state.glideUntil = performance.now() + 260;
+      if (switchingOnTap) state.glideUntil = performance.now() + 210;
       targetTab.click();
     }
-    positionPill(state, true);
-    if (state.dockWidth) moveHorizontalPill(state);
+    if (state.syncSeq === seqBefore) {
+      positionPill(state, true);
+    } else if (state.dockWidth) {
+      moveHorizontalPill(state);
+    }
   };
 
   const onCancel = (event: PointerEvent) => {
@@ -1188,11 +1213,26 @@ function attachDragScrub(state: PillState) {
     if (pointerId !== null || !event.isPrimary || event.button !== 0 || !isHorizontalMobileDock()) return;
     ignoredClick = null;
     if (!state.dockWidth) return;
-    syncAccentLayer(state);
-    tabs = getHorizontalTabs(container).map(element => ({
-      element,
-      box: getUntransformedRect(element),
-    }));
+    const canReuseTabs = Boolean(
+      state.barBox
+      && state.accentTabs.length >= 2
+      && state.accentTabs.every(entry => entry.element.isConnected && !entry.element.hidden),
+    );
+    if (canReuseTabs && state.barBox) {
+      dockLeft = state.barBox.left + state.containerLeftInHost;
+      const dockTop = state.barBox.top + state.containerTopInHost;
+      tabs = state.accentTabs.map(entry => ({
+        element: entry.element,
+        box: new DOMRect(dockLeft + entry.left, dockTop + entry.top, entry.width, entry.height),
+      }));
+    } else {
+      syncAccentLayer(state);
+      dockLeft = container.getBoundingClientRect().left;
+      tabs = getHorizontalTabs(container).map(element => ({
+        element,
+        box: getUntransformedRect(element),
+      }));
+    }
     const directTarget = event.target instanceof Element
       ? event.target.closest<HTMLElement>('.nav-item, .billing-section-nav-button')
       : null;
@@ -1208,7 +1248,6 @@ function attachDragScrub(state: PillState) {
     state.glideUntil = 0;
     state.overscrollX = 0;
     state.pressed = true;
-    dockLeft = container.getBoundingClientRect().left;
     state.targetX = pressedTab.box.left - dockLeft;
     previewTab(pressedTab.element);
     moveHorizontalPill(state);
@@ -1273,7 +1312,7 @@ function registerPillHost(container: HTMLElement, host: HTMLElement, tag: 'li' |
     lastRecessTransform: '', lastAccentClip: '', lastDropletOpacity: '', lastDropletTransform: '',
     containerLeftInHost: 0, containerTopInHost: 0,
     top: 0, height: 0, dockWidth: 0, dockHeight: 0, leftRoom: 0, rightEdge: 0, bottomEdge: 0,
-    barBox: null, lensWidth: 0, lensHeight: 0,
+    barBox: null, lensWidth: 0, lensHeight: 0, syncSeq: 0,
   };
   controllers.push(state);
   attachDragScrub(state);
@@ -1304,9 +1343,29 @@ export function setupLiquidNav() {
   window.addEventListener('resize', cancelAndSync);
   window.addEventListener('blur', cancelAndSync);
   reducedMotion.addEventListener('change', cancelAndSync);
-  reducedTransparency.addEventListener('change', cancelAndSync);
+  reducedTransparency.addEventListener('change', () => {
+    if (reducedTransparency.matches) {
+      clearDockGlassProbes();
+    } else if (isHorizontalMobileDock()) {
+      for (const state of controllers) {
+        if (state.dockWidth && state.barBox) {
+          updateDockGlass(state.host, state.barBox, state.lensWidth, state.lensHeight);
+        }
+      }
+    }
+    cancelAndSync();
+  });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) cancelAndSync();
+    if (document.hidden) {
+      cancelAndSync();
+      clearDockGlassProbes();
+    } else if (isHorizontalMobileDock() && !reducedTransparency.matches) {
+      for (const state of controllers) {
+        if (state.dockWidth && state.barBox) {
+          updateDockGlass(state.host, state.barBox, state.lensWidth, state.lensHeight);
+        }
+      }
+    }
   });
 
   const trees = [document.getElementById('nav-dashboard-children'), document.getElementById('nav-billing-tree')];

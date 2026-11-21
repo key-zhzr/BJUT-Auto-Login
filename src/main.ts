@@ -608,20 +608,44 @@ async function showUpdateDialog(
   const installAvailable = options.installAvailable !== false;
   const title = reinstall ? '重新安装' : options.sameVersion ? '发现同版本新构建' : '发现新版本';
   document.getElementById('update-modal-title')!.textContent = `${title} ${release.tag_name}`;
-  const signedInstallerHint = installAvailable && target.platform !== 'android'
-    ? ' · 应用内安装将使用签名更新包'
-    : '';
-  const buildTimes = [];
+  const meta = document.getElementById('update-modal-meta')!;
+  meta.replaceChildren();
+  const chips = document.createElement('div');
+  chips.className = 'update-meta-chips';
+  const addChip = (text: string, extraClass = '') => {
+    const chip = document.createElement('span');
+    chip.className = extraClass ? `update-meta-chip ${extraClass}` : 'update-meta-chip';
+    chip.textContent = text;
+    chips.append(chip);
+    return chip;
+  };
+  addChip(`当前 v${target.currentVersion}`);
+  addChip(`${target.platform}/${target.arch}`);
+  const sizeChip = addChip(asset.size > 0 ? formatBytes(asset.size) : '正在读取大小…', 'update-meta-size');
+  if (installAvailable && target.platform !== 'android') {
+    addChip('签名更新包', 'is-accent');
+  }
+  const specs = document.createElement('div');
+  specs.className = 'update-meta-specs';
+  const addSpec = (labelText: string, valueText: string, options: { wide?: boolean; mono?: boolean } = {}) => {
+    const cell = document.createElement('div');
+    cell.className = options.wide ? 'update-meta-spec is-wide' : 'update-meta-spec';
+    const label = document.createElement('span');
+    label.textContent = labelText;
+    const value = document.createElement(options.mono ? 'code' : 'strong');
+    value.textContent = valueText;
+    cell.append(label, value);
+    specs.append(cell);
+  };
+  addSpec('完整安装包', asset.name, { wide: true, mono: true });
   if (isBuildTimestamp(target.currentBuildTimestamp)) {
-    buildTimes.push(`当前编译时间 ${formatBuildTimestamp(target.currentBuildTimestamp)}`);
+    addSpec('当前编译时间', formatBuildTimestamp(target.currentBuildTimestamp));
   }
   if (isBuildTimestamp(options.buildTimestamp)) {
-    buildTimes.push(`更新包编译时间 ${formatBuildTimestamp(options.buildTimestamp)}`);
+    addSpec('更新包编译时间', formatBuildTimestamp(options.buildTimestamp));
   }
-  const buildDetails = buildTimes.length ? ` · ${buildTimes.join(' · ')}` : '';
-  const meta = document.getElementById('update-modal-meta')!;
-  const showSize = (size: string) => { meta.textContent = `当前 v${target.currentVersion} · ${target.platform}/${target.arch}${buildDetails} · 完整安装包 ${asset.name} · ${size}${signedInstallerHint}`; };
-  showSize(asset.size > 0 ? formatBytes(asset.size) : '正在读取大小…');
+  meta.append(chips, specs);
+  const showSize = (size: string) => { sizeChip.textContent = size; };
   notes.innerHTML = await renderReleaseNotes(release.body || '');
   notes.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => {
     anchor.addEventListener('click', event => {
@@ -2335,11 +2359,25 @@ function renderAccountHealthPanel() {
     badge.className = `account-health-badge ${item.status}`;
     badge.textContent = accountHealthLabel(item.status);
     title.append(user, badge);
-    const detail = document.createElement('small');
-    const failure = item.lastFailureReason ? `；最近失败：${item.lastFailureReason}` : '';
-    detail.textContent = `${formatCooldown(item.cooldownSeconds)}；连续失败 ${item.consecutiveFailures} 次${failure}`;
-    detail.title = `最近成功：${formatHealthTime(item.lastSuccess)}；最近失败：${formatHealthTime(item.lastFailure)}`;
-    info.append(title, detail);
+    const metaRow = document.createElement('div');
+    metaRow.className = 'meta-chip-row';
+    for (const chipText of [
+      formatCooldown(item.cooldownSeconds),
+      `连续失败 ${item.consecutiveFailures} 次`,
+    ]) {
+      const chip = document.createElement('span');
+      chip.className = 'meta-chip';
+      chip.textContent = chipText;
+      metaRow.append(chip);
+    }
+    info.append(title, metaRow);
+    if (item.lastFailureReason) {
+      const reason = document.createElement('small');
+      reason.className = 'account-health-reason';
+      reason.textContent = `最近失败：${item.lastFailureReason}`;
+      info.append(reason);
+    }
+    info.title = `最近成功：${formatHealthTime(item.lastSuccess)}；最近失败：${formatHealthTime(item.lastFailure)}`;
     const reset = document.createElement('button');
     reset.className = 'btn btn-secondary btn-sm action-reset-health';
     reset.dataset.user = item.user;
@@ -2507,7 +2545,8 @@ function renderNetworkProfiles() {
     info.className = 'network-profile-info';
     const title = document.createElement('strong');
     title.textContent = profile.name;
-    const details = document.createElement('small');
+    const metaRow = document.createElement('div');
+    metaRow.className = 'meta-chip-row';
     const account = profile.account_order[0] || '沿用全局账号顺序';
     const network = profile.ssid || '校园有线';
     const typePolicy = profile.auto_login_types || {};
@@ -2517,8 +2556,18 @@ function renderNetworkProfiles() {
       (typePolicy.type2 ?? legacyAutoLogin) ? 'bjut_wifi' : '',
       (typePolicy.type3 ?? legacyAutoLogin) ? 'lgn 有线' : '',
     ].filter(Boolean).join('/');
-    details.textContent = `${network} · ${profile.login_type === 'auto' ? '自动协议' : profile.login_type} · 自动登录 ${enabledTypes || '全关'} · ${account}`;
-    info.append(title, details);
+    for (const chipText of [
+      network,
+      profile.login_type === 'auto' ? '自动协议' : profile.login_type,
+      `自动登录 ${enabledTypes || '全关'}`,
+      account,
+    ]) {
+      const chip = document.createElement('span');
+      chip.className = 'meta-chip';
+      chip.textContent = chipText;
+      metaRow.append(chip);
+    }
+    info.append(title, metaRow);
     const actions = document.createElement('div');
     actions.className = 'network-profile-actions';
     const toggle = document.createElement('button');
@@ -2919,10 +2968,21 @@ const NAV_PAGE_ORDER: Record<string, number> = {
 };
 let cancelPageSlide: (() => void) | null = null;
 let activeLeavingPage: HTMLElement | null = null;
+let pageTransitionSeq = 0;
+let pendingPageTransitionTasks: Array<{ seq: number; run: () => void }> = [];
 
-function clearPageSlideState() {
+function flushPageTransitionTasks() {
+  const tasks = pendingPageTransitionTasks;
+  pendingPageTransitionTasks = [];
+  for (const task of tasks) {
+    if (task.seq === pageTransitionSeq) task.run();
+  }
+}
+
+function clearPageSlideState(flushTasks = false) {
   cancelPageSlide?.();
   cancelPageSlide = null;
+  document.body.classList.remove('is-page-sliding');
   if (activeLeavingPage) {
     activeLeavingPage.classList.remove('page-slide-leave-left', 'page-slide-leave-right');
     activeLeavingPage.inert = false;
@@ -2940,6 +3000,11 @@ function clearPageSlideState() {
       'page-slide-leave-right',
     );
   });
+  if (flushTasks) {
+    flushPageTransitionTasks();
+  } else {
+    pendingPageTransitionTasks = [];
+  }
 }
 
 function activatePage(target: string, navTarget = target) {
@@ -2956,6 +3021,8 @@ function activatePage(target: string, navTarget = target) {
   const prevPageId = prevPageEl?.id || 'dashboard';
   const nextPageEl = document.getElementById(resolvedTarget);
   const pageChanged = Boolean(nextPageEl && prevPageEl !== nextPageEl);
+  if (pageChanged) pageTransitionSeq += 1;
+  const activeTransitionSeq = pageTransitionSeq;
   const mainEl = document.getElementById('main-content');
   const shouldSlide = Boolean(
     pageChanged
@@ -3021,6 +3088,7 @@ function activatePage(target: string, navTarget = target) {
   }
 
   if (shouldSlide && prevPageEl && nextPageEl) {
+    document.body.classList.add('is-page-sliding');
     prevPageEl.style.setProperty('--leave-top', `${leaveTop}px`);
     prevPageEl.style.setProperty('--leave-left', `${leaveLeft}px`);
     prevPageEl.style.setProperty('--leave-width', `${leaveWidth}px`);
@@ -3035,22 +3103,36 @@ function activatePage(target: string, navTarget = target) {
     const onAnimEnd = (event: AnimationEvent) => {
       if (event.target !== animTarget) return;
       if (event.animationName !== 'pageSlideFromRight' && event.animationName !== 'pageSlideFromLeft') return;
-      clearPageSlideState();
+      clearPageSlideState(true);
     };
     animTarget.addEventListener('animationend', onAnimEnd);
-    const timer = window.setTimeout(clearPageSlideState, 380);
+    const timer = window.setTimeout(() => clearPageSlideState(true), 280);
     cancelPageSlide = () => {
       window.clearTimeout(timer);
       animTarget.removeEventListener('animationend', onAnimEnd);
     };
   }
 
+  const runAfterPageSlide = (task: () => void) => {
+    if (shouldSlide) {
+      pendingPageTransitionTasks.push({ seq: activeTransitionSeq, run: task });
+    } else {
+      task();
+    }
+  };
+
   routerWorkbench?.onPage(resolvedTarget);
   rechargeHours.setActive(resolvedTarget === 'billing-center' && activeBillingWorkbenchSection === 'recharge');
   if (resolvedTarget === 'diagnostics') {
-    void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
+    runAfterPageSlide(() => {
+      void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
+    });
   }
-  if (resolvedTarget === 'logs' && logsDirty) renderFilteredLogs();
+  if (resolvedTarget === 'logs' && logsDirty) {
+    runAfterPageSlide(() => {
+      if (logsDirty) renderFilteredLogs();
+    });
+  }
   if (resolvedTarget === 'settings') {
     if (requestedSettingsSubpage !== undefined) {
       openSettingsSubpage(requestedSettingsSubpage, { animate: true, resetScroll: true });
@@ -3059,7 +3141,9 @@ function activatePage(target: string, navTarget = target) {
     } else {
       syncSettingsOverviewSummaries();
     }
-    void refreshPermissionHealth();
+    runAfterPageSlide(() => {
+      void refreshPermissionHealth();
+    });
   }
   if (resolvedTarget === 'billing-center') {
     activateBillingWorkbenchSection(activeBillingWorkbenchSection);

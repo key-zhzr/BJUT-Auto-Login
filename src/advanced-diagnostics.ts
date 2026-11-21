@@ -65,22 +65,29 @@ export function setupAdvancedDiagnostics() {
             };
             actions.append(button);
         }
+        const doneWrap = document.createElement('div');
+        doneWrap.className = 'modal-actions';
         const done = document.createElement('button');
         done.type = 'button';
         done.className = 'btn btn-secondary';
         done.textContent = '关闭';
         done.onclick = close;
-        form.append(done);
+        doneWrap.append(done);
+        form.append(doneWrap);
     });
     document.getElementById('btn-issue-preview')?.addEventListener('click', async () => {
         const { form, close } = presentationDialog('issue-preview-dialog', '反馈预览');
+        const note = document.createElement('p');
+        note.className = 'transfer-note';
+        note.textContent = '以下诊断包已自动脱敏（隐藏学号、密码与本机敏感地址后缀），可核对后再复制前往 GitHub 提交。';
         const text = document.createElement('textarea');
+        text.className = 'issue-preview-textarea';
         text.rows = 12;
         text.readOnly = true;
         text.style.width = '100%';
         text.setAttribute('aria-label', '脱敏诊断信息');
         text.value = '正在准备脱敏信息…';
-        form.append(text);
+        form.append(note, text);
         const actions = document.createElement('div');
         actions.className = 'modal-actions';
         const cancel = document.createElement('button');

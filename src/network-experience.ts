@@ -85,15 +85,46 @@ export class NetworkExperience {
     disconnected.addEventListener('toggle', () => { this.showDisconnected = disconnected.open; });
     const disconnectedList = document.createElement('div'); disconnectedList.className = 'network-adapter-list'; disconnected.append(disconnectedList);
     let rowParent: HTMLElement = this.list;
-    const addRow = (id: string, title: string, detail: string, chosen: boolean, available: boolean, active = false) => {
+    const addRow = (
+      id: string,
+      title: string,
+      chips: string[] | string,
+      chosen: boolean,
+      available: boolean,
+      active = false,
+    ) => {
       const row = document.createElement('button'); row.type = 'button';
       row.className = `network-adapter-row${chosen ? ' chosen' : ''}${active ? ' in-use' : ''}`;
       row.dataset.adapterId = id; row.dataset.unavailable = String(!available);
       row.setAttribute('role', 'radio'); row.setAttribute('aria-checked', String(chosen)); row.tabIndex = chosen ? 0 : -1;
       const marker = document.createElement('span'); marker.className = 'adapter-radio-marker'; marker.setAttribute('aria-hidden', 'true');
-      const text = document.createElement('span'); text.className = 'network-adapter-text'; const label = document.createElement('strong'); label.textContent = title;
-      const description = document.createElement('small'); description.textContent = detail;
-      text.append(label, description); row.append(marker, text); rowParent.append(row);
+      const text = document.createElement('span'); text.className = 'network-adapter-text';
+      const head = document.createElement('span'); head.className = 'network-adapter-head';
+      const label = document.createElement('strong'); label.textContent = title;
+      head.append(label);
+      if (active) {
+        const badge = document.createElement('span');
+        badge.className = 'health-badge success';
+        badge.textContent = '用于认证';
+        head.append(badge);
+      }
+      text.append(head);
+      if (Array.isArray(chips)) {
+        const chipRow = document.createElement('span');
+        chipRow.className = 'meta-chip-row';
+        for (const item of chips) {
+          const chip = document.createElement('span');
+          chip.className = 'meta-chip';
+          chip.textContent = item;
+          chipRow.append(chip);
+        }
+        text.append(chipRow);
+      } else {
+        const description = document.createElement('small');
+        description.textContent = chips;
+        text.append(description);
+      }
+      row.append(marker, text); rowParent.append(row);
     };
     if (inventory.selectionSupported) addRow('', '自动选择', '优先校园有线，随当前连接自动识别', !inventory.preferredInterface, true);
     const adapters = [...inventory.adapters].sort((a, b) => Number(b.selected) - Number(a.selected) || Number(b.connected) - Number(a.connected));
@@ -101,9 +132,19 @@ export class NetworkExperience {
       rowParent = !adapter.connected && adapter.id !== inventory.preferredInterface ? disconnectedList : this.list;
       const kind = ({ wifi: 'Wi-Fi', ethernet: '有线', vpn: '虚拟 / VPN', cellular: '移动数据' } as Record<string, string>)[adapter.transport] || adapter.transport;
       const title = adapter.name === kind ? adapter.name : `${adapter.name} · ${kind}`;
-      addRow(adapter.id, `${title}${adapter.selected ? ' · 用于认证' : ''}`,
-        `${adapter.interfaceName} · ${adapter.connected ? '已启用' : '已断开'} · IPv4 ${adapter.ipv4.join(' / ') || '--'} · IPv6 ${adapter.ipv6.length ? '已取得地址' : '--'}`,
-        inventory.preferredInterface === adapter.id, adapter.selectable && adapter.connected && adapter.ipv4.length > 0, adapter.selected);
+      addRow(
+        adapter.id,
+        title,
+        [
+          adapter.interfaceName,
+          adapter.connected ? '已启用' : '已断开',
+          `IPv4 ${adapter.ipv4.join(' / ') || '--'}`,
+          `IPv6 ${adapter.ipv6.length ? '已取得地址' : '--'}`,
+        ],
+        inventory.preferredInterface === adapter.id,
+        adapter.selectable && adapter.connected && adapter.ipv4.length > 0,
+        adapter.selected,
+      );
     }
     if (disconnectedList.childElementCount) this.list.append(disconnected);
     rowParent = this.list;
@@ -153,6 +194,23 @@ export class NetworkExperience {
   }
 
   renderSchedule(plan: NetworkSchedule) {
-    element('network-schedule-summary').textContent = `${plan.reason}。当前每 ${plan.intervalSeconds} 秒检测连通性，每 ${plan.interfacePollSeconds} 秒核对接口；网络变化事件仍会立即响应。`;
+    const container = element('network-schedule-summary');
+    container.replaceChildren();
+    const reason = document.createElement('div');
+    reason.className = 'schedule-summary-reason';
+    reason.textContent = plan.reason;
+    const chips = document.createElement('div');
+    chips.className = 'meta-chip-row';
+    for (const text of [
+      `连通性检测：每 ${plan.intervalSeconds} 秒`,
+      `接口核对：每 ${plan.interfacePollSeconds} 秒`,
+      '网络变化即时响应',
+    ]) {
+      const chip = document.createElement('span');
+      chip.className = 'meta-chip';
+      chip.textContent = text;
+      chips.append(chip);
+    }
+    container.append(reason, chips);
   }
 }

@@ -687,10 +687,15 @@ html:root[data-theme] {
     linear-gradient(90deg, var(--accent-hover), var(--accent-color));
 }
 
-:root[data-theme] .markdown-body,
+:root[data-theme] .markdown-body {
+  background: var(--theme-subtle-bg);
+  border-color: var(--theme-border);
+}
+
 :root[data-theme] .markdown-body code,
 :root[data-theme] .markdown-body pre {
   background: var(--theme-code-bg);
+  border-color: var(--theme-border);
 }
 
 :root[data-theme] .update-progress-track,

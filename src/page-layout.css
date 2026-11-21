@@ -15,17 +15,21 @@
   :root[data-theme] :is(.logs-container,#router-logs-content)::-webkit-scrollbar { width:8px!important; height:8px!important; background:transparent!important; }
   :root[data-theme] body.is-android #main-content > .page:not(.page-slide-from-right):not(.page-slide-from-left):not(.page-slide-leave-left):not(.page-slide-leave-right) { animation: none; }
 
+  :root[data-theme] body.is-android #main-content > .page {
+    contain: style;
+  }
+
   :root[data-theme] body.is-android #main-content > .page:not(#billing-center).active.page-slide-from-right,
   :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-right > .page-header,
   :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-right .billing-workbench-content {
-    animation: pageSlideFromRight 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: pageSlideFromRight 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
     will-change: transform;
   }
 
   :root[data-theme] body.is-android #main-content > .page:not(#billing-center).active.page-slide-from-left,
   :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-left > .page-header,
   :root[data-theme] body.is-android #main-content > #billing-center.active.page-slide-from-left .billing-workbench-content {
-    animation: pageSlideFromLeft 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: pageSlideFromLeft 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
     will-change: transform;
   }
 
@@ -41,7 +45,7 @@
     pointer-events: none;
     z-index: 1;
     will-change: transform;
-    animation-duration: 300ms;
+    animation-duration: 220ms;
     animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
     animation-fill-mode: both;
   }
@@ -621,17 +625,26 @@
   }
 
   @supports ((backdrop-filter: blur(5px)) or (-webkit-backdrop-filter: blur(5px))) {
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface {
-      background: var(--dock-tint);
-      -webkit-backdrop-filter: blur(5px) saturate(1.25);
-      backdrop-filter: var(--dock-backdrop, blur(5px) saturate(1.25));
-    }
-
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav):is(.is-droplet-active, .is-bar-animating) .nav-liquid-bar-surface,
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
-      background: var(--dock-tint);
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface,
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
+    }
+
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
+    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
+      background: var(--dock-tint);
+    }
+
+    :root[data-theme] body:not(.is-desktop):not(.is-page-sliding) :is(#nav, .billing-mobile-nav):not(.is-droplet-active):not(.is-bar-animating) .nav-liquid-bar-surface {
+      -webkit-backdrop-filter: var(--dock-backdrop, none);
+      backdrop-filter: var(--dock-backdrop, none);
+    }
+
+    :root[data-theme] body:not(.is-desktop):not(.is-page-sliding) :is(#nav, .billing-mobile-nav):not(.is-droplet-active):not(.is-bar-animating) .nav-liquid-pill {
+      -webkit-backdrop-filter: blur(10px) saturate(1.3);
+      backdrop-filter: blur(10px) saturate(1.3);
     }
 
     :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
@@ -660,7 +673,15 @@
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill-inner {
     border: 0;
     background: var(--dock-pill-tint);
-    box-shadow: none;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      inset 0 -0.5px 0 rgba(var(--accent-rgb, var(--primary-rgb)), 0.14);
+  }
+
+  :root[data-theme][data-color-scheme="dark"] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill-inner {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      inset 0 -0.5px 0 rgba(0, 0, 0, 0.24);
   }
 
   :root[data-theme] body:not(.is-desktop) #nav .nav-item,
@@ -727,9 +748,13 @@
 
 @media (prefers-reduced-transparency: reduce) {
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface,
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
   :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
     background: var(--theme-card-solid);
     border-color: var(--theme-border-strong);
   }
