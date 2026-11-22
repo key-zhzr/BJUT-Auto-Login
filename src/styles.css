@@ -144,7 +144,7 @@ nav {
   display: flex;
   flex-direction: column;
   padding: 1.15rem 0.7rem;
-  transition: all 0.3s ease;
+  transition: background-color 0.25s ease, border-color 0.25s ease, width 0.25s ease;
 }
 
 .nav-brand {
@@ -335,7 +335,7 @@ nav {
   border-radius: 10px;
   cursor: pointer;
   color: var(--text-muted);
-  transition: all 0.2s ease;
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -2095,7 +2095,8 @@ input:focus {
   height: auto;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 0.85rem;
   line-height: 1.5;
@@ -3268,28 +3269,10 @@ input:checked + .slider:before { transform: translateX(24px); }
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  max-height: 42rem;
   margin-top: 0.75rem;
-  overflow: hidden;
-  visibility: visible;
-  opacity: 1;
-  transition:
-    max-height 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    margin-top 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 160ms ease,
-    visibility 0s linear;
 }
-#permission-health-group.is-collapsed .permission-health-list {
-  max-height: 0;
-  margin-top: 0;
-  visibility: hidden;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    max-height 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    margin-top 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 120ms ease,
-    visibility 0s linear 220ms;
+.permission-health-list[hidden] {
+  display: none !important;
 }
 .permission-health-toggle svg {
   width: 15px;
@@ -4301,13 +4284,17 @@ body.is-android .glass-card {
 }
 body.is-android .android-only { display: block; }
 body.is-android .usage-alert-master-setting { display: none; }
-body.is-android .modal-overlay,
-body.is-android .custom-select-options {
+body.is-android .modal-overlay {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background: rgba(0, 0, 0, 0.48);
+}
+:root:not([data-theme="basic"]) body.is-android .custom-select-options {
   -webkit-backdrop-filter: blur(4px) !important;
   backdrop-filter: blur(4px) !important;
 }
 body.is-android .modal-overlay.hidden,
-body.is-android .custom-select:not(.open) .custom-select-options {
+:root:not([data-theme="basic"]) body.is-android .custom-select:not(.open):not(.closing) .custom-select-options {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
@@ -5224,7 +5211,8 @@ body.is-android .titlebar {
   z-index: 3500;
   max-height: 220px;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
 }
 @supports not selector(::-webkit-scrollbar) {
   .custom-select-options {
@@ -5240,7 +5228,7 @@ body.is-android .titlebar {
   color: inherit;
 }
 .custom-select-options[hidden],
-.custom-select:not(.open) > .custom-select-options {
+.custom-select:not(.open):not(.closing) > .custom-select-options {
   display: none;
 }
 .custom-select-options::-webkit-scrollbar {
@@ -5485,7 +5473,7 @@ html.keyboard-open { height: var(--app-viewport-height); overflow: hidden; }
 :root body.is-android.keyboard-open .app-container { height: 100%; min-height: 0; }
 :root body.is-android.keyboard-open main {
   min-height: 0; max-height: 100%; padding-bottom: 1rem !important;
-  overflow-y: auto; overscroll-behavior-y: contain;
+  overflow-y: auto; overscroll-behavior-y: none;
 }
 :root body.is-android.keyboard-open .logs-container { min-height: 0; }
 :root body.is-android.keyboard-open .modal-overlay { height: var(--app-viewport-height); }

@@ -1,3 +1,14 @@
+html,
+body,
+#main-content,
+.modal-content,
+.custom-select-options,
+.logs-container,
+.billing-records-table-wrap {
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+}
+
 /* Keep the original full-page scroll area and room for card shadows. */
 #main-content { position:relative; overflow-y:scroll; overflow-x:clip; scrollbar-gutter:auto; }
 .modal-content { scrollbar-gutter:auto; }
@@ -17,6 +28,25 @@
 
   :root[data-theme] body.is-android #main-content > .page {
     contain: style;
+  }
+
+  :root[data-theme] body.is-android.is-page-sliding #main-content > .page:not(#billing-center) {
+    contain: layout style paint;
+  }
+
+  :root[data-theme] body.is-android.is-page-sliding #main-content > .page > .page-header::after {
+    display: none;
+  }
+
+  :root[data-theme] body.is-android.is-page-sliding #main-content > .page > .page-header::before {
+    opacity: 1;
+    transition: none;
+  }
+
+  :root[data-theme] body.is-android.is-page-slide-prep #main-content > .page:is(.page-slide-from-right, .page-slide-from-left, .page-slide-leave-left, .page-slide-leave-right),
+  :root[data-theme] body.is-android.is-page-slide-prep #main-content > #billing-center:is(.page-slide-from-right, .page-slide-from-left) > .page-header,
+  :root[data-theme] body.is-android.is-page-slide-prep #main-content > #billing-center:is(.page-slide-from-right, .page-slide-from-left) .billing-workbench-content {
+    animation-play-state: paused !important;
   }
 
   :root[data-theme] body.is-android #main-content > .page:not(#billing-center).active.page-slide-from-right,
@@ -282,7 +312,7 @@
 
 :root[data-theme] :is(.logs-container,#router-logs-content){scrollbar-width:auto}
 
-:root[data-theme] .custom-select-options { overscroll-behavior: contain; }
+:root[data-theme] .custom-select-options { overscroll-behavior: none; overscroll-behavior-y: none; }
 :root[data-theme] .router-source-row button[aria-pressed="true"] { color:var(--primary-color); background:rgba(var(--primary-rgb),.13); border:1px solid var(--primary-color); }
 #billing-source-current { font-size:.8rem; color:var(--text-muted); }
 /* Keep every visible billing section in the dock, including the router summary. */
@@ -378,12 +408,12 @@
   box-shadow: none !important;
 }
 
-/* Desktop & Tablet Sidebar Glass Specular Polish + Apple / WinUI Harmonization */
+/* Desktop & Tablet Sidebar Glass Specular Polish + Apple Harmonization */
 @media (min-width: 769px) {
-  :root[data-theme] #nav {
+  :root[data-theme]:not([data-theme="winui"]) #nav {
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38);
   }
-  :root[data-theme][data-color-scheme="dark"] #nav {
+  :root[data-theme]:not([data-theme="winui"])[data-color-scheme="dark"] #nav {
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   }
   :root[data-theme="apple27"] #nav .nav-items > .nav-liquid-pill:not(.is-parent-pill) .nav-liquid-pill-inner {
@@ -402,23 +432,11 @@
     background: var(--theme-hover-bg);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
   }
-  :root[data-theme="winui"] #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
-    border-color: var(--win-control-stroke-rest);
-    background: var(--win-control-fill-hover);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.34),
-      0 2px 6px rgba(0, 0, 0, 0.04);
-  }
-  :root[data-theme="winui"][data-color-scheme="dark"] #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.1),
-      0 2px 8px rgba(0, 0, 0, 0.22);
-  }
 }
 
 /* Narrow Desktop Rail (Tier 1) */
 @media (max-width: 768px) {
-  :root[data-theme] body.is-desktop #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
+  :root[data-theme]:not([data-theme="winui"]) body.is-desktop #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
     border-radius: var(--theme-control-radius, 10px);
   }
   :root[data-theme="apple27"] body.is-desktop #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
@@ -432,11 +450,6 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.42),
       0 4px 12px rgba(var(--accent-rgb), 0.26);
   }
-  :root[data-theme="winui"] body.is-desktop #nav .nav-items > .nav-liquid-pill .nav-liquid-pill-inner {
-    border-color: var(--win-control-stroke-rest);
-    background: var(--win-control-fill-hover);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
-  }
 }
 
 :root[data-theme] .has-liquid-pill .nav-liquid-pill { opacity: 1; }
@@ -444,9 +457,18 @@
 :root[data-theme] .nav-liquid-droplet { display: none; }
 :root[data-theme] .nav-liquid-bar-surface { display: none; }
 :root[data-theme] .nav-liquid-bar-recess { display: none; }
+:root[data-theme="winui"] :is(
+  .nav-liquid-pill,
+  .nav-liquid-bar-surface,
+  .nav-liquid-bar-recess,
+  .nav-liquid-accent-layer,
+  .nav-liquid-droplet
+) {
+  display: none !important;
+}
 
 @media (max-width: 768px) {
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) {
     --dock-edge: rgba(35, 48, 69, 0.14);
     --dock-tint: rgba(251, 252, 255, 0.53);
     --dock-highlight: rgba(255, 255, 255, 0.84);
@@ -462,7 +484,7 @@
       0 2px 6px rgba(15, 23, 42, 0.08);
   }
 
-  :root[data-theme][data-color-scheme="dark"] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) {
+  :root[data-theme]:not([data-theme="winui"])[data-color-scheme="dark"] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) {
     --dock-edge: rgba(255, 255, 255, 0.17);
     --dock-tint: rgba(18, 24, 35, 0.62);
     --dock-highlight: rgba(255, 255, 255, 0.24);
@@ -478,8 +500,8 @@
       0 2px 8px rgba(0, 0, 0, 0.28);
   }
 
-  :root[data-theme] body:not(.is-desktop) #nav,
-  :root[data-theme] body:not(.is-desktop).billing-center-active .billing-mobile-nav {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) #nav,
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop).billing-center-active .billing-mobile-nav {
     position: fixed;
     inset: auto 0 max(0.625rem, env(safe-area-inset-bottom));
     width: min(calc(100% - clamp(1.25rem, 6.2vw, 2.5rem)), 32rem);
@@ -501,7 +523,7 @@
     -webkit-touch-callout: none;
   }
 
-  :root[data-theme] body:not(.is-desktop).billing-center-active #nav {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop).billing-center-active #nav {
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -509,7 +531,7 @@
   }
 
   /* The bar samples the page. The raised lens also samples the tab artwork. */
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface {
     display: block;
     position: absolute;
     inset: 0;
@@ -526,8 +548,8 @@
     contain: layout style;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-glow,
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-glow {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-glow,
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-glow {
     position: absolute;
     inset: 0;
     border-radius: inherit;
@@ -543,7 +565,7 @@
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess {
     display: block;
     position: absolute;
     inset: 0;
@@ -555,11 +577,11 @@
     contain: layout style;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-bar-recess {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-bar-recess {
     visibility: visible;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
     position: absolute;
     inset: 0;
     border-radius: inherit;
@@ -572,7 +594,7 @@
     contain: layout style;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-accent-layer {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-accent-layer {
     display: block;
     position: absolute;
     inset: 0;
@@ -584,11 +606,11 @@
     contain: layout style;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-accent-layer {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-accent-layer {
     visibility: visible;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-accent-item {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-accent-item {
     position: absolute;
     display: flex;
     flex-direction: column;
@@ -607,7 +629,7 @@
     contain: layout style;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
     display: block;
     position: absolute;
     top: 0;
@@ -625,42 +647,42 @@
   }
 
   @supports ((backdrop-filter: blur(5px)) or (-webkit-backdrop-filter: blur(5px))) {
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
+    :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
 
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
+    :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
+    :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
       background: var(--dock-tint);
     }
 
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface {
+    :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface {
       -webkit-backdrop-filter: var(--dock-backdrop, none);
       backdrop-filter: var(--dock-backdrop, none);
     }
 
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
+    :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
       -webkit-backdrop-filter: blur(10px) saturate(1.3);
       backdrop-filter: blur(10px) saturate(1.3);
     }
 
-    :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
+    :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
       -webkit-backdrop-filter: blur(1px);
       backdrop-filter: var(--dock-lens-backdrop, blur(1px));
     }
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-droplet {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-droplet-active .nav-liquid-droplet {
     visibility: visible;
   }
 
-  :root[data-theme] body:not(.is-desktop) #nav .nav-items {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) #nav .nav-items {
     z-index: 1;
     overflow: visible;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
     border-radius: 999px;
     transform-origin: center center;
     transition: none;
@@ -668,7 +690,7 @@
     contain: layout style;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill-inner {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill-inner {
     border: 0;
     background: var(--dock-pill-tint);
     box-shadow:
@@ -676,14 +698,14 @@
       inset 0 -0.5px 0 rgba(var(--accent-rgb, var(--primary-rgb)), 0.14);
   }
 
-  :root[data-theme][data-color-scheme="dark"] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill-inner {
+  :root[data-theme]:not([data-theme="winui"])[data-color-scheme="dark"] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill-inner {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.2),
       inset 0 -0.5px 0 rgba(0, 0, 0, 0.24);
   }
 
-  :root[data-theme] body:not(.is-desktop) #nav .nav-item,
-  :root[data-theme] body:not(.is-desktop).billing-center-active #billing-center .billing-mobile-nav .billing-section-nav-button {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) #nav .nav-item,
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop).billing-center-active #billing-center .billing-mobile-nav .billing-section-nav-button {
     border-radius: 999px;
     border: 0;
     min-height: 0;
@@ -702,30 +724,25 @@
     contain: layout style;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav .nav-item, #billing-center .billing-mobile-nav .billing-section-nav-button):active {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav .nav-item, #billing-center .billing-mobile-nav .billing-section-nav-button):active {
     transform: none;
     filter: none;
     transition: none !important;
   }
 
-  :root[data-theme="winui"] body:not(.is-desktop) #nav .nav-item::before,
-  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-mobile-nav .billing-section-nav-button::before {
-    display: none;
-  }
-
-  :root[data-theme] body:not(.is-desktop) #nav .nav-item > svg:not(.nav-tree-chevron),
-  :root[data-theme] body:not(.is-desktop) #nav .nav-liquid-accent-item > svg {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) #nav .nav-item > svg:not(.nav-tree-chevron),
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) #nav .nav-liquid-accent-item > svg {
     width: 23px;
     height: 23px;
   }
 
-  :root[data-theme] body:not(.is-desktop).billing-center-active .billing-mobile-nav .billing-section-nav-button > svg,
-  :root[data-theme] body:not(.is-desktop).billing-center-active .billing-mobile-nav .nav-liquid-accent-item > svg {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop).billing-center-active .billing-mobile-nav .billing-section-nav-button > svg,
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop).billing-center-active .billing-mobile-nav .nav-liquid-accent-item > svg {
     width: 21px;
     height: 21px;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(
     #nav:not(.is-droplet-active) .nav-item.active,
     #billing-center .billing-mobile-nav:not(.is-droplet-active) .billing-section-nav-button.active
   ) {
@@ -733,39 +750,39 @@
     font-weight: 500;
   }
 
-  :root[data-theme] body:not(.is-desktop) :is(#nav, #billing-center .billing-mobile-nav).is-droplet-active :is(.nav-item, .billing-section-nav-button) {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, #billing-center .billing-mobile-nav).is-droplet-active :is(.nav-item, .billing-section-nav-button) {
     color: var(--text-main);
     font-weight: 500;
   }
 
-  :root[data-theme] body:not(.is-desktop) main,
-  :root[data-theme] body:not(.is-desktop).billing-center-active main {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) main,
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop).billing-center-active main {
     padding-bottom: calc(6rem + env(safe-area-inset-bottom));
   }
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface,
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface,
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-pill {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-surface,
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav) .nav-liquid-bar-recess-surface {
     background: var(--theme-card-solid);
     border-color: var(--theme-border-strong);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root[data-theme] .nav-liquid-pill,
-  :root[data-theme] .nav-liquid-pill-inner,
-  :root[data-theme] body:not(.is-desktop) :is(#nav .nav-item, .billing-mobile-nav .billing-section-nav-button),
-  :root[data-theme] body:not(.is-desktop) :is(#nav .nav-item, .billing-mobile-nav .billing-section-nav-button) > svg {
+  :root[data-theme]:not([data-theme="winui"]) .nav-liquid-pill,
+  :root[data-theme]:not([data-theme="winui"]) .nav-liquid-pill-inner,
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav .nav-item, .billing-mobile-nav .billing-section-nav-button),
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav .nav-item, .billing-mobile-nav .billing-section-nav-button) > svg {
     transition: none !important;
   }
-  :root[data-theme] body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-liquid-previewing [data-liquid-hover] > svg {
+  :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) :is(#nav, .billing-mobile-nav).is-liquid-previewing [data-liquid-hover] > svg {
     transform: none;
   }
 }

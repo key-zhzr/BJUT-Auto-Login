@@ -1089,7 +1089,7 @@ fn valid_router_request(operation: &str, args: &Value) -> bool {
                     .is_some_and(|v| (0..=41024448000).contains(&v)),
                 "resolution" => matches!(value.as_i64(), Some(60 | 3600 | 86400)),
                 "monthly" => value.is_boolean(),
-                "part" => matches!(value.as_str(), Some("summary" | "series")),
+                "part" => matches!(value.as_str(), Some("summary" | "series" | "compact")),
                 "traffic_scope" => matches!(value.as_str(), Some("local" | "all")),
                 "refresh" => value.is_boolean(),
                 "ticket" => value.as_str().is_some_and(valid_token),

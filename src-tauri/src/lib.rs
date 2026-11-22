@@ -7658,11 +7658,10 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
             if state.network_change_generation.load(Ordering::SeqCst) != generation {
                 return;
             }
-            let network = get_network_info(app.clone(), Some(false));
-            let ipv4 = network["ip"].as_str().and_then(usable_physical_ipv4);
-            let ipv6 = network_campus_ipv6(&network);
-            if AuthStack::from_network(&network).matches(ipv4.is_some(), !ipv6.is_empty()) {
-                ready_ip = network_auth_ip(&network).to_string();
+            // Use the same physical address observation as the change poll.
+            // The full check and portal authentication handle stack readiness.
+            ready_ip = get_local_ip(app.clone());
+            if !ready_ip.is_empty() {
                 progress.phase("已取得物理网卡 IP，准备完整检测", 20);
                 rust_log(
                     &app,
@@ -7690,17 +7689,17 @@ fn schedule_network_change_readiness(app: tauri::AppHandle, state: Arc<AppState>
         if state.network_change_generation.load(Ordering::SeqCst) != generation {
             return;
         }
-        state.network_change_waiting.store(false, Ordering::SeqCst);
         if ready_ip.is_empty() {
             rust_log(
                 &app,
                 &state,
                 "网络",
-                "网络变化后连续 10 次仍未取得所选地址族所需的物理接口地址，将执行一次完整检测以更新离线状态",
+                "网络变化后连续 10 次仍未取得物理接口地址，将执行一次完整检测以更新网络状态",
                 "info",
             );
         }
         *state.last_known_ip.lock().unwrap() = Some(ready_ip);
+        state.network_change_waiting.store(false, Ordering::SeqCst);
         progress.handoff();
         trigger_network_check(app, state, true).await;
     });
@@ -7719,7 +7718,7 @@ fn notify_network_change(
         &state,
         "网络",
         &format!(
-            "收到{}网络变化事件，等待新的物理接口 IPv4 就绪后执行完整检测",
+            "收到{}网络变化事件，等待新的物理接口地址就绪后执行完整检测",
             source.unwrap_or_else(|| "系统".to_string()),
         ),
         "info",
@@ -8801,6 +8800,20 @@ mod tests {
             Some("10.126.0.3"),
             "10.126.0.3"
         ));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn physical_address_is_stable_without_campus_ipv6_in_dual_mode() {
+        let ipv6 = vec!["fd00::1234".to_string()];
+        let ipv4 = "192.168.1.183";
+        let campus_ipv6 = ipv6
+            .iter()
+            .any(|ip| network_inventory::campus_ipv6(ip).is_some());
+        assert!(!AuthStack::Dual.matches(true, campus_ipv6));
+        let observed = link_address(ipv4.to_string(), &ipv6);
+        assert_eq!(observed, ipv4);
+        assert!(!network_ip_observation_changed(Some(&observed), ipv4));
     }
 
     #[test]

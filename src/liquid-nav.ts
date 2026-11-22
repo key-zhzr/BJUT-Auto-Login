@@ -120,6 +120,7 @@ interface PillState {
   lensWidth: number;
   lensHeight: number;
   syncSeq: number;
+  cachedTheme: string;
   warmedGeometry: string;
   warmupFrame: number;
   warmingUp: boolean;
@@ -161,6 +162,10 @@ let initialized = false;
 
 function isHorizontalMobileDock() {
   return mobileWidth.matches && !document.body.classList.contains('is-desktop');
+}
+
+function isWinuiTheme() {
+  return document.documentElement.dataset.theme === 'winui';
 }
 
 function getUntransformedRect(element: HTMLElement): DOMRect {
@@ -417,7 +422,8 @@ function cancelWarmup(state: PillState) {
 
 function scheduleDropletWarmup(state: PillState) {
   if (
-    isReducedTransparency
+    isWinuiTheme()
+    || isReducedTransparency
     || isReducedMotion
     || document.hidden
     || !state.dockWidth
@@ -825,17 +831,23 @@ function paintHorizontalPill(state: PillState) {
     const localCy = barH / 2 + (hcY - barY - barH / 2) / barScaleY;
     const localW = lensWidth / barScaleX;
     const localH = lensHeight / barScaleY;
+    const snapPx = Math.abs(state.velocity) > 300 ? 1 : 0.5;
+    const snap = (value: number) => Math.round(value / snapPx) * snapPx;
+    const holeW = snap(localW);
+    const holeH = snap(localH);
+    const holeX = snap(localCx - holeW / 2);
+    const holeY = snap(localCy - holeH / 2);
     const nextCutout = buildStadiumHolePath(
       -32,
       -32,
       barW + 32,
       barH + 32,
-      localCx - localW / 2,
-      localCy - localH / 2,
-      localW,
-      localH,
-      clipRadius / barScaleX,
-      clipRadius / barScaleY,
+      holeX,
+      holeY,
+      holeW,
+      holeH,
+      snap(clipRadius / barScaleX),
+      snap(clipRadius / barScaleY),
     );
     state.lastBarCutout = setCachedStyle(barSurface, 'clipPath', state.lastBarCutout, nextCutout);
   }
@@ -882,17 +894,21 @@ function paintHorizontalPill(state: PillState) {
     const localW = lensWidth / pressScale;
     const localH = lensHeight / pressScale;
     const localR = clipRadius / pressScale;
+    const snapTab = Math.abs(state.velocity) > 300 ? 1 : 0.5;
+    const snapT = (value: number) => Math.round(value / snapTab) * snapTab;
+    const tabHoleW = snapT(localW);
+    const tabHoleH = snapT(localH);
     const nextClip = buildStadiumHolePath(
       -32,
       -32,
       entry.width + 32,
       entry.height + 32,
-      localCx - localW / 2,
-      localCy - localH / 2,
-      localW,
-      localH,
-      localR,
-      localR,
+      snapT(localCx - tabHoleW / 2),
+      snapT(localCy - tabHoleH / 2),
+      tabHoleW,
+      tabHoleH,
+      snapT(localR),
+      snapT(localR),
     );
     entry.lastClipPath = setCachedStyle(entry.element, 'clipPath', entry.lastClipPath, nextClip);
   });
@@ -1043,6 +1059,50 @@ function positionPill(state: PillState, animate: boolean) {
   isReducedTransparency = reducedTransparency.matches;
   const {container, host, pill, pillInner} = state;
   const isPrimary = host.id === 'nav';
+
+  if (isWinuiTheme()) {
+    state.cancelPress?.();
+    cancelWarmup(state);
+    stopHorizontalMotion(state);
+    state.cachedTheme = 'winui';
+    state.barBox = null;
+    state.accentTabs = [];
+    state.warmedGeometry = '';
+    state.lastKey = '';
+    state.dockWidth = 0;
+    state.dockHeight = 0;
+    state.lift = 0;
+    state.liftVel = 0;
+    state.barScale = 0;
+    state.barScaleVel = 0;
+    state.overscrollX = 0;
+    state.glideUntil = 0;
+    state.pullX = 0;
+    state.pullY = 0;
+    state.pullVelX = 0;
+    state.pullVelY = 0;
+    state.deform = 0;
+    state.deformVel = 0;
+    clearTabVisuals(state);
+    paintDockSurface(state, 0, 0);
+    state.barRecessSurface.style.borderRadius = '';
+    host.style.removeProperty('--dock-backdrop');
+    host.style.removeProperty('--dock-lens-backdrop');
+    state.lastPillVisibility = setCachedStyle(pill, 'visibility', state.lastPillVisibility, 'hidden');
+    state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, '0');
+    host.classList.remove(
+      'has-liquid-pill',
+      'is-droplet-active',
+      'is-bar-animating',
+      'is-liquid-dragging',
+      'is-liquid-previewing',
+    );
+    if (isPrimary) {
+      syncNativeDropletSlot(host, state.droplet, false);
+    }
+    return;
+  }
+
   const resolved = isPrimary ? resolvePrimaryNavActiveTarget(container) : resolveBillingDockActiveTarget(container);
   if (!resolved.target) {
     state.cancelPress?.();
@@ -1071,17 +1131,46 @@ function positionPill(state: PillState, animate: boolean) {
     return;
   }
 
+  const currentTheme = document.documentElement.dataset.theme ?? '';
+  if (state.cachedTheme !== currentTheme) {
+    state.cachedTheme = currentTheme;
+    state.barBox = null;
+    state.accentTabs = [];
+  }
   const horizontal = isHorizontalMobileDock();
-  const bounds = container.getBoundingClientRect();
-  const target = horizontal ? getUntransformedRect(resolved.target) : resolved.target.getBoundingClientRect();
   const changed = state.lastKey !== resolved.key;
-  let left = target.left - bounds.left + container.scrollLeft;
-  let top = target.top - bounds.top + container.scrollTop;
-  if (!horizontal) {
-    const cOffset = getNetTransformOffset(container);
-    const tOffset = getNetTransformOffset(resolved.target);
-    left += cOffset.dx - tOffset.dx;
-    top += cOffset.dy - tOffset.dy;
+  const cachedEntry = horizontal
+    && state.cachedTheme === currentTheme
+    && state.dockWidth > 0
+    && state.barBox
+    && host.dataset.dockBackdropWidth === String(viewportWidth)
+    && host.dataset.dockBackdropHeight === String(viewportHeight)
+    ? state.accentTabs.find(entry => entry.element === resolved.target && entry.element.isConnected && !entry.element.hidden)
+    : undefined;
+  let target: DOMRect;
+  let left: number;
+  let top: number;
+  let bounds: { width: number; height: number; left: number };
+  if (cachedEntry && state.barBox) {
+    bounds = { width: state.dockWidth, height: state.dockHeight, left: state.barBox.left + state.containerLeftInHost };
+    target = new DOMRect(bounds.left + cachedEntry.left, state.barBox.top + state.containerTopInHost + cachedEntry.top, cachedEntry.width, cachedEntry.height);
+    left = cachedEntry.left;
+    top = cachedEntry.top;
+  } else {
+    const domBounds = container.getBoundingClientRect();
+    bounds = { width: domBounds.width, height: domBounds.height, left: domBounds.left };
+    target = horizontal ? getUntransformedRect(resolved.target) : resolved.target.getBoundingClientRect();
+    left = target.left - domBounds.left + container.scrollLeft;
+    top = target.top - domBounds.top + container.scrollTop;
+    if (!horizontal) {
+      const cOffset = getNetTransformOffset(container);
+      const tOffset = getNetTransformOffset(resolved.target);
+      left += cOffset.dx - tOffset.dx;
+      top += cOffset.dy - tOffset.dy;
+    } else {
+      host.dataset.dockBackdropWidth = String(viewportWidth);
+      host.dataset.dockBackdropHeight = String(viewportHeight);
+    }
   }
 
   pill.classList.toggle('is-parent-pill', resolved.isParentPill);
@@ -1106,10 +1195,13 @@ function positionPill(state: PillState, animate: boolean) {
     state.dockHeight = bounds.height;
     state.leftRoom = bounds.left - EDGE_CLEARANCE;
     state.rightEdge = viewportWidth - bounds.left - EDGE_CLEARANCE;
-    state.bottomEdge = viewportHeight - bounds.top - EDGE_CLEARANCE;
-    state.barBox = host.getBoundingClientRect();
-    state.containerLeftInHost = bounds.left - state.barBox.left;
-    state.containerTopInHost = bounds.top - state.barBox.top;
+    const domTop = cachedEntry && state.barBox ? state.barBox.top + state.containerTopInHost : target.top - top + container.scrollTop;
+    state.bottomEdge = viewportHeight - domTop - EDGE_CLEARANCE;
+    if (!cachedEntry || !state.barBox) {
+      state.barBox = host.getBoundingClientRect();
+      state.containerLeftInHost = bounds.left - state.barBox.left;
+      state.containerTopInHost = domTop - state.barBox.top;
+    }
     state.targetX = left;
     state.targetWidth = target.width;
     state.top = top;
@@ -1205,7 +1297,8 @@ function positionPill(state: PillState, animate: boolean) {
 function attachDragScrub(state: PillState) {
   const {container, host} = state;
   let pointerId: number | null = null;
-  let ignoredClick: number | null = null;
+  let ignoredClickId: number | null = null;
+  let ignoredClickUntil = 0;
   let startX = 0;
   let startY = 0;
   let grabOffsetX = 0;
@@ -1239,10 +1332,8 @@ function attachDragScrub(state: PillState) {
     if (pointerId === null) return;
     const id = pointerId;
     if (ignoreClick) {
-      ignoredClick = id;
-      requestAnimationFrame(() => {
-        if (ignoredClick === id) ignoredClick = null;
-      });
+      ignoredClickId = id;
+      ignoredClickUntil = performance.now() + 420;
     }
     pointerId = null;
     pressedTabEl = null;
@@ -1367,8 +1458,9 @@ function attachDragScrub(state: PillState) {
   host.addEventListener('dragstart', event => event.preventDefault());
 
   host.addEventListener('pointerdown', event => {
-    if (pointerId !== null || !event.isPrimary || event.button !== 0 || !isHorizontalMobileDock()) return;
-    ignoredClick = null;
+    if (pointerId !== null || !event.isPrimary || event.button !== 0 || isWinuiTheme() || !isHorizontalMobileDock()) return;
+    ignoredClickId = null;
+    ignoredClickUntil = 0;
     cancelWarmup(state);
     if (!state.dockWidth) return;
     const canReuseTabs = Boolean(
@@ -1415,9 +1507,18 @@ function attachDragScrub(state: PillState) {
   });
 
   host.addEventListener('click', event => {
-    if (ignoredClick === null || !event.isTrusted || event.detail === 0
-      || (event instanceof PointerEvent && event.pointerId > 0 && event.pointerId !== ignoredClick)) return;
-    ignoredClick = null;
+    if (
+      ignoredClickId === null
+      || !event.isTrusted
+      || event.detail === 0
+      || performance.now() > ignoredClickUntil
+      || (event instanceof PointerEvent && event.pointerId > 0 && event.pointerId !== ignoredClickId)
+    ) {
+      ignoredClickId = null;
+      return;
+    }
+    ignoredClickId = null;
+    ignoredClickUntil = 0;
     event.preventDefault();
     event.stopPropagation();
   }, true);
@@ -1470,7 +1571,7 @@ function registerPillHost(container: HTMLElement, host: HTMLElement, tag: 'li' |
     lastRecessTransform: '', lastAccentClip: '', lastDropletOpacity: '', lastDropletTransform: '',
     containerLeftInHost: 0, containerTopInHost: 0,
     top: 0, height: 0, dockWidth: 0, dockHeight: 0, leftRoom: 0, rightEdge: 0, bottomEdge: 0,
-    barBox: null, lensWidth: 0, lensHeight: 0, syncSeq: 0,
+    barBox: null, lensWidth: 0, lensHeight: 0, syncSeq: 0, cachedTheme: '',
     warmedGeometry: '', warmupFrame: 0, warmingUp: false,
   };
   controllers.push(state);
@@ -1513,7 +1614,7 @@ export function setupLiquidNav() {
   reducedTransparency.addEventListener('change', () => {
     isReducedTransparency = reducedTransparency.matches;
     for (const state of controllers) {
-      if (isReducedTransparency) {
+      if (isReducedTransparency || isWinuiTheme()) {
         state.warmedGeometry = '';
         state.host.style.removeProperty('--dock-backdrop');
         state.host.style.removeProperty('--dock-lens-backdrop');
@@ -1529,7 +1630,7 @@ export function setupLiquidNav() {
       for (const state of controllers) {
         state.warmedGeometry = '';
       }
-    } else if (isHorizontalMobileDock() && !isReducedTransparency) {
+    } else if (!isWinuiTheme() && isHorizontalMobileDock() && !isReducedTransparency) {
       for (const state of controllers) {
         if (state.dockWidth && state.barBox) {
           updateDockGlass(state.host, state.barBox, state.lensWidth, state.lensHeight);

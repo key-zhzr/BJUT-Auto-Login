@@ -51,13 +51,30 @@ export async function runMotionRegression(note:(text:string)=>void){
   try{
     for(const value of ['basic','apple27','winui']){
       document.documentElement.dataset.theme=value;
-      trigger.click();assert(wrapper.classList.contains('opens-up'),`${value} 空间不足时没有预先向上定位`);
-      for(let i=0;i<12;i++){await frame();assert(menu.getBoundingClientRect().bottom<=trigger.getBoundingClientRect().top+12,`${value} 展开时改变了方向`);}
-      select.close();assert(wrapper.classList.contains('opens-up'),`${value} 收起时丢失方向`);
-      await frame();assert(menu.getBoundingClientRect().bottom<=trigger.getBoundingClientRect().top+12,`${value} 收起时跳到了下方`);
-      trigger.click();await frame();assert(!menu.hidden,`${value} 快速重开被旧计时器隐藏`);
-      select.close();await until(()=>menu.hidden);
-      box.style.bottom='';box.style.top='56px';trigger.click();assert(!wrapper.classList.contains('opens-up'),`${value} 充足空间时未向下展开`);select.close();await until(()=>menu.hidden);box.style.top='';box.style.bottom='36px';
+      trigger.click();
+      if(value==='basic'){
+        assert(wrapper.classList.contains('covers-anchor'),'basic 未采用原位覆盖定位');
+        await until(()=>!wrapper.classList.contains('is-morphing'));
+        const tRect=trigger.getBoundingClientRect(),mRect=menu.getBoundingClientRect();
+        assert(mRect.top<tRect.top && mRect.bottom>=tRect.top-4 && mRect.top>=0 && mRect.bottom<=window.innerHeight+1,'basic 靠近底部时覆盖位置越界');
+        select.close();assert(wrapper.classList.contains('closing'),'basic 收起时未进入关闭过渡');
+        await frame();assert(!menu.hidden && getComputedStyle(menu).display!=='none','basic 收起在首帧即瞬灭');
+        trigger.click();await frame();assert(!menu.hidden && wrapper.classList.contains('open'),'basic 快速重开被旧计时器隐藏');
+        select.close();await until(()=>menu.hidden);
+        box.style.bottom='';box.style.top='42%';trigger.click();
+        await until(()=>!wrapper.classList.contains('is-morphing'));
+        const midTrigger=trigger.getBoundingClientRect(),midMenu=menu.getBoundingClientRect();
+        assert(midMenu.top<midTrigger.top-8 && midMenu.bottom>midTrigger.bottom+8,'basic 在屏幕中部未同时向上下覆盖展开');
+        select.close();await until(()=>menu.hidden);box.style.top='';box.style.bottom='36px';
+      }else{
+        assert(wrapper.classList.contains('opens-up'),`${value} 空间不足时没有预先向上定位`);
+        for(let i=0;i<12;i++){await frame();assert(menu.getBoundingClientRect().bottom<=trigger.getBoundingClientRect().top+12,`${value} 展开时改变了方向`);}
+        select.close();assert(wrapper.classList.contains('opens-up'),`${value} 收起时丢失方向`);
+        await frame();assert(menu.getBoundingClientRect().bottom<=trigger.getBoundingClientRect().top+12,`${value} 收起时跳到了下方`);
+        trigger.click();await frame();assert(!menu.hidden,`${value} 快速重开被旧计时器隐藏`);
+        select.close();await until(()=>menu.hidden);
+        box.style.bottom='';box.style.top='56px';trigger.click();assert(!wrapper.classList.contains('opens-up'),`${value} 充足空间时未向下展开`);select.close();await until(()=>menu.hidden);box.style.top='';box.style.bottom='36px';
+      }
     }
     note('通过：三种主题的下拉方向在打开、收起和快速重开时保持稳定');
     box.style.bottom='';box.style.top='56px';trigger.click();await frame();

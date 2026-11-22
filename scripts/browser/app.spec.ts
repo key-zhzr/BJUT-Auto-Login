@@ -23,11 +23,12 @@ for (const platform of ['macos', 'android']) {
       const trigger = element.querySelector('.custom-select-trigger')!.getBoundingClientRect();
       const menu = element.querySelector('.custom-select-options')!;
       const bounds = menu.getBoundingClientRect();
+      const covers = bounds.top <= trigger.bottom + 1 && bounds.bottom >= trigger.top - 1;
       return {
         triggerLeft: Math.round(trigger.left), triggerRight: Math.round(trigger.right),
         menuLeft: Math.round(bounds.left), menuRight: Math.round(bounds.right),
         inside: bounds.left >= 0 && bounds.right <= innerWidth + 1 && bounds.top >= 0 && bounds.bottom <= innerHeight + 1,
-        gap: Math.min(Math.abs(bounds.top - trigger.bottom), Math.abs(trigger.top - bounds.bottom)),
+        gap: covers ? 0 : Math.min(Math.abs(bounds.top - trigger.bottom), Math.abs(trigger.top - bounds.bottom)),
         open: menu.matches(':popover-open'),
       };
     });
@@ -911,7 +912,7 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
   await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
   await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
 
-  for (const theme of ['basic', 'apple27', 'winui']) {
+  for (const theme of ['basic', 'apple27']) {
     await page.evaluate(t => {
       document.documentElement.dataset.theme = t;
       document.documentElement.dataset.colorScheme = 'light';
@@ -1573,6 +1574,236 @@ test('liquid glass docks refract the live backdrop and follow drag gestures', as
   await expect(page.locator('.billing-mobile-nav [data-billing-section-target="services"]')).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('.billing-mobile-nav .nav-liquid-droplet')).toBeHidden();
   await page.emulateMedia({reducedMotion: 'no-preference'});
+});
+
+test('winui native navigation, settings cards, breadcrumb bar & basic flclash dropdown', async ({page}) => {
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=desktop');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'winui';
+    document.documentElement.dataset.colorScheme = 'light';
+  });
+  await page.waitForTimeout(80);
+  const winuiDesktopNav = await page.evaluate(() => {
+    const nav = document.getElementById('nav')!;
+    const surface = nav.querySelector('.nav-liquid-bar-surface');
+    const pill = nav.querySelector('.nav-liquid-pill');
+    return {
+      hasLiquidClass: nav.classList.contains('has-liquid-pill'),
+      surfaceDisplay: surface ? getComputedStyle(surface).display : 'missing',
+      pillDisplay: pill ? getComputedStyle(pill).display : 'missing',
+    };
+  });
+  expect(winuiDesktopNav).toEqual({
+    hasLiquidClass: false,
+    surfaceDisplay: 'none',
+    pillDisplay: 'none',
+  });
+
+  await page.locator('[data-target="settings"]').first().click();
+  await page.locator('[data-settings-target="appearance"]').click();
+  const winuiSettingsMetrics = await page.evaluate(() => {
+    const headerCopy = document.querySelector<HTMLElement>('#settings .settings-header-copy')!;
+    const group = document.querySelector<HTMLElement>('[data-settings-subpage="appearance"] > .settings-group:has(> .setting-item)')!;
+    const cardItem = group.querySelector<HTMLElement>(':scope > .setting-item')!;
+    return {
+      headerDisplay: getComputedStyle(headerCopy).display,
+      groupBg: getComputedStyle(group).backgroundColor,
+      itemBg: getComputedStyle(cardItem).backgroundColor,
+    };
+  });
+  expect(winuiSettingsMetrics.headerDisplay).toBe('flex');
+  expect(winuiSettingsMetrics.groupBg).toBe('rgba(0, 0, 0, 0)');
+  expect(winuiSettingsMetrics.itemBg).not.toBe('rgba(0, 0, 0, 0)');
+
+  await page.setViewportSize({width: 390, height: 844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'winui';
+    document.documentElement.dataset.colorScheme = 'light';
+  });
+  await page.waitForTimeout(80);
+  const winuiMobileNav = await page.evaluate(() => {
+    const nav = document.getElementById('nav')!;
+    const ns = getComputedStyle(nav);
+    return {
+      hasLiquidClass: nav.classList.contains('has-liquid-pill'),
+      radius: ns.borderTopLeftRadius,
+      width: Math.round(nav.getBoundingClientRect().width),
+      pillDisplay: getComputedStyle(nav.querySelector('.nav-liquid-pill')!).display,
+    };
+  });
+  expect(winuiMobileNav.hasLiquidClass).toBe(false);
+  expect(winuiMobileNav.radius).toBe('0px');
+  expect(winuiMobileNav.width).toBeGreaterThanOrEqual(389);
+  expect(winuiMobileNav.pillDisplay).toBe('none');
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'basic';
+    document.documentElement.dataset.colorScheme = 'light';
+  });
+  await page.locator('[data-target="settings"]').first().click();
+  await page.locator('[data-settings-target="appearance"]').click();
+  await page.locator('[aria-label="主题风格"], [aria-label="界面主题"], #setting-theme').locator('..').locator('.custom-select-trigger').first().click().catch(async () => {
+    await page.locator('[data-settings-subpage="appearance"] .custom-select-trigger').first().click();
+  });
+  await expect(page.locator('.custom-select.open:not(.is-morphing)')).toHaveCount(1, {timeout: 2000});
+  const dropdownCheck = await page.evaluate(() => {
+    const openWrapper = document.querySelector<HTMLElement>('.custom-select.open')!;
+    const trigger = openWrapper.querySelector<HTMLElement>('.custom-select-trigger')!.getBoundingClientRect();
+    const menu = openWrapper.querySelector<HTMLElement>('.custom-select-options')!;
+    const menuRect = menu.getBoundingClientRect();
+    const opt = menu.querySelector<HTMLElement>('.custom-option.selected')!;
+    const ms = getComputedStyle(menu);
+    const os = getComputedStyle(opt);
+    const after = getComputedStyle(opt, '::after');
+    const prevMaxH = menu.style.maxHeight;
+    menu.style.maxHeight = '56px';
+    menu.scrollTop = 0;
+    menu.dispatchEvent(new Event('scroll'));
+    const canDown = menu.classList.contains('can-scroll-down');
+    menu.scrollTop = menu.scrollHeight;
+    menu.dispatchEvent(new Event('scroll'));
+    const canUp = menu.classList.contains('can-scroll-up');
+    const maskWhileScrollable = ms.maskImage || ms.webkitMaskImage || 'none';
+    menu.style.maxHeight = prevMaxH;
+    menu.scrollTop = 0;
+    menu.dispatchEvent(new Event('scroll'));
+    return {
+      menuRadius: ms.borderTopLeftRadius,
+      menuPaddingTop: ms.paddingTop,
+      optRadius: os.borderTopLeftRadius,
+      optBg: os.backgroundColor,
+      optWeight: os.fontWeight,
+      afterContent: after.content,
+      canDown,
+      canUp,
+      maskWhileScrollable,
+      coversVertically: menuRect.top <= trigger.bottom && menuRect.bottom >= trigger.top,
+      expandsUpAndDown: menuRect.top < trigger.top - 4 && menuRect.bottom > trigger.bottom + 4,
+    };
+  });
+  expect(dropdownCheck.menuRadius).toBe('20px');
+  expect(dropdownCheck.menuPaddingTop).toBe('8px');
+  expect(dropdownCheck.optRadius).toBe('12px');
+  expect(dropdownCheck.optBg).toBe('rgba(0, 0, 0, 0)');
+  expect(dropdownCheck.optWeight).toBe('400');
+  expect(dropdownCheck.afterContent).not.toBe('none');
+  expect(dropdownCheck.canDown).toBe(true);
+  expect(dropdownCheck.canUp).toBe(true);
+  expect(dropdownCheck.maskWhileScrollable).toBe('none');
+  expect(dropdownCheck.coversVertically).toBe(true);
+  expect(dropdownCheck.expandsUpAndDown).toBe(true);
+
+  await page.keyboard.press('Escape');
+  const closingMidFrame = await page.evaluate(() => {
+    const closing = document.querySelector<HTMLElement>('.custom-select.closing');
+    const menu = closing?.querySelector<HTMLElement>('.custom-select-options');
+    return {
+      hasClosingClass: !!closing,
+      visibleMidClose: !!menu && !menu.hidden && getComputedStyle(menu).display !== 'none',
+    };
+  });
+  expect(closingMidFrame.hasClosingClass).toBe(true);
+  expect(closingMidFrame.visibleMidClose).toBe(true);
+  await expect(page.locator('.custom-select.closing')).toHaveCount(0, {timeout: 2000});
+  await expect(page.locator('#setting-theme .custom-select-options')).toBeHidden();
+});
+
+test('overscroll rubber-band, scroll position memory & non-adjacent android slide survive synthetic click', async ({page}) => {
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+  await page.setViewportSize({width: 390, height: 844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  const overscroll = await page.evaluate(async () => {
+    const main = document.getElementById('main-content')!;
+    const dash = document.getElementById('dashboard')!;
+    const nav = document.getElementById('nav')!;
+    const navTopBefore = nav.getBoundingClientRect().top;
+    const obsY = getComputedStyle(main).overscrollBehaviorY;
+    main.scrollTop = 0;
+    for (let i = 0; i < 3; i++) {
+      main.dispatchEvent(new WheelEvent('wheel', {deltaY: -120, cancelable: true, bubbles: true}));
+    }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const bouncedTransform = dash.style.transform;
+    const navTopDuring = nav.getBoundingClientRect().top;
+    const end = performance.now() + 800;
+    while (dash.style.transform && performance.now() < end) {
+      await new Promise(requestAnimationFrame);
+    }
+    return {obsY, bouncedTransform, navTopDiff: Math.abs(navTopDuring - navTopBefore), settledTransform: dash.style.transform};
+  });
+  expect(overscroll.obsY).toBe('none');
+  expect(overscroll.bouncedTransform).toMatch(/^translate3d\(0px,\s*[1-9]\d*(\.\d+)?px,\s*0px\)$/);
+  expect(overscroll.navTopDiff).toBeLessThan(0.5);
+  expect(overscroll.settledTransform).toBe('');
+
+  // Scroll memory: Settings Home <-> Subpage and Dashboard <-> Accounts
+  const scrollMem = await page.evaluate(async () => {
+    const main = document.getElementById('main-content')!;
+    const targetDashScroll = Math.min(180, Math.max(80, main.scrollHeight - main.clientHeight));
+    main.scrollTop = targetDashScroll;
+    document.querySelector<HTMLElement>('#nav .nav-item[data-target="settings"]')!.click();
+    await new Promise(r => setTimeout(r, 340));
+    const settingsScrolledTarget = Math.min(150, Math.max(60, main.scrollHeight - main.clientHeight));
+    main.scrollTop = settingsScrolledTarget;
+    document.querySelector<HTMLElement>('[data-settings-target="appearance"]')!.click();
+    await new Promise(requestAnimationFrame);
+    const subpageScroll = main.scrollTop;
+    document.getElementById('btn-settings-back')!.click();
+    await new Promise(requestAnimationFrame);
+    const restoredSettingsScroll = main.scrollTop;
+    document.querySelector<HTMLElement>('#nav .nav-item[data-target="dashboard"]')!.click();
+    await new Promise(r => setTimeout(r, 340));
+    const restoredDashScroll = main.scrollTop;
+    return {
+      settingsScrolledTarget,
+      subpageScroll,
+      restoredSettingsScroll,
+      targetDashScroll,
+      restoredDashScroll,
+    };
+  });
+  expect(scrollMem.subpageScroll).toBe(0);
+  expect(Math.abs(scrollMem.restoredSettingsScroll - scrollMem.settingsScrolledTarget)).toBeLessThan(2);
+  expect(Math.abs(scrollMem.restoredDashScroll - scrollMem.targetDashScroll)).toBeLessThan(2);
+
+  // Non-adjacent slide survives trailing synthetic click
+  await page.locator('#nav .nav-item[data-target="settings"]').click();
+  await page.waitForTimeout(340);
+  const nonAdjacent = await page.evaluate(async () => {
+    const accountsBtn = document.querySelector<HTMLElement>('#nav .nav-item[data-target="accounts"]')!;
+    const accountsPage = document.getElementById('accounts')!;
+    accountsBtn.click();
+    await new Promise(requestAnimationFrame);
+    accountsBtn.click(); // Trailing synthetic click with pageChanged === false
+    await new Promise(requestAnimationFrame);
+    const keptSlideClass = accountsPage.classList.contains('page-slide-from-left');
+    await new Promise(r => setTimeout(r, 360));
+    return {
+      keptSlideClass,
+      settledHasSlideClass: accountsPage.classList.contains('page-slide-from-left'),
+      active: accountsPage.classList.contains('active'),
+    };
+  });
+  expect(nonAdjacent).toEqual({
+    keptSlideClass: true,
+    settledHasSlideClass: false,
+    active: true,
+  });
 });
 
 test('the moving lens refracts icon and label strokes in its annulus', async ({page}, testInfo) => {

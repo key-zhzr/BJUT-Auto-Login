@@ -1,4 +1,4 @@
-import { buildUsageChart, normalizeUsageReport, forecastUsage, flowLabel, usageBucket, usageChartCsv, usageDisplayScale, usageInterfaces, usageRangeLabel, usageScales, usageZoom, usageTooltipPosition, defaultUsageRetention, type UsageChartOptions, type UsageReport, type UsageScope } from './device-usage-model';
+import { buildUsageChart, normalizeUsageReport, forecastUsage, flowLabel, usageBucket, usageChartCsv, usageDisplayScale, usageInterfaces, usageRangeLabel, usageScales, usageZoom, usageTooltipPosition, defaultUsageRetention, type UsageChartOptions, type UsageLoadProgress, type UsagePoint, type UsageReport, type UsageScope } from './device-usage-model';
 
 export interface UsageSelect {
     element: HTMLElement;
@@ -29,12 +29,22 @@ function usageNativeSelect(label: string, options: {value: string; text: string}
     control.setOptions(options); element.onchange = () => change(element.value); return control;
 }
 
+function sameUsagePoint(a: UsagePoint, b: UsagePoint) {
+    return a === b || (a.at === b.at && a.resolution === b.resolution && a.account === b.account && a.device === b.device
+        && a.interfaceId === b.interfaceId && a.interfaceName === b.interfaceName && a.local === b.local
+        && a.usedMb === b.usedMb && a.sampledSeconds === b.sampledSeconds
+        && a.startedAt === b.startedAt && a.endedAt === b.endedAt);
+}
+
 /** Shared DOM renderer: the App supplies its existing menus/motion; LuCI supplies its own controls. */
 export class UsageChart {
     private data: UsageReport = {enabled: false, scope: 'local', accounts: [], history: [], series: []};
     private options: UsageChartOptions = {scale: 'minute', range: 21600, mode: 'delta', presentation: 'sum', interfaces: null, account: ''};
     private title = usageElement('h3', '', '流量趋势');
     private status = usageElement('p', 'traffic-note');
+    private loading = usageElement('div', 'traffic-loading');
+    private loadingText = usageElement('p', 'traffic-note');
+    private loadingFill = usageElement('div', 'traffic-loading-fill');
     private enabled = usageElement('button', 'btn btn-secondary btn-sm', '开启统计');
     private content = usageElement('div', 'traffic-content');
     private scopeLocal = usageElement('button', 'btn btn-secondary btn-sm', '仅本机设备');
@@ -67,6 +77,14 @@ export class UsageChart {
         this.title.textContent = environment.title || '流量趋势';
         this.scopeLocal.textContent = environment.localLabel || '仅本机设备';
         const header = usageElement('div', 'traffic-heading'), intro = usageElement('div'); intro.append(this.title, this.status);
+        const loadingBody = usageElement('div', 'traffic-loading-body'), track = usageElement('div', 'traffic-loading-track');
+        track.append(this.loadingFill);
+        loadingBody.append(this.loadingText, track);
+        this.loading.append(loadingBody);
+        this.loading.setAttribute('role', 'progressbar');
+        this.loading.setAttribute('aria-label', '正在加载流量历史');
+        this.loading.setAttribute('aria-valuemin', '0');
+        this.loading.setAttribute('aria-hidden', 'true');
         this.enabled.type = 'button'; this.enabled.onclick = () => {void this.configure(!this.data.enabled, this.data.scope);};
         header.append(intro, this.enabled);
         const scope = usageElement('div', 'traffic-scope'); scope.append(usageElement('span', '', '查看范围'), this.scopeLocal, this.scopeAll);
@@ -128,7 +146,7 @@ export class UsageChart {
         const details = usageElement('details', 'traffic-devices'); details.append(usageElement('summary', '', '当前在线设备'), this.devices);
         const note = usageElement('p', 'traffic-note', '下载计费量 · 滚轮缩放时间 · 虚线连接采样中断 · 当月累计仅含已采集记录');
         this.content.append(scope, controls, this.dates, this.interfaceChoices, this.legend, this.plot, this.summary, note, details);
-        this.content.hidden = true; root.replaceChildren(header, this.content);
+        this.content.hidden = true; root.replaceChildren(header, this.loading, this.content);
         if (typeof ResizeObserver !== 'undefined') {
             this.observer = new ResizeObserver(() => {
                 const width = Math.max(300, Math.round(this.plot.clientWidth));
@@ -159,7 +177,10 @@ export class UsageChart {
         const scoped = normalizeUsageReport(data);
         const next = {...scoped, enabled: data.enabled === true, scope: data.scope === 'all' ? 'all' as const : 'local' as const, accounts: scoped.accounts, history: scoped.history, series: scoped.series};
         this.status.textContent = message || (next.enabled ? `计费下载量 · 每分钟更新 · 采集${next.scope === 'local' ? this.scopeLocal.textContent : '全部在线设备'}` : '流量统计未开启，可手动开启。');
-        const stamp = JSON.stringify([next, message]); if (stamp === this.stamp) return; this.stamp = stamp; this.data = next;
+        const stamp = JSON.stringify([next.enabled, next.scope, next.accounts, next.history, next.switches, message]);
+        if (stamp === this.stamp && next.series.length === this.data.series.length &&
+            next.series.every((row, index) => sameUsagePoint(row, this.data.series[index]))) return;
+        this.stamp = stamp; this.data = next;
         this.enabled.textContent = next.enabled ? '暂停统计' : '开启统计'; this.enabled.setAttribute('aria-pressed', String(next.enabled));
         this.resize(this.root, () => {
         this.content.hidden = !next.enabled;
@@ -177,6 +198,16 @@ export class UsageChart {
         this.draw(false); this.drawDevices();
         });
     }
+    showLoading(progress: UsageLoadProgress | null) {
+        this.loading.classList.toggle('is-loading', progress !== null);
+        this.loading.setAttribute('aria-hidden', String(progress === null));
+        this.plot.setAttribute('aria-busy', String(progress !== null));
+        if (!progress) return;
+        this.loadingText.textContent = `正在加载流量历史 · ${progress.completed} / ${progress.total} 段`;
+        this.loading.setAttribute('aria-valuemax', String(progress.total));
+        this.loading.setAttribute('aria-valuenow', String(progress.completed));
+        this.loadingFill.style.transform = `scaleX(${progress.completed / progress.total})`;
+    }
     showError(message: string) {this.status.textContent = message;}
     query() {
         const now = Date.now() / 1000;
@@ -185,8 +216,8 @@ export class UsageChart {
         return {start: Math.max(0, usageBucket(start, scale.value)), end: Math.ceil(end), resolution: scale.seconds >= 86400 || scale.value === 'month' ? 86400 : scale.seconds >= 3600 ? 3600 : 60, monthly: this.options.mode === 'monthly'};
     }
     destroy() {this.observer?.disconnect();if(this.wheelFrame)cancelAnimationFrame(this.wheelFrame);}
-    private updateInterfaces() {
-        const choices = usageInterfaces(this.viewed().series, this.options.account), stamp = JSON.stringify([choices, this.options.interfaces]);
+    private updateInterfaces(series: UsagePoint[]) {
+        const choices = usageInterfaces(series, this.options.account), stamp = JSON.stringify([choices, this.options.interfaces]);
         if (stamp === this.interfacesStamp) return; this.interfacesStamp = stamp;
         this.interfaceChoices.replaceChildren();
         for (const choice of choices) {
@@ -205,8 +236,9 @@ export class UsageChart {
         this.dates.hidden=this.options.start===undefined;
         this.interfaceChoices.hidden = this.options.presentation !== 'interfaces';
         this.scopeLocal.setAttribute('aria-pressed',String(this.viewScope==='local'));this.scopeAll.setAttribute('aria-pressed',String(this.viewScope==='all'));
-        this.updateInterfaces();
-        this.chart = buildUsageChart(this.viewed().series, this.options); this.width = Math.max(300, this.plot.clientWidth || 1000);
+        const series = this.viewed().series;
+        this.updateInterfaces(series);
+        this.chart = buildUsageChart(series, this.options); this.width = Math.max(300, this.plot.clientWidth || 1000);
         this.legend.replaceChildren(...this.chart.curves.map((curve, index) => {
             const item = usageElement('span'), dot = usageElement('i'); dot.style.background = usageColors[index % usageColors.length];
             item.append(dot, document.createTextNode(curve.name)); return item;

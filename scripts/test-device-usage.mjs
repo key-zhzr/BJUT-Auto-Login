@@ -54,6 +54,45 @@ test('router history rejects missing status, stops superseded reads and keeps le
     assert.equal(windows.at(-1).end, query.end);
     assert.ok(windows.every(window => !window.monthly && !window.part));
 });
+
+test('a month of compact minute data loads in bounded parallel segments with real progress', async () => {
+    const start = Date.parse('2025-01-01T00:00:00+08:00') / 1000;
+    const end = start + 31 * 86400 - 1;
+    const summary = {enabled:true, scope:'local', accounts:[], history:[], series:[], part:'summary', seriesEncoding:'compact-v1'};
+    const channels = ['lan3', 'lan4', 'lan5', 'eth1.41'].map(device =>
+        ({device, account:'fixture', interfaceId:device, interfaceName:device, local:true}));
+    let requests = 0, inFlight = 0, peak = 0;
+    const request = async page => {
+        if (page.part === 'summary') return summary;
+        assert.equal(page.part, 'compact');
+        assert.equal(page.resolution, 60);
+        assert.ok(page.end - page.start < 3 * 86400);
+        requests++;
+        peak = Math.max(peak, ++inFlight);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        const lines = [];
+        for (let at = page.start; at <= page.end; at += 60) {
+            for (let i = 0; i < channels.length; i++) lines.push(`${i},${at - page.start},1.5,61,-60,1`);
+        }
+        inFlight--;
+        return {...summary, part:'compact', timeline:{channels, base: page.start, resolution:60, rows:lines.join('\n')}};
+    };
+    const reader = new RouterUsageReader(), progress = [];
+    const query = {start, end, resolution:60, monthly:false};
+    const report = await reader.read(request, query, () => true, value => progress.push(value));
+    assert.equal(report.series.length, 31 * 1440 * channels.length);
+    assert.ok(requests <= 12);
+    assert.equal(peak, 2);
+    assert.deepEqual(progress.map(step => step.completed), Array.from({length:requests+1}, (_,index)=>index));
+    assert.ok(progress.every(step => step.total === requests));
+    assert.equal(report.series[0].startedAt, start - 60);
+    assert.equal(report.series.at(-1).endedAt, end - 58);
+    const previousRequests = requests;
+    const cached = await reader.read(request, query);
+    assert.equal(requests, previousRequests);
+    assert.deepEqual(cached.series, report.series);
+});
+
 test('chart tooltips leave space around the pointer and stay in the plot',()=>{
  for(const [width,height,bw,bh,x,y] of [[1000,270,220,110,500,200],[1000,270,220,110,980,40],[310,270,280,130,160,230]]){
   const p=usageTooltipPosition(width,height,bw,bh,x,y);

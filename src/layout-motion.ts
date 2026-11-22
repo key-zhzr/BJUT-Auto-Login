@@ -2,8 +2,66 @@ import { AnimatedVisibility } from './animated-visibility';
 
 const visibility = new WeakMap<HTMLElement, AnimatedVisibility>();
 const resizing = new WeakMap<HTMLElement, { animation: Animation; cleanup: () => void }>();
+const disclosureAnims = new WeakMap<
+  HTMLDetailsElement,
+  {
+    animation: Animation;
+    childAnims: Animation[];
+    siblingAnims: Animation[];
+    fromHeight: number;
+    toHeight: number;
+    cleanup: () => void;
+  }
+>();
 const disclosures = new WeakMap<HTMLDetailsElement, { desired: boolean; ignore: boolean | null; height: number }>();
 const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+export function collectFlowSiblings(element: HTMLElement, direction: 'next' | 'prev'): HTMLElement[] {
+  const stopRoot = element.closest<HTMLElement>('.page, .modal-content') || element.parentElement;
+  const collected: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
+  let current: HTMLElement | null = element;
+  while (current && current !== stopRoot) {
+    let sibling = direction === 'next' ? current.nextElementSibling : current.previousElementSibling;
+    while (sibling) {
+      if (sibling instanceof HTMLElement && !sibling.hidden && !seen.has(sibling)) {
+        const style = getComputedStyle(sibling);
+        if (
+          style.display !== 'none'
+          && style.position !== 'fixed'
+          && style.position !== 'absolute'
+          && style.position !== 'sticky'
+        ) {
+          // Never transform a wrapper that contains a viewport-fixed mobile nav bar.
+          const fixedDescendant = sibling.querySelector<HTMLElement>('.billing-mobile-nav, #nav');
+          if (fixedDescendant) {
+            for (const child of Array.from(sibling.children)) {
+              if (
+                child instanceof HTMLElement
+                && !child.hidden
+                && child !== fixedDescendant
+                && !child.contains(fixedDescendant)
+                && !seen.has(child)
+              ) {
+                const cs = getComputedStyle(child);
+                if (cs.display !== 'none' && cs.position !== 'fixed' && cs.position !== 'absolute' && cs.position !== 'sticky') {
+                  seen.add(child);
+                  collected.push(child);
+                }
+              }
+            }
+          } else {
+            seen.add(sibling);
+            collected.push(sibling);
+          }
+        }
+      }
+      sibling = direction === 'next' ? sibling.nextElementSibling : sibling.previousElementSibling;
+    }
+    current = current.parentElement;
+  }
+  return collected;
+}
 
 export function setVisible(element: HTMLElement, visible: boolean, options?: { autoAnchor?: boolean }) {
   let controller = visibility.get(element);
@@ -166,19 +224,114 @@ function disclosureState(details: HTMLDetailsElement) {
 }
 
 export function setExpanded(details: HTMLDetailsElement, expanded: boolean, previousHeight?: number) {
-  const anchor = createUpperHalfScrollAnchor(details, false);
   const state = disclosureState(details);
-  const before = previousHeight ?? details.offsetHeight;
-  state.desired = expanded;
+  const existing = disclosureAnims.get(details);
+  let currentHeight = previousHeight ?? details.offsetHeight;
+  if (existing) {
+    const rawProgress = existing.animation.effect?.getComputedTiming().progress;
+    const progress = typeof rawProgress === 'number' && Number.isFinite(rawProgress)
+      ? Math.max(0, Math.min(1, rawProgress))
+      : 1;
+    currentHeight = existing.fromHeight + (existing.toHeight - existing.fromHeight) * progress;
+    existing.animation.onfinish = null;
+    existing.cleanup();
+  }
   stop(details);
+  state.desired = expanded;
+
   const nativeOpen = (value: boolean) => { state.ignore = value; details.open = value; };
+  const siblings = collectFlowSiblings(details, 'next');
+  const scroller = details.closest<HTMLElement>('#main-content');
+  const savedScroll = scroller?.scrollTop ?? 0;
+
   nativeOpen(false);
   const collapsed = details.offsetHeight;
+  const beforeTops = siblings.map(s => s.getBoundingClientRect().top);
+
   nativeOpen(true);
+  if (scroller && scroller.scrollTop !== savedScroll) scroller.scrollTop = savedScroll;
   const opened = details.offsetHeight;
-  heightTransition(details, before, expanded ? opened : collapsed, () => {
-    nativeOpen(state.desired); state.height = details.offsetHeight;
-  }, anchor);
+  const afterTops = siblings.map(s => s.getBoundingClientRect().top);
+
+  const delta = opened - collapsed;
+  if (delta < 1 || reduced() || !details.animate) {
+    nativeOpen(expanded);
+    state.height = details.offsetHeight;
+    return;
+  }
+
+  const startH = Math.max(collapsed, Math.min(opened, currentHeight));
+  const targetH = expanded ? opened : collapsed;
+  if (Math.abs(targetH - startH) < 1) {
+    nativeOpen(expanded);
+    state.height = details.offsetHeight;
+    return;
+  }
+
+  const fromFrac = (startH - collapsed) / delta;
+  const toFrac = expanded ? 1 : 0;
+  const fromClip = Math.max(0, opened - startH);
+  const toClip = Math.max(0, opened - targetH);
+  const radius = getComputedStyle(details).borderTopLeftRadius || '0px';
+  const timing: KeyframeAnimationOptions = {
+    duration: expanded ? 220 : 180,
+    easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)',
+    fill: 'both',
+  };
+
+  const animation = details.animate(
+    [
+      { clipPath: `inset(0px 0px ${fromClip.toFixed(1)}px 0px round ${radius})` },
+      { clipPath: `inset(0px 0px ${toClip.toFixed(1)}px 0px round ${radius})` },
+    ],
+    timing,
+  );
+
+  const childAnims: Animation[] = [];
+  for (const child of Array.from(details.children)) {
+    if (!(child instanceof HTMLElement) || child.tagName === 'SUMMARY' || !child.animate) continue;
+    childAnims.push(child.animate(
+      [
+        { opacity: fromFrac, transform: `translate3d(0, ${((1 - fromFrac) * -6).toFixed(2)}px, 0)` },
+        { opacity: toFrac, transform: `translate3d(0, ${((1 - toFrac) * -6).toFixed(2)}px, 0)` },
+      ],
+      timing,
+    ));
+  }
+
+  const siblingAnims: Animation[] = [];
+  for (let i = 0; i < siblings.length; i++) {
+    const dy = afterTops[i] - beforeTops[i];
+    if (Math.abs(dy) < 1 || !siblings[i].animate) continue;
+    siblingAnims.push(siblings[i].animate(
+      [
+        { transform: `translate3d(0, ${(-(1 - fromFrac) * dy).toFixed(2)}px, 0)` },
+        { transform: `translate3d(0, ${(-(1 - toFrac) * dy).toFixed(2)}px, 0)` },
+      ],
+      timing,
+    ));
+  }
+
+  const cleanup = () => {
+    animation.cancel();
+    childAnims.forEach(a => a.cancel());
+    siblingAnims.forEach(a => a.cancel());
+    disclosureAnims.delete(details);
+  };
+  disclosureAnims.set(details, {
+    animation,
+    childAnims,
+    siblingAnims,
+    fromHeight: startH,
+    toHeight: targetH,
+    cleanup,
+  });
+  animation.onfinish = () => {
+    if (disclosureAnims.get(details)?.animation !== animation) return;
+    nativeOpen(state.desired);
+    cleanup();
+    state.height = details.offsetHeight;
+  };
 }
 
 export function toggleExpanded(details: HTMLDetailsElement) {
@@ -191,7 +344,9 @@ export function setupDisclosureMotion() {
     for (const entry of entries) {
       const details = entry.target as HTMLDetailsElement;
       const state = disclosureState(details);
-      if (state.desired === details.open && !resizing.has(details)) state.height = details.getBoundingClientRect().height;
+      if (state.desired === details.open && !resizing.has(details) && !disclosureAnims.has(details)) {
+        state.height = details.getBoundingClientRect().height;
+      }
     }
   });
   const prepare = (details: HTMLDetailsElement) => {

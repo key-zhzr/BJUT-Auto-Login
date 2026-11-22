@@ -1492,7 +1492,7 @@ html:root[data-theme] {
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.14);
 }
 
-:root[data-theme] body.is-android .custom-select-options,
+:root[data-theme]:not([data-theme="basic"]) body.is-android .custom-select-options,
 :root[data-theme] body.is-android .modal-content {
   background: var(--theme-raised-bg);
   -webkit-backdrop-filter: blur(4px) !important;
@@ -1598,7 +1598,7 @@ html:root[data-theme] {
 /* Basic uses motion for action buttons and color for menus/navigation. */
 :root[data-theme="basic"] :is(
   button, [role="button"], .nav-item, .nav-tree-link,
-  .custom-select-trigger, .custom-option, .billing-section-nav-button,
+  .custom-select-trigger, .billing-section-nav-button,
   .billing-package-option, .billing-payment-method,
   .settings-nav-item, .settings-back-button, .billing-back-button, summary
 ) {
@@ -1609,7 +1609,7 @@ html:root[data-theme] {
 
 :root[data-theme="basic"] :is(
   button, [role="button"], .nav-item, .nav-tree-link,
-  .custom-select-trigger, .custom-option, .billing-section-nav-button,
+  .custom-select-trigger, .billing-section-nav-button,
   .billing-package-option, .billing-payment-method,
   .settings-nav-item, .settings-back-button, .billing-back-button, summary
 ):not(:disabled):not([aria-disabled="true"]):active {
@@ -1624,8 +1624,13 @@ html:root[data-theme] {
 }
 
 :root[data-theme="basic"] .custom-option:not([aria-disabled="true"]):active {
-  background-color: color-mix(in srgb, var(--primary-color) 18%, var(--theme-raised-bg));
-  transform: scale(0.988);
+  transform: none;
+  filter: none;
+  background: rgba(204, 204, 204, 0.22);
+}
+
+:root[data-theme="basic"][data-color-scheme="light"] .custom-option:not([aria-disabled="true"]):active {
+  background: rgba(15, 23, 42, 0.08);
 }
 
 :root[data-theme="basic"] .switch:active input:not(:disabled) + .slider {
@@ -1636,11 +1641,19 @@ html:root[data-theme] {
 @media (prefers-reduced-motion: no-preference) {
   :root[data-theme="basic"] body.is-android :is(
     button, [role="button"], .nav-item, .nav-tree-link,
-    .custom-select-trigger, .custom-option, .billing-section-nav-button,
+    .custom-select-trigger, .billing-section-nav-button,
     .billing-package-option, .billing-payment-method,
     .settings-nav-item, .settings-back-button, .billing-back-button, summary
   ):not(:disabled):not([aria-disabled="true"]):active {
-    transition: transform 80ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 80ms ease !important;
+    filter: none;
+    opacity: 0.86;
+    transition: transform 80ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 80ms ease !important;
+  }
+
+  :root[data-theme="basic"] body.is-android .switch:active input:not(:disabled) + .slider {
+    filter: none;
+    opacity: 0.86;
+    transition: opacity 80ms ease;
   }
 }
 
@@ -1653,6 +1666,209 @@ html:root[data-theme] {
   ):not(:disabled):not([aria-disabled="true"]):active,
   :root[data-theme="basic"] .switch:active input:not(:disabled) + .slider {
     transform: none;
+    transition: none !important;
+  }
+}
+
+/* Basic theme: FlClash (prism_ui PopupMenu / AnchoredPopupRoute) liquid glass platter & covering morph */
+:root[data-theme="basic"] .custom-select-trigger {
+  border-radius: 12px;
+}
+
+:root[data-theme="basic"] .custom-select-trigger > :is(svg, i) {
+  display: none;
+}
+
+:root[data-theme="basic"] .custom-select-trigger::after,
+:root[data-theme="basic"] #billing-webvpn-modal .custom-select-trigger::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  margin: 0 0 0 auto;
+  border: 0;
+  transform: none;
+  flex: 0 0 auto;
+  opacity: 0.72;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='m7 15 5 5 5-5M7 9l5-5 5 5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='m7 15 5 5 5-5M7 9l5-5 5 5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+:root[data-theme="basic"] .custom-select.open .custom-select-trigger {
+  border-color: var(--theme-border);
+  box-shadow: none;
+}
+
+:root[data-theme="basic"] .custom-select.is-trigger-hidden .custom-select-trigger {
+  opacity: 0;
+  pointer-events: none;
+}
+
+:root[data-theme="basic"] .custom-select-options,
+:root[data-theme="basic"] .custom-select-options[popover] {
+  box-sizing: border-box;
+  padding: 8px;
+  border-radius: 20px;
+  max-height: 360px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.09) 0%, rgba(36, 39, 46, 0.70) 28%, rgba(28, 31, 38, 0.74) 100%);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7);
+  backdrop-filter: blur(24px) saturate(1.7);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.14),
+    inset -1px 0 0 rgba(255, 255, 255, 0.08),
+    0 20px 48px rgba(0, 0, 0, 0.46),
+    0 6px 16px rgba(0, 0, 0, 0.24);
+  transform-origin: center center;
+  transform: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: none;
+}
+
+:root[data-theme="basic"][data-color-scheme="light"] .custom-select-options,
+:root[data-theme="basic"][data-color-scheme="light"] .custom-select-options[popover] {
+  border-color: rgba(15, 23, 42, 0.08);
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.88) 0%, rgba(248, 250, 252, 0.78) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    inset 1px 0 0 rgba(255, 255, 255, 0.68),
+    inset 0 -1px 0 rgba(15, 23, 42, 0.06),
+    0 18px 42px rgba(15, 23, 42, 0.15),
+    0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+:root[data-theme="basic"] body.is-android .custom-select-options,
+:root[data-theme="basic"] body.is-android .custom-select-options[popover] {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.08) 0%, rgba(34, 37, 44, 0.82) 32%, rgba(28, 31, 38, 0.84) 100%);
+  -webkit-backdrop-filter: blur(14px) saturate(1.45);
+  backdrop-filter: blur(14px) saturate(1.45);
+}
+
+:root[data-theme="basic"][data-color-scheme="light"] body.is-android .custom-select-options,
+:root[data-theme="basic"][data-color-scheme="light"] body.is-android .custom-select-options[popover] {
+  background: rgba(255, 255, 255, 0.90);
+}
+
+:root[data-theme="basic"] .custom-select:is(.open, .closing) .custom-select-options {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: none;
+}
+
+:root[data-theme="basic"] .custom-select.is-morphing .custom-select-options {
+  overflow: hidden !important;
+  max-height: none !important;
+  contain: layout style;
+  will-change: transform, height, border-radius, opacity;
+}
+
+:root[data-theme="basic"] .custom-select.closing .custom-select-options {
+  pointer-events: none;
+}
+
+:root[data-theme="basic"] .custom-select.is-morphing .custom-option {
+  opacity: var(--opt-opacity, 1);
+  transform: translate3d(0, var(--opt-shift-y, 0px), 0);
+  transition: none !important;
+}
+
+:root[data-theme="basic"] .custom-select.is-morphing .custom-option.morph-visible {
+  filter: var(--opt-filter, none);
+}
+
+:root[data-theme="basic"] .custom-option {
+  position: relative;
+  display: block;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  color: var(--theme-text);
+  background: transparent;
+  font-size: 0.92rem;
+  font-weight: 400;
+  line-height: 20px;
+  transition: background-color 110ms ease, color 110ms ease;
+}
+
+:root[data-theme="basic"] .appearance-accent-select .custom-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+:root[data-theme="basic"] body.is-android .custom-option {
+  min-height: 44px;
+  line-height: 24px;
+}
+
+:root[data-theme="basic"] .custom-option.selected {
+  color: var(--theme-text);
+  border-color: transparent;
+  background: transparent;
+  font-weight: 400;
+  padding-right: 30px;
+}
+
+:root[data-theme="basic"][data-color-scheme="light"] .custom-option.selected {
+  color: var(--theme-text);
+  background: transparent;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="basic"] body:not(.is-android) .custom-option:hover,
+  :root[data-theme="basic"] body:not(.is-android) .custom-option.selected:hover {
+    color: var(--theme-text);
+    border-color: transparent;
+    background: rgba(204, 204, 204, 0.22);
+  }
+
+  :root[data-theme="basic"][data-color-scheme="light"] body:not(.is-android) .custom-option:hover,
+  :root[data-theme="basic"][data-color-scheme="light"] body:not(.is-android) .custom-option.selected:hover {
+    background: rgba(15, 23, 42, 0.08);
+  }
+}
+
+:root[data-theme="basic"] .custom-option.keyboard-active,
+:root[data-theme="basic"] .custom-option[data-press-hover="true"],
+:root[data-theme="basic"] .custom-option.selected.keyboard-active,
+:root[data-theme="basic"] .custom-option.selected[data-press-hover="true"] {
+  color: var(--theme-text);
+  border-color: transparent;
+  background: rgba(204, 204, 204, 0.22);
+}
+
+:root[data-theme="basic"][data-color-scheme="light"] :is(
+  .custom-option.keyboard-active,
+  .custom-option[data-press-hover="true"],
+  .custom-option.selected.keyboard-active,
+  .custom-option.selected[data-press-hover="true"]
+) {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+:root[data-theme="basic"] .custom-option.selected::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 16px;
+  height: 16px;
+  transform: translateY(-50%);
+  opacity: 0.92;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round' d='M3.2 8.4l3.1 3.1 6.5-6.8'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round' d='M3.2 8.4l3.1 3.1 6.5-6.8'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="basic"] .custom-select-options,
+  :root[data-theme="basic"] .custom-select:is(.open, .closing) .custom-select-options,
+  :root[data-theme="basic"] .custom-option {
     transition: none !important;
   }
 }

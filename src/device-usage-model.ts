@@ -70,11 +70,16 @@ export interface UsageReport {
     switches?: UsageSwitch[];
     timeline?: {
         channels: Omit<UsagePoint, 'at' | 'resolution' | 'usedMb' | 'sampledSeconds'>[];
-        buckets: number[][];
+        buckets?: number[][];
+        base?: number;
+        resolution?: number;
+        rows?: string;
     };
 }
-type RouterUsageRequest = UsageQuery & {part?: 'summary' | 'series'};
-type RouterUsageResponse = UsageReport & {part?: 'summary' | 'series'; state?: string};
+type RouterUsagePart = 'summary' | 'series' | 'compact';
+type RouterUsageRequest = UsageQuery & {part?: RouterUsagePart};
+type RouterUsageResponse = UsageReport & {part?: RouterUsagePart; seriesEncoding?: string; state?: string};
+export interface UsageLoadProgress {completed: number; total: number;}
 
 function requireUsageReport(report: RouterUsageResponse) {
     if (typeof report?.enabled !== 'boolean' || (report.scope !== 'local' && report.scope !== 'all')) {
@@ -82,10 +87,11 @@ function requireUsageReport(report: RouterUsageResponse) {
     }
 }
 
-function routerUsageWindows(query: UsageQuery): UsageQuery[] {
+function routerUsageWindows(query: UsageQuery, compact: boolean): UsageQuery[] {
     const windows: UsageQuery[] = [];
     const add = (start: number, end: number, resolution: number) => {
-        const span = resolution === 60 ? 86400 : resolution === 3600 ? 7 * 86400 : 90 * 86400;
+        const days = resolution === 60 ? (compact ? 3 : 1) : resolution === 3600 ? 7 : 90;
+        const span = days * 86400;
         while (start <= end) {
             const boundary = (Math.floor((start + 28800) / span) + 1) * span - 28800;
             const last = Math.min(end, boundary - 1);
@@ -107,29 +113,49 @@ function routerUsageWindows(query: UsageQuery): UsageQuery[] {
 /** Load closed time windows once and refresh the recent tail as samples arrive. */
 export class RouterUsageReader {
     private pages = new Map<string, {expires: number; rows: UsagePoint[]}>();
+    private cachedPoints = 0;
+    private generation = 0;
 
-    clear() { this.pages.clear(); }
+    clear() { this.generation++; this.pages.clear(); this.cachedPoints = 0; }
+
+    private remember(key: string, expires: number, rows: UsagePoint[]) {
+        this.cachedPoints -= this.pages.get(key)?.rows.length ?? 0;
+        this.pages.delete(key);
+        this.pages.set(key, {expires, rows});
+        this.cachedPoints += rows.length;
+        for (const [oldKey, old] of this.pages) {
+            if (this.pages.size <= 48 && this.cachedPoints <= 240_000) break;
+            this.cachedPoints -= old.rows.length;
+            this.pages.delete(oldKey);
+        }
+    }
 
     async read(
         request: (query: RouterUsageRequest) => Promise<RouterUsageResponse>,
         query: UsageQuery,
         current: () => boolean = () => true,
+        progress?: (value: UsageLoadProgress) => void,
     ): Promise<UsageReport | null> {
         const now = Date.now();
+        const generation = this.generation;
+        let stopped = false;
+        const active = () => !stopped && generation === this.generation && current();
         // A short range also works on routers that ignore the optional part.
         const at = Math.floor(now / 1000);
         const summary = await request({part: 'summary', start: at, end: at, resolution: 86400, monthly: false});
-        if (!current()) return null;
+        if (!active()) return null;
         requireUsageReport(summary);
         if (!summary.enabled) {
             this.clear();
             return summary;
         }
         const paged = summary.part === 'summary';
+        const compact = paged && summary.seriesEncoding === 'compact-v1';
+        const part = compact ? 'compact' : paged ? 'series' : undefined;
         const load = async (window: UsageQuery): Promise<UsagePoint[] | null> => {
-            if (!current()) return null;
-            const page = await request(paged ? {...window, part: 'series'} : window);
-            if (!current()) return null;
+            if (!active()) return null;
+            const page = await request(part ? {...window, part} : window);
+            if (!active()) return null;
             if (page?.state === 'split') {
                 const steps = Math.floor((window.end - window.start) / window.resolution);
                 if (steps < 1) throw new Error('此时段的流量数据过多');
@@ -141,39 +167,79 @@ export class RouterUsageReader {
             }
             requireUsageReport(page);
             if (!page.enabled || page.scope !== summary.scope) return null;
+            if (compact && (page.part !== 'compact' || typeof page.timeline?.rows !== 'string'
+                || page.timeline.resolution !== window.resolution || !Number.isSafeInteger(page.timeline.base)
+                || !Array.isArray(page.timeline.channels))) throw new Error('路由器返回的流量分段不完整');
             return normalizeUsageReport(page).series.filter(row =>
                 row.resolution === window.resolution && row.at >= window.start && row.at <= window.end);
         };
-        const next = new Map<string, {expires: number; rows: UsagePoint[]}>();
-        const series: UsagePoint[] = [];
-        for (const window of routerUsageWindows(query)) {
-            const key = JSON.stringify([paged, summary.scope, window.start, window.end, window.resolution]);
-            let entry = this.pages.get(key);
-            if (!entry || entry.expires <= now) {
-                const rows = await load(window);
-                if (!rows) return null;
-                entry = {expires: now + 5 * 60_000, rows};
-            }
-            if (window.end < at - 180) next.set(key, entry);
-            for (const row of entry.rows) series.push(row);
+        const windows = routerUsageWindows(query, compact);
+        const rows = new Array<UsagePoint[]>(windows.length);
+        const pending: {index: number; key: string; window: UsageQuery}[] = [];
+        for (const [index, window] of windows.entries()) {
+            const key = JSON.stringify([part, summary.scope, window.start, window.end, window.resolution]);
+            const cached = this.pages.get(key);
+            if (cached && cached.expires > now) rows[index] = cached.rows;
+            else pending.push({index, key, window});
         }
-        if (!current()) return null;
-        this.pages = next;
+        let completed = windows.length - pending.length, cursor = 0;
+        // Periodic refreshes of a single tail segment do not flash the bar.
+        const reportProgress = () => {
+            if (pending.length > 1) progress?.({completed, total: windows.length});
+        };
+        reportProgress();
+        const worker = async () => {
+            try {
+                while (active() && cursor < pending.length) {
+                    const {index, key, window} = pending[cursor++];
+                    const page = await load(window);
+                    if (!page) { stopped = true; return; }
+                    if (window.end < at - 180) this.remember(key, now + 5 * 60_000, page);
+                    rows[index] = page;
+                    completed++;
+                    reportProgress();
+                }
+            } catch (error) {
+                stopped = true;
+                throw error;
+            }
+        };
+        // Bound peak work on the router and drain in-flight pages on a range change.
+        const results = await Promise.allSettled(Array.from({length: Math.min(2, pending.length)}, worker));
+        for (const result of results) if (result.status === 'rejected') throw result.reason;
+        if (!active()) return null;
+        const series: UsagePoint[] = [];
+        for (const page of rows) for (const point of page) series.push(point);
         return {...summary, timeline: undefined, series};
     }
 }
 
 export function normalizeUsageReport(report: UsageReport): UsageReport {
-    const series = [...(report.series || [])];
-    for (const row of report.timeline?.buckets || []) {
-        const channel = report.timeline?.channels[row[0]];
+    const timeline = report.timeline;
+    const series = timeline ? [...(report.series || [])] : report.series || [];
+    for (const row of timeline?.buckets || []) {
+        const channel = timeline?.channels[row[0]];
         if (!channel || ![5,7].includes(row.length) || !row.every(Number.isFinite) || ![60, 3600, 86400].includes(row[1]) || row[3] < 0 || row[4] <= 0) continue;
         series.push({...channel, resolution: row[1], at: row[2], usedMb: row[3], sampledSeconds: row[4], ...(row.length === 7 ? {startedAt:row[5],endedAt:row[6]} : {})});
+    }
+    if (timeline && typeof timeline.rows === 'string' && timeline.base !== undefined && timeline.resolution !== undefined) {
+        const {base, resolution, channels, rows} = timeline;
+        if (Number.isSafeInteger(base) && [60, 3600, 86400].includes(resolution)) for (const line of rows.split('\n')) {
+            if (!line) continue;
+            const point = line.split(',').map(Number);
+            const [index, offset, usedMb, sampledSeconds, start, end] = point;
+            const channel = channels[index];
+            if (!channel || (point.length !== 4 && point.length !== 6) || !point.every(Number.isFinite)
+                || !Number.isSafeInteger(offset) || offset < 0 || usedMb < 0 || sampledSeconds <= 0) continue;
+            const at = base + offset;
+            series.push({...channel, at, resolution, usedMb, sampledSeconds,
+                ...(point.length === 6 ? {startedAt: at + start, endedAt: at + end} : {})});
+        }
     }
     // Scope is enforced by the sampler/API and again here for cached data from
     // an earlier all-device session. Unclassified legacy rows are not local.
     const all = report.scope === 'all';
-    return {...report, timeline: undefined, accounts: (report.accounts || []).map(account => ({...account, devices: (account.devices || []).filter(device => all || device.local === true)})), history: (report.history || []).filter(row => all || row.local === true), series: series.filter(row => all || row.local === true)};
+    return {...report, timeline: undefined, accounts: (report.accounts || []).map(account => ({...account, devices: (account.devices || []).filter(device => all || device.local === true)})), history: (report.history || []).filter(row => all || row.local === true), series: !all && series.some(row => row.local !== true) ? series.filter(row => row.local === true) : series};
 }
 export const usageScales = [
     { value: 'minute', text: '每分钟', seconds: 60, ranges: [3600, 21600, 86400, 172800] },

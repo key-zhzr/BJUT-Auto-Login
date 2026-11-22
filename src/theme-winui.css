@@ -279,10 +279,6 @@
   background: transparent !important;
 }
 
-:root[data-theme="winui"] body.has-native-system-backdrop nav {
-  background: transparent;
-}
-
 :root[data-theme="winui"] .app-container,
 :root[data-theme="winui"] main,
 :root[data-theme="winui"] .page,
@@ -297,6 +293,15 @@
   box-shadow: none;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+
+@media (min-width: 769px) {
+  :root[data-theme="winui"] body.is-desktop nav,
+  :root[data-theme="winui"] body.has-native-system-backdrop nav {
+    border-right-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
 }
 
 :root[data-theme="winui"] .fluent-icon {
@@ -494,6 +499,128 @@
   border-bottom-color: var(--win-divider-stroke);
 }
 
+/* Windows 11 Settings Home & Subpages: standalone Fluent SettingsCard rows on Mica */
+:root[data-theme="winui"] .settings-overview-group,
+:root[data-theme="winui"] .settings-subpage > .settings-group:has(> .setting-item):not(.network-adapter-settings):not(:has(.diagnostic-panel-header, .setting-group-heading, .permission-health-list, .settings-about-card)) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+:root[data-theme="winui"] .settings-overview-group:not(.android-only),
+:root[data-theme="winui"] .settings-subpage > .settings-group:has(> .setting-item):not(.network-adapter-settings):not(.android-only):not(:has(.diagnostic-panel-header, .setting-group-heading, .permission-health-list, .settings-about-card)),
+:root[data-theme="winui"] body.is-android .settings-subpage > .settings-group.android-only:has(> .setting-item) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+:root[data-theme="winui"] :is(
+  .settings-overview-group,
+  .settings-subpage > .settings-group:has(> .setting-item):not(.network-adapter-settings):not(:has(.diagnostic-panel-header, .setting-group-heading, .permission-health-list, .settings-about-card))
+) > h3 {
+  margin: 10px 0 4px;
+  color: var(--win-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: 0;
+}
+
+:root[data-theme="winui"] .settings-home > .settings-overview-group:first-child > h3,
+:root[data-theme="winui"] .settings-subpage > .settings-group:first-child > h3 {
+  margin-top: 0;
+}
+
+:root[data-theme="winui"] .settings-nav-list {
+  gap: 4px;
+}
+
+:root[data-theme="winui"] .settings-subpage > .settings-group:has(> .setting-item):not(.network-adapter-settings):not(:has(.diagnostic-panel-header, .setting-group-heading, .permission-health-list, .settings-about-card)) > .setting-item {
+  min-height: 64px;
+  margin: 0;
+  padding: 14px 18px;
+  border: 1px solid var(--win-card-stroke);
+  border-radius: var(--win-radius-control);
+  background: var(--win-card-fill);
+}
+
+:root[data-theme="winui"] .settings-subpage > .settings-group:has(> .setting-item):not(.network-adapter-settings):not(:has(.diagnostic-panel-header, .setting-group-heading, .permission-health-list, .settings-about-card)) > .setting-schedule-summary {
+  margin-top: 2px;
+  border-color: var(--win-card-stroke);
+  border-radius: var(--win-radius-control);
+  background: var(--win-card-fill-secondary);
+}
+
+:root[data-theme="winui"] .settings-nav-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 0;
+  color: var(--win-text-primary);
+  background: transparent;
+}
+
+/* Windows 11 Settings BreadcrumbBar header */
+:root[data-theme="winui"] #settings .settings-header-copy:has(#btn-settings-back:not([hidden])) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+:root[data-theme="winui"] #btn-settings-back {
+  min-height: auto;
+  margin: 0 0 var(--win-space-1) -6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--win-radius-control);
+  color: var(--win-text-secondary);
+  background: transparent;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 36px;
+  letter-spacing: -0.012em;
+  gap: 6px;
+}
+
+:root[data-theme="winui"] #btn-settings-back > svg {
+  display: none;
+}
+
+:root[data-theme="winui"] #btn-settings-back::after {
+  content: "›";
+  margin-left: 8px;
+  color: var(--win-text-tertiary);
+  font-weight: 400;
+}
+
+@media (max-width: 600px) {
+  :root[data-theme="winui"] #btn-settings-back {
+    margin-left: -4px;
+    font-size: 18px;
+    line-height: 26px;
+  }
+
+  :root[data-theme="winui"] #settings .settings-header-copy:has(#btn-settings-back:not([hidden])) > h1 {
+    font-size: 22px;
+    line-height: 28px;
+  }
+}
+
+/* SettingsExpander (<details>) */
+:root[data-theme="winui"] details {
+  border: 1px solid var(--win-card-stroke);
+  border-radius: var(--win-radius-control);
+  background: var(--win-card-fill);
+}
+
+:root[data-theme="winui"] details[open] > summary {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--win-divider-stroke);
+}
+
 /* -------------------------------------------------------------------------- */
 /* NavigationView                                                              */
 /* -------------------------------------------------------------------------- */
@@ -548,12 +675,17 @@
     .nav-item,
     .nav-tree-link,
     .billing-section-nav-button:not(:disabled),
-    .settings-nav-item,
     .settings-back-button
   ):hover {
     color: var(--win-text-primary);
     border-color: transparent;
     background: var(--win-subtle-fill-hover);
+  }
+
+  :root[data-theme="winui"] body:not(.is-android) .settings-nav-item:hover {
+    color: var(--win-text-primary);
+    border-color: var(--win-card-stroke);
+    background: var(--win-control-fill-hover);
   }
 }
 
@@ -627,12 +759,13 @@
 }
 
 :root[data-theme="winui"] .settings-nav-item {
+  min-height: 68px;
+  padding: 14px 18px;
   border: 1px solid var(--win-card-stroke);
   border-radius: var(--win-radius-control);
-  background: var(--win-card-fill-secondary);
+  background: var(--win-card-fill);
 }
 
-:root[data-theme="winui"] .settings-back-button,
 :root[data-theme="winui"] .billing-back-button {
   border: 1px solid var(--win-control-stroke-rest);
   border-radius: var(--win-radius-control);
@@ -660,8 +793,7 @@
     opacity var(--win-duration-fast) linear;
 }
 
-/* Narrow desktop widths (< 769px) collapse the pane into a clean icon-only rail
-   matching Tier 2 vertical spacing without overlaying the content pane. */
+/* Narrow desktop rail (Tier 1) */
 @media (max-width: 768px) {
   :root[data-theme="winui"] body.is-desktop #nav {
     width: 64px !important;
@@ -686,6 +818,108 @@
   :root[data-theme="winui"] body.is-desktop #nav .nav-item.active::before {
     display: block !important;
     left: 2px;
+  }
+
+  /* Native Windows bottom navigation bar on mobile / non-desktop widths */
+  :root[data-theme="winui"] body:not(.is-desktop) #nav,
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-mobile-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    inset: auto 0 0;
+    width: 100%;
+    height: auto;
+    min-height: calc(56px + env(safe-area-inset-bottom));
+    margin: 0;
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+    border: 0;
+    border-top: 1px solid var(--win-divider-stroke);
+    border-radius: 0;
+    background: var(--win-mica-base) !important;
+    box-shadow: none;
+    transform: none;
+    transition: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    z-index: 900;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active #nav {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: none;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop) #nav .nav-items {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+    width: 100%;
+    align-items: stretch;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-mobile-nav {
+    display: grid;
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop) #nav .nav-item,
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-mobile-nav .billing-section-nav-button {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-height: 48px;
+    height: 100%;
+    padding: 6px 4px;
+    border: 0;
+    border-radius: var(--win-radius-control);
+    color: var(--win-text-secondary);
+    background: transparent;
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 14px;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop) :is(#nav .nav-item, .billing-mobile-nav .billing-section-nav-button).active {
+    color: var(--win-text-primary);
+    background: var(--win-subtle-fill-hover);
+    font-weight: 600;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop) :is(#nav .nav-item, .billing-mobile-nav .billing-section-nav-button).active::before {
+    display: block !important;
+    position: absolute;
+    top: 2px;
+    left: 50%;
+    width: 16px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--win-accent-text-primary, var(--win-accent-fill-rest));
+    transform: translateX(-50%);
+    animation: none;
+    content: "";
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop) :is(#nav .nav-item, .billing-mobile-nav .billing-section-nav-button) > svg:not(.nav-tree-chevron) {
+    width: 20px;
+    height: 20px;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop) .nav-tree-chevron {
+    display: none;
+  }
+
+  :root[data-theme="winui"] body:not(.is-desktop) main,
+  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active main {
+    padding-bottom: calc(5.2rem + env(safe-area-inset-bottom));
   }
 }
 
@@ -1119,12 +1353,22 @@
   .modal-content > .modal-actions:last-child,
   .modal-content > form:last-child > .modal-actions:last-child
 ) {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--win-space-2);
   margin: var(--win-space-6) calc(var(--win-modal-pad) * -1) calc(var(--win-modal-pad) * -1);
   padding: var(--win-space-4) var(--win-modal-pad);
   border-top: 1px solid var(--win-divider-stroke);
   border-radius: 0 0 calc(var(--win-radius-overlay) - 1px) calc(var(--win-radius-overlay) - 1px);
   background: var(--win-dialog-footer-fill);
+}
+
+:root[data-theme="winui"] :is(
+  .modal-content > .modal-actions:last-child,
+  .modal-content > form:last-child > .modal-actions:last-child
+) > .btn {
+  flex: 1 1 0;
+  min-width: 96px;
 }
 
 @media (max-width: 480px) {
@@ -1140,9 +1384,41 @@
 @keyframes winui-theme-page-enter {
   from {
     opacity: 0;
+    transform: translate3d(0, 14px, 0);
   }
   to {
     opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+:root[data-theme="winui"] .settings-subpage-enter {
+  animation: winui-settings-subpage-enter var(--win-duration-normal) var(--win-ease-enter) both;
+}
+
+:root[data-theme="winui"] .settings-home-enter {
+  animation: winui-settings-home-enter var(--win-duration-normal) var(--win-ease-enter) both;
+}
+
+@keyframes winui-settings-subpage-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes winui-settings-home-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
   }
 }
 
@@ -1153,11 +1429,11 @@
 @keyframes winui-theme-section-enter {
   from {
     opacity: 0;
-    transform: translateX(6px);
+    transform: translate3d(0, 8px, 0);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
@@ -1275,6 +1551,12 @@
   box-shadow: none;
 }
 
+:root[data-theme="winui"] body.is-android .settings-overview-group,
+:root[data-theme="winui"] body.is-android .settings-subpage > .settings-group:has(> .setting-item):not(.network-adapter-settings):not(:has(.diagnostic-panel-header, .setting-group-heading, .permission-health-list, .settings-about-card)) {
+  background: transparent;
+  box-shadow: none;
+}
+
 @media (min-width: 769px) {
   :root[data-theme="winui"] body.is-android #nav {
     -webkit-backdrop-filter: none !important;
@@ -1314,18 +1596,15 @@
 }
 
 @media (max-width: 768px) {
-  /* Single mobile dock: entering billing center swaps the primary navigation
-     for billing sections to reclaim bottom viewport space. */
   :root[data-theme="winui"] body:not(.is-desktop).billing-center-active main {
-    padding-bottom: calc(6.4rem + env(safe-area-inset-bottom));
+    padding-bottom: calc(5.2rem + env(safe-area-inset-bottom));
   }
 
   :root[data-theme="winui"] body:not(.is-desktop).billing-center-active #nav {
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
-    transform: translateY(16px);
-    transition: opacity 140ms ease, transform 140ms ease;
+    transition: opacity var(--win-duration-fast) linear;
   }
 }
 
@@ -1379,21 +1658,13 @@
   summary
 ):not(:disabled):not([aria-disabled="true"]):active {
   transform: scale(0.978);
-  filter: brightness(0.94);
-  transition: transform 80ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 80ms ease;
+  opacity: 0.86;
+  transition: transform 80ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 80ms ease;
 }
 
 :root[data-theme="winui"] body.is-android .switch:active input:not(:disabled) + .slider {
-  filter: brightness(0.92);
-}
-
-@media (max-width: 480px) {
-  :root[data-theme="winui"] body:not(.is-desktop).billing-center-active .billing-mobile-nav {
-    bottom: max(0.45rem, env(safe-area-inset-bottom));
-    width: calc(100% - 1rem);
-    height: 4.35rem;
-    padding: 0.32rem;
-  }
+  opacity: 0.86;
+  transition: opacity 80ms ease;
 }
 
 /* -------------------------------------------------------------------------- */

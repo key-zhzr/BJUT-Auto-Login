@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { CustomSelect } from './custom-select';
 import { animateResize } from './layout-motion';
-import { type AccountUsage, type DailyUsage, type UsageReport, type UsageScope } from './device-usage-model';
+import { type AccountUsage, type DailyUsage, type UsageLoadProgress, type UsageReport, type UsageScope } from './device-usage-model';
 import { UsageChart, type UsageSelect } from './usage-chart';
 import { presentationDialog } from './presentation-dialog';
 import './usage-chart.css';
@@ -46,6 +46,7 @@ export class DeviceUsageView {
         });
     }
     update(data: UsageReport) {this.chart.update(data);}
+    showLoading(progress: UsageLoadProgress | null) {this.chart.showLoading(progress);}
     query(){return this.chart.query();}
     render(accounts: AccountUsage[], message = '', history: DailyUsage[] = []) {this.chart.update({enabled: false, scope: 'local', accounts, history, series: []}, message);}
     showError(message: string) {this.chart.showError(message);}

@@ -224,11 +224,13 @@ export class RouterWorkbench {
     const current = () => this.trafficRevision === revision && !!this.snapshot && !this.disconnected;
     try {
       const data = await this.trafficReader.read(
-        query => this.request('traffic', {...query}), this.trafficView.query(), current);
+        query => this.request('traffic', {...query}), this.trafficView.query(), current,
+        progress => this.trafficView.showLoading(progress));
       if (data && current()) this.trafficView.update(data);
     } catch {
       if (current()) this.trafficView.showError('暂时无法读取路由器流量，稍后会自动重试。');
     } finally {
+      this.trafficView.showLoading(null);
       this.trafficBusy = false;
       if (revision !== this.trafficRevision) void this.refreshTraffic();
     }

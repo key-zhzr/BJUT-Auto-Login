@@ -143,6 +143,7 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     appWebView = webView
+    webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
     val nightMode = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
     webView.setBackgroundColor(if (nightMode) android.graphics.Color.rgb(15, 23, 42) else android.graphics.Color.rgb(238, 242, 247))
     // Log the provider after WebView creation; never initialize it from the

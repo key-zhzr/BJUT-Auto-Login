@@ -19,6 +19,9 @@ import { setupScrollLayout } from './scroll-layout';
 import { setupPageHeaders } from './page-headers';
 import { setupDisclosureMotion, setVisible, animateResize } from './layout-motion';
 import { setupSwitchDrag } from './switch-drag';
+import { setupOverscrollBounce } from './overscroll-bounce';
+
+let overscrollBounce: { reset: () => void } = { reset: () => {} };
 import { loginBillingWebVpn } from './billing-webvpn';
 import { setupImageCaptchas } from './image-captcha';
 import { NetworkProgressView, type NetworkCheckProgress } from './network-progress-view';
@@ -2161,6 +2164,7 @@ async function init() {
   setupNavigation();
   setupPageHeaders();
   setupScrollLayout();
+  overscrollBounce = setupOverscrollBounce();
   setupDisclosureMotion();
   setupSwitchDrag();
   onBillingSourceChange(source => applyBillingSource(source));
@@ -2742,6 +2746,7 @@ function setPermissionHealthCollapsed(collapsed: boolean) {
   btnTogglePermissions.setAttribute('aria-expanded', String(!collapsed));
   permissionHealthList.setAttribute('aria-hidden', String(collapsed));
   permissionHealthToggleLabel.textContent = collapsed ? '展开详情' : '收起详情';
+  setVisible(permissionHealthList, !collapsed);
 }
 
 async function refreshPermissionHealth() {
@@ -2806,7 +2811,12 @@ function syncBillingCenterMessageVisibility() {
 function activateBillingWorkbenchSection(section: string, resetScroll = false) {
   if(section==='upstreams' && getBillingSource()!=='router')section='overview';
   if (!billingWorkbenchSections.includes(section as BillingWorkbenchSection)) return;
-  const changed = activeBillingWorkbenchSection !== section;
+  const prevSection = activeBillingWorkbenchSection;
+  const changed = prevSection !== section;
+  if (changed && !resetScroll && document.getElementById('billing-center')?.classList.contains('active')) {
+    saveViewScrollPosition(`billing-center:${prevSection}`);
+  }
+  overscrollBounce.reset();
   activeBillingWorkbenchSection = section as BillingWorkbenchSection;
   document.getElementById('billing-center')!.classList.toggle('is-uplink-summary',section==='upstreams');
   if(changed && section==='upstreams') {
@@ -2855,7 +2865,12 @@ function activateBillingWorkbenchSection(section: string, resetScroll = false) {
     }, 260);
   }
   if (resetScroll) {
-    document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, behavior: 'auto' });
+    const mainEl = document.querySelector<HTMLElement>('main');
+    mainEl?.scrollTo({ top: 0, behavior: 'auto' });
+    mainEl?.classList.remove('is-scrolled');
+    viewScrollPositions.set(`billing-center:${activeBillingWorkbenchSection}`, 0);
+  } else if (changed && document.getElementById('billing-center')?.classList.contains('active')) {
+    restoreViewScrollPosition(`billing-center:${activeBillingWorkbenchSection}`);
   }
 }
 
@@ -2945,14 +2960,55 @@ function syncSettingsOverviewSummaries() {
   setSettingsSummaryText('settings-summary-about', versionText);
 }
 
+const viewScrollPositions = new Map<string, number>();
+
+function getViewScrollKey(pageId: string): string {
+  if (pageId === 'settings') {
+    return activeSettingsSubpage ? `settings:${activeSettingsSubpage}` : 'settings:home';
+  }
+  if (pageId === 'billing-center') {
+    return `billing-center:${activeBillingWorkbenchSection}`;
+  }
+  return pageId;
+}
+
+function saveViewScrollPosition(key: string): number {
+  const mainEl = document.getElementById('main-content');
+  if (!mainEl || !key) return 0;
+  const top = Math.max(0, mainEl.scrollTop);
+  viewScrollPositions.set(key, top);
+  return top;
+}
+
+function restoreViewScrollPosition(key: string, currentScrollTop?: number): number {
+  const mainEl = document.getElementById('main-content');
+  if (!mainEl) return 0;
+  const saved = viewScrollPositions.get(key) ?? 0;
+  if (saved === 0 && currentScrollTop === 0) {
+    if (mainEl.classList.contains('is-scrolled')) mainEl.classList.remove('is-scrolled');
+    return 0;
+  }
+  const activeTop = currentScrollTop ?? mainEl.scrollTop;
+  if (Math.abs(activeTop - saved) >= 1) {
+    mainEl.scrollTo({ top: saved, behavior: 'auto' });
+  }
+  mainEl.classList.toggle('is-scrolled', saved > 4);
+  return saved;
+}
+
 function openSettingsSubpage(
   subpage: string | null,
-  options: { animate?: boolean; resetScroll?: boolean } = {},
+  options: { animate?: boolean; resetScroll?: boolean; restoreScroll?: boolean; skipSave?: boolean } = {},
 ) {
   CustomSelect.closeOpen();
+  const prevSubpage = activeSettingsSubpage;
   const meta = subpage ? SETTINGS_SUBPAGE_META[subpage] : undefined;
   const nextSubpage = meta ? subpage : null;
-  const changed = activeSettingsSubpage !== nextSubpage;
+  const changed = prevSubpage !== nextSubpage;
+  overscrollBounce.reset();
+  if (changed && !options.skipSave && document.getElementById('settings')?.classList.contains('active')) {
+    saveViewScrollPosition(prevSubpage ? `settings:${prevSubpage}` : 'settings:home');
+  }
   activeSettingsSubpage = nextSubpage;
 
   const backBtn = document.getElementById('btn-settings-back');
@@ -2979,6 +3035,17 @@ function openSettingsSubpage(
     void refreshPermissionHealth();
   }
 
+  if (options.resetScroll === true) {
+    const mainEl = document.getElementById('main-content');
+    if (mainEl) {
+      mainEl.scrollTo({ top: 0, behavior: 'auto' });
+      mainEl.classList.remove('is-scrolled');
+    }
+    viewScrollPositions.set(nextSubpage ? `settings:${nextSubpage}` : 'settings:home', 0);
+  } else if (options.restoreScroll !== false) {
+    restoreViewScrollPosition(nextSubpage ? `settings:${nextSubpage}` : 'settings:home');
+  }
+
   if (settingsMotionTimer !== null) {
     window.clearTimeout(settingsMotionTimer);
     settingsMotionTimer = null;
@@ -2995,12 +3062,6 @@ function openSettingsSubpage(
       visiblePanel?.classList.remove(enterClass);
       settingsMotionTimer = null;
     }, 240);
-  }
-
-  if (options.resetScroll !== false) {
-    const mainEl = document.getElementById('main-content');
-    mainEl?.scrollTo({ top: 0, behavior: 'auto' });
-    mainEl?.classList.remove('is-scrolled');
   }
 }
 
@@ -3028,7 +3089,7 @@ function flushPageTransitionTasks() {
 function clearPageSlideState(flushTasks = false) {
   cancelPageSlide?.();
   cancelPageSlide = null;
-  document.body.classList.remove('is-page-sliding');
+  document.body.classList.remove('is-page-sliding', 'is-page-slide-prep');
   if (activeLeavingPage) {
     activeLeavingPage.classList.remove('page-slide-leave-left', 'page-slide-leave-right');
     activeLeavingPage.inert = false;
@@ -3067,8 +3128,6 @@ function activatePage(target: string, navTarget = target) {
   const prevPageId = prevPageEl?.id || 'dashboard';
   const nextPageEl = document.getElementById(resolvedTarget);
   const pageChanged = Boolean(nextPageEl && prevPageEl !== nextPageEl);
-  if (pageChanged) pageTransitionSeq += 1;
-  const activeTransitionSeq = pageTransitionSeq;
   const mainEl = document.getElementById('main-content');
   const shouldSlide = Boolean(
     pageChanged
@@ -3080,7 +3139,8 @@ function activatePage(target: string, navTarget = target) {
     && !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
   );
 
-  let leaveTop = 0;
+  let mainRectTop = 0;
+  let prevRectTop = 0;
   let leaveLeft = 0;
   let leaveWidth = 0;
   let leaveHeaderOffset = 0;
@@ -3088,13 +3148,21 @@ function activatePage(target: string, navTarget = target) {
     const mainRect = mainEl.getBoundingClientRect();
     const prevRect = prevPageEl.getBoundingClientRect();
     const prevHeaderRect = prevPageEl.querySelector<HTMLElement>(':scope > .page-header')?.getBoundingClientRect();
-    leaveTop = prevRect.top - mainRect.top;
+    mainRectTop = mainRect.top;
+    prevRectTop = prevRect.top;
     leaveLeft = prevRect.left - mainRect.left;
     leaveWidth = prevRect.width;
     leaveHeaderOffset = prevHeaderRect ? Math.max(0, prevHeaderRect.top - prevRect.top) : 0;
   }
 
-  clearPageSlideState();
+  let prevScrollTop = 0;
+  if (pageChanged) {
+    pageTransitionSeq += 1;
+    clearPageSlideState();
+    prevScrollTop = saveViewScrollPosition(getViewScrollKey(prevPageId));
+    overscrollBounce.reset();
+  }
+  const activeTransitionSeq = pageTransitionSeq;
 
   const consoleExpanded = resolvedTarget === 'dashboard' || resolvedTarget === 'billing-center';
   const billingExpanded = resolvedTarget === 'billing-center';
@@ -3120,6 +3188,12 @@ function activatePage(target: string, navTarget = target) {
   nav?.querySelector<HTMLElement>('.nav-billing-tree')
     ?.setAttribute('aria-hidden', String(!billingExpanded));
 
+  // Sync mobile dock before dirtying destination page DOM so positionPill avoids forced full-page layout.
+  const syncNavEarly = resolvedTarget !== 'billing-center' && prevPageId !== 'billing-center';
+  if (syncNavEarly) {
+    syncLiquidNav({ animate: true });
+  }
+
   const prevOrder = NAV_PAGE_ORDER[prevPageId] ?? 0;
   const nextOrder = NAV_PAGE_ORDER[resolvedTarget] ?? 0;
   const forward = nextOrder >= prevOrder;
@@ -3128,13 +3202,35 @@ function activatePage(target: string, navTarget = target) {
     page.classList.toggle('active', page.id === resolvedTarget);
   });
 
-  if (pageChanged && mainEl) {
-    mainEl.scrollTo({ top: 0, behavior: 'auto' });
-    mainEl.classList.remove('is-scrolled');
+  if (resolvedTarget === 'settings') {
+    if (requestedSettingsSubpage !== undefined) {
+      openSettingsSubpage(
+        requestedSettingsSubpage,
+        pageChanged
+          ? { animate: true, resetScroll: true, skipSave: true, restoreScroll: false }
+          : { animate: true, resetScroll: true },
+      );
+    } else if (pageChanged) {
+      openSettingsSubpage(null, { animate: false, resetScroll: false, skipSave: true, restoreScroll: false });
+    } else {
+      syncSettingsOverviewSummaries();
+    }
   }
 
-  if (shouldSlide && prevPageEl && nextPageEl) {
-    document.body.classList.add('is-page-sliding');
+  let restoredScrollTop = 0;
+  if (pageChanged && mainEl) {
+    if (resolvedTarget === 'settings' && requestedSettingsSubpage !== undefined) {
+      if (prevScrollTop >= 1) mainEl.scrollTo({ top: 0, behavior: 'auto' });
+      mainEl.classList.remove('is-scrolled');
+      viewScrollPositions.set(getViewScrollKey('settings'), 0);
+    } else {
+      restoredScrollTop = restoreViewScrollPosition(getViewScrollKey(resolvedTarget), prevScrollTop);
+    }
+  }
+
+  if (shouldSlide && prevPageEl && nextPageEl && mainEl) {
+    const leaveTop = (prevRectTop - mainRectTop) + restoredScrollTop;
+    document.body.classList.add('is-page-sliding', 'is-page-slide-prep');
     prevPageEl.style.setProperty('--leave-top', `${leaveTop}px`);
     prevPageEl.style.setProperty('--leave-left', `${leaveLeft}px`);
     prevPageEl.style.setProperty('--leave-width', `${leaveWidth}px`);
@@ -3146,15 +3242,23 @@ function activatePage(target: string, navTarget = target) {
     const animTarget = (resolvedTarget === 'billing-center'
       ? nextPageEl.querySelector<HTMLElement>(':scope > .page-header')
       : nextPageEl) || nextPageEl;
+    let timer: number | null = null;
+    let rafId = 0;
     const onAnimEnd = (event: AnimationEvent) => {
       if (event.target !== animTarget) return;
       if (event.animationName !== 'pageSlideFromRight' && event.animationName !== 'pageSlideFromLeft') return;
       clearPageSlideState(true);
     };
-    animTarget.addEventListener('animationend', onAnimEnd);
-    const timer = window.setTimeout(() => clearPageSlideState(true), 280);
+    rafId = window.requestAnimationFrame(() => {
+      rafId = 0;
+      if (activeTransitionSeq !== pageTransitionSeq) return;
+      document.body.classList.remove('is-page-slide-prep');
+      animTarget.addEventListener('animationend', onAnimEnd);
+      timer = window.setTimeout(() => clearPageSlideState(true), 300);
+    });
     cancelPageSlide = () => {
-      window.clearTimeout(timer);
+      if (rafId) window.cancelAnimationFrame(rafId);
+      if (timer !== null) window.clearTimeout(timer);
       animTarget.removeEventListener('animationend', onAnimEnd);
     };
   }
@@ -3167,7 +3271,9 @@ function activatePage(target: string, navTarget = target) {
     }
   };
 
-  routerWorkbench?.onPage(resolvedTarget);
+  runAfterPageSlide(() => {
+    routerWorkbench?.onPage(resolvedTarget);
+  });
   rechargeHours.setActive(resolvedTarget === 'billing-center' && activeBillingWorkbenchSection === 'recharge');
   if (resolvedTarget === 'diagnostics') {
     runAfterPageSlide(() => {
@@ -3180,22 +3286,19 @@ function activatePage(target: string, navTarget = target) {
     });
   }
   if (resolvedTarget === 'settings') {
-    if (requestedSettingsSubpage !== undefined) {
-      openSettingsSubpage(requestedSettingsSubpage, { animate: true, resetScroll: true });
-    } else if (pageChanged) {
-      openSettingsSubpage(null, { animate: false, resetScroll: false });
-    } else {
-      syncSettingsOverviewSummaries();
-    }
     runAfterPageSlide(() => {
       void refreshPermissionHealth();
     });
   }
   if (resolvedTarget === 'billing-center') {
     activateBillingWorkbenchSection(activeBillingWorkbenchSection);
-    renderBillingCenter(billingCenterData ? billingOverviewToUserInfo(billingCenterData.overview) : null);
+    runAfterPageSlide(() => {
+      renderBillingCenter(billingCenterData ? billingOverviewToUserInfo(billingCenterData.overview) : null);
+    });
   }
-  syncLiquidNav({ animate: true });
+  if (!syncNavEarly) {
+    syncLiquidNav({ animate: true });
+  }
 }
 
 function handleAndroidBack() {
@@ -3231,7 +3334,6 @@ function handleAndroidBack() {
   }
   if (activePage && activePage !== 'dashboard') {
     activatePage('dashboard');
-    document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, behavior: 'auto' });
     return true;
   }
   return false;
@@ -3258,7 +3360,7 @@ function setupNavigation() {
       const target = link.dataset.navPageTarget;
       if (!target) return;
       if (target === 'billing-center') {
-        activateBillingWorkbenchSection('overview', true);
+        activateBillingWorkbenchSection('overview', false);
         activatePage(target, 'dashboard');
         if (!billingCenterData) void refreshBillingCenterData();
       } else {
@@ -3325,7 +3427,6 @@ function setupEventListeners() {
   });
   btnOpenBilling.addEventListener('click', () => {
     activatePage('billing-center', 'dashboard');
-    document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, behavior: 'auto' });
     if (!billingCenterData) void refreshBillingCenterData();
   });
   btnCloseBilling.addEventListener('click', () => activatePage('dashboard'));
@@ -3334,7 +3435,7 @@ function setupEventListeners() {
       if (button.closest('.nav-billing-tree')) {
         activatePage('billing-center', 'dashboard');
       }
-      activateBillingWorkbenchSection(button.dataset.billingSectionTarget || '', true);
+      activateBillingWorkbenchSection(button.dataset.billingSectionTarget || '', false);
       if(!billingCenterData && button.dataset.billingSectionTarget!=='upstreams')void refreshBillingCenterData();
     });
     button.addEventListener('keydown', event => {
@@ -3350,13 +3451,13 @@ function setupEventListeners() {
       const nextIndex = (index + (backwards ? -1 : 1) + groupButtons.length) % groupButtons.length;
       const nextButton = groupButtons[nextIndex];
       nextButton.focus();
-      activateBillingWorkbenchSection(nextButton.dataset.billingSectionTarget || '', true);
+      activateBillingWorkbenchSection(nextButton.dataset.billingSectionTarget || '', false);
     });
   });
   billingSectionShortcuts.forEach(button => {
     button.addEventListener('click', () => {
       const section = button.dataset.billingSectionShortcut || '';
-      activateBillingWorkbenchSection(section, true);
+      activateBillingWorkbenchSection(section, false);
       billingSectionNavButtons.find(item => (
         item.dataset.billingSectionTarget === section && item.offsetParent !== null
       ))?.focus();
