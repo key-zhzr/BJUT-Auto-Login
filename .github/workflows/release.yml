@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      build_only:
+        description: 仅生成 GitHub Actions 安装包
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -520,6 +525,7 @@ jobs:
               json.dump(manifest, handle, ensure_ascii=False, indent=2)
 
       - name: Upload to GitHub Release
+        if: github.event_name != 'workflow_dispatch' || !inputs.build_only
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.get_version.outputs.version }}
