@@ -1666,6 +1666,8 @@ test('winui native navigation, settings cards, breadcrumb bar & basic flclash dr
     const ms = getComputedStyle(menu);
     const os = getComputedStyle(opt);
     const after = getComputedStyle(opt, '::after');
+    const initOverflowY = ms.overflowY;
+    const initScrollDelta = menu.scrollHeight - menu.clientHeight;
     const prevMaxH = menu.style.maxHeight;
     menu.style.maxHeight = '56px';
     menu.scrollTop = 0;
@@ -1685,6 +1687,8 @@ test('winui native navigation, settings cards, breadcrumb bar & basic flclash dr
       optBg: os.backgroundColor,
       optWeight: os.fontWeight,
       afterContent: after.content,
+      initOverflowY,
+      initScrollDelta,
       canDown,
       canUp,
       maskWhileScrollable,
@@ -1698,11 +1702,31 @@ test('winui native navigation, settings cards, breadcrumb bar & basic flclash dr
   expect(dropdownCheck.optBg).toBe('rgba(0, 0, 0, 0)');
   expect(dropdownCheck.optWeight).toBe('400');
   expect(dropdownCheck.afterContent).not.toBe('none');
+  expect(dropdownCheck.initOverflowY).toBe('hidden');
+  expect(dropdownCheck.initScrollDelta).toBeLessThanOrEqual(0);
   expect(dropdownCheck.canDown).toBe(true);
   expect(dropdownCheck.canUp).toBe(true);
   expect(dropdownCheck.maskWhileScrollable).toBe('none');
   expect(dropdownCheck.coversVertically).toBe(true);
   expect(dropdownCheck.expandsUpAndDown).toBe(true);
+
+  // Verify C0-continuous edge pull across bottom edge (no backward drop/twitch).
+  const edgePullBox = await page.locator('.custom-select.open .custom-select-options').boundingBox();
+  expect(edgePullBox).toBeTruthy();
+  const readPullY = () => page.locator('.custom-select.open .custom-select-options').evaluate(el => {
+    const m = el.style.transform.match(/translate3d\([^,]+,\s*([^,]+)px/);
+    return m ? Number.parseFloat(m[1]) : 0;
+  });
+  await page.mouse.move(edgePullBox!.x + edgePullBox!.width / 2, edgePullBox!.y + edgePullBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(edgePullBox!.x + edgePullBox!.width / 2, edgePullBox!.y + edgePullBox!.height - 1, {steps: 4});
+  const justInsideY = await readPullY();
+  await page.mouse.move(edgePullBox!.x + edgePullBox!.width / 2, edgePullBox!.y + edgePullBox!.height + 24, {steps: 4});
+  const pastEdgeY = await readPullY();
+  await page.mouse.up();
+  expect(justInsideY).toBeGreaterThan(0);
+  expect(pastEdgeY).toBeGreaterThan(justInsideY);
+  await page.waitForTimeout(320);
 
   await page.keyboard.press('Escape');
   const closingMidFrame = await page.evaluate(() => {
@@ -1785,21 +1809,28 @@ test('overscroll rubber-band, scroll position memory & non-adjacent android slid
   await page.locator('#nav .nav-item[data-target="settings"]').click();
   await page.waitForTimeout(340);
   const nonAdjacent = await page.evaluate(async () => {
+    const main = document.getElementById('main-content')!;
     const accountsBtn = document.querySelector<HTMLElement>('#nav .nav-item[data-target="accounts"]')!;
     const accountsPage = document.getElementById('accounts')!;
     accountsBtn.click();
+    main.scrollTop = 0;
+    const wheel = new WheelEvent('wheel', {deltaY: -120, cancelable: true, bubbles: true});
+    main.dispatchEvent(wheel);
+    const wheelConsumedDuringSlide = wheel.defaultPrevented;
     await new Promise(requestAnimationFrame);
     accountsBtn.click(); // Trailing synthetic click with pageChanged === false
     await new Promise(requestAnimationFrame);
     const keptSlideClass = accountsPage.classList.contains('page-slide-from-left');
     await new Promise(r => setTimeout(r, 360));
     return {
+      wheelConsumedDuringSlide,
       keptSlideClass,
       settledHasSlideClass: accountsPage.classList.contains('page-slide-from-left'),
       active: accountsPage.classList.contains('active'),
     };
   });
   expect(nonAdjacent).toEqual({
+    wheelConsumedDuringSlide: false,
     keptSlideClass: true,
     settledHasSlideClass: false,
     active: true,

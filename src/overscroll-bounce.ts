@@ -184,7 +184,7 @@ export function setupOverscrollBounce(): { reset: () => void } {
 
   mainEl.addEventListener('touchstart', event => {
     if (activeTouchId !== null || event.touches.length !== 1) return;
-    if (document.body.classList.contains('is-page-sliding')) return;
+    if (mainEl.classList.contains('is-page-sliding')) return;
     if (shouldIgnoreTarget(event.target)) return;
     const touch = event.touches[0];
     activeTouchId = touch.identifier;
@@ -213,7 +213,7 @@ export function setupOverscrollBounce(): { reset: () => void } {
       }
     }
     if (!touch) return;
-    if (document.body.classList.contains('is-page-sliding')) {
+    if (mainEl.classList.contains('is-page-sliding')) {
       reset();
       return;
     }
@@ -283,7 +283,7 @@ export function setupOverscrollBounce(): { reset: () => void } {
   mainEl.addEventListener('touchcancel', endTouch, { passive: true });
 
   mainEl.addEventListener('wheel', event => {
-    if (event.defaultPrevented || event.ctrlKey || document.body.classList.contains('is-page-sliding')) return;
+    if (event.defaultPrevented || event.ctrlKey || mainEl.classList.contains('is-page-sliding')) return;
     if (shouldIgnoreTarget(event.target)) return;
     if (!event.deltaY || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
 

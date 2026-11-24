@@ -1,4 +1,4 @@
-import { updateDockGlass } from './liquid-glass';
+import { updateDockGlass, whenDockGlassReady } from './liquid-glass';
 import {
   flushMacosLiquidGlass,
   getMacosNativeGlassEngine,
@@ -123,6 +123,7 @@ interface PillState {
   cachedTheme: string;
   warmedGeometry: string;
   warmupFrame: number;
+  warmupTimer: number;
   warmingUp: boolean;
 }
 
@@ -389,12 +390,20 @@ function clearTabVisuals(state: PillState) {
 }
 
 function cancelWarmup(state: PillState) {
+  if (state.warmupTimer) {
+    window.clearTimeout(state.warmupTimer);
+    state.warmupTimer = 0;
+  }
   if (state.warmupFrame) {
     cancelAnimationFrame(state.warmupFrame);
     state.warmupFrame = 0;
   }
   if (!state.warmingUp) return;
   state.warmingUp = false;
+  if (!state.pressed && !state.dragging && !state.frame) {
+    state.host.classList.remove('is-droplet-active');
+    state.lastDropletActive = false;
+  }
   state.barSurface.style.clipPath = '';
   state.barRecess.style.visibility = '';
   state.barRecess.style.opacity = '';
@@ -438,16 +447,28 @@ function scheduleDropletWarmup(state: PillState) {
   const warmKey = `${Math.round(state.barBox.width)}x${Math.round(state.barBox.height)}:${Math.round(state.lensWidth)}x${Math.round(state.lensHeight)}`;
   if (state.warmedGeometry === warmKey) return;
 
+  if (document.getElementById('app-loading-mask')?.classList.contains('is-visible')) {
+    if (!state.warmupTimer) {
+      state.warmupTimer = window.setTimeout(() => {
+        state.warmupTimer = 0;
+        scheduleDropletWarmup(state);
+      }, 120);
+    }
+    return;
+  }
+
   cancelWarmup(state);
-  state.warmupFrame = requestAnimationFrame(() => {
-    state.warmupFrame = 0;
+  const seq = state.syncSeq;
+  void whenDockGlassReady(state.host).then(() => {
     if (
-      state.pressed
+      state.syncSeq !== seq
+      || state.pressed
       || state.dragging
       || state.frame
       || !state.dockWidth
       || !state.barBox
       || !state.accentTabs.length
+      || isWinuiTheme()
       || isReducedTransparency
       || isReducedMotion
       || document.hidden
@@ -455,68 +476,93 @@ function scheduleDropletWarmup(state: PillState) {
       return;
     }
 
-    const activeTab = state.accentTabs.find(tab => tab.element.classList.contains('active')) || state.accentTabs[0];
-    const barW = state.barBox.width;
-    const barH = state.barBox.height;
-    const lensW = state.lensWidth;
-    const lensH = state.lensHeight;
-    if (barW < 2 || barH < 2 || lensW < 2 || lensH < 2) return;
-
-    state.warmingUp = true;
-    const middle = activeTab.left + activeTab.width / 2;
-    const middleY = barH / 2 - state.containerTopInHost;
-    const clipLeft = Math.max(0, middle - lensW / 2);
-    const clipTop = middleY - lensH / 2;
-    const clipRight = Math.max(0, state.dockWidth - (clipLeft + lensW));
-    const clipBottom = Math.max(0, state.dockHeight - (clipTop + lensH));
-    const clipRadius = Math.min(lensW / 2, lensH / 2);
-    const clipInset = `inset(${clipTop.toFixed(2)}px ${clipRight.toFixed(2)}px ${clipBottom.toFixed(2)}px ${clipLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
-
-    const holeCx = Math.max(2, Math.min(barW - 2, middle + state.containerLeftInHost));
-    const holeCy = barH / 2;
-    state.barSurface.style.clipPath = buildStadiumHolePath(-32, -32, barW + 32, barH + 32, holeCx - 1, holeCy - 1, 2, 2, 1, 1);
-    activeTab.element.style.clipPath = buildStadiumHolePath(
-      -32,
-      -32,
-      activeTab.width + 32,
-      activeTab.height + 32,
-      activeTab.width / 2 - 1,
-      activeTab.height / 2 - 1,
-      2,
-      2,
-      1,
-      1,
-    );
-
-    const hLeft = Math.max(0, clipLeft + state.containerLeftInHost);
-    const hTop = clipTop + state.containerTopInHost;
-    const hRight = Math.max(0, barW - (hLeft + lensW));
-    const hBottom = Math.max(0, barH - (hTop + lensH));
-    state.barRecess.style.visibility = 'visible';
-    state.barRecess.style.opacity = '0.005';
-    state.barRecess.style.clipPath = `inset(${hTop.toFixed(2)}px ${hRight.toFixed(2)}px ${hBottom.toFixed(2)}px ${hLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
-    state.barRecessSurface.style.transform = 'translate3d(0px, 0px, 0) scale(0.99, 0.90)';
-
-    state.accentLayer.style.visibility = 'visible';
-    state.accentLayer.style.opacity = '0.005';
-    state.accentLayer.style.clipPath = clipInset;
-
-    const dropletLeft = middle - lensW / 2;
-    const dropletTop = middleY - lensH / 2;
-    state.droplet.style.visibility = 'visible';
-    state.droplet.style.opacity = '0.005';
-    state.droplet.style.transform = `translate3d(${dropletLeft.toFixed(2)}px, ${dropletTop.toFixed(2)}px, 0) scale(1, 1)`;
-    state.pill.style.opacity = '0.995';
-
     state.warmupFrame = requestAnimationFrame(() => {
-      state.warmupFrame = requestAnimationFrame(() => {
+      state.warmupFrame = 0;
+      if (
+        state.syncSeq !== seq
+        || state.pressed
+        || state.dragging
+        || state.frame
+        || !state.dockWidth
+        || !state.barBox
+        || !state.accentTabs.length
+        || isReducedTransparency
+        || isReducedMotion
+        || document.hidden
+      ) {
+        return;
+      }
+
+      const activeTab = state.accentTabs.find(tab => tab.element.classList.contains('active')) || state.accentTabs[0];
+      const barW = state.barBox.width;
+      const barH = state.barBox.height;
+      const lensW = state.lensWidth;
+      const lensH = state.lensHeight;
+      if (barW < 2 || barH < 2 || lensW < 2 || lensH < 2) return;
+
+      state.warmingUp = true;
+      const middle = activeTab.left + activeTab.width / 2;
+      const middleY = barH / 2 - state.containerTopInHost;
+      const clipLeft = Math.max(0, middle - lensW / 2);
+      const clipTop = middleY - lensH / 2;
+      const clipRight = Math.max(0, state.dockWidth - (clipLeft + lensW));
+      const clipBottom = Math.max(0, state.dockHeight - (clipTop + lensH));
+      const clipRadius = Math.min(lensW / 2, lensH / 2);
+      const clipInset = `inset(${clipTop.toFixed(2)}px ${clipRight.toFixed(2)}px ${clipBottom.toFixed(2)}px ${clipLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
+
+      const holeCx = Math.max(2, Math.min(barW - 2, middle + state.containerLeftInHost));
+      const holeCy = barH / 2;
+      state.host.classList.add('is-droplet-active');
+      state.barSurface.style.clipPath = buildStadiumHolePath(-32, -32, barW + 32, barH + 32, holeCx - 1, holeCy - 1, 2, 2, 1, 1);
+      activeTab.element.style.clipPath = buildStadiumHolePath(
+        -32,
+        -32,
+        activeTab.width + 32,
+        activeTab.height + 32,
+        activeTab.width / 2 - 1,
+        activeTab.height / 2 - 1,
+        2,
+        2,
+        1,
+        1,
+      );
+
+      const hLeft = Math.max(0, clipLeft + state.containerLeftInHost);
+      const hTop = clipTop + state.containerTopInHost;
+      const hRight = Math.max(0, barW - (hLeft + lensW));
+      const hBottom = Math.max(0, barH - (hTop + lensH));
+      state.barRecess.style.visibility = 'visible';
+      state.barRecess.style.opacity = '0.005';
+      state.barRecess.style.clipPath = `inset(${hTop.toFixed(2)}px ${hRight.toFixed(2)}px ${hBottom.toFixed(2)}px ${hLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
+      state.barRecessSurface.style.transform = 'translate3d(0px, 0px, 0) scale(0.99, 0.90)';
+
+      state.accentLayer.style.visibility = 'visible';
+      state.accentLayer.style.opacity = '0.005';
+      state.accentLayer.style.clipPath = clipInset;
+
+      const dropletLeft = middle - lensW / 2;
+      const dropletTop = middleY - lensH / 2;
+      state.droplet.style.visibility = 'visible';
+      state.droplet.style.opacity = '0.005';
+      state.droplet.style.transform = `translate3d(${dropletLeft.toFixed(2)}px, ${dropletTop.toFixed(2)}px, 0) scale(1, 1)`;
+      state.pill.style.opacity = '0.995';
+
+      let hold = 4;
+      const holdTick = () => {
+        if (!state.warmingUp) return;
+        hold -= 1;
+        if (hold > 0) {
+          state.warmupFrame = requestAnimationFrame(holdTick);
+          return;
+        }
         state.warmupFrame = 0;
         cancelWarmup(state);
         state.warmedGeometry = warmKey;
         if (!state.pressed && !state.dragging && !state.frame && state.dockWidth) {
           paintHorizontalPill(state);
         }
-      });
+      };
+      state.warmupFrame = requestAnimationFrame(holdTick);
     });
   });
 }
@@ -1435,7 +1481,8 @@ function attachDragScrub(state: PillState) {
     const movedToOtherTab = Boolean(releaseTab && releaseTab !== pressedTabEl);
     const dragged = state.dragging || Math.abs(event.clientX - startX) >= 5 || movedToOtherTab;
     const targetTab = dragged ? releaseTab : pressedTabEl;
-    const shouldSwitch = Boolean(targetTab && !targetTab.classList.contains('active') && isBoxVisible(targetTab));
+    const tabEntry = targetTab ? tabs.find(entry => entry.element === targetTab) : undefined;
+    const shouldSwitch = Boolean(targetTab && tabEntry && tabEntry.box.width > 0 && !targetTab.classList.contains('active'));
     const switchingOnTap = !dragged && shouldSwitch;
     cancel(dragged || shouldSwitch, switchingOnTap);
     const seqBefore = state.syncSeq;
@@ -1572,7 +1619,7 @@ function registerPillHost(container: HTMLElement, host: HTMLElement, tag: 'li' |
     containerLeftInHost: 0, containerTopInHost: 0,
     top: 0, height: 0, dockWidth: 0, dockHeight: 0, leftRoom: 0, rightEdge: 0, bottomEdge: 0,
     barBox: null, lensWidth: 0, lensHeight: 0, syncSeq: 0, cachedTheme: '',
-    warmedGeometry: '', warmupFrame: 0, warmingUp: false,
+    warmedGeometry: '', warmupFrame: 0, warmupTimer: 0, warmingUp: false,
   };
   controllers.push(state);
   attachDragScrub(state);
@@ -1650,7 +1697,7 @@ export function setupLiquidNav() {
       if (event.target === tree) syncInstant();
     });
   }
-  const layoutClassKey = () => `${document.documentElement.dataset.theme ?? ''}|${document.body.className.replace(/\bis-page-sliding\b/g, '').trim()}`;
+  const layoutClassKey = () => `${document.documentElement.dataset.theme ?? ''}|${document.body.className}`;
   let lastLayoutKey = layoutClassKey();
   const observeLayout = new MutationObserver(() => {
     const nextKey = layoutClassKey();

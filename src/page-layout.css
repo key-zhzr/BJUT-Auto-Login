@@ -30,22 +30,47 @@ body,
     contain: style;
   }
 
-  :root[data-theme] body.is-android.is-page-sliding #main-content > .page:not(#billing-center) {
+  :root[data-theme] body.is-android #main-content > .page:not(.active):not(.page-slide-leave-left):not(.page-slide-leave-right) {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0.75rem;
+    width: calc(100% - 1.5rem);
+    height: auto;
+    max-height: 100%;
+    overflow: hidden;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: -1;
+    content-visibility: visible;
     contain: layout style paint;
   }
 
-  :root[data-theme] body.is-android.is-page-sliding #main-content > .page > .page-header::after {
+  :root[data-theme] body.is-android #main-content > .page.page-prewarm:not(.active) {
+    height: auto;
+    overflow: visible;
+    content-visibility: visible;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  :root[data-theme] body.is-android #main-content.is-page-sliding > .page:not(#billing-center) {
+    contain: layout style paint;
+  }
+
+  :root[data-theme] body.is-android #main-content.is-page-sliding > .page > .page-header::after {
     display: none;
   }
 
-  :root[data-theme] body.is-android.is-page-sliding #main-content > .page > .page-header::before {
+  :root[data-theme] body.is-android #main-content.is-page-sliding > .page > .page-header::before {
     opacity: 1;
     transition: none;
   }
 
-  :root[data-theme] body.is-android.is-page-slide-prep #main-content > .page:is(.page-slide-from-right, .page-slide-from-left, .page-slide-leave-left, .page-slide-leave-right),
-  :root[data-theme] body.is-android.is-page-slide-prep #main-content > #billing-center:is(.page-slide-from-right, .page-slide-from-left) > .page-header,
-  :root[data-theme] body.is-android.is-page-slide-prep #main-content > #billing-center:is(.page-slide-from-right, .page-slide-from-left) .billing-workbench-content {
+  :root[data-theme] body.is-android #main-content.is-page-slide-prep > .page:is(.page-slide-from-right, .page-slide-from-left, .page-slide-leave-left, .page-slide-leave-right),
+  :root[data-theme] body.is-android #main-content.is-page-slide-prep > #billing-center:is(.page-slide-from-right, .page-slide-from-left) > .page-header,
+  :root[data-theme] body.is-android #main-content.is-page-slide-prep > #billing-center:is(.page-slide-from-right, .page-slide-from-left) .billing-workbench-content {
     animation-play-state: paused !important;
   }
 

@@ -113,6 +113,8 @@ function createNormalMap(width: number, height: number, profile: LensProfile) {
 }
 
 let filterDefs: SVGDefsElement | undefined;
+const lensDecodePromises = new Map<string, Promise<void>>();
+const dockReadyPromises = new WeakMap<HTMLElement, Promise<void>>();
 
 function updateLens(id: string, width: number, height: number, profile: LensProfile): 'updated' | 'cached' | 'failed' {
   const w = Math.round(width);
@@ -124,6 +126,12 @@ function updateLens(id: string, width: number, height: number, profile: LensProf
 
   const map = createNormalMap(w, h, profile);
   if (!map) return 'failed';
+  const predecode = new Image();
+  predecode.src = map.normalHref;
+  lensDecodePromises.set(
+    id,
+    typeof predecode.decode === 'function' ? predecode.decode().catch(() => {}) : Promise.resolve(),
+  );
   if (!filterDefs) {
     const holder = svg('svg', {
       width: 0,
@@ -251,4 +259,15 @@ export function updateDockGlass(host: HTMLElement, dock: DOMRect, lensWidth: num
   if (lensResult !== 'failed') {
     host.style.setProperty('--dock-lens-backdrop', `url("#${lens}")`);
   }
+  dockReadyPromises.set(
+    host,
+    Promise.all([
+      lensDecodePromises.get(surface) ?? Promise.resolve(),
+      lensDecodePromises.get(lens) ?? Promise.resolve(),
+    ]).then(() => {}),
+  );
+}
+
+export function whenDockGlassReady(host: HTMLElement): Promise<void> {
+  return dockReadyPromises.get(host) ?? Promise.resolve();
 }

@@ -1742,14 +1742,36 @@ html:root[data-theme] {
 
 :root[data-theme="basic"] body.is-android .custom-select-options,
 :root[data-theme="basic"] body.is-android .custom-select-options[popover] {
-  background: linear-gradient(155deg, rgba(255, 255, 255, 0.08) 0%, rgba(34, 37, 44, 0.82) 32%, rgba(28, 31, 38, 0.84) 100%);
-  -webkit-backdrop-filter: blur(14px) saturate(1.45);
-  backdrop-filter: blur(14px) saturate(1.45);
+  background: linear-gradient(155deg, rgb(42, 46, 56) 0%, rgb(28, 31, 38) 100%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 10px 24px rgba(0, 0, 0, 0.36);
+  contain: layout style;
 }
 
 :root[data-theme="basic"][data-color-scheme="light"] body.is-android .custom-select-options,
 :root[data-theme="basic"][data-color-scheme="light"] body.is-android .custom-select-options[popover] {
-  background: rgba(255, 255, 255, 0.90);
+  background: rgb(255, 255, 255);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.90),
+    0 8px 20px rgba(15, 23, 42, 0.14);
+}
+
+:root[data-theme="basic"] .custom-select-options::-webkit-scrollbar {
+  width: 4px;
+  background: transparent;
+}
+
+:root[data-theme="basic"] .custom-select-options::-webkit-scrollbar-track {
+  margin-block: 16px;
+  background: transparent;
+}
+
+:root[data-theme="basic"] .custom-select-options::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.44);
+  border-radius: 999px;
 }
 
 :root[data-theme="basic"] .custom-select:is(.open, .closing) .custom-select-options {
@@ -1757,13 +1779,19 @@ html:root[data-theme] {
   visibility: visible;
   transform: none;
   transition: none;
+  will-change: transform, opacity;
 }
 
-:root[data-theme="basic"] .custom-select.is-morphing .custom-select-options {
+:root[data-theme="basic"] body:not(.is-android) .custom-select.is-morphing .custom-select-options {
   overflow: hidden !important;
   max-height: none !important;
   contain: layout style;
   will-change: transform, height, border-radius, opacity;
+}
+
+:root[data-theme="basic"] body.is-android .custom-select.is-morphing .custom-select-options {
+  contain: layout style;
+  will-change: transform, opacity;
 }
 
 :root[data-theme="basic"] .custom-select.closing .custom-select-options {
@@ -1776,7 +1804,7 @@ html:root[data-theme] {
   transition: none !important;
 }
 
-:root[data-theme="basic"] .custom-select.is-morphing .custom-option.morph-visible {
+:root[data-theme="basic"] body:not(.is-android) .custom-select.is-morphing .custom-option.morph-visible {
   filter: var(--opt-filter, none);
 }
 

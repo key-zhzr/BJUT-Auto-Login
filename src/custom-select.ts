@@ -91,6 +91,54 @@ function readViewportBounds(element: HTMLElement, triggerRect: DOMRect) {
   return { left, right, width, top, bottom };
 }
 
+function bakeSpringTransformKeyframes(
+  steps: number,
+  fromDy: number,
+  toDy: number,
+  fromSX: number,
+  toSX: number,
+  fromSY: number,
+  toSY: number,
+  fromOp: number,
+  toOp: number,
+  stiffness: number,
+  ratio: number,
+  springSpanSec: number,
+  dipSign: number,
+  dipAmp: number,
+  mode: 'open' | 'close',
+): Keyframe[] {
+  const frames: Keyframe[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps;
+    const tSec = f * springSpanSec;
+    const rawProgress = i === steps ? 1 : evalSpring(tSec, stiffness, ratio);
+    const ringing = mode === 'close' ? 1 - Math.pow(clamp((f - 0.78) / 0.22, 0, 1), 2) : 1;
+    const progress = mode === 'close' ? 1 + (rawProgress - 1) * ringing : rawProgress;
+    const peak = mode === 'open' ? 0.098 : 0.072;
+    const shape = mode === 'open' ? 3.3 : 2.4;
+    const dip = dipSign * dipAmp * riseAndFall(tSec, peak, shape) * ringing;
+    const dy = lerp(fromDy, toDy, progress) + dip;
+    const sx = mode === 'open'
+      ? lerp(fromSX, toSX, clamp(progress * 1.25, 0, 1))
+      : lerp(fromSX, toSX, clamp(progress, 0, 1));
+    const sy = Math.max(0.25, lerp(fromSY, toSY, progress));
+    let op = 1;
+    if (mode === 'open') {
+      op = lerp(fromOp, toOp, clamp(f / 0.14, 0, 1));
+    } else {
+      const fadeT = clamp((f - 0.56) / 0.44, 0, 1);
+      op = lerp(fromOp, toOp, fadeT * fadeT * (3 - 2 * fadeT));
+    }
+    frames.push({
+      offset: f,
+      transform: `translate3d(0, ${dy.toFixed(2)}px, 0) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`,
+      opacity: op.toFixed(3),
+    });
+  }
+  return frames;
+}
+
 export class CustomSelect {
   private static openInstance: CustomSelect | null = null;
   private static outsideHandlerInstalled = false;
@@ -114,9 +162,24 @@ export class CustomSelect {
   private morphFrame: number | null = null;
   private morphMode: 'open' | 'close' | null = null;
   private morphState: MorphSnapshot | null = null;
+  private openAnimations: Animation[] = [];
+  private closeAnimations: Animation[] = [];
+  private androidMorphStartedAt = 0;
+  private androidMorphFrom = { dy: 0, sx: 1, sy: 1, op: 1 };
   private layoutMetrics: LayoutMetrics | null = null;
   private elasticFrame: number | null = null;
   private elastic = { x: 0, y: 0, sx: 1, sy: 1 };
+  private elasticAnchorY: number | null = null;
+  private elasticBoundaryMode: 'top' | 'bottom' | 'edge' | null = null;
+  private lastPointerY = 0;
+  private touchElasticId: number | null = null;
+  private touchStartX = 0;
+  private touchStartY = 0;
+  private touchLastY = 0;
+  private touchAnchorY: number | null = null;
+  private touchElasticActive = false;
+  private touchBoundaryMode: 'top' | 'bottom' | 'edge' | null = null;
+  private isScrollableList = false;
   private wheelPullY = 0;
   private wheelBounceTimer: number | null = null;
   private triggerHoldTimer: number | null = null;
@@ -149,6 +212,13 @@ export class CustomSelect {
     this.trigger.style.transform = '';
     this.trigger.style.pointerEvents = '';
   }
+  private cancelAnimationsList(list: Animation[]) {
+    for (const anim of list) {
+      anim.onfinish = null;
+      anim.cancel();
+    }
+    list.length = 0;
+  }
   private clearElasticState() {
     if (this.elasticFrame !== null) {
       cancelAnimationFrame(this.elasticFrame);
@@ -159,6 +229,12 @@ export class CustomSelect {
       this.wheelBounceTimer = null;
     }
     this.wheelPullY = 0;
+    this.elasticAnchorY = null;
+    this.elasticBoundaryMode = null;
+    this.touchElasticId = null;
+    this.touchAnchorY = null;
+    this.touchBoundaryMode = null;
+    this.touchElasticActive = false;
     this.elastic = { x: 0, y: 0, sx: 1, sy: 1 };
     if (this.morphMode === null) this.optionsContainer.style.transform = '';
   }
@@ -171,6 +247,8 @@ export class CustomSelect {
         : `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`;
   }
   private springElasticBack() {
+    this.elasticAnchorY = null;
+    this.elasticBoundaryMode = null;
     if (this.elasticFrame !== null) cancelAnimationFrame(this.elasticFrame);
     const from = { ...this.elastic };
     if (Math.abs(from.x) < 0.2 && Math.abs(from.y) < 0.2 && Math.abs(from.sx - 1) < 0.002 && Math.abs(from.sy - 1) < 0.002) {
@@ -199,10 +277,13 @@ export class CustomSelect {
     const scrollTop = this.optionsContainer.scrollTop;
     const minTop = scrollTop - 48;
     const maxBottom = scrollTop + cardHeight + 48;
-    for (const option of this.allOptions) {
+    const visibleFlags = this.allOptions.map((option) => {
       const top = option.offsetTop;
       const bottom = top + option.offsetHeight;
-      option.classList.toggle('morph-visible', bottom >= minTop && top <= maxBottom);
+      return bottom >= minTop && top <= maxBottom;
+    });
+    for (let i = 0; i < this.allOptions.length; i += 1) {
+      this.allOptions[i].classList.toggle('morph-visible', visibleFlags[i]);
     }
   }
   private clearMorphContainerStyles() {
@@ -210,6 +291,8 @@ export class CustomSelect {
       cancelAnimationFrame(this.morphFrame);
       this.morphFrame = null;
     }
+    this.cancelAnimationsList(this.openAnimations);
+    this.cancelAnimationsList(this.closeAnimations);
     this.morphMode = null;
     this.morphState = null;
     this.element.classList.remove('is-morphing');
@@ -257,7 +340,9 @@ export class CustomSelect {
     style.left = '';
     style.width = '';
     style.maxHeight = '';
+    style.overflowY = '';
     style.touchAction = '';
+    this.isScrollableList = false;
     this.layoutMetrics = null;
     this.openedInBasic = false;
   }
@@ -281,14 +366,23 @@ export class CustomSelect {
       const isAndroid = document.body.classList.contains('is-android');
       const itemH = this.allOptions[0]?.offsetHeight || (isAndroid ? 44 : 40);
       const optionCount = this.optionsContainer.children.length || this.allOptions.length;
-      // Mirror FlClash's (7 + 0.5) half-row peek without any border-eating mask-image.
+      const cs = getComputedStyle(this.optionsContainer);
+      const triggerRadius = Number.parseFloat(getComputedStyle(this.trigger).borderTopLeftRadius) || 12;
+      const borderY = (Number.parseFloat(cs.borderTopWidth) || 0) + (Number.parseFloat(cs.borderBottomWidth) || 0);
+      const contentScrollH = this.optionsContainer.scrollHeight || itemH + 16;
+      const fullBorderBoxH = Math.ceil(contentScrollH + borderY);
+      // Account for border-box borders so non-scrollable menus never show a 2px phantom scrollbar.
       const flClashMax = optionCount > 7
-        ? Math.round(8 + 7.5 * itemH)
-        : Math.max(this.optionsContainer.scrollHeight || itemH + 16, itemH + 16);
+        ? Math.round(8 + 7.5 * itemH + borderY)
+        : fullBorderBoxH;
       const effectiveMaxH = Math.min(flClashMax, available);
       style.maxHeight = `${effectiveMaxH}px`;
 
-      const menuH = Math.min(this.optionsContainer.scrollHeight || effectiveMaxH, effectiveMaxH);
+      const menuH = Math.min(fullBorderBoxH, effectiveMaxH);
+      const isScrollable = fullBorderBoxH > effectiveMaxH + 1;
+      this.isScrollableList = isScrollable;
+      style.overflowY = isScrollable ? 'auto' : 'hidden';
+
       const maxWidth = Math.max(120, width - pad * 2);
       const menuWidth = Math.min(trigger.width, maxWidth);
       const menuLeft = Math.round(clamp(trigger.left, left + pad, Math.max(left + pad, right - pad - menuWidth)));
@@ -310,7 +404,6 @@ export class CustomSelect {
         style.top = `${Math.round(menuTop - trigger.top)}px`;
         style.bottom = 'auto';
       }
-      const triggerRadius = Number.parseFloat(getComputedStyle(this.trigger).borderTopLeftRadius) || 12;
       this.layoutMetrics = {
         cardLeft: menuLeft,
         cardTop: menuTop,
@@ -331,6 +424,8 @@ export class CustomSelect {
     }
 
     this.element.classList.remove('covers-anchor');
+    style.overflowY = '';
+    this.isScrollableList = false;
     const maxMenuHeight = 220;
     const below = Math.max(0, bottom - trigger.bottom - 12);
     const above = Math.max(0, trigger.top - top - 12);
@@ -350,20 +445,153 @@ export class CustomSelect {
     }
     return true;
   }
+  private startAndroidBasicOpenMorph(fromInterrupted: { dy: number; sx: number; sy: number; op: number } | null) {
+    const m = this.layoutMetrics;
+    if (!m || typeof this.optionsContainer.animate !== 'function') {
+      this.element.classList.add('is-trigger-hidden');
+      return;
+    }
+    this.clearMorphContainerStyles();
+    this.clearElasticState();
+    this.morphMode = 'open';
+    this.androidMorphStartedAt = performance.now();
+    this.element.classList.add('is-morphing');
+    this.element.classList.remove('is-trigger-hidden');
+
+    const triggerCenterY = m.triggerTop + m.triggerHeight / 2;
+    const cardCenterY = m.cardTop + m.cardHeight / 2;
+    const toCard = cardCenterY - triggerCenterY;
+    const dipSign = toCard === 0 ? 1 : Math.sign(toCard);
+    const dipAmp = Math.min(1, Math.abs(toCard) / 30) * 14 + 0.08 * Math.abs(toCard);
+    const dy0 = fromInterrupted ? fromInterrupted.dy : -toCard;
+    const sy0 = fromInterrupted ? fromInterrupted.sy : clamp(m.triggerHeight / Math.max(1, m.cardHeight), 0.36, 0.9);
+    const sx0 = fromInterrupted ? fromInterrupted.sx : 0.94;
+    const op0 = fromInterrupted ? clamp(fromInterrupted.op, 0.3, 1) : 0.3;
+    this.androidMorphFrom = { dy: dy0, sx: sx0, sy: sy0, op: op0 };
+
+    const keyframes = bakeSpringTransformKeyframes(
+      20, dy0, 0, sx0, 1, sy0, 1, op0, 1, 400, 0.754, 0.45, dipSign, dipAmp, 'open',
+    );
+    const cardAnim = this.optionsContainer.animate(keyframes, {
+      duration: 340,
+      easing: 'linear',
+    });
+    this.openAnimations.push(cardAnim);
+
+    const trigAnim = this.trigger.animate(
+      [{ opacity: 1 }, { opacity: 0 }],
+      { duration: 90, easing: 'ease-out', fill: 'forwards' },
+    );
+    trigAnim.onfinish = () => {
+      if (this.morphMode !== 'open') return;
+      this.element.classList.add('is-trigger-hidden');
+      trigAnim.cancel();
+    };
+    this.openAnimations.push(trigAnim);
+
+    cardAnim.onfinish = () => {
+      if (this.morphMode !== 'open') return;
+      this.clearMorphContainerStyles();
+      if (this.element.classList.contains('open')) {
+        this.clearTriggerInlineStyles();
+        this.element.classList.add('is-trigger-hidden');
+      }
+    };
+  }
+  private startAndroidBasicCloseMorph() {
+    const m = this.layoutMetrics;
+    if (!m || typeof this.optionsContainer.animate !== 'function') {
+      this.hideOptions();
+      return;
+    }
+    const triggerCenterY = m.triggerTop + m.triggerHeight / 2;
+    const cardCenterY = m.cardTop + m.cardHeight / 2;
+    const endDy = triggerCenterY - cardCenterY;
+    const endSY = clamp(m.triggerHeight / Math.max(1, m.cardHeight), 0.36, 0.9);
+    let startDy = this.morphMode === null ? this.elastic.y : 0;
+    let startSX = this.morphMode === null ? this.elastic.sx : 1;
+    let startSY = this.morphMode === null ? this.elastic.sy : 1;
+    let startOp = 1;
+    if (this.morphMode === 'open') {
+      const f = clamp((performance.now() - this.androidMorphStartedAt) / 340, 0.08, 1);
+      const progress = evalSpring(f * 0.45, 400, 0.754);
+      startDy = lerp(this.androidMorphFrom.dy, 0, progress);
+      startSX = lerp(this.androidMorphFrom.sx, 1, clamp(progress * 1.25, 0, 1));
+      startSY = lerp(this.androidMorphFrom.sy, 1, progress);
+      startOp = clamp(lerp(this.androidMorphFrom.op, 1, f / 0.14), 0.3, 1);
+    }
+    const startIsVisible = !this.element.classList.contains('is-trigger-hidden') ? 0.5 : 0;
+
+    this.clearElasticState();
+    this.clearMorphContainerStyles();
+    this.markMorphVisibleOptions(m.cardHeight);
+    this.morphMode = 'close';
+    this.androidMorphStartedAt = performance.now();
+    this.androidMorphFrom = { dy: startDy, sx: startSX, sy: startSY, op: startOp };
+    this.element.classList.add('closing', 'is-morphing');
+    this.element.classList.remove('is-trigger-hidden');
+    this.trigger.style.opacity = String(startIsVisible);
+    this.trigger.style.pointerEvents = 'none';
+
+    const dist = Math.abs(cardCenterY - triggerCenterY);
+    const away = (cardCenterY - triggerCenterY) === 0 ? 1 : Math.sign(cardCenterY - triggerCenterY);
+    const dipAmp = Math.min(0.21 * dist, 18);
+    const keyframes = bakeSpringTransformKeyframes(
+      16, startDy, endDy, startSX, 0.96, startSY, endSY, startOp, 0, 300, 0.82, 0.42, away, dipAmp, 'close',
+    );
+    const cardAnim = this.optionsContainer.animate(keyframes, {
+      duration: 260,
+      easing: 'linear',
+      fill: 'forwards',
+    });
+    this.closeAnimations.push(cardAnim);
+
+    const trigAnim = this.trigger.animate(
+      [
+        { offset: 0, opacity: startIsVisible },
+        { offset: 0.25, opacity: startIsVisible },
+        { offset: 0.85, opacity: 1 },
+        { offset: 1, opacity: 1 },
+      ],
+      { duration: 260, easing: 'linear', fill: 'forwards' },
+    );
+    this.closeAnimations.push(trigAnim);
+
+    cardAnim.onfinish = () => {
+      if (this.morphMode !== 'close') return;
+      this.hideOptions();
+    };
+  }
   private startBasicOpenMorph(fromState: MorphSnapshot | null) {
     const m = this.layoutMetrics;
     if (!m || prefersReducedMotion()) {
       this.element.classList.add('is-trigger-hidden');
       return;
     }
+    if (document.body.classList.contains('is-android')) {
+      let interruptedAndroid: { dy: number; sx: number; sy: number; op: number } | null = null;
+      if (this.morphMode === 'close') {
+        const f = clamp((performance.now() - this.androidMorphStartedAt) / 260, 0.05, 0.95);
+        const progress = evalSpring(f * 0.42, 300, 0.82);
+        const cardCenterY = m.cardTop + m.cardHeight / 2;
+        const endDy = (m.triggerTop + m.triggerHeight / 2) - cardCenterY;
+        const endSY = clamp(m.triggerHeight / Math.max(1, m.cardHeight), 0.36, 0.9);
+        interruptedAndroid = {
+          dy: lerp(this.androidMorphFrom.dy, endDy, progress),
+          sx: lerp(this.androidMorphFrom.sx, 0.96, progress),
+          sy: lerp(this.androidMorphFrom.sy, endSY, progress),
+          op: lerp(this.androidMorphFrom.op, 0, clamp((f - 0.56) / 0.44, 0, 1)),
+        };
+      }
+      this.startAndroidBasicOpenMorph(interruptedAndroid);
+      return;
+    }
     this.clearMorphContainerStyles();
     this.clearElasticState();
-    this.markMorphVisibleOptions(m.cardHeight);
     this.morphMode = 'open';
     this.element.classList.add('is-morphing');
     this.element.classList.remove('is-trigger-hidden');
 
-    const isAndroid = document.body.classList.contains('is-android');
     const startTop = fromState ? fromState.top : m.triggerTop;
     const startH = fromState ? fromState.height : m.triggerHeight;
     const startSX = fromState ? fromState.scaleX : 0.96;
@@ -401,7 +629,7 @@ export class CustomSelect {
       const under = clamp(settled / 0.25, 0, 1);
       if (under < 1) {
         this.trigger.style.opacity = (1 - under).toFixed(3);
-        this.trigger.style.filter = isAndroid ? '' : `blur(${(3.2 * under).toFixed(2)}px)`;
+        this.trigger.style.filter = `blur(${(3.2 * under).toFixed(2)}px)`;
         this.trigger.style.pointerEvents = 'none';
       } else {
         this.clearTriggerInlineStyles();
@@ -409,7 +637,7 @@ export class CustomSelect {
       }
 
       const optOpacity = clamp(lerp(startReveal, 1, clamp((settled - 0.05) / 0.62, 0, 1)), 0, 1);
-      const blurPx = Math.hypot((isAndroid ? 3.2 : 4.5) * (1 - settled), (isAndroid ? 0.9 : 1.7) * riseAndFall(elapsedSec, 0.069, 2.1));
+      const blurPx = Math.hypot(4.5 * (1 - settled), 1.7 * riseAndFall(elapsedSec, 0.069, 2.1));
       const shiftY = -Math.max(0, m.cardHeight - curH) * 0.34;
       const glassOpacity = clamp(lerp(startOpacity, 1, elapsedSec / 0.05), 0.25, 1);
 
@@ -455,6 +683,10 @@ export class CustomSelect {
       this.hideOptions();
       return;
     }
+    if (document.body.classList.contains('is-android')) {
+      this.startAndroidBasicCloseMorph();
+      return;
+    }
     const interrupted = this.morphMode === 'open' ? this.morphState : null;
     const elasticOffsetY = this.morphMode === null ? this.elastic.y : 0;
     const elasticScaleX = this.morphMode === null ? this.elastic.sx : 1;
@@ -464,11 +696,10 @@ export class CustomSelect {
     this.morphMode = 'close';
     this.element.classList.add('closing', 'is-morphing');
     this.element.classList.remove('is-trigger-hidden');
-    // Keep trigger invisible until droplet return re-materializes it (+120ms).
+    // Keep trigger invisible until droplet return re-materializes it (+110ms).
     this.trigger.style.opacity = '0';
     this.trigger.style.pointerEvents = 'none';
 
-    const isAndroid = document.body.classList.contains('is-android');
     const startTop = interrupted ? interrupted.top : m.cardTop + elasticOffsetY;
     const startH = interrupted ? interrupted.height : m.cardHeight;
     const startR = interrupted ? interrupted.radius : 20;
@@ -506,14 +737,14 @@ export class CustomSelect {
       // Options blur and fade within the first 100ms (_dropletContentOut = 0.1).
       const outT = clamp(elapsedSec / 0.1, 0, 1);
       const reveal = startReveal * (1 - Math.pow(outT, 0.75));
-      const blurPx = (isAndroid ? 4.8 : 7.5) * (1 - clamp(reveal, 0, 1));
+      const blurPx = 7.5 * (1 - clamp(reveal, 0, 1));
       const shiftY = -Math.max(0, m.cardHeight - curH) * 0.34;
 
       // Trigger re-materializes beneath returning glass droplet (+110ms -> +320ms).
       const glyphT = clamp((elapsedSec - 0.11) / 0.21, 0, 1);
       const lift = Math.min(0.2 * Math.abs(toCard), 10) * riseAndFall(elapsedSec, 0.176, 4.9) * ringing;
       this.trigger.style.opacity = glyphT.toFixed(3);
-      this.trigger.style.filter = !isAndroid && glyphT > 0.01 && glyphT < 0.98
+      this.trigger.style.filter = glyphT > 0.01 && glyphT < 0.98
         ? `blur(${(3.2 * (1 - glyphT)).toFixed(2)}px)` : '';
       this.trigger.style.transform = lift > 0.1 ? `translate3d(0, ${(-away * lift).toFixed(2)}px, 0)` : '';
       this.trigger.style.pointerEvents = '';
@@ -668,9 +899,16 @@ export class CustomSelect {
     if (prevOpen && prevOpen !== this) prevOpen.close();
     CustomSelect.openInstance = this;
     const interrupted = this.morphMode === 'close' ? this.morphState : null;
+    const interruptedWasClose = this.morphMode === 'close';
     if (this.closeTimer !== null) { window.clearTimeout(this.closeTimer); this.closeTimer = null; }
     this.element.classList.remove('closing');
-    if (this.morphMode !== null) this.clearMorphContainerStyles();
+    if (this.morphMode !== null && (!interruptedWasClose || !document.body.classList.contains('is-android'))) {
+      this.clearMorphContainerStyles();
+    } else if (this.morphMode !== null) {
+      // Android interruption keeps androidMorphStartedAt/From until startBasicOpenMorph reads it.
+      this.cancelAnimationsList(this.openAnimations);
+      this.cancelAnimationsList(this.closeAnimations);
+    }
     this.clearElasticState();
     this.clearTriggerInlineStyles();
     this.element.classList.add('menu-positioning');
@@ -687,21 +925,30 @@ export class CustomSelect {
       CustomSelect.openInstance = null;
       return;
     }
-    this.optionsContainer.getBoundingClientRect();
-    const maxScroll = Math.max(0, this.optionsContainer.scrollHeight - this.optionsContainer.clientHeight);
-    if (maxScroll > 2) {
-      const selectedEl = this.selectedOptions[0];
-      if (selectedEl) {
-        const ideal = selectedEl.offsetTop + selectedEl.offsetHeight / 2 - this.optionsContainer.clientHeight * 0.45;
-        this.optionsContainer.scrollTop = Math.max(0, Math.min(maxScroll, ideal));
+    const basic = isBasicTheme();
+    if (!basic) {
+      this.optionsContainer.getBoundingClientRect();
+    }
+    if (this.isScrollableList) {
+      const clientH = this.optionsContainer.clientHeight;
+      const maxScroll = Math.max(0, this.optionsContainer.scrollHeight - clientH);
+      if (maxScroll > 2) {
+        const selectedEl = this.selectedOptions[0];
+        if (selectedEl) {
+          const ideal = selectedEl.offsetTop + selectedEl.offsetHeight / 2 - clientH * 0.45;
+          this.optionsContainer.scrollTop = Math.max(0, Math.min(maxScroll, ideal));
+        }
       }
     }
-    const basic = isBasicTheme();
     this.openedInBasic = basic;
     if (basic) {
-      this.optionsContainer.style.touchAction = maxScroll > 2 ? 'pan-y' : 'none';
+      this.optionsContainer.style.touchAction = this.isScrollableList ? 'pan-y' : 'none';
     }
-    this.syncScrollMask();
+    if (basic && !this.isScrollableList) {
+      this.optionsContainer.classList.remove('can-scroll-up', 'can-scroll-down');
+    } else {
+      this.syncScrollMask();
+    }
     this.element.classList.remove('menu-positioning');
     this.element.classList.add('open'); this.trigger.setAttribute('aria-expanded', 'true');
     this.observeMenuLayout();
@@ -711,7 +958,7 @@ export class CustomSelect {
     }
     this.highlight(Math.max(0, this.options().findIndex(option => option.dataset.value === this._value)), keyboard);
     if (basic) {
-      this.startBasicOpenMorph(interrupted);
+      this.startBasicOpenMorph(interruptedWasClose ? interrupted : null);
     } else {
       this.element.classList.remove('is-trigger-hidden');
     }
@@ -731,30 +978,59 @@ export class CustomSelect {
       if (selected) this.selectedOptions.push(option);
     });
   }
-  private updateElasticFromPointer(clientX: number, clientY: number, startX: number, startY: number, isPressed: boolean) {
+  /** Computes C0-continuous elastic displacement across inside & outside-edge drags. */
+  private updateElasticFromPointer(clientX: number, clientY: number, startX: number, startY: number, stepDy = 0) {
     if (!isBasicTheme() || this.morphMode !== null || !this.element.classList.contains('open') || !this.layoutMetrics) return;
     const { cardLeft, cardTop, cardWidth, cardHeight } = this.layoutMetrics;
-    const el = this.optionsContainer;
-    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
-    let rawX = 0;
-    if (clientX < cardLeft) rawX = clientX - cardLeft;
-    else if (clientX > cardLeft + cardWidth) rawX = clientX - (cardLeft + cardWidth);
-    else rawX = (clientX - startX) * 0.22;
+    const cardRight = cardLeft + cardWidth;
+    const cardBottom = cardTop + cardHeight;
+
+    // Continuous X across left/right edges (zero jump when crossing bounds).
+    const clampedX = clamp(clientX, cardLeft, cardRight);
+    const clampedStartX = clamp(startX, cardLeft, cardRight);
+    const rawX = (clampedX - clampedStartX) * 0.16 + (clientX - clampedX) * 0.85;
 
     let rawY = 0;
-    if (clientY < cardTop) rawY = clientY - cardTop;
-    else if (clientY > cardTop + cardHeight) rawY = clientY - (cardTop + cardHeight);
-    else if (maxScroll <= 2) rawY = (clientY - startY) * 0.45;
-    else if (el.scrollTop <= 0.5 && clientY > startY) rawY = (clientY - startY) * 0.4;
-    else if (el.scrollTop >= maxScroll - 0.5 && clientY < startY) rawY = (clientY - startY) * 0.4;
+    const el = this.optionsContainer;
+    const maxScroll = this.isScrollableList ? Math.max(0, el.scrollHeight - el.clientHeight) : 0;
 
-    const pullX = rubberBand(rawX, 10);
-    const pullY = rubberBand(rawY, 18);
-    const stretchY = 1 + Math.min(0.03, Math.abs(pullY) / 420);
-    const swell = isPressed ? 1.014 : 1;
-    const sy = swell * stretchY;
-    const sx = swell / Math.sqrt(stretchY);
-    this.applyElasticTransform(pullX, pullY, sx, sy);
+    if (maxScroll <= 1) {
+      // Non-scrollable card: C0-continuous across top/bottom edges.
+      const clampedY = clamp(clientY, cardTop, cardBottom);
+      const clampedStartY = clamp(startY, cardTop, cardBottom);
+      rawY = (clampedY - clampedStartY) * 0.32 + (clientY - clampedY) * 0.9;
+      this.elasticAnchorY = null;
+      this.elasticBoundaryMode = null;
+    } else {
+      const outsideX = clientX < cardLeft || clientX > cardRight;
+      const outsideY = clientY < cardTop || clientY > cardBottom;
+      const atTop = el.scrollTop <= 0.5 && stepDy > 0;
+      const atBottom = el.scrollTop >= maxScroll - 0.5 && stepDy < 0;
+
+      if (this.elasticAnchorY === null) {
+        if (outsideY || outsideX || atTop || atBottom) {
+          this.elasticBoundaryMode = (outsideY || outsideX) ? 'edge' : atTop ? 'top' : 'bottom';
+          this.elasticAnchorY = clientY < cardTop ? cardTop : clientY > cardBottom ? cardBottom : clientY;
+        }
+      }
+      if (this.elasticAnchorY !== null) {
+        rawY = clientY - this.elasticAnchorY;
+        if (!outsideX && !outsideY) {
+          if ((this.elasticBoundaryMode === 'top' && rawY < 0) || (this.elasticBoundaryMode === 'bottom' && rawY > 0)) {
+            this.elasticAnchorY = null;
+            this.elasticBoundaryMode = null;
+            rawY = 0;
+          }
+        }
+      }
+    }
+
+    const pullX = rubberBand(rawX, 11);
+    const pullY = rubberBand(rawY, 20);
+    const pullMag = Math.hypot(pullX, pullY);
+    const swell = 1 + Math.min(0.014, pullMag / 450);
+    const stretchY = 1 + Math.min(0.032, Math.abs(pullY) / 380);
+    this.applyElasticTransform(pullX, pullY, swell / Math.sqrt(stretchY), swell * stretchY);
   }
   constructor(elementId: string) {
     this.element = document.getElementById(elementId)!;
@@ -808,11 +1084,14 @@ export class CustomSelect {
       const pointerId = event.pointerId;
       const startX = event.clientX;
       const startY = event.clientY;
+      let prevY = startY;
       let activeCarried = false;
       let moved = false;
 
       const startCarriedSession = () => {
         activeCarried = true;
+        this.elasticAnchorY = null;
+        this.elasticBoundaryMode = null;
         this.ignoreTriggerClickUntil = performance.now() + 500;
         if (!this.element.classList.contains('open')) this.open(false);
         this.trigger.focus({ preventScroll: true });
@@ -821,6 +1100,8 @@ export class CustomSelect {
       const onWindowMove = (moveEv: PointerEvent) => {
         if (moveEv.pointerId !== pointerId) return;
         const dist = Math.hypot(moveEv.clientX - startX, moveEv.clientY - startY);
+        const stepDy = moveEv.clientY - prevY;
+        prevY = moveEv.clientY;
         if (!activeCarried) {
           if (dist > 8) cleanupWindow();
           return;
@@ -833,7 +1114,7 @@ export class CustomSelect {
         const hit = document.elementFromPoint(moveEv.clientX, moveEv.clientY)?.closest<HTMLElement>('.custom-option');
         const hovered = hit && this.optionsContainer.contains(hit) && hit.getAttribute('aria-disabled') !== 'true' ? hit : null;
         this.setPressHover(hovered);
-        this.updateElasticFromPointer(moveEv.clientX, moveEv.clientY, startX, startY, true);
+        this.updateElasticFromPointer(moveEv.clientX, moveEv.clientY, startX, startY, stepDy);
       };
 
       const onWindowEnd = (endEv: PointerEvent) => {
@@ -901,7 +1182,9 @@ export class CustomSelect {
     this.optionsContainer.addEventListener('scroll', () => {
       if (this.element.classList.contains('open')) this.syncScrollMask();
     }, { passive: true });
+
     let pressPointerId: number | null = null;
+    let pressPointerType = 'mouse';
     let pressStartX = 0;
     let pressStartY = 0;
     let pressStartScrollTop = 0;
@@ -910,21 +1193,29 @@ export class CustomSelect {
     let pressSlid = false;
     const onListMove = (event: PointerEvent) => {
       if (event.pointerId !== pressPointerId) return;
-      const scrollable = this.optionsContainer.scrollHeight > this.optionsContainer.clientHeight + 2;
+      const stepDy = event.clientY - this.lastPointerY;
+      this.lastPointerY = event.clientY;
+      const scrollable = this.isScrollableList && this.optionsContainer.scrollHeight > this.optionsContainer.clientHeight + 2;
       if (
         (scrollable && event.pointerType !== 'mouse' && Math.abs(event.clientY - pressStartY) > 8)
         || Math.abs(this.optionsContainer.scrollTop - pressStartScrollTop) > 2
       ) {
         pressScrollingList = true;
         this.setPressHover(null);
-        this.updateElasticFromPointer(event.clientX, event.clientY, pressStartX, pressStartY, true);
+        if (pressPointerType === 'mouse') {
+          this.updateElasticFromPointer(event.clientX, event.clientY, pressStartX, pressStartY, stepDy);
+        }
         return;
       }
       if (pressScrollingList) {
-        this.updateElasticFromPointer(event.clientX, event.clientY, pressStartX, pressStartY, true);
+        if (pressPointerType === 'mouse') {
+          this.updateElasticFromPointer(event.clientX, event.clientY, pressStartX, pressStartY, stepDy);
+        }
         return;
       }
-      this.updateElasticFromPointer(event.clientX, event.clientY, pressStartX, pressStartY, true);
+      if (pressPointerType === 'mouse') {
+        this.updateElasticFromPointer(event.clientX, event.clientY, pressStartX, pressStartY, stepDy);
+      }
       const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('.custom-option');
       const hovered = hit && this.optionsContainer.contains(hit) && hit.getAttribute('aria-disabled') !== 'true' ? hit : null;
       if (hovered && hovered !== pressDownOption) pressSlid = true;
@@ -941,7 +1232,9 @@ export class CustomSelect {
       pressScrollingList = false;
       pressSlid = false;
       this.setPressHover(null);
-      if (isBasicTheme() && this.element.classList.contains('open')) this.springElasticBack();
+      if (pressPointerType === 'mouse' && isBasicTheme() && this.element.classList.contains('open')) {
+        this.springElasticBack();
+      }
     };
     const onListUp = (event: PointerEvent) => {
       if (event.pointerId !== pressPointerId) return;
@@ -966,8 +1259,12 @@ export class CustomSelect {
       if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
       if (pressPointerId !== null) clearPressTracking();
       pressPointerId = event.pointerId;
+      pressPointerType = event.pointerType;
       pressStartX = event.clientX;
       pressStartY = event.clientY;
+      this.lastPointerY = event.clientY;
+      this.elasticAnchorY = null;
+      this.elasticBoundaryMode = null;
       pressStartScrollTop = this.optionsContainer.scrollTop;
       pressScrollingList = false;
       pressSlid = false;
@@ -975,17 +1272,100 @@ export class CustomSelect {
       if (pressDownOption && pressDownOption.getAttribute('aria-disabled') !== 'true') {
         this.setPressHover(pressDownOption);
       }
-      if (isBasicTheme() && this.morphMode === null) {
-        if (this.elasticFrame !== null) {
-          cancelAnimationFrame(this.elasticFrame);
-          this.elasticFrame = null;
-        }
-        this.applyElasticTransform(0, 0, 1.014, 1.014);
+      if (isBasicTheme() && this.morphMode === null && this.elasticFrame !== null) {
+        cancelAnimationFrame(this.elasticFrame);
+        this.elasticFrame = null;
       }
       window.addEventListener('pointermove', onListMove);
       window.addEventListener('pointerup', onListUp);
       window.addEventListener('pointercancel', onListCancel);
     });
+
+    // Dedicated touch elastic tracking: Android cancels pointermove during pan-y scrolls,
+    // so touchstart/touchmove lets both scrollable-boundary and edge-exit stretches engage cleanly.
+    const findTouchById = (list: TouchList, id: number): Touch | null => {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].identifier === id) return list[i];
+      }
+      return null;
+    };
+    this.optionsContainer.addEventListener('touchstart', event => {
+      if (!isBasicTheme() || !this.element.classList.contains('open') || this.morphMode !== null) return;
+      if (event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      this.touchElasticId = touch.identifier;
+      this.touchStartX = touch.clientX;
+      this.touchStartY = touch.clientY;
+      this.touchLastY = touch.clientY;
+      this.touchAnchorY = null;
+      this.touchElasticActive = false;
+      this.touchBoundaryMode = null;
+      this.elasticAnchorY = null;
+      this.elasticBoundaryMode = null;
+      if (this.elasticFrame !== null) {
+        cancelAnimationFrame(this.elasticFrame);
+        this.elasticFrame = null;
+      }
+    }, { passive: true });
+
+    this.optionsContainer.addEventListener('touchmove', event => {
+      if (this.touchElasticId === null || !isBasicTheme() || !this.element.classList.contains('open') || this.morphMode !== null || !this.layoutMetrics) return;
+      const touch = findTouchById(event.touches, this.touchElasticId);
+      if (!touch) return;
+      const stepDy = touch.clientY - this.touchLastY;
+      this.touchLastY = touch.clientY;
+      const { cardLeft, cardTop, cardWidth, cardHeight } = this.layoutMetrics;
+      const el = this.optionsContainer;
+      const maxScroll = this.isScrollableList ? Math.max(0, el.scrollHeight - el.clientHeight) : 0;
+      const outsideX = touch.clientX < cardLeft || touch.clientX > cardLeft + cardWidth;
+      const outsideY = touch.clientY < cardTop || touch.clientY > cardTop + cardHeight;
+      const atTop = el.scrollTop <= 0.5 && stepDy > 0;
+      const atBottom = el.scrollTop >= maxScroll - 0.5 && stepDy < 0;
+
+      if (!this.touchElasticActive) {
+        if (maxScroll <= 1 || outsideX || outsideY || atTop || atBottom) {
+          this.touchElasticActive = true;
+          this.touchBoundaryMode = (maxScroll <= 1 || outsideX || outsideY) ? 'edge' : atTop ? 'top' : 'bottom';
+          this.touchAnchorY = touch.clientY < cardTop ? cardTop : touch.clientY > cardTop + cardHeight ? cardTop + cardHeight : touch.clientY;
+          this.elasticAnchorY = this.touchAnchorY;
+          this.elasticBoundaryMode = this.touchBoundaryMode;
+        }
+      }
+
+      if (!this.touchElasticActive) return;
+
+      if (maxScroll > 1 && !outsideX && !outsideY && this.touchAnchorY !== null) {
+        const relY = touch.clientY - this.touchAnchorY;
+        if ((this.touchBoundaryMode === 'top' && relY < 0) || (this.touchBoundaryMode === 'bottom' && relY > 0)) {
+          this.touchElasticActive = false;
+          this.touchAnchorY = null;
+          this.touchBoundaryMode = null;
+          this.elasticAnchorY = null;
+          this.elasticBoundaryMode = null;
+          this.applyElasticTransform(0, 0, 1, 1);
+          return;
+        }
+      }
+
+      if (event.cancelable) event.preventDefault();
+      this.updateElasticFromPointer(touch.clientX, touch.clientY, this.touchStartX, this.touchStartY, stepDy);
+    }, { passive: false });
+
+    const finishTouchElastic = (event: TouchEvent) => {
+      if (this.touchElasticId === null) return;
+      if (findTouchById(event.touches, this.touchElasticId)) return;
+      const wasActive = this.touchElasticActive;
+      this.touchElasticId = null;
+      this.touchAnchorY = null;
+      this.touchBoundaryMode = null;
+      this.touchElasticActive = false;
+      if (wasActive && isBasicTheme() && this.element.classList.contains('open')) {
+        this.springElasticBack();
+      }
+    };
+    this.optionsContainer.addEventListener('touchend', finishTouchElastic, { passive: true });
+    this.optionsContainer.addEventListener('touchcancel', finishTouchElastic, { passive: true });
+
     // Consume wheel momentum inside the list, including at its limits. Letting
     // it reach the page used to scroll an ancestor and close the flyout.
     this.optionsContainer.addEventListener('wheel', event => {
@@ -994,9 +1374,11 @@ export class CustomSelect {
       const unit = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? this.optionsContainer.clientHeight : 1;
       const delta = event.deltaY * unit;
       const prevTop = this.optionsContainer.scrollTop;
-      const maxScroll = Math.max(0, this.optionsContainer.scrollHeight - this.optionsContainer.clientHeight);
-      this.optionsContainer.scrollTop += delta;
-      this.syncScrollMask();
+      const maxScroll = this.isScrollableList ? Math.max(0, this.optionsContainer.scrollHeight - this.optionsContainer.clientHeight) : 0;
+      if (this.isScrollableList) {
+        this.optionsContainer.scrollTop += delta;
+        this.syncScrollMask();
+      }
       if (isBasicTheme() && this.morphMode === null) {
         const atTop = prevTop <= 0.5 && delta < 0;
         const atBottom = prevTop >= maxScroll - 0.5 && delta > 0;
@@ -1080,11 +1462,10 @@ export class CustomSelect {
         this.triggerSpan.getAnimations().forEach(anim => anim.cancel());
         const isAndroid = document.body.classList.contains('is-android');
         this.triggerSpan.animate(
-          [
-            { opacity: 0.18, filter: isAndroid ? 'blur(2.5px)' : 'blur(3.5px)' },
-            { opacity: 1, filter: 'blur(0px)' },
-          ],
-          { duration: 210, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+          isAndroid
+            ? [{ opacity: 0.28, transform: 'translate3d(0, 2px, 0)' }, { opacity: 1, transform: 'translate3d(0, 0, 0)' }]
+            : [{ opacity: 0.18, filter: 'blur(3.5px)' }, { opacity: 1, filter: 'blur(0px)' }],
+          { duration: isAndroid ? 180 : 210, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
         );
       }
     }

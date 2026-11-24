@@ -183,6 +183,39 @@ async function initializeMacosDockPolicy(): Promise<void> {
 
 const macosDockPolicyReady = initializeMacosDockPolicy();
 
+const warmedPageIds = new Set<string>(['dashboard']);
+let androidPrewarmTimer: number | null = null;
+
+function scheduleAndroidPagePrewarm() {
+  if (!IS_ANDROID || window.innerWidth > 768 || androidPrewarmTimer !== null) return;
+  const queue = ['settings', 'accounts', 'diagnostics', 'logs'].filter(id => !warmedPageIds.has(id));
+  if (!queue.length) return;
+  const step = () => {
+    androidPrewarmTimer = null;
+    const mainEl = document.getElementById('main-content');
+    if (!mainEl || document.hidden) return;
+    if (mainEl.classList.contains('is-page-sliding')) {
+      androidPrewarmTimer = window.setTimeout(step, 180);
+      return;
+    }
+    const nextId = queue.shift();
+    if (!nextId) return;
+    const el = document.getElementById(nextId);
+    if (el && !el.classList.contains('active') && !warmedPageIds.has(nextId)) {
+      warmedPageIds.add(nextId);
+      el.classList.add('page-prewarm');
+      void el.offsetHeight;
+      window.requestAnimationFrame(() => {
+        el.classList.remove('page-prewarm');
+        if (queue.length) androidPrewarmTimer = window.setTimeout(step, 180);
+      });
+      return;
+    }
+    if (queue.length) androidPrewarmTimer = window.setTimeout(step, 40);
+  };
+  androidPrewarmTimer = window.setTimeout(step, 280);
+}
+
 function setLoadingMaskVisible(visible: boolean, text = '正在启动 BJUT-AL…') {
   const mask = document.getElementById('app-loading-mask');
   const label = document.getElementById('app-loading-text');
@@ -190,6 +223,10 @@ function setLoadingMaskVisible(visible: boolean, text = '正在启动 BJUT-AL…
   if (label) label.textContent = text;
   mask.classList.toggle('is-visible', visible);
   mask.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  if (!visible) {
+    window.requestAnimationFrame(() => syncLiquidNav({ animate: false }));
+    scheduleAndroidPagePrewarm();
+  }
 }
 
 const RESUME_MASK_MIN_HIDDEN_MS = 5000;
@@ -1614,7 +1651,12 @@ enum LoginType {
 // UI Elements
 const navItems = document.querySelectorAll('.nav-item');
 const navPageLinks = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-nav-page-target]'));
-const pages = document.querySelectorAll('.page');
+const pages = document.querySelectorAll<HTMLElement>('.page');
+if (IS_ANDROID) {
+  pages.forEach(page => {
+    page.inert = !page.classList.contains('active');
+  });
+}
 const networkStatus = document.getElementById('network-status')!;
 const networkDetail = document.getElementById('network-detail')!;
 const networkIcon = document.getElementById('network-icon')!;
@@ -2998,7 +3040,7 @@ function restoreViewScrollPosition(key: string, currentScrollTop?: number): numb
 
 function openSettingsSubpage(
   subpage: string | null,
-  options: { animate?: boolean; resetScroll?: boolean; restoreScroll?: boolean; skipSave?: boolean } = {},
+  options: { animate?: boolean; resetScroll?: boolean; restoreScroll?: boolean; skipSave?: boolean; deferSummaries?: boolean } = {},
 ) {
   CustomSelect.closeOpen();
   const prevSubpage = activeSettingsSubpage;
@@ -3030,7 +3072,7 @@ function openSettingsSubpage(
   homeEl?.classList.remove('settings-home-enter');
 
   if (!nextSubpage) {
-    syncSettingsOverviewSummaries();
+    if (!options.deferSummaries) syncSettingsOverviewSummaries();
   } else if (nextSubpage === 'security') {
     void refreshPermissionHealth();
   }
@@ -3089,10 +3131,10 @@ function flushPageTransitionTasks() {
 function clearPageSlideState(flushTasks = false) {
   cancelPageSlide?.();
   cancelPageSlide = null;
-  document.body.classList.remove('is-page-sliding', 'is-page-slide-prep');
+  document.getElementById('main-content')?.classList.remove('is-page-sliding', 'is-page-slide-prep');
   if (activeLeavingPage) {
     activeLeavingPage.classList.remove('page-slide-leave-left', 'page-slide-leave-right');
-    activeLeavingPage.inert = false;
+    activeLeavingPage.inert = IS_ANDROID ? !activeLeavingPage.classList.contains('active') : false;
     activeLeavingPage.style.removeProperty('--leave-top');
     activeLeavingPage.style.removeProperty('--leave-left');
     activeLeavingPage.style.removeProperty('--leave-width');
@@ -3197,9 +3239,16 @@ function activatePage(target: string, navTarget = target) {
   const prevOrder = NAV_PAGE_ORDER[prevPageId] ?? 0;
   const nextOrder = NAV_PAGE_ORDER[resolvedTarget] ?? 0;
   const forward = nextOrder >= prevOrder;
+  const wasTargetWarmed = warmedPageIds.has(resolvedTarget);
+  warmedPageIds.add(resolvedTarget);
 
   pages.forEach(page => {
-    page.classList.toggle('active', page.id === resolvedTarget);
+    const active = page.id === resolvedTarget;
+    page.classList.remove('page-prewarm');
+    page.classList.toggle('active', active);
+    if (IS_ANDROID) {
+      page.inert = !active;
+    }
   });
 
   if (resolvedTarget === 'settings') {
@@ -3211,7 +3260,13 @@ function activatePage(target: string, navTarget = target) {
           : { animate: true, resetScroll: true },
       );
     } else if (pageChanged) {
-      openSettingsSubpage(null, { animate: false, resetScroll: false, skipSave: true, restoreScroll: false });
+      openSettingsSubpage(null, {
+        animate: false,
+        resetScroll: false,
+        skipSave: true,
+        restoreScroll: false,
+        deferSummaries: shouldSlide,
+      });
     } else {
       syncSettingsOverviewSummaries();
     }
@@ -3230,7 +3285,7 @@ function activatePage(target: string, navTarget = target) {
 
   if (shouldSlide && prevPageEl && nextPageEl && mainEl) {
     const leaveTop = (prevRectTop - mainRectTop) + restoredScrollTop;
-    document.body.classList.add('is-page-sliding', 'is-page-slide-prep');
+    mainEl.classList.add('is-page-sliding', 'is-page-slide-prep');
     prevPageEl.style.setProperty('--leave-top', `${leaveTop}px`);
     prevPageEl.style.setProperty('--leave-left', `${leaveLeft}px`);
     prevPageEl.style.setProperty('--leave-width', `${leaveWidth}px`);
@@ -3249,12 +3304,20 @@ function activatePage(target: string, navTarget = target) {
       if (event.animationName !== 'pageSlideFromRight' && event.animationName !== 'pageSlideFromLeft') return;
       clearPageSlideState(true);
     };
-    rafId = window.requestAnimationFrame(() => {
+    const releasePrep = () => {
       rafId = 0;
       if (activeTransitionSeq !== pageTransitionSeq) return;
-      document.body.classList.remove('is-page-slide-prep');
+      mainEl.classList.remove('is-page-slide-prep');
       animTarget.addEventListener('animationend', onAnimEnd);
       timer = window.setTimeout(() => clearPageSlideState(true), 300);
+    };
+    rafId = window.requestAnimationFrame(() => {
+      if (activeTransitionSeq !== pageTransitionSeq) return;
+      if (!wasTargetWarmed) {
+        rafId = window.requestAnimationFrame(releasePrep);
+      } else {
+        releasePrep();
+      }
     });
     cancelPageSlide = () => {
       if (rafId) window.cancelAnimationFrame(rafId);
@@ -3270,6 +3333,12 @@ function activatePage(target: string, navTarget = target) {
       task();
     }
   };
+
+  if (resolvedTarget === 'settings' && requestedSettingsSubpage === undefined && pageChanged && shouldSlide) {
+    runAfterPageSlide(() => {
+      if (!activeSettingsSubpage) syncSettingsOverviewSummaries();
+    });
+  }
 
   runAfterPageSlide(() => {
     routerWorkbench?.onPage(resolvedTarget);
