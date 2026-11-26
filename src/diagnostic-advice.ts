@@ -13,7 +13,10 @@ export function diagnosticAdvice(report: DiagnosticReport): string[] {
         messages.push('校园目标路由异常：在 VPN 中放行校园网段，并核对认证网卡。');
     if (failed('authentication_session'))
         messages.push('尚未确认校园网会话：建议先刷新账号状态，避免连续重复登录。');
-    if (failed('internet'))
+    const connectivity = report.steps.find(step => step.id === 'internet')?.connectivity;
+    if (connectivity?.system.some(result => result.status === 'reachable')
+        && connectivity.direct.some(result => ['connection_error', 'dns_error', 'timeout', 'tls_error', 'response_error', 'unknown', 'unreachable'].includes(result.status))
+        && connectivity.direct.every(result => result.status !== 'reachable'))
         messages.push('当前系统路由与网卡直连结果不一致：若系统已通但网卡直连失败，请检查 Wi-Fi 是否未登录或 VPN 接管了流量。');
     if (report.dualStack?.ipv6.status === 'not_configured')
         messages.push('当前网卡未获取到 IPv6 地址；若路由器或端口未下发 IPv6，仅完成网页登录不会获得 IPv6。');

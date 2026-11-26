@@ -1020,7 +1020,7 @@
   }
 
   :root[data-theme="apple27"] body:not(.is-desktop) main {
-    padding-inline: max(0.75rem, env(safe-area-inset-left));
+    padding-inline: max(0.75rem, var(--safe-left)) max(0.75rem, var(--safe-right));
   }
 
   :root[data-theme="apple27"] body:not(.is-desktop) .page-header {
@@ -1127,9 +1127,9 @@
     align-items: flex-end;
     padding:
       0.5rem
-      max(0.5rem, env(safe-area-inset-right))
-      max(0.5rem, env(safe-area-inset-bottom))
-      max(0.5rem, env(safe-area-inset-left));
+      max(0.5rem, var(--safe-right))
+      max(0.5rem, var(--safe-bottom))
+      max(0.5rem, var(--safe-left));
   }
 
   :root[data-theme="apple27"] body:not(.is-desktop) .modal-content {
@@ -1327,7 +1327,7 @@
 }
 
 :root[data-theme="apple27"] .billing-section-enter {
-  animation: apple27ContentEnter var(--apple-duration-standard) var(--apple-ease-standard) both;
+  animation: apple27ContentEnter var(--apple-duration-standard) var(--apple-ease-standard) backwards;
 }
 
 @keyframes apple27PageEnter {

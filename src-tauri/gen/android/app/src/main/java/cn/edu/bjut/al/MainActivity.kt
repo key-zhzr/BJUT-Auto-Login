@@ -5,20 +5,26 @@ import android.content.Context
 import android.content.Intent
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
+import android.content.res.Configuration
+import android.graphics.Color
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.view.ViewTreeObserver
 import org.json.JSONArray
 import org.json.JSONObject
@@ -30,6 +36,74 @@ import java.util.Locale
 class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
   @Volatile private var pendingQuickAction: String? = null
+  @Volatile private var appThemeDarkOverride: Boolean? = null
+  @Volatile private var lastInsetTopDp = 0f
+  @Volatile private var lastInsetRightDp = 0f
+  @Volatile private var lastInsetBottomDp = 0f
+  @Volatile private var lastInsetLeftDp = 0f
+  @Volatile private var lastInsetSignature = ""
+
+  private fun isSystemNightMode(config: Configuration = resources.configuration): Boolean {
+    return (config.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+  }
+
+  private fun applySystemBars(isDark: Boolean, bgColorInt: Int? = null) {
+    WindowCompat.setDecorFitsSystemWindows(window, false)
+    val barStyle = if (isDark) {
+      SystemBarStyle.dark(Color.TRANSPARENT)
+    } else {
+      SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+    }
+    enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
+    WindowInsetsControllerCompat(window, window.decorView).apply {
+      isAppearanceLightStatusBars = !isDark
+      isAppearanceLightNavigationBars = !isDark
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      window.isStatusBarContrastEnforced = false
+      window.isNavigationBarContrastEnforced = false
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      val lp = window.attributes
+      val targetCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+      } else {
+        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+      }
+      if (lp.layoutInDisplayCutoutMode != targetCutoutMode) {
+        lp.layoutInDisplayCutoutMode = targetCutoutMode
+        window.attributes = lp
+      }
+    }
+    if (bgColorInt != null) {
+      window.decorView.setBackgroundColor(bgColorInt)
+      appWebView?.setBackgroundColor(bgColorInt)
+    }
+  }
+
+  private fun pushSafeAreaInsets(webView: WebView, insets: WindowInsetsCompat) {
+    val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+    val density = resources.displayMetrics.density.coerceAtLeast(1f)
+    val top = (bars.top / density).coerceAtLeast(0f)
+    val right = (bars.right / density).coerceAtLeast(0f)
+    val bottom = (bars.bottom / density).coerceAtLeast(0f)
+    val left = (bars.left / density).coerceAtLeast(0f)
+    lastInsetTopDp = top
+    lastInsetRightDp = right
+    lastInsetBottomDp = bottom
+    lastInsetLeftDp = left
+    val t = String.format(Locale.US, "%.2f", top)
+    val r = String.format(Locale.US, "%.2f", right)
+    val b = String.format(Locale.US, "%.2f", bottom)
+    val l = String.format(Locale.US, "%.2f", left)
+    val signature = "$t,$r,$b,$l"
+    if (signature != lastInsetSignature) {
+      lastInsetSignature = signature
+      webView.post {
+        webView.evaluateJavascript("window.__nativeSafeAreaInsets?.($signature)", null)
+      }
+    }
+  }
   private fun acceptQuickAction(intent: Intent?) {
     val uri = intent?.dataString.orEmpty()
     val action = if (uri.isNotEmpty()) {
@@ -71,7 +145,7 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    enableEdgeToEdge()
+    applySystemBars(isSystemNightMode())
     KeepAliveJournal.recordPreviousProcessExit(this)
     getSharedPreferences("service_state", Context.MODE_PRIVATE)
       .edit()
@@ -140,12 +214,30 @@ class MainActivity : TauriActivity() {
     super.onPause()
   }
 
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(newConfig)
+    val isDark = appThemeDarkOverride ?: isSystemNightMode(newConfig)
+    applySystemBars(isDark, null)
+    appWebView?.let { webView ->
+      ViewCompat.requestApplyInsets(webView)
+      ViewCompat.getRootWindowInsets(webView)?.let { pushSafeAreaInsets(webView, it) }
+    }
+  }
+
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     appWebView = webView
     webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
-    val nightMode = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
-    webView.setBackgroundColor(if (nightMode) android.graphics.Color.rgb(15, 23, 42) else android.graphics.Color.rgb(238, 242, 247))
+    val isDark = appThemeDarkOverride ?: isSystemNightMode()
+    val defaultBg = if (isDark) Color.rgb(15, 23, 42) else Color.rgb(238, 242, 247)
+    webView.setBackgroundColor(defaultBg)
+    applySystemBars(isDark, null)
+    ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
+      pushSafeAreaInsets(webView, insets)
+      ViewCompat.onApplyWindowInsets(view, insets)
+    }
+    ViewCompat.getRootWindowInsets(webView)?.let { pushSafeAreaInsets(webView, it) }
+    ViewCompat.requestApplyInsets(webView)
     // Log the provider after WebView creation; never initialize it from the
     // background service just to collect diagnostics.
     try {
@@ -716,6 +808,30 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun clearServiceLogs() {
       KeepAliveJournal.clear(activity)
+    }
+
+    @JavascriptInterface
+    fun getSafeAreaInsets(): String {
+      return JSONObject()
+        .put("top", lastInsetTopDp.toDouble())
+        .put("right", lastInsetRightDp.toDouble())
+        .put("bottom", lastInsetBottomDp.toDouble())
+        .put("left", lastInsetLeftDp.toDouble())
+        .toString()
+    }
+
+    @JavascriptInterface
+    fun setSystemBarsStyle(isDark: Boolean, bgHex: String) {
+      val parsedColor = try {
+        val trimmed = bgHex.trim()
+        if (trimmed.isNotEmpty()) Color.parseColor(trimmed) else null
+      } catch (_: Exception) {
+        null
+      }
+      activity.appThemeDarkOverride = isDark
+      activity.runOnUiThread {
+        activity.applySystemBars(isDark, parsedColor)
+      }
     }
   }
 }

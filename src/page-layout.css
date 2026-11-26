@@ -1,10 +1,6 @@
-html,
-body,
-#main-content,
-.modal-content,
-.custom-select-options,
-.logs-container,
-.billing-records-table-wrap {
+html.is-android,
+body.is-android,
+body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs-container, .billing-records-table-wrap) {
   overscroll-behavior: none;
   overscroll-behavior-y: none;
 }
@@ -21,8 +17,39 @@ body,
 /* Only scrolling content reserves space. A root gutter exposes the native
    window background; menu gutters leave unpainted bands beside each option. */
 #main-content { isolation: isolate; }
+:root[data-theme] body.is-android #main-content::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+}
+.android-scroll-indicator {
+  position: fixed;
+  top: 0;
+  right: 2px;
+  width: 3px;
+  pointer-events: none;
+  z-index: 3500;
+  opacity: 0;
+  transition: opacity 220ms ease;
+  contain: layout style paint;
+}
+.android-scroll-indicator.is-visible {
+  opacity: 1;
+  transition: opacity 80ms ease;
+}
+.android-scroll-thumb {
+  width: 100%;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.58);
+  transform-origin: top center;
+  will-change: transform;
+}
+:root[data-color-scheme="dark"] .android-scroll-thumb {
+  background: rgba(148, 163, 184, 0.48);
+}
 @media(max-width:768px) {
-  :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap)::-webkit-scrollbar { width:3px!important; height:3px!important; background:transparent!important; }
+  :root[data-theme] :is(.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap)::-webkit-scrollbar { width:3px!important; height:3px!important; background:transparent!important; }
+  :root[data-theme] body:not(.is-android) #main-content::-webkit-scrollbar { width:3px!important; height:3px!important; background:transparent!important; }
   :root[data-theme] :is(.logs-container,#router-logs-content)::-webkit-scrollbar { width:8px!important; height:8px!important; background:transparent!important; }
   :root[data-theme] body.is-android #main-content > .page:not(.page-slide-from-right):not(.page-slide-from-left):not(.page-slide-leave-left):not(.page-slide-leave-right) { animation: none; }
 
@@ -33,11 +60,11 @@ body,
   :root[data-theme] body.is-android #main-content > .page:not(.active):not(.page-slide-leave-left):not(.page-slide-leave-right) {
     display: block;
     position: absolute;
-    top: 0;
-    left: 0.75rem;
-    width: calc(100% - 1.5rem);
+    top: calc(1rem + var(--safe-top));
+    left: max(0.75rem, var(--safe-left));
+    width: calc(100% - max(0.75rem, var(--safe-left)) - max(0.75rem, var(--safe-right)));
     height: auto;
-    max-height: 50%;
+    max-height: 100%;
     overflow: hidden;
     visibility: hidden;
     pointer-events: none;
@@ -50,7 +77,8 @@ body,
     height: auto;
     overflow: visible;
     content-visibility: visible;
-    visibility: hidden;
+    visibility: visible;
+    opacity: 0.001;
     pointer-events: none;
     z-index: -1;
   }
@@ -64,6 +92,20 @@ body,
   }
 
   :root[data-theme] body.is-android #main-content.is-page-sliding > .page > .page-header::before {
+    opacity: 1;
+    transition: none;
+  }
+
+  :root[data-theme] body.is-android #main-content.is-nav-settling > .page.active:not(#billing-center) {
+    will-change: transform;
+    contain: layout style paint;
+  }
+
+  :root[data-theme] body.is-android #main-content.is-nav-settling > .page > .page-header::after {
+    display: none;
+  }
+
+  :root[data-theme] body.is-android #main-content.is-nav-settling > .page > .page-header::before {
     opacity: 1;
     transition: none;
   }
@@ -173,8 +215,8 @@ body,
   align-items: flex-start;
   gap: .25rem;
 }
-/* Unscrolled opaque header veil fades solely via opacity so backdrop-filter
-   and linear-gradient never interpolate mid-transition at scrollTop = 0. */
+/* Unscrolled opaque header veil fades solely via opacity so the scrolled
+   gradient veil never interpolates mid-transition at scrollTop = 0. */
 :root[data-theme] #main-content > .page > .page-header::before {
   content: '';
   position: absolute;
@@ -202,15 +244,14 @@ body,
   bottom: -1.6rem;
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--theme-body-bg, var(--bg-color)) 97%, transparent) 0%,
-    color-mix(in srgb, var(--theme-body-bg, var(--bg-color)) 88%, transparent) 58%,
-    color-mix(in srgb, var(--theme-body-bg, var(--bg-color)) 45%, transparent) 84%,
+    var(--theme-body-bg, var(--bg-color)) 0%,
+    color-mix(in srgb, var(--theme-body-bg, var(--bg-color)) 92%, transparent) 28%,
+    color-mix(in srgb, var(--theme-body-bg, var(--bg-color)) 68%, transparent) 55%,
+    color-mix(in srgb, var(--theme-body-bg, var(--bg-color)) 32%, transparent) 78%,
     transparent 100%
   );
-  backdrop-filter: blur(22px) saturate(1.4);
-  -webkit-backdrop-filter: blur(22px) saturate(1.4);
-  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 68%, rgba(0, 0, 0, 0.5) 86%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 0%, #000 68%, rgba(0, 0, 0, 0.5) 86%, transparent 100%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   visibility: hidden;
   transition: visibility 0s linear 160ms;
 }
@@ -528,7 +569,7 @@ body,
   :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) #nav,
   :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop).billing-center-active .billing-mobile-nav {
     position: fixed;
-    inset: auto 0 max(0.625rem, env(safe-area-inset-bottom));
+    inset: auto 0 max(0.625rem, calc(var(--safe-bottom) + 0.125rem));
     width: min(calc(100% - clamp(1.25rem, 6.2vw, 2.5rem)), 32rem);
     height: 3.875rem;
     padding: 0.25rem;
@@ -782,7 +823,7 @@ body,
 
   :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop) main,
   :root[data-theme]:not([data-theme="winui"]) body:not(.is-desktop).billing-center-active main {
-    padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+    padding-bottom: calc(6rem + var(--safe-bottom));
   }
 }
 

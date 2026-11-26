@@ -1,4 +1,28 @@
 import {test,expect} from '@playwright/test';
+
+test('diagnostics show a two-by-two link matrix and keep DNS reasons in the details dialog', async ({page}) => {
+  await page.setViewportSize({width:390,height:844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await page.getByRole('button', {name:'隐藏验收面板', exact:true}).click();
+  await page.locator('#nav [data-target=diagnostics]').click();
+  await page.locator('#btn-run-diagnostics').click();
+  const matrix = page.getByRole('table', {name:'互联网 IPv4 与 IPv6 连通性'});
+  await expect(matrix.locator('tbody tr')).toHaveCount(2);
+  await expect(matrix.locator('td')).toHaveText(['✓ 15 ms', '✓ 27 ms', '✓ 20 ms', '待确认']);
+  const dns = page.locator('[data-step-id=dns]');
+  await expect(dns).toContainText('公网可解析 · 校内域名可解析');
+  await expect(dns).not.toContainText('公共 DNS 回退');
+  await dns.getByRole('button', {name:'系统 DNS详细信息'}).click();
+  const modal = page.locator('#alert-modal');
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText('公共 DNS 回退）：解析成功');
+  await expect(modal).toContainText('172.21.0.21 · 已知校园 DNS');
+  await modal.locator('#btn-alert-ok').click();
+  await page.getByRole('button', {name:'互联网连通性详细信息'}).click();
+  await expect(modal).toContainText('网卡直连 IPv6 未完成连通性校验');
+  await expect(modal).not.toContainText('公共 DNS 回退');
+});
+
 for (const platform of ['macos', 'android']) {
   test(`an open dropdown follows its anchor on a narrow ${platform} window`, async ({page}) => {
     await page.setViewportSize({width: 1024, height: 768});
@@ -470,15 +494,20 @@ test('light startup mask, full-viewport accounts modal, single billing dock, blu
     main.dispatchEvent(new Event('scroll'));
     await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
     const scrolled=main.classList.contains('is-scrolled');
-    const blurStyle=getComputedStyle(header,'::after').backdropFilter;
-    const afterVis=getComputedStyle(header,'::after').visibility;
+    const afterStyle=getComputedStyle(header,'::after');
+    const blurStyle=afterStyle.backdropFilter;
+    const afterBg=afterStyle.backgroundImage;
+    const afterVis=afterStyle.visibility;
     main.scrollTop=0;
     main.dispatchEvent(new Event('scroll'));
     await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
-    return {scrolled,blurStyle,afterVis,cleared:!main.classList.contains('is-scrolled')};
+    return {scrolled,blurStyle,afterBg,afterVis,cleared:!main.classList.contains('is-scrolled')};
   });
   expect(scrollState.scrolled).toBe(true);
-  expect(scrollState.blurStyle).toContain('blur(');
+  expect(scrollState.blurStyle).toBe('none');
+  expect(scrollState.afterBg).toContain('linear-gradient(');
+  expect(scrollState.afterBg).toContain('0.92');
+  expect(scrollState.afterBg).toContain('0.68');
   expect(scrollState.afterVis).toBe('visible');
   expect(scrollState.cleared).toBe(true);
 });
@@ -2308,4 +2337,310 @@ test('dashboard same-day timestamp, macOS dropdown open/scroll-close, billing ov
   expect(overlapStats.dashActive).toBe(true);
   expect(overlapStats.frames).toBeGreaterThan(8);
   await expect(page.locator('.custom-select.open, .custom-select.closing')).toHaveCount(0, {timeout: 2500});
+});
+
+test('platform-scoped overscroll, reverse scroll continuation, router modules, shrinking scrollbar, android edge-to-edge blur, and droplet shrink continuity', async ({page}) => {
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+
+  // 1. Desktop does not hijack overscroll and top header blur extends to y=0 at 50% -> 0%
+  await page.setViewportSize({width: 1100, height: 520});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  await page.locator('#nav .nav-item[data-target="diagnostics"]').first().click();
+  await expect(page.locator('#diagnostics.active')).toBeVisible();
+  const desktopCheck = await page.evaluate(async () => {
+    const main = document.getElementById('main-content')!;
+    const header = document.querySelector<HTMLElement>('#diagnostics .page-header')!;
+    const overscrollY = getComputedStyle(main).overscrollBehaviorY;
+    const hasIndicator = Boolean(document.querySelector('.android-scroll-indicator'));
+    main.scrollTop = 0;
+    for (let i = 0; i < 4; i++) {
+      main.dispatchEvent(new WheelEvent('wheel', {deltaY: -140, cancelable: true, bubbles: true}));
+    }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const firstPanelTransform = document.querySelector<HTMLElement>('#diagnostics > :not(.page-header)')?.style.transform || '';
+    main.scrollTop = 120;
+    main.dispatchEvent(new Event('scroll'));
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const headerRect = header.getBoundingClientRect();
+    const afterStyle = getComputedStyle(header, '::after');
+    const afterTop = Number.parseFloat(afterStyle.top) || 0;
+    const afterBottom = Number.parseFloat(afterStyle.bottom) || 0;
+    return {
+      overscrollY,
+      hasIndicator,
+      firstPanelTransform,
+      headerTopY: headerRect.top,
+      headerAfterAppTop: headerRect.top + afterTop,
+      afterBottom,
+      afterBg: afterStyle.backgroundImage,
+      afterBackdrop: afterStyle.backdropFilter,
+      afterVis: afterStyle.visibility,
+    };
+  });
+  expect(desktopCheck.overscrollY).not.toBe('none');
+  expect(desktopCheck.hasIndicator).toBe(false);
+  expect(desktopCheck.firstPanelTransform).toBe('');
+  expect(desktopCheck.headerTopY).toBeGreaterThanOrEqual(48);
+  expect(desktopCheck.headerAfterAppTop).toBeLessThanOrEqual(1);
+  expect(desktopCheck.afterBottom).toBeLessThan(-20);
+  expect(desktopCheck.afterBottom).toBeGreaterThan(-32);
+  expect(desktopCheck.afterVis).toBe('visible');
+  expect(desktopCheck.afterBg).toContain('0.92');
+  expect(desktopCheck.afterBg).toContain('0.68');
+  expect(desktopCheck.afterBackdrop).toBe('none');
+
+  // 2. Android edge-to-edge insets + top header blur + shrinking scrollbar + reverse scroll + router panels
+  await page.setViewportSize({width: 390, height: 844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  await page.locator('#nav .nav-item[data-target="diagnostics"]').click();
+  await expect(page.locator('#diagnostics.active')).toBeVisible();
+  await expect(page.locator('#main-content')).not.toHaveClass(/is-page-sliding/, {timeout: 2000});
+
+  const androidHeaderAndScrollbar = await page.evaluate(async () => {
+    window.__nativeSafeAreaInsets?.(32, 0, 24, 0);
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const bodyStyle = getComputedStyle(document.body);
+    const main = document.getElementById('main-content')!;
+    const header = document.querySelector<HTMLElement>('#diagnostics .page-header')!;
+    main.scrollTop = 120;
+    main.dispatchEvent(new Event('scroll'));
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const headerRect = header.getBoundingClientRect();
+    const afterStyle = getComputedStyle(header, '::after');
+    const afterTop = Number.parseFloat(afterStyle.top) || 0;
+    const afterBottom = Number.parseFloat(afterStyle.bottom) || 0;
+
+    // Top overscroll compresses scrollbar thumb anchored to top
+    main.scrollTop = 0;
+    main.dispatchEvent(new Event('scroll'));
+    for (let i = 0; i < 4; i++) {
+      main.dispatchEvent(new WheelEvent('wheel', {deltaY: -120, cancelable: true, bubbles: true}));
+    }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const indicator = document.querySelector<HTMLElement>('.android-scroll-indicator')!;
+    const thumb = document.querySelector<HTMLElement>('.android-scroll-thumb')!;
+    const topVisible = indicator.classList.contains('is-visible');
+    const topScale = Number(thumb.dataset.thumbScale || '1');
+
+    // Reverse downward scroll mid-spring must advance scrollTop cleanly instead of flipping to bottom overscroll
+    await new Promise(r => setTimeout(r, 130));
+    main.dispatchEvent(new WheelEvent('wheel', {deltaY: 160, cancelable: true, bubbles: true}));
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const reverseScrollTop = main.scrollTop;
+    const childAfterReverse = document.querySelector<HTMLElement>('#diagnostics > :not(.page-header)')!;
+    const reverseChildY = childAfterReverse.style.transform
+      ? new DOMMatrixReadOnly(getComputedStyle(childAfterReverse).transform).m42
+      : 0;
+
+    // Wait settle -> scale returns to 1.000
+    const settleDeadline = performance.now() + 900;
+    while (performance.now() < settleDeadline && childAfterReverse.style.transform) {
+      await new Promise(requestAnimationFrame);
+    }
+    const settledScale = Number(thumb.dataset.thumbScale || '1');
+
+    // Same-gesture touch reversal from top overscroll must keep scrolling main.scrollTop manually
+    main.scrollTop = 0;
+    main.dispatchEvent(new Event('scroll'));
+    let touchReverseScrollTop = 0;
+    let touchReverseChildY = 0;
+    if (typeof Touch === 'function' && typeof TouchEvent === 'function') {
+      const target = document.querySelector<HTMLElement>('#diagnostics .diagnostic-summary') || main;
+      const sendTouch = (type: string, y: number) => {
+        const t = new Touch({identifier: 1, target, clientX: 195, clientY: y, pageX: 195, pageY: y});
+        main.dispatchEvent(new TouchEvent(type, {
+          cancelable: type !== 'touchend',
+          bubbles: true,
+          touches: type === 'touchend' ? [] : [t],
+          targetTouches: type === 'touchend' ? [] : [t],
+          changedTouches: [t],
+        }));
+      };
+      sendTouch('touchstart', 300);
+      sendTouch('touchmove', 310);
+      sendTouch('touchmove', 360);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      sendTouch('touchmove', 290);
+      sendTouch('touchmove', 255);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      touchReverseScrollTop = main.scrollTop;
+      touchReverseChildY = childAfterReverse.style.transform
+        ? new DOMMatrixReadOnly(getComputedStyle(childAfterReverse).transform).m42
+        : 0;
+      sendTouch('touchend', 255);
+      const settleTouchEnd = performance.now() + 900;
+      while (performance.now() < settleTouchEnd && childAfterReverse.style.transform) {
+        await new Promise(requestAnimationFrame);
+      }
+    }
+
+    // Bottom overscroll compresses scrollbar thumb anchored to bottom
+    const maxScroll = Math.max(0, main.scrollHeight - main.clientHeight);
+    main.scrollTop = maxScroll;
+    main.dispatchEvent(new Event('scroll'));
+    for (let i = 0; i < 4; i++) {
+      main.dispatchEvent(new WheelEvent('wheel', {deltaY: 120, cancelable: true, bubbles: true}));
+    }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const bottomScale = Number(thumb.dataset.thumbScale || '1');
+    const end2 = performance.now() + 900;
+    while (performance.now() < end2 && childAfterReverse.style.transform) {
+      await new Promise(requestAnimationFrame);
+    }
+    window.__nativeSafeAreaInsets?.(0, 0, 0, 0);
+    main.scrollTop = 0;
+    return {
+      bodyPadTop: bodyStyle.paddingTop,
+      bodyRadius: bodyStyle.borderRadius,
+      headerTopY: headerRect.top,
+      headerAfterAppTop: headerRect.top + afterTop,
+      afterBottom,
+      afterBg: afterStyle.backgroundImage,
+      afterBackdrop: afterStyle.backdropFilter,
+      topVisible,
+      topScale,
+      reverseScrollTop,
+      reverseChildY,
+      touchReverseScrollTop,
+      touchReverseChildY,
+      settledScale,
+      bottomScale,
+    };
+  });
+  expect(androidHeaderAndScrollbar.bodyPadTop).toBe('0px');
+  expect(androidHeaderAndScrollbar.bodyRadius).toBe('0px');
+  expect(androidHeaderAndScrollbar.headerTopY).toBeGreaterThanOrEqual(46);
+  expect(androidHeaderAndScrollbar.headerAfterAppTop).toBeLessThanOrEqual(1);
+  expect(androidHeaderAndScrollbar.afterBottom).toBeLessThan(-20);
+  expect(androidHeaderAndScrollbar.afterBg).toContain('0.92');
+  expect(androidHeaderAndScrollbar.afterBg).toContain('0.68');
+  expect(androidHeaderAndScrollbar.afterBackdrop).toBe('none');
+  expect(androidHeaderAndScrollbar.topVisible).toBe(true);
+  expect(androidHeaderAndScrollbar.topScale).toBeLessThan(0.88);
+  expect(androidHeaderAndScrollbar.reverseScrollTop).toBeGreaterThan(20);
+  expect(androidHeaderAndScrollbar.reverseChildY).toBeGreaterThanOrEqual(-0.2);
+  expect(androidHeaderAndScrollbar.touchReverseScrollTop).toBeGreaterThan(15);
+  expect(androidHeaderAndScrollbar.touchReverseChildY).toBeGreaterThanOrEqual(-0.2);
+  expect(androidHeaderAndScrollbar.settledScale).toBeCloseTo(1, 2);
+  expect(androidHeaderAndScrollbar.bottomScale).toBeLessThan(0.88);
+
+  // 3. Router modules on Dashboard and Accounts participate in overscroll
+  await page.locator('#nav .nav-item[data-target="dashboard"]').click();
+  await expect(page.locator('#dashboard.active')).toBeVisible();
+  await expect(page.locator('#main-content')).not.toHaveClass(/is-page-sliding/, {timeout: 2000});
+  const routerDashBounce = await page.evaluate(async () => {
+    const main = document.getElementById('main-content')!;
+    const routerDash = document.getElementById('router-dashboard')!;
+    const wasHidden = routerDash.hidden;
+    routerDash.hidden = false;
+    await new Promise(r => setTimeout(r, 260));
+    main.scrollTop = 0;
+    for (let i = 0; i < 4; i++) {
+      main.dispatchEvent(new WheelEvent('wheel', {deltaY: -120, cancelable: true, bubbles: true}));
+    }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const computedY = new DOMMatrixReadOnly(getComputedStyle(routerDash).transform).m42;
+    const animFillMode = getComputedStyle(routerDash).animationFillMode;
+    const end = performance.now() + 900;
+    while (performance.now() < end && routerDash.style.transform) {
+      await new Promise(requestAnimationFrame);
+    }
+    routerDash.hidden = wasHidden;
+    return {
+      animFillMode,
+      computedY,
+    };
+  });
+  expect(routerDashBounce.animFillMode).toBe('backwards');
+  expect(routerDashBounce.computedY).toBeGreaterThan(3);
+
+  await page.locator('#nav .nav-item[data-target="accounts"]').click();
+  await expect(page.locator('#accounts.active')).toBeVisible();
+  await expect(page.locator('#main-content')).not.toHaveClass(/is-page-sliding/, {timeout: 2000});
+  const routerAccBounce = await page.evaluate(async () => {
+    const main = document.getElementById('main-content')!;
+    const routerAcc = document.getElementById('router-accounts-panel')!;
+    const wasHidden = routerAcc.hidden;
+    routerAcc.hidden = false;
+    await new Promise(r => setTimeout(r, 260));
+    main.scrollTop = 0;
+    for (let i = 0; i < 4; i++) {
+      main.dispatchEvent(new WheelEvent('wheel', {deltaY: -120, cancelable: true, bubbles: true}));
+    }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const computedY = new DOMMatrixReadOnly(getComputedStyle(routerAcc).transform).m42;
+    const animFillMode = getComputedStyle(routerAcc).animationFillMode;
+    const end = performance.now() + 900;
+    while (performance.now() < end && routerAcc.style.transform) {
+      await new Promise(requestAnimationFrame);
+    }
+    routerAcc.hidden = wasHidden;
+    return {
+      animFillMode,
+      computedY,
+    };
+  });
+  expect(routerAccBounce.animFillMode).toBe('backwards');
+  expect(routerAccBounce.computedY).toBeGreaterThan(3);
+
+  // 4. Tap-switch droplet shrink completes cleanly without early blurred pill handoff
+  await expect(page.locator('#nav')).not.toHaveClass(/is-droplet-active/, {timeout: 2000});
+  const settingsBtn = page.locator('#nav .nav-item[data-target="settings"]');
+  const settingsBox = (await settingsBtn.boundingBox())!;
+  const tapWatcher = page.evaluate(() => new Promise<{frames: number; dropletFrames: number; earlyPillFlash: number; flashDetails: unknown[]}>(resolve => {
+    const nav = document.getElementById('nav')!;
+    const droplet = nav.querySelector<HTMLElement>('.nav-liquid-droplet')!;
+    const pill = nav.querySelector<HTMLElement>('.nav-liquid-pill')!;
+    const pillWidth = pill.getBoundingClientRect().width;
+    const start = performance.now();
+    let frames = 0;
+    let dropletFrames = 0;
+    let earlyPillFlash = 0;
+    const flashDetails: unknown[] = [];
+    let tapStarted = false;
+    nav.addEventListener('pointerdown', () => { tapStarted = true; }, { once: true });
+    const tick = () => {
+      frames++;
+      if (tapStarted && nav.classList.contains('is-droplet-active')) {
+        dropletFrames++;
+        const dRect = droplet.getBoundingClientRect();
+        const dOp = Number.parseFloat(getComputedStyle(droplet).opacity);
+        const pillVis = getComputedStyle(pill).visibility;
+        if (dRect.width > pillWidth + 6 && (dOp < 0.99 || pillVis === 'visible')) {
+          earlyPillFlash++;
+          flashDetails.push({
+            dt: +(performance.now() - start).toFixed(1),
+            dWidth: +dRect.width.toFixed(2),
+            pillWidth: +pillWidth.toFixed(2),
+            curPillWidth: +pill.getBoundingClientRect().width.toFixed(2),
+            dOp,
+            pillVis,
+            pillOp: getComputedStyle(pill).opacity,
+          });
+        }
+      }
+      if (!tapStarted || performance.now() - start < 700 || nav.classList.contains('is-droplet-active')) {
+        requestAnimationFrame(tick);
+      } else {
+        resolve({frames, dropletFrames, earlyPillFlash, flashDetails});
+      }
+    };
+    requestAnimationFrame(tick);
+  }));
+  await page.mouse.move(settingsBox.x + settingsBox.width / 2, settingsBox.y + settingsBox.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(35);
+  await page.mouse.up();
+  const tapResult = await tapWatcher;
+  expect(tapResult.dropletFrames).toBeGreaterThan(4);
+  expect(tapResult.earlyPillFlash, JSON.stringify(tapResult.flashDetails)).toBe(0);
+  await expect(page.locator('#settings.active')).toBeVisible();
 });

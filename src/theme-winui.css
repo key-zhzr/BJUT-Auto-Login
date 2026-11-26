@@ -260,7 +260,7 @@
 }
 
 :root[data-theme="winui"] body.is-desktop .app-container {
-  padding-top: 32px;
+  padding-top: 0;
 }
 
 :root[data-theme="winui"] body.is-android .app-container {
@@ -419,8 +419,8 @@
 }
 
 /* A deactivated desktop window uses the neutral fallback, like system Mica. */
-:root[data-theme="winui"] body.is-window-inactive,
-:root[data-theme="winui"] body.window-inactive {
+:root[data-theme="winui"] body.is-desktop.is-window-inactive,
+:root[data-theme="winui"] body.is-desktop.window-inactive {
   --win-pane-fill: transparent;
   --win-layer-fill: transparent;
   --win-card-fill: var(--theme-card-solid);
@@ -433,6 +433,16 @@
 
 :root[data-theme="winui"] main {
   padding: var(--win-space-6);
+}
+
+:root[data-theme="winui"] body.is-desktop main {
+  padding-top: calc(32px + var(--win-space-6));
+}
+
+:root[data-theme="winui"] body.is-android main {
+  padding-top: calc(var(--win-space-4) + var(--safe-top));
+  padding-left: max(var(--win-space-4), var(--safe-left));
+  padding-right: max(var(--win-space-4), var(--safe-right));
 }
 
 :root[data-theme="winui"] .page-header {
@@ -631,7 +641,7 @@
 
 :root[data-theme="winui"] body.is-desktop nav {
   width: 240px;
-  padding: var(--win-space-3) var(--win-space-2);
+  padding: calc(32px + var(--win-space-3)) var(--win-space-2) var(--win-space-3);
 }
 
 :root[data-theme="winui"] .nav-items {
@@ -798,7 +808,11 @@
   :root[data-theme="winui"] body.is-desktop #nav {
     width: 64px !important;
     flex: 0 0 64px !important;
-    padding: 1.15rem 0.5rem !important;
+    padding: calc(32px + 1.15rem) 0.5rem 1.15rem !important;
+  }
+
+  :root[data-theme="winui"] body.is-desktop main {
+    padding: calc(32px + 1.35rem) 1.5rem 2rem;
   }
 
   :root[data-theme="winui"] body.is-desktop #nav .nav-item {
@@ -830,9 +844,9 @@
     inset: auto 0 0;
     width: 100%;
     height: auto;
-    min-height: calc(56px + env(safe-area-inset-bottom));
+    min-height: calc(56px + var(--safe-bottom));
     margin: 0;
-    padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+    padding: 4px 8px calc(4px + var(--safe-bottom));
     border: 0;
     border-top: 1px solid var(--win-divider-stroke);
     border-radius: 0;
@@ -919,7 +933,7 @@
 
   :root[data-theme="winui"] body:not(.is-desktop) main,
   :root[data-theme="winui"] body:not(.is-desktop).billing-center-active main {
-    padding-bottom: calc(5.2rem + env(safe-area-inset-bottom));
+    padding-bottom: calc(5.2rem + var(--safe-bottom));
   }
 }
 
@@ -1393,11 +1407,11 @@
 }
 
 :root[data-theme="winui"] .settings-subpage-enter {
-  animation: winui-settings-subpage-enter var(--win-duration-normal) var(--win-ease-enter) both;
+  animation: winui-settings-subpage-enter var(--win-duration-normal) var(--win-ease-enter) backwards;
 }
 
 :root[data-theme="winui"] .settings-home-enter {
-  animation: winui-settings-home-enter var(--win-duration-normal) var(--win-ease-enter) both;
+  animation: winui-settings-home-enter var(--win-duration-normal) var(--win-ease-enter) backwards;
 }
 
 @keyframes winui-settings-subpage-enter {
@@ -1423,7 +1437,7 @@
 }
 
 :root[data-theme="winui"] .billing-section-enter {
-  animation: winui-theme-section-enter var(--win-duration-normal) var(--win-ease-enter) both;
+  animation: winui-theme-section-enter var(--win-duration-normal) var(--win-ease-enter) backwards;
 }
 
 @keyframes winui-theme-section-enter {
@@ -1597,7 +1611,7 @@
 
 @media (max-width: 768px) {
   :root[data-theme="winui"] body:not(.is-desktop).billing-center-active main {
-    padding-bottom: calc(5.2rem + env(safe-area-inset-bottom));
+    padding-bottom: calc(5.2rem + var(--safe-bottom));
   }
 
   :root[data-theme="winui"] body:not(.is-desktop).billing-center-active #nav {
@@ -1610,7 +1624,7 @@
 
 @media (min-width: 769px) {
   :root[data-theme="winui"] body.is-android nav {
-    padding: var(--win-space-3) var(--win-space-2);
+    padding: calc(var(--win-space-3) + var(--safe-top)) var(--win-space-2) calc(var(--win-space-3) + var(--safe-bottom)) max(var(--win-space-2), var(--safe-left));
     border-right: 1px solid var(--win-divider-stroke);
     border-radius: 0;
     background: var(--win-card-fill);
@@ -1695,16 +1709,12 @@
   background: var(--win-status-danger-bg);
 }
 
-:root[data-theme="winui"] .diagnostic-kv-val.is-ok {
+:root[data-theme="winui"] .diagnostic-connectivity td[data-status="reachable"] {
   color: var(--win-status-success-fg);
 }
 
-:root[data-theme="winui"] .diagnostic-kv-val.is-warn {
+:root[data-theme="winui"] .diagnostic-connectivity td[data-status="timeout"] {
   color: var(--win-status-warning-fg);
-}
-
-:root[data-theme="winui"] .diagnostic-kv-val.is-error {
-  color: var(--win-status-danger-fg);
 }
 
 :root[data-theme="winui"] .diagnostic-step.success .diagnostic-step-marker {

@@ -24,6 +24,8 @@ interface AndroidBridgeApi {
   shareExportFile?(path: string, title: string): boolean;
   openAlipay?(url: string): boolean;
   openWechat?(url: string): boolean;
+  getSafeAreaInsets?(): string;
+  setSystemBarsStyle?(isDark: boolean, bgHex: string): void;
 }
 
 interface NavigatorConnection extends EventTarget {
@@ -45,5 +47,6 @@ interface Window {
   __handleAndroidBack?: () => boolean;
   __nativeKeepAlive?: () => void;
   __nativeKeyboardChanged?: (visible: boolean, availableHeight: number) => void;
+  __nativeSafeAreaInsets?: (top: number, right: number, bottom: number, left: number) => void;
   triggerAutoLogin?: () => void;
 }

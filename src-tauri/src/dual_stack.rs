@@ -327,7 +327,9 @@ pub(crate) async fn probe_route_with_updates(
     mut update: impl FnMut(&DualStackReport),
 ) -> DualStackReport {
     let interface = network["interfaceName"].as_str().unwrap_or("");
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "macos")]
+    let adapters = crate::network_inventory::macos_link_adapters();
+    #[cfg(not(any(target_os = "android", target_os = "macos")))]
     let adapters = crate::network_inventory::adapters();
     #[cfg(target_os = "android")]
     let adapters = if direct {
@@ -355,9 +357,8 @@ pub(crate) async fn probe_route_with_updates(
                 .as_array()
                 .is_none_or(Vec::is_empty)
         {
-            // Wired snapshots already include scoped DNS. Read Wi-Fi DHCP and
-            // scoped resolver data once per manual diagnostic, not every poll.
-            servers.extend(crate::macos_network::lgn_link_configuration(interface).dns_servers);
+            // Wired snapshots already include scoped DNS.
+            servers.extend(crate::macos_network::scoped_dns_servers(interface));
         }
         servers.extend(
             network["dnsServers"]

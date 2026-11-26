@@ -33,7 +33,7 @@ import { NetworkExperience } from './network-experience';
 import { LoginProgressView } from './login-progress-view';
 import { renderNetworkEvents } from './network-events-view';
 import { setupKeyboardNavigation } from './keyboard-navigation';
-import { setupLiquidNav, syncLiquidNav } from './liquid-nav';
+import { isLiquidNavAnimating, setupLiquidNav, syncLiquidNav, whenLiquidNavSettled } from './liquid-nav';
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Bell, Check, CheckCircle, ChevronDown, ChevronUp,
   ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
@@ -119,6 +119,12 @@ function syncWinuiThemeRuntime(): void {
   if (backdropKey !== lastWinuiBackdropKey) {
     lastWinuiBackdropKey = backdropKey;
     windowsBackdropReady = syncWindowsBackdrop(theme, colorScheme);
+    if (IS_ANDROID) {
+      const barBgHex = theme === 'winui'
+        ? (colorScheme === 'dark' ? '#000000' : '#f3f3f3')
+        : (colorScheme === 'dark' ? '#0f172a' : '#eef2f7');
+      window.AndroidBridge?.setSystemBarsStyle?.(colorScheme === 'dark', barBgHex);
+    }
   }
 
   const nextWinuiIcons = theme === 'winui';
@@ -155,6 +161,7 @@ observeSystemColorScheme(() => {
   syncWinuiThemeRuntime();
 });
 
+document.documentElement.classList.toggle('is-android', IS_ANDROID);
 if (IS_ANDROID) {
   document.body.classList.add('is-android');
   setupAndroidKeyboard();
@@ -195,8 +202,8 @@ function scheduleAndroidPagePrewarm() {
     androidPrewarmTimer = null;
     const mainEl = document.getElementById('main-content');
     if (!mainEl || document.hidden) return;
-    if (mainEl.classList.contains('is-page-sliding')) {
-      androidPrewarmTimer = window.setTimeout(step, 180);
+    if (mainEl.classList.contains('is-page-sliding') || isLiquidNavAnimating()) {
+      androidPrewarmTimer = window.setTimeout(step, 90);
       return;
     }
     const nextId = queue.shift();
@@ -209,13 +216,13 @@ function scheduleAndroidPagePrewarm() {
         window.requestAnimationFrame(() => {
           el.classList.remove('page-prewarm');
           if (queue.length || !androidSubpagePrewarmed) {
-            androidPrewarmTimer = window.setTimeout(step, 180);
+            androidPrewarmTimer = window.setTimeout(step, 45);
           }
         });
         return;
       }
       if (queue.length || !androidSubpagePrewarmed) {
-        androidPrewarmTimer = window.setTimeout(step, 40);
+        androidPrewarmTimer = window.setTimeout(step, 20);
       }
       return;
     }
@@ -235,7 +242,7 @@ function scheduleAndroidPagePrewarm() {
       }
     }
   };
-  androidPrewarmTimer = window.setTimeout(step, 280);
+  androidPrewarmTimer = window.setTimeout(step, 40);
 }
 
 function setLoadingMaskVisible(visible: boolean, text = '正在启动 BJUT-AL…') {
@@ -335,7 +342,7 @@ let documentWasHidden = document.hidden;
 const updateWindowAppearanceState = () => {
   document.body.classList.toggle(
     'window-inactive',
-    document.hidden || !document.hasFocus(),
+    IS_ANDROID ? document.hidden : (document.hidden || !document.hasFocus()),
   );
 };
 document.addEventListener('visibilitychange', () => {
@@ -1284,25 +1291,59 @@ async function initializeRustEvents() {
     }
   };
 
+  let pendingCountdownPayload: CountdownPayload | null = null;
+  let countdownFlushScheduled = false;
+  const applyCountdownPayload = (data: CountdownPayload) => {
+    refreshDashboardTimestampDisplay();
+    const countdownText = document.getElementById('countdown-text');
+    if (!countdownText) return;
+    if (data.status === 'checking') {
+      countdownText.textContent = '检测中...';
+      isChecking = true;
+    } else if (data.status === 'suspended') {
+      countdownText.textContent = '已休眠';
+      isChecking = false;
+    } else if (data.status === 'ticking') {
+      countdownText.textContent = data.seconds.toString();
+      isChecking = false;
+    }
+  };
+  const scheduleCountdownFlush = () => {
+    if (countdownFlushScheduled) return;
+    countdownFlushScheduled = true;
+    const tryFlush = () => {
+      const mainEl = document.getElementById('main-content');
+      if (mainEl?.classList.contains('is-page-sliding') || mainEl?.classList.contains('is-nav-settling')) {
+        window.setTimeout(tryFlush, 90);
+        return;
+      }
+      countdownFlushScheduled = false;
+      const latest = pendingCountdownPayload;
+      pendingCountdownPayload = null;
+      if (latest) applyCountdownPayload(latest);
+    };
+    whenLiquidNavSettled(tryFlush);
+  };
+
   // Register every channel independently. One unavailable event must not stop
   // network, countdown, log, or account events from being wired up.
   await Promise.all([
     settle('图片验证码', setupImageCaptchas()),
     settle('倒计时事件', listen<CountdownPayload>('countdown-tick', event => {
-      refreshDashboardTimestampDisplay();
       const data = event.payload;
-      const countdownText = document.getElementById('countdown-text');
-      if (!countdownText) return;
-      if (data.status === 'checking') {
-        countdownText.textContent = '检测中...';
-        isChecking = true;
-      } else if (data.status === 'suspended') {
-        countdownText.textContent = '已休眠';
-        isChecking = false;
-      } else if (data.status === 'ticking') {
-        countdownText.textContent = data.seconds.toString();
-        isChecking = false;
+      const mainEl = document.getElementById('main-content');
+      if (
+        IS_ANDROID
+        && (mainEl?.classList.contains('is-page-sliding')
+          || mainEl?.classList.contains('is-nav-settling')
+          || isLiquidNavAnimating())
+      ) {
+        pendingCountdownPayload = data;
+        scheduleCountdownFlush();
+        return;
       }
+      pendingCountdownPayload = null;
+      applyCountdownPayload(data);
     })),
     settle('网络状态事件', listen<NetworkStatePayload>('network-state-change', event => {
       applyNetworkStatePayload(event.payload);
@@ -1317,7 +1358,7 @@ async function initializeRustEvents() {
     settle('登录阶段事件', listen<LoginProgress>('login-progress', event => loginProgressView.render(event.payload))),
     settle('检测调度事件', listen<NetworkSchedule>('network-schedule', event => networkExperience.renderSchedule(event.payload))),
     settle('网络诊断逐项结果', listen<{runId: string; step: DiagnosticStep}>('network-diagnostic-step', event => {
-      if (diagnosticRunActive && event.payload.runId === diagnosticRunId) renderDiagnosticStep(event.payload.step);
+      if (diagnosticRunActive && event.payload.runId === diagnosticRunId) renderDiagnosticStep(event.payload.step, customAlert);
     })),
     settle('网络诊断进度事件', listen<DiagnosticProgress>('network-diagnostic-progress', event => {
       if (!diagnosticRunActive || event.payload.runId !== diagnosticRunId) return;
@@ -2555,7 +2596,7 @@ async function refreshCredentialStorageHealth() {
 }
 
 function renderDiagnosticReport(report: DiagnosticReport) {
-  renderDiagnosticReportView(report, { busy: diagnosticRunActive || adapterRestartActive, renderHealth: health => networkExperience.renderHealth(health), formatTime: formatHealthTime });
+  renderDiagnosticReportView(report, { busy: diagnosticRunActive || adapterRestartActive, showDetails: customAlert, formatTime: formatHealthTime });
 }
 
 let diagnosticRunActive = false;
@@ -2621,7 +2662,7 @@ async function runDiagnostics() {
     lastDiagnosticReport = await invoke<DiagnosticReport>('run_network_diagnostics', { runId: diagnosticRunId });
     finishDiagnosticProgress();
     renderDiagnosticReport(lastDiagnosticReport);
-    await Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
+    void Promise.allSettled([refreshAccountHealth(), refreshCredentialStorageHealth()]);
   } catch (error) {
     document.getElementById('diagnostic-summary-title')!.textContent = `诊断失败：${String(error)}`;
     diagnosticProgressVisibility.setVisible(false);
@@ -3157,7 +3198,23 @@ let activeLeavingPage: HTMLElement | null = null;
 let pageTransitionSeq = 0;
 let pendingPageTransitionTasks: Array<{ seq: number; run: () => void }> = [];
 
+let deferredTaskFlushTimer: number | null = null;
+let navSettlingCleanup: (() => void) | null = null;
+
+function clearNavSettlingState() {
+  if (navSettlingCleanup) {
+    const cleanup = navSettlingCleanup;
+    navSettlingCleanup = null;
+    cleanup();
+  }
+  document.getElementById('main-content')?.classList.remove('is-nav-settling');
+}
+
 function flushPageTransitionTasks() {
+  if (deferredTaskFlushTimer !== null) {
+    window.clearTimeout(deferredTaskFlushTimer);
+    deferredTaskFlushTimer = null;
+  }
   const tasks = pendingPageTransitionTasks;
   pendingPageTransitionTasks = [];
   for (const task of tasks) {
@@ -3166,9 +3223,15 @@ function flushPageTransitionTasks() {
 }
 
 function clearPageSlideState(flushTasks = false) {
+  clearNavSettlingState();
   cancelPageSlide?.();
   cancelPageSlide = null;
-  document.getElementById('main-content')?.classList.remove('is-page-sliding', 'is-page-slide-prep');
+  if (deferredTaskFlushTimer !== null) {
+    window.clearTimeout(deferredTaskFlushTimer);
+    deferredTaskFlushTimer = null;
+  }
+  const mainEl = document.getElementById('main-content');
+  mainEl?.classList.remove('is-page-sliding', 'is-page-slide-prep');
   if (activeLeavingPage) {
     activeLeavingPage.classList.remove('page-slide-leave-left', 'page-slide-leave-right');
     activeLeavingPage.inert = IS_ANDROID ? !activeLeavingPage.classList.contains('active') : false;
@@ -3187,7 +3250,30 @@ function clearPageSlideState(flushTasks = false) {
     );
   });
   if (flushTasks) {
-    flushPageTransitionTasks();
+    if (IS_ANDROID && isLiquidNavAnimating()) {
+      const seq = pageTransitionSeq;
+      if (mainEl) {
+        mainEl.classList.add('is-nav-settling');
+        const onScrollIntent = () => clearNavSettlingState();
+        mainEl.addEventListener('touchstart', onScrollIntent, { passive: true, once: true });
+        mainEl.addEventListener('wheel', onScrollIntent, { passive: true, once: true });
+        navSettlingCleanup = () => {
+          mainEl.removeEventListener('touchstart', onScrollIntent);
+          mainEl.removeEventListener('wheel', onScrollIntent);
+        };
+      }
+      const runIfCurrent = () => {
+        if (seq !== pageTransitionSeq) return;
+        clearNavSettlingState();
+        if (pendingPageTransitionTasks.length) {
+          flushPageTransitionTasks();
+        }
+      };
+      whenLiquidNavSettled(runIfCurrent);
+      deferredTaskFlushTimer = window.setTimeout(runIfCurrent, 420);
+    } else {
+      flushPageTransitionTasks();
+    }
   } else {
     pendingPageTransitionTasks = [];
   }
@@ -3285,7 +3371,7 @@ function activatePage(target: string, navTarget = target) {
     const active = page.id === resolvedTarget;
     page.classList.remove('page-prewarm');
     page.classList.toggle('active', active);
-    if (IS_ANDROID) {
+    if (IS_ANDROID && page.inert !== !active) {
       page.inert = !active;
     }
   });
@@ -3360,7 +3446,7 @@ function activatePage(target: string, navTarget = target) {
     } else {
       rafId = window.requestAnimationFrame(() => {
         if (activeTransitionSeq !== pageTransitionSeq) return;
-        rafId = window.requestAnimationFrame(releasePrep);
+        releasePrep();
       });
     }
     cancelPageSlide = () => {

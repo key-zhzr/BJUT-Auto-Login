@@ -41,6 +41,9 @@ android {
             // campus gateway IPs over HTTP. All such URLs are still hard-coded in Rust.
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isMinifyEnabled = true
+            packaging {
+                jniLibs.useLegacyPackaging = true
+            }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))

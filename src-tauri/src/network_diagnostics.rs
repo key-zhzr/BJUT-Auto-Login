@@ -1,5 +1,7 @@
 //! Compose read-only diagnostics and export a redacted support bundle.
 use super::*;
+use crate::network_probe::DIAGNOSTIC_BUDGET;
+use tokio::time::{timeout_at, Instant as Deadline};
 
 fn emit_step(app: &tauri::AppHandle, run_id: &Option<String>, step: &DiagnosticStep) {
     if let Some(run_id) = run_id {
@@ -15,6 +17,7 @@ pub(super) async fn run_network_diagnostics(
     app: tauri::AppHandle,
     run_id: Option<String>,
 ) -> DiagnosticReport {
+    let deadline = Deadline::now() + DIAGNOSTIC_BUDGET;
     let generation = app
         .state::<Arc<AppState>>()
         .network_change_generation
@@ -33,11 +36,33 @@ pub(super) async fn run_network_diagnostics(
         steps.push(step);
     };
     let identity_started = std::time::Instant::now();
-    let network = get_network_info(app.clone(), Some(true));
+    let prepared = timeout_at(
+        deadline,
+        tokio::task::spawn_blocking({
+            let app = app.clone();
+            move || {
+                let network = get_network_info(app, Some(true));
+                if Deadline::now() >= deadline {
+                    return None;
+                }
+                #[cfg(target_os = "android")]
+                let route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
+                #[cfg(not(target_os = "android"))]
+                let route_guard = ();
+                Some((network, route_guard))
+            }
+        }),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .flatten();
+    let network = prepared
+        .as_ref()
+        .map(|(network, _)| network.clone())
+        .unwrap_or_default();
     #[cfg(target_os = "android")]
-    let wifi_route_guard = AndroidWifiRouteGuard::bind_if_required(&network);
-    #[cfg(target_os = "android")]
-    let wifi_route_failed = wifi_route_guard.failed();
+    let wifi_route_failed = prepared.as_ref().is_some_and(|(_, guard)| guard.failed());
     #[cfg(not(target_os = "android"))]
     let wifi_route_failed = false;
     let transport = network_transport(&network).to_string();
@@ -68,15 +93,23 @@ pub(super) async fn run_network_diagnostics(
         .get("routeIp")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    let mut ip = network
+    let ip = network
         .get("ip")
         .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string();
-    if ip.is_empty() {
-        ip = get_local_ip(app.clone());
-    }
-    let identity_status = if ip.is_empty() {
+    let address = if ip.is_empty() {
+        network["ipv6"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .find(|address| network_inventory::usable_ipv6(address))
+            .unwrap_or_default()
+    } else {
+        &ip
+    };
+    let identity_status = if address.is_empty() {
         "error"
     } else if !wifi_identity_error.is_empty() {
         "warning"
@@ -85,13 +118,15 @@ pub(super) async fn run_network_diagnostics(
     } else {
         "warning"
     };
-    let identity_message = if ip.is_empty() {
-        "未检测到可用网络接口或 IPv4 地址".to_string()
+    let identity_message = if prepared.is_none() {
+        "未在本次 2 秒预算内读到网卡信息".to_string()
+    } else if address.is_empty() {
+        "未检测到可用网络接口或 IP 地址".to_string()
     } else if mobile_data {
-        format!("当前通过移动数据上网，本地 IP {ip}")
+        format!("当前通过移动数据上网，本地 IP {address}")
     } else if wifi_identity_error == "locationPermissionDenied" {
         format!(
-            "已取得接口 {} 的本地 IP {ip}，但 Windows 未授予精确位置权限，无法读取 SSID/BSSID；请在系统“隐私和安全性 → 位置”中允许桌面应用访问位置",
+            "已取得接口 {} 的本地 IP {address}，但 Windows 未授予精确位置权限，无法读取 SSID/BSSID；请在系统“隐私和安全性 → 位置”中允许桌面应用访问位置",
             if interface_name.is_empty() {
                 "未知"
             } else {
@@ -100,7 +135,7 @@ pub(super) async fn run_network_diagnostics(
         )
     } else if wifi_identity_error == "locationPermissionOrServiceUnavailable" {
         format!(
-            "已取得接口 {} 的本地 IP {ip}，但 Android 未返回 SSID/BSSID；请确认附近 Wi-Fi、前台位置权限和系统位置服务均已开启",
+            "已取得接口 {} 的本地 IP {address}，但 Android 未返回 SSID/BSSID；请确认附近 Wi-Fi、前台位置权限和系统位置服务均已开启",
             if interface_name.is_empty() {
                 "未知"
             } else {
@@ -109,7 +144,7 @@ pub(super) async fn run_network_diagnostics(
         )
     } else if transport.eq_ignore_ascii_case("ethernet") {
         format!(
-            "已连接有线接口 {}，本地 IP {ip}（身份来源：{identity_source}）",
+            "已连接有线接口 {}，本地 IP {address}（身份来源：{identity_source}）",
             if interface_name.is_empty() {
                 "未知"
             } else {
@@ -117,10 +152,10 @@ pub(super) async fn run_network_diagnostics(
             }
         )
     } else if ssid.is_empty() || ssid.eq_ignore_ascii_case("<unknown ssid>") {
-        format!("已取得本地 IP {ip}，但未取得无线网络名称（可能为有线网络或权限不足）")
+        format!("已取得本地 IP {address}，但未取得无线网络名称（可能为有线网络或权限不足）")
     } else {
         format!(
-            "已连接 {ssid}，接口 {}，本地 IP {ip}（身份来源：{identity_source}）",
+            "已连接 {ssid}，接口 {}，本地 IP {address}（身份来源：{identity_source}）",
             if interface_name.is_empty() {
                 "未知"
             } else {
@@ -133,29 +168,54 @@ pub(super) async fn run_network_diagnostics(
         "网络接口",
         identity_started,
         identity_status,
+        match identity_status {
+            "success" if mobile_data => "移动数据已连接".to_string(),
+            "success" if !ssid.is_empty() => format!("已连接 {ssid}"),
+            "success" => format!("已连接 {interface_name}"),
+            "warning" => "网卡已连接，部分身份信息缺失".to_string(),
+            _ if prepared.is_none() => "读取超时".to_string(),
+            _ => "未取得可用网络地址".to_string(),
+        },
         identity_message,
     ));
     emit_network_diagnostic_progress(&app, &run_id, 16, "网络接口信息读取完成");
 
     let route_started = std::time::Instant::now();
     emit_network_diagnostic_progress(&app, &run_id, 20, "正在核对校园认证目标路由…");
-    let route_uses_physical_ipv4 = usable_physical_ipv4(route_ip).is_some();
+    let route_is_same =
+        !ip.is_empty() && route_ip == ip && usable_physical_ipv4(route_ip).is_some();
     push_step(make_diagnostic_step(
         "campus_route",
         "校园目标路由",
         route_started,
         if wifi_route_failed {
             "error"
-        } else if route_ip.is_empty() || !route_uses_physical_ipv4 || ip.is_empty() {
-            "warning"
-        } else {
+        } else if route_is_same {
             "success"
+        } else if ip.is_empty() && !address.is_empty() {
+            "skipped"
+        } else {
+            "warning"
+        },
+        if wifi_route_failed {
+            "绑定校园网卡失败"
+        } else if route_is_same {
+            "认证路由与认证网卡一致"
+        } else if ip.is_empty() && !address.is_empty() {
+            "当前使用 IPv6"
+        } else if route_ip.is_empty() {
+            "未取得认证路由"
+        } else {
+            "认证路由需核对"
         },
         if wifi_route_failed {
             "检测到非默认的待认证 Wi-Fi，但 Android 无法将请求绑定到该网络".to_string()
+        } else if ip.is_empty() && !address.is_empty() {
+            "当前网卡仅取得 IPv6，源 IPv4 对照不适用。IPv6 认证可用性请查看认证网关结果。"
+                .to_string()
         } else if route_ip.is_empty() {
             "无法取得访问校园认证目标时系统选择的源 IPv4".to_string()
-        } else if !route_uses_physical_ipv4 {
+        } else if usable_physical_ipv4(route_ip).is_none() {
             format!("校园认证目标当前走了 VPN 虚拟地址（{route_ip}），请在 VPN 中放行校园网段")
         } else if ip.is_empty() {
             format!(
@@ -173,7 +233,7 @@ pub(super) async fn run_network_diagnostics(
 
     let campus_started = std::time::Instant::now();
     emit_network_diagnostic_progress(&app, &run_id, 34, "正在检查校园网环境特征…");
-    let campus_ip = is_campus_local_ip(&ip);
+    let campus_ip = is_campus_local_ip(&ip) || !network_campus_ipv6(&network).is_empty();
     let campus_ssid = is_known_campus_ssid(&ssid);
     let lgn_wired_hint = network
         .get("lgnWiredHint")
@@ -226,85 +286,53 @@ pub(super) async fn run_network_diagnostics(
         "校园网环境",
         campus_started,
         campus_status,
+        match campus_status {
+            "success" => "符合校园网特征",
+            "warning" => "部分校园网特征符合",
+            "skipped" => "移动数据，跳过检查",
+            _ => "未匹配校园网特征",
+        },
         campus_message,
     ));
     emit_network_diagnostic_progress(&app, &run_id, 42, "校园网环境特征检查完成");
 
     let portal_route_context = portal_route_context_from_network(&network).ok().flatten();
     let dns_probe = async {
-        let started = std::time::Instant::now();
-        let public_dns = async {
-            match tokio::time::timeout(
-                NETWORK_PROBE_TIMEOUT,
-                tokio::net::lookup_host(("www.baidu.com", 443)),
-            )
-            .await
-            {
-                Ok(Ok(mut addresses)) => {
-                    if addresses.next().is_some() {
-                        (true, "系统 DNS 解析正常".to_string())
-                    } else {
-                        (false, "系统 DNS 未返回可用地址".to_string())
-                    }
-                }
-                Ok(Err(error)) => (false, format!("系统 DNS 解析失败：{error}")),
-                Err(_) => (false, "系统 DNS 解析超过 3 秒".to_string()),
-            }
-        };
-        let campus_dns = async {
-            if compatibility != VpnCompatibility::Low || wifi_route_failed {
-                return None;
-            }
-            let address = portal_route_context.as_ref()?.physical_ipv4()?;
-            let host = if lgn_wired_hint { LGN_HOST } else { WLGN_HOST };
-            let servers = campus_dns_servers(host, Some(address)).join(" / ");
-            Some(match query_campus_dns_ipv4(host, Some(address)).await {
-                Ok(_) => (true, format!("校园 DNS（{servers}）：{host} 解析成功")),
-                Err(error) => (false, format!("校园 DNS（{servers}）：{error}")),
-            })
-        };
-        let ((mut ok, mut message), campus) =
-            futures_util::future::join(public_dns, campus_dns).await;
-        if let Some((campus_ok, detail)) = campus {
-            ok &= campus_ok;
-            message.push('\n');
-            message.push_str(&detail);
-        }
-        let step = make_diagnostic_step(
-            "dns",
-            "DNS 解析",
-            started,
-            if ok { "success" } else { "warning" },
-            message,
-        );
+        let step = diagnostic_dns::diagnose(&network, campus_ip || campus_ssid, deadline).await;
         emit_step(&app, &run_id, &step);
         step
     };
     let internet_probe = async {
-        let paths = std::sync::Mutex::new(diagnostic_paths::Paths::pending());
-        let connection_probe =
-            connectivity::for_app(&app, &network).wait_with_updates(|snapshot| {
-                let mut paths = paths.lock().unwrap();
-                if let Some(health) = &snapshot.health {
-                    paths.system = health.clone();
-                }
-                if let Some(health) = &snapshot.physical {
-                    paths.direct = health.clone();
-                }
-                emit_step(&app, &run_id, &paths.step());
-            });
-        let direct_probe = async {
-            if !connectivity::requires_physical_probe(&network) {
-                dual_stack::probe_route_with_updates(&network, true, |health| {
-                    let mut paths = paths.lock().unwrap();
-                    paths.direct = health.clone();
+        let started = std::time::Instant::now();
+        let direct_supported = matches!(transport.as_str(), "wifi" | "ethernet");
+        let mut paths = diagnostic_paths::Paths::pending();
+        let mut connection = connectivity::Snapshot::default();
+        let mut timed_out = prepared.is_none();
+        if prepared.is_some() {
+            let observation = connectivity::for_app(&app, &network);
+            let result = timeout_at(
+                deadline,
+                observation.wait_with_updates(|snapshot| {
+                    connection = snapshot.clone();
+                    if let Some(health) = &snapshot.health {
+                        paths.system = health.clone();
+                    }
+                    if let Some(health) = &snapshot.physical {
+                        paths.direct = health.clone();
+                    }
                     emit_step(&app, &run_id, &paths.step());
-                })
-                .await;
+                }),
+            )
+            .await;
+            match result {
+                Ok(snapshot) => connection = snapshot,
+                Err(_) => timed_out = true,
             }
-        };
-        let (connection, _) = futures_util::future::join(connection_probe, direct_probe).await;
-        let paths = paths.into_inner().unwrap();
+        }
+        paths.finish(
+            direct_supported,
+            timed_out.then(|| started.elapsed().as_millis()),
+        );
         let session_step = connection.require_session.then(|| DiagnosticStep {
             id: "authentication_session".into(),
             label: "认证网卡的校园会话".into(),
@@ -314,32 +342,46 @@ pub(super) async fn run_network_diagnostics(
                 "warning"
             }
             .into(),
+            summary: match connection.session_online {
+                Some(true) => "已有校园会话",
+                Some(false) => "尚未登录校园网",
+                None if timed_out && !connection.session_checked => "检查超时",
+                None => "未确认校园会话",
+            }
+            .into(),
             message: match connection.session_online {
                 Some(true) => "所选认证网卡已有校园在线会话",
                 Some(false) => "所选认证网卡尚未登录校园网（当前外网可能经过 VPN 或其他网卡）",
+                None if timed_out && !connection.session_checked => {
+                    "在 2 秒总预算内未收到认证网关的会话信息"
+                }
                 None => "未能确认所选网卡的校园网登录状态，请检查认证网关",
             }
             .into(),
             duration_ms: connection.session_duration_ms,
+            connectivity: None,
         });
         let mut internet_step = paths.step();
-        let mut online = paths.system.online() || paths.direct.online();
-        if !online && !connection.cancelled {
-            online = connection.internet.iter().any(|result| result.success);
+        let system_online = connection.online();
+        let online = system_online || (!connection.cancelled && paths.direct.online());
+        if !paths.system.online() && system_online {
             for result in &connection.internet {
-                internet_step
-                    .message
-                    .push_str(&format!("\n补充目标 {}：{}", result.label, result.detail));
+                internet_step.message.push_str(&format!(
+                    "\n系统路由补充目标 {}：{}",
+                    result.label, result.detail
+                ));
             }
-            if online {
-                internet_step.status = "success".into();
-            }
+            internet_step.status = "success".into();
+            internet_step.summary = "补充目标验证通过".into();
         }
-        // Preserve the exact system result and ordering emitted to the console.
-        let dual_stack = connection
-            .health
-            .clone()
-            .unwrap_or_else(|| dual_stack::unavailable("检测已取消，请重试"));
+        let dual_stack = if connection
+            .preferred_health()
+            .is_some_and(|health| health.scope == "physical")
+        {
+            paths.direct.clone()
+        } else {
+            paths.system
+        };
         if let Some(step) = &session_step {
             emit_step(&app, &run_id, step);
         }
@@ -349,69 +391,46 @@ pub(super) async fn run_network_diagnostics(
             dual_stack,
             session_step,
             connection.cancelled && !wifi_route_failed,
-            connection.require_physical && !connection.access_online(),
+            system_online && direct_supported && !paths.direct.online_for(connection.auth_stack),
         )
     };
     let gateway_probe = async {
         let started = std::time::Instant::now();
-        let result = if wifi_route_failed || portal_route_context.is_none() {
-            (Vec::new(), None)
-        } else {
+        let budget = deadline
+            .saturating_duration_since(Deadline::now())
+            .saturating_sub(std::time::Duration::from_millis(10));
+        if wifi_route_failed || portal_route_context.is_none() || budget.is_zero() {
+            return (Vec::new(), None, 0);
+        }
+        let (gateways, ipv6) = timeout_at(
+            deadline,
             futures_util::future::join(
                 diagnose_login_gateways(
                     compatibility,
                     &ssid,
-                    network_transport(&network),
+                    &transport,
                     portal_route_context.as_ref(),
+                    budget,
                 ),
                 async {
                     if lgn_wired_hint {
                         Some(
-                            diagnose_lgn_ipv6_rust(compatibility, portal_route_context.as_ref())
-                                .await,
+                            diagnose_lgn_ipv6_rust(
+                                compatibility,
+                                portal_route_context.as_ref(),
+                                budget,
+                            )
+                            .await,
                         )
                     } else {
                         None
                     }
                 },
-            )
-            .await
-        };
-        let details = result
-            .0
-            .iter()
-            .map(|gateway| {
-                format!(
-                    "{}：{}",
-                    gateway.login_type.display_name(),
-                    if gateway.login_ready {
-                        "可用"
-                    } else if gateway.portal_detected {
-                        "已发现"
-                    } else {
-                        "未探测到"
-                    }
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        emit_step(
-            &app,
-            &run_id,
-            &DiagnosticStep {
-                id: "portal".into(),
-                label: "认证网关".into(),
-                status: if result.0.iter().any(|gateway| gateway.login_ready) {
-                    "success"
-                } else {
-                    "warning"
-                }
-                .into(),
-                message: details,
-                duration_ms: started.elapsed().as_millis(),
-            },
-        );
-        (result, started.elapsed().as_millis())
+            ),
+        )
+        .await
+        .unwrap_or_default();
+        (gateways, ipv6, started.elapsed().as_millis())
     };
     let (
         dns_step,
@@ -423,15 +442,21 @@ pub(super) async fn run_network_diagnostics(
             probe_cancelled,
             physical_unconfirmed,
         ),
-        ((gateway_results, lgn_ipv6_diagnostic), portal_duration_ms),
-    ) = run_diagnostic_probes(dns_probe, internet_probe, gateway_probe, |percent| {
-        emit_network_diagnostic_progress(
-            &app,
-            &run_id,
-            percent,
-            "正在并发检查 DNS、互联网和认证网关…",
-        )
-    })
+        (gateway_results, lgn_ipv6_diagnostic, portal_duration_ms),
+    ) = run_diagnostic_probes(
+        deadline,
+        dns_probe,
+        internet_probe,
+        gateway_probe,
+        |percent| {
+            emit_network_diagnostic_progress(
+                &app,
+                &run_id,
+                percent,
+                "正在并发检查 DNS、互联网和认证网关…",
+            )
+        },
+    )
     .await;
     push_step(dns_step);
     push_step(internet_step);
@@ -462,7 +487,7 @@ pub(super) async fn run_network_diagnostics(
                 } else if result.portal_detected {
                     "已发现认证页，暂无法直接登录"
                 } else if result.timed_out {
-                    "等待响应超时（3 秒）"
+                    "在本次 2 秒诊断预算内未完成"
                 } else {
                     "未探测到"
                 }
@@ -490,8 +515,15 @@ pub(super) async fn run_network_diagnostics(
                         "warning"
                     }
                     .to_string(),
+                    summary: if result.is_ok() && !configuration_issue {
+                        "IPv6 配置已验证"
+                    } else {
+                        "IPv6 配置需核对"
+                    }
+                    .into(),
                     message: configuration.diagnostic(result.is_ok()),
                     duration_ms: 0,
+                    connectivity: None,
                 });
             }
         }
@@ -519,19 +551,22 @@ pub(super) async fn run_network_diagnostics(
             Err(error) => gateway_details.push_str(&format!("不可用（{error}）")),
         }
     }
-    let (portal_status, portal_message) = if wifi_route_failed {
+    let (portal_status, portal_summary, portal_message) = if wifi_route_failed {
         (
             "error",
+            "绑定网卡失败".to_string(),
             "无法绑定非默认校园 Wi-Fi，已停止认证网关探测以避免误用 VPN/移动数据".to_string(),
         )
     } else if portal_route_context.is_none() {
         (
-            "error",
-            "未取得同一物理接口的名称与 IPv4，已阻止不绑定接口的认证网关探测。\n请检查 Windows 网卡驱动与接口权限。".to_string(),
+            "skipped",
+            "缺少可用的认证网卡".to_string(),
+            "未取得同一物理网卡的接口名和所需地址，未发起认证网关探测。".to_string(),
         )
     } else if login_type != LoginType::Unknown {
         (
             if online { "success" } else { "warning" },
+            format!("{} 认证网关可用", login_type.display_name()),
             format!(
                 "判定校园网类型为 {}。\n{}",
                 login_type.display_name(),
@@ -541,16 +576,19 @@ pub(super) async fn run_network_diagnostics(
     } else if type1_requires_maximum {
         (
             "warning",
+            "已发现宿舍网关，需要核对连接方式".to_string(),
             format!("已发现 bjut-sushe 认证网关，但当前 HTTPS 兼容模式不能向其发送账号密码。\n确认网络可信后可临时启用最高兼容（HTTP + IP）。\n{gateway_details}"),
         )
-    } else if online {
+    } else if gateway_results.is_empty() || gateway_results.iter().any(|result| result.timed_out) {
         (
-            "success",
-            format!("互联网已连通，校园认证网关检测完成。\n{gateway_details}"),
+            "warning",
+            "网关检查未完成".to_string(),
+            format!("部分认证网关在 2 秒总预算内未返回可验证的响应。\n{gateway_details}"),
         )
     } else {
         (
-            "error",
+            if online { "skipped" } else { "warning" },
+            "未发现可用的校园认证网关".to_string(),
             format!(
                 "未找到可访问的校园网认证网关，可能是完全离线或处于非校园网络。\n{gateway_details}"
             ),
@@ -560,19 +598,19 @@ pub(super) async fn run_network_diagnostics(
         id: "portal".to_string(),
         label: "认证网关".to_string(),
         status: portal_status.to_string(),
+        summary: portal_summary,
         message: portal_message,
         duration_ms: portal_duration_ms,
+        connectivity: None,
     });
     emit_network_diagnostic_progress(&app, &run_id, 100, "网络链路诊断完成");
 
-    let latest = get_network_info(app.clone(), Some(false));
     let stale = probe_cancelled
         || generation
             != app
                 .state::<Arc<AppState>>()
                 .network_change_generation
-                .load(Ordering::SeqCst)
-        || !connectivity::same_network(&latest, &network);
+                .load(Ordering::SeqCst);
     if stale {
         dual_stack.invalidate("网络或认证状态已改变，此报告仅保留原检测明细，请重新诊断");
     }
@@ -593,7 +631,9 @@ pub(super) async fn run_network_diagnostics(
         }
     } else if session_unconfirmed && online {
         ("partial", "外网已通，但所选网卡的校园网登录状态待确认")
-    } else if online && (ip.is_empty() || transport == "none") {
+    } else if prepared.is_none() {
+        ("partial", "未在诊断预算内取得网络接口信息")
+    } else if online && (address.is_empty() || transport == "none") {
         ("partial", "外网已通，但认证网卡尚未获取到 IP 地址")
     } else if online && !dual_stack.online() {
         ("partial", "外网已通，IPv4 / IPv6 分项连接测试尚未完成")
@@ -616,7 +656,7 @@ pub(super) async fn run_network_diagnostics(
             "auth_required",
             "已连接宿舍校园网；该网关仅支持 HTTP，请切换至“最高兼容”后再登录",
         )
-    } else if ip.is_empty() || transport == "none" {
+    } else if address.is_empty() || transport == "none" {
         (
             "no_network",
             "未获取到网络地址，请检查 Wi-Fi、网线或系统权限",
@@ -635,7 +675,7 @@ pub(super) async fn run_network_diagnostics(
         overall: overall.to_string(),
         summary: summary.to_string(),
         ssid,
-        ip,
+        ip: address.to_string(),
         steps,
         adapter_restart,
         dual_stack,
@@ -717,19 +757,24 @@ pub(super) async fn create_diagnostic_bundle(
             account
         })
         .collect();
-    report.summary = redact_diagnostic_text(report.summary, &public_accounts, ip, bssid);
-    report.ip = if report.ip.is_empty() {
+    let detected_ip = std::mem::take(&mut report.ip);
+    let redact = |text: String| {
+        let text = redact_diagnostic_text(text, &public_accounts, ip, bssid);
+        if detected_ip.is_empty() {
+            text
+        } else {
+            text.replace(&detected_ip, "[LOCAL-IP]")
+        }
+    };
+    report.summary = redact(report.summary);
+    report.ip = if detected_ip.is_empty() {
         String::new()
     } else {
         "[LOCAL-IP]".to_string()
     };
     for step in &mut report.steps {
-        step.message = redact_diagnostic_text(
-            std::mem::take(&mut step.message),
-            &public_accounts,
-            ip,
-            bssid,
-        );
+        step.summary = redact(std::mem::take(&mut step.summary));
+        step.message = redact(std::mem::take(&mut step.message));
     }
     report.dual_stack.redact_addresses();
     if let Some(target) = &mut report.adapter_restart {

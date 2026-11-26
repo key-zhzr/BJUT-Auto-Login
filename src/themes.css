@@ -1145,7 +1145,7 @@ html:root[data-theme] {
 
 @media (min-width: 769px) {
   :root[data-theme="winui"] body.is-desktop .app-container {
-    padding-top: 32px;
+    padding-top: 0;
   }
 }
 

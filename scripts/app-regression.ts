@@ -177,13 +177,27 @@ mockIPC(async (cmd, payload: any = {}) => {
   }
   if (cmd === 'run_network_diagnostics') {
     diagnosticsCount++;
-    await emit('network-diagnostic-step', {runId:payload.runId,step:{id:'dns',label:'DNS 解析',status:'success',message:'模拟 DNS 已完成',durationMs:3}});
+    const dns = {
+      id: 'dns', label: '系统 DNS', status: 'warning', summary: '公网可解析 · 校内域名可解析',
+      message: 'IPv6 目标（AAAA，系统 DNS）：解析失败\nIPv6 目标（AAAA，公共 DNS 回退）：解析成功\njfself.bjut.edu.cn：解析成功\n172.21.0.21 · 已知校园 DNS',
+      durationMs: 14,
+    };
+    const internet = {
+      id: 'internet', label: '互联网连通性', status: 'success',
+      message: '系统路由 IPv4 通过\n系统路由 IPv6 通过\n网卡直连 IPv6 未完成连通性校验',
+      durationMs: 27,
+      connectivity: {
+        system: [{status:'reachable',durationMs:15}, {status:'reachable',durationMs:27}],
+        direct: [{status:'reachable',durationMs:20}, {status:'dns_error',durationMs:0}],
+      },
+    };
+    await emit('network-diagnostic-step', {runId:payload.runId,step:dns});
     await emit('network-diagnostic-step', {runId:'old-run',step:{id:'dns',label:'DNS 解析',status:'error',message:'过期结果',durationMs:1}});
     await new Promise(resolve => setTimeout(resolve, 400));
     if (diagnosticsCount === 2) throw new Error('模拟诊断失败');
     await emit('network-diagnostic-progress', {runId:payload.runId,percent:75,label:'正在确认认证网关'});
     await new Promise(resolve => setTimeout(resolve, 400));
-    return {overall:'healthy',summary:'模拟诊断完成',createdAt:'2026-09-19',ssid:'',ip:'172.26.1.2',steps:[]};
+    return {overall:'healthy',summary:'模拟诊断完成',createdAt:'2026-09-19',ssid:'',ip:'172.26.1.2',steps:[dns,internet]};
   }
   if (cmd === 'get_app_config') return cfg;
   if (cmd === 'get_network_time') return {unixMs: Date.UTC(2026,8,21,0,0),source:'模拟 NTP'};
@@ -350,7 +364,7 @@ button.addEventListener('click',async()=>{
     const diagnosticPanel = document.getElementById('diagnostic-progress')!;
     click('#btn-run-diagnostics');
     if (motion) assert(diagnosticPanel.getAnimations().length > 0, '诊断进度缺少出现动画');
-    await wait(()=>document.querySelector('[data-step-id="dns"]')?.textContent?.includes('模拟 DNS 已完成') === true);
+    await wait(()=>document.querySelector('[data-step-id="dns"]')?.textContent?.includes('公网可解析') === true);
     assert((document.getElementById('btn-run-diagnostics') as HTMLButtonElement).disabled, '没有在诊断完成前显示模块结果');
     assert(!document.getElementById('diagnostic-steps')!.textContent?.includes('过期结果'), '旧诊断结果覆盖当前结果');
     assert(!(document.getElementById('account-health-panel') as HTMLDetailsElement).open, '正常账号状态未折叠');

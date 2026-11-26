@@ -26,7 +26,7 @@ const DEFORM_LIMIT = 1;
 const LIFT_OPEN_OMEGA = 19;
 const LIFT_OPEN_ZETA = 0.68;
 const LIFT_CLOSE_OMEGA = 15;
-const LIFT_CLOSE_ZETA = 0.92;
+const LIFT_CLOSE_ZETA = 0.90;
 const BAR_OPEN_OMEGA = 20;
 const BAR_OPEN_ZETA = 0.62;
 const BAR_CLOSE_OMEGA = 20;
@@ -69,6 +69,7 @@ interface PillState {
   lastKey: string;
   pressed: boolean;
   dragging: boolean;
+  fastFlight: boolean;
   glideUntil: number;
   cancelPress?: (ignoreClick?: boolean, preserveGlide?: boolean) => void;
   frame: number;
@@ -80,6 +81,7 @@ interface PillState {
   velocity: number;
   lift: number;
   liftVel: number;
+  liftOpening: boolean;
   barScale: number;
   barScaleVel: number;
   overscrollX: number;
@@ -102,6 +104,7 @@ interface PillState {
   lastGlowOpacity: string;
   lastBarTransform: string;
   lastBarCutout: string;
+  lastRecessVisibility: string;
   lastRecessClip: string;
   lastRecessTransform: string;
   lastAccentClip: string;
@@ -159,7 +162,30 @@ function stepSpring(
 }
 
 const controllers: PillState[] = [];
+const settledCallbacks: Array<() => void> = [];
 let initialized = false;
+
+function isAndroidHost() {
+  return document.body.classList.contains('is-android');
+}
+
+export function isLiquidNavAnimating(): boolean {
+  return controllers.some(state => state.frame !== 0 || state.lift > 0.003);
+}
+
+function flushSettledCallbacks() {
+  if (settledCallbacks.length === 0 || isLiquidNavAnimating()) return;
+  const callbacks = settledCallbacks.splice(0, settledCallbacks.length);
+  for (const cb of callbacks) cb();
+}
+
+export function whenLiquidNavSettled(callback: () => void): void {
+  if (!isLiquidNavAnimating()) {
+    callback();
+    return;
+  }
+  settledCallbacks.push(callback);
+}
 
 function isHorizontalMobileDock() {
   return mobileWidth.matches && !document.body.classList.contains('is-desktop');
@@ -378,6 +404,7 @@ function clearTabVisuals(state: PillState) {
     entry.lastTransform = setCachedStyle(entry.element, 'transform', entry.lastTransform, '');
     entry.lastMirrorTransform = setCachedStyle(entry.mirror, 'transform', entry.lastMirrorTransform, '');
   }
+  state.lastRecessVisibility = setCachedStyle(state.barRecess, 'visibility', state.lastRecessVisibility, '');
   state.lastRecessClip = setCachedStyle(state.barRecess, 'clipPath', state.lastRecessClip, '');
   state.lastRecessTransform = setCachedStyle(state.barRecessSurface, 'transform', state.lastRecessTransform, '');
   state.lastBarCutout = setCachedStyle(state.barSurface, 'clipPath', state.lastBarCutout, '');
@@ -417,6 +444,7 @@ function cancelWarmup(state: PillState) {
   state.droplet.style.transform = '';
   state.pill.style.opacity = '';
   state.lastBarCutout = '';
+  state.lastRecessVisibility = '';
   state.lastRecessClip = '';
   state.lastRecessTransform = '';
   state.lastAccentClip = '';
@@ -769,6 +797,7 @@ function paintDockSurface(
 
 function paintHorizontalPill(state: PillState) {
   const {host, barSurface, pill, accentLayer, droplet, barRecess, barRecessSurface, x, width, top, height} = state;
+  const isAndroid = isAndroidHost();
   const lift = Math.max(0, state.lift);
   const pullWeight = state.pressed ? lift : Math.min(1, lift + Math.hypot(state.pullX, state.pullY) * 0.08);
   const pullX = state.pullX * pullWeight;
@@ -787,11 +816,6 @@ function paintHorizontalPill(state: PillState) {
     state.lastPillH = height;
     pill.style.height = `${height}px`;
   }
-  const pillAlpha = lift > 0 ? Math.max(0, 1 - lift * 2.2) : 1;
-  const nextPillVisibility = pillAlpha <= 0.001 ? 'hidden' : '';
-  state.lastPillVisibility = setCachedStyle(pill, 'visibility', state.lastPillVisibility, nextPillVisibility);
-  const nextPillOpacity = lift > 0 ? pillAlpha.toFixed(3) : '';
-  state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, nextPillOpacity);
   pill.style.transform = `translate3d(${(x + barX + pillRadX).toFixed(2)}px, ${(top + barY + pillRadY).toFixed(2)}px, 0) scale(${pressScale.toFixed(4)})`;
 
   const itemTransforms = state.accentTabs.map(entry => {
@@ -807,9 +831,12 @@ function paintHorizontalPill(state: PillState) {
   });
 
   if (!lift) {
+    state.lastPillVisibility = setCachedStyle(pill, 'visibility', state.lastPillVisibility, '');
+    state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, '');
     state.lastDropletTransform = setCachedStyle(droplet, 'transform', state.lastDropletTransform, '');
     state.lastDropletOpacity = setCachedStyle(droplet, 'opacity', state.lastDropletOpacity, '');
     state.lastAccentClip = setCachedStyle(accentLayer, 'clipPath', state.lastAccentClip, '');
+    state.lastRecessVisibility = setCachedStyle(barRecess, 'visibility', state.lastRecessVisibility, '');
     state.lastRecessClip = setCachedStyle(barRecess, 'clipPath', state.lastRecessClip, '');
     state.lastRecessTransform = setCachedStyle(barRecessSurface, 'transform', state.lastRecessTransform, '');
     state.lastBarCutout = setCachedStyle(barSurface, 'clipPath', state.lastBarCutout, '');
@@ -846,9 +873,21 @@ function paintHorizontalPill(state: PillState) {
   const lensHeight = Math.max(1, Math.min(lensHeightRaw, 2 * (state.bottomEdge - middleY)));
   const left = middle - state.lensWidth / 2;
   const y = middleY - state.lensHeight / 2;
+
+  // Keep droplet 100% solid whenever its width still exceeds the resting pill by >= 5px
+  // (covering both slow-frame elastic stretch on lift-off and tail shrink), and only
+  // crossfade smoothly across the final resting envelope.
+  const handoffSpan = state.liftOpening ? 0.05 : 0.14;
+  const handoffRaw = Math.min(1, Math.max(lift / handoffSpan, Math.max(0, lensWidth - width) / 5));
+  const handoff = handoffRaw * handoffRaw * (3 - 2 * handoffRaw);
+  const pillAlpha = 1 - handoff;
+  const nextPillVisibility = pillAlpha <= 0.001 ? 'hidden' : '';
+  state.lastPillVisibility = setCachedStyle(pill, 'visibility', state.lastPillVisibility, nextPillVisibility);
+  state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, pillAlpha.toFixed(3));
+
   const nextDropletTransform = `translate3d(${left.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${(lensWidth / state.lensWidth).toFixed(4)}, ${(lensHeight / state.lensHeight).toFixed(4)})`;
   state.lastDropletTransform = setCachedStyle(droplet, 'transform', state.lastDropletTransform, nextDropletTransform);
-  const nextDropletOpacity = Math.max(0, Math.min(1, lift * 2.4)).toFixed(3);
+  const nextDropletOpacity = handoff.toFixed(3);
   state.lastDropletOpacity = setCachedStyle(droplet, 'opacity', state.lastDropletOpacity, nextDropletOpacity);
 
   const clipTop = middleY - lensHeight / 2;
@@ -859,49 +898,60 @@ function paintHorizontalPill(state: PillState) {
   const nextAccentClip = `inset(${clipTop.toFixed(2)}px ${clipRight.toFixed(2)}px ${clipBottom.toFixed(2)}px ${clipLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
   state.lastAccentClip = setCachedStyle(accentLayer, 'clipPath', state.lastAccentClip, nextAccentClip);
 
+  // During Android ballistic tap flight, skip per-frame Skia SVG path(evenodd)
+  // cutouts on the backdrop bar and intermediate tabs so the dock stays at 120Hz.
+  const androidFastFlight = isAndroid
+    && !state.dragging
+    && (state.fastFlight || Math.abs(state.velocity) > 90 || Math.abs(state.targetX - state.x) > 14);
+
   if (state.barBox) {
-    const barW = state.barBox.width;
-    const barH = state.barBox.height;
-    const hLeft = clipLeft + state.containerLeftInHost;
-    const hTop = clipTop + state.containerTopInHost;
-    const hRight = barW - (hLeft + lensWidth);
-    const hBottom = barH - (hTop + lensHeight);
-    const nextRecessClip = `inset(${hTop.toFixed(2)}px ${hRight.toFixed(2)}px ${hBottom.toFixed(2)}px ${hLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
-    state.lastRecessClip = setCachedStyle(barRecess, 'clipPath', state.lastRecessClip, nextRecessClip);
+    if (androidFastFlight) {
+      state.lastRecessVisibility = setCachedStyle(barRecess, 'visibility', state.lastRecessVisibility, 'hidden');
+      state.lastRecessClip = setCachedStyle(barRecess, 'clipPath', state.lastRecessClip, '');
+      state.lastBarCutout = setCachedStyle(barSurface, 'clipPath', state.lastBarCutout, '');
+    } else {
+      state.lastRecessVisibility = setCachedStyle(barRecess, 'visibility', state.lastRecessVisibility, '');
+      const barW = state.barBox.width;
+      const barH = state.barBox.height;
+      const hLeft = clipLeft + state.containerLeftInHost;
+      const hTop = clipTop + state.containerTopInHost;
+      const hRight = barW - (hLeft + lensWidth);
+      const hBottom = barH - (hTop + lensHeight);
+      const nextRecessClip = `inset(${hTop.toFixed(2)}px ${hRight.toFixed(2)}px ${hBottom.toFixed(2)}px ${hLeft.toFixed(2)}px round ${clipRadius.toFixed(2)}px)`;
+      state.lastRecessClip = setCachedStyle(barRecess, 'clipPath', state.lastRecessClip, nextRecessClip);
 
-    const recessFactor = visualLift * (1 - Math.max(0, deform));
-    const recessScaleY = 1 - RECESS_SHRINK_Y * recessFactor;
-    const recessScaleX = 1 - (barH / Math.max(1, barW)) * RECESS_SHRINK_Y * recessFactor;
-    const nextRecessTransform = `translate3d(${barX.toFixed(2)}px, ${barY.toFixed(2)}px, 0) scale(${(barScaleX * recessScaleX).toFixed(4)}, ${(barScaleY * recessScaleY).toFixed(4)})`;
-    state.lastRecessTransform = setCachedStyle(barRecessSurface, 'transform', state.lastRecessTransform, nextRecessTransform);
+      const recessFactor = visualLift * (1 - Math.max(0, deform));
+      const recessScaleY = 1 - RECESS_SHRINK_Y * recessFactor;
+      const recessScaleX = 1 - (barH / Math.max(1, barW)) * RECESS_SHRINK_Y * recessFactor;
+      const nextRecessTransform = `translate3d(${barX.toFixed(2)}px, ${barY.toFixed(2)}px, 0) scale(${(barScaleX * recessScaleX).toFixed(4)}, ${(barScaleY * recessScaleY).toFixed(4)})`;
+      state.lastRecessTransform = setCachedStyle(barRecessSurface, 'transform', state.lastRecessTransform, nextRecessTransform);
 
-    const hcX = hLeft + lensWidth / 2;
-    const hcY = hTop + lensHeight / 2;
-    const localCx = barW / 2 + (hcX - barX - barW / 2) / barScaleX;
-    const localCy = barH / 2 + (hcY - barY - barH / 2) / barScaleY;
-    const localW = lensWidth / barScaleX;
-    const localH = lensHeight / barScaleY;
-    const isAndroidSliding = document.body.classList.contains('is-android')
-      && (Math.abs(state.velocity) > 220 || document.getElementById('main-content')?.classList.contains('is-page-sliding'));
-    const snapPx = isAndroidSliding ? 1.5 : Math.abs(state.velocity) > 300 ? 1 : 0.5;
-    const snap = (value: number) => Math.round(value / snapPx) * snapPx;
-    const holeW = snap(localW);
-    const holeH = snap(localH);
-    const holeX = snap(localCx - holeW / 2);
-    const holeY = snap(localCy - holeH / 2);
-    const nextCutout = buildStadiumHolePath(
-      -32,
-      -32,
-      barW + 32,
-      barH + 32,
-      holeX,
-      holeY,
-      holeW,
-      holeH,
-      snap(clipRadius / barScaleX),
-      snap(clipRadius / barScaleY),
-    );
-    state.lastBarCutout = setCachedStyle(barSurface, 'clipPath', state.lastBarCutout, nextCutout);
+      const hcX = hLeft + lensWidth / 2;
+      const hcY = hTop + lensHeight / 2;
+      const localCx = barW / 2 + (hcX - barX - barW / 2) / barScaleX;
+      const localCy = barH / 2 + (hcY - barY - barH / 2) / barScaleY;
+      const localW = lensWidth / barScaleX;
+      const localH = lensHeight / barScaleY;
+      const snapPx = isAndroid && Math.abs(state.velocity) > 180 ? 2 : Math.abs(state.velocity) > 300 ? 1 : 0.5;
+      const snap = (value: number) => Math.round(value / snapPx) * snapPx;
+      const holeW = snap(localW);
+      const holeH = snap(localH);
+      const holeX = snap(localCx - holeW / 2);
+      const holeY = snap(localCy - holeH / 2);
+      const nextCutout = buildStadiumHolePath(
+        -32,
+        -32,
+        barW + 32,
+        barH + 32,
+        holeX,
+        holeY,
+        holeW,
+        holeH,
+        snap(clipRadius / barScaleX),
+        snap(clipRadius / barScaleY),
+      );
+      state.lastBarCutout = setCachedStyle(barSurface, 'clipPath', state.lastBarCutout, nextCutout);
+    }
   }
 
   const itemMag = 1 + ITEM_MAG_GAIN * visualLift;
@@ -940,16 +990,19 @@ function paintHorizontalPill(state: PillState) {
       return;
     }
 
+    if (androidFastFlight) {
+      entry.lastOpacity = setCachedStyle(entry.element, 'opacity', entry.lastOpacity, '');
+      entry.lastClipPath = setCachedStyle(entry.element, 'clipPath', entry.lastClipPath, '');
+      return;
+    }
+
     entry.lastOpacity = setCachedStyle(entry.element, 'opacity', entry.lastOpacity, '');
     const localCx = entry.width / 2 + (middle - eCx) / pressScale;
     const localCy = entry.height / 2 + (middleY - eCy) / pressScale;
     const localW = lensWidth / pressScale;
     const localH = lensHeight / pressScale;
     const localR = clipRadius / pressScale;
-    const snapTab = (document.body.classList.contains('is-android')
-      && (Math.abs(state.velocity) > 220 || document.getElementById('main-content')?.classList.contains('is-page-sliding')))
-      ? 1.5
-      : Math.abs(state.velocity) > 300 ? 1 : 0.5;
+    const snapTab = isAndroid && Math.abs(state.velocity) > 180 ? 2 : Math.abs(state.velocity) > 300 ? 1 : 0.5;
     const snapT = (value: number) => Math.round(value / snapTab) * snapTab;
     const tabHoleW = snapT(localW);
     const tabHoleH = snapT(localH);
@@ -975,6 +1028,7 @@ function stopHorizontalMotion(state: PillState) {
   cancelAnimationFrame(state.frame);
   state.frame = 0;
   state.lastFrame = 0;
+  state.fastFlight = false;
 }
 
 function snapHorizontalPill(state: PillState) {
@@ -985,10 +1039,12 @@ function snapHorizontalPill(state: PillState) {
   state.velocity = 0;
   state.lift = 0;
   state.liftVel = 0;
+  state.liftOpening = false;
   state.barScale = 0;
   state.barScaleVel = 0;
   state.overscrollX = 0;
   state.glideUntil = 0;
+  state.fastFlight = false;
   state.pullX = 0;
   state.pullY = 0;
   state.pullVelX = 0;
@@ -997,6 +1053,7 @@ function snapHorizontalPill(state: PillState) {
   state.deformVel = 0;
   clearTabVisuals(state);
   paintHorizontalPill(state);
+  flushSettledCallbacks();
 }
 
 function moveHorizontalPill(state: PillState) {
@@ -1007,7 +1064,7 @@ function moveHorizontalPill(state: PillState) {
   if (state.frame) return;
   const step = (time: number) => {
     const dt = state.lastFrame ? Math.min((time - state.lastFrame) / 1000, 0.05) : 1 / 60;
-    state.lastFrame = time;
+    state.lastFrame = nowOrTime(time);
 
     // A time-based, damped spring keeps the same feel at 60 Hz and 120 Hz.
     const rate = state.dragging ? 38 : 24;
@@ -1017,12 +1074,13 @@ function moveHorizontalPill(state: PillState) {
     state.x = state.targetX + (delta + pull * dt) * decay;
     state.velocity = (state.velocity - rate * pull * dt) * decay;
     state.width += (state.targetWidth - state.width) * (1 - Math.exp(-30 * dt));
-    const glideLift = state.glideUntil > time && Math.abs(state.targetX - state.x) > 4;
+    const glideLift = state.glideUntil > time && Math.abs(state.targetX - state.x) > 3;
     if (!glideLift && state.glideUntil && time >= state.glideUntil) {
       state.glideUntil = 0;
     }
 
     const liftTarget = !isReducedTransparency && (state.pressed || glideLift) ? 1 : 0;
+    state.liftOpening = liftTarget > state.lift;
     [state.lift, state.liftVel] = stepSpring(
       state.lift,
       state.liftVel,
@@ -1031,7 +1089,7 @@ function moveHorizontalPill(state: PillState) {
       liftTarget > state.lift ? LIFT_OPEN_ZETA : LIFT_CLOSE_ZETA,
       dt,
     );
-    if (liftTarget === 0 && state.lift < 0.008 && Math.abs(state.liftVel) < 0.12) {
+    if (liftTarget === 0 && state.lift < 0.003 && Math.abs(state.liftVel) < 0.04) {
       state.lift = 0;
       state.liftVel = 0;
     }
@@ -1068,7 +1126,7 @@ function moveHorizontalPill(state: PillState) {
       dt,
     );
 
-    if (Math.abs(state.targetX - state.x) < 0.35
+    const finished = Math.abs(state.targetX - state.x) < 0.35
       && Math.abs(state.velocity) < 5
       && Math.abs(state.targetWidth - state.width) < 0.25
       && Math.abs(state.targetPullX - state.pullX) < 0.12
@@ -1079,8 +1137,10 @@ function moveHorizontalPill(state: PillState) {
       && Math.abs(state.deformVel) < 0.02
       && Math.abs(barScaleTarget - state.barScale) < 0.004
       && Math.abs(state.barScaleVel) < 0.04
-      && Math.abs(liftTarget - state.lift) < 0.008
-      && Math.abs(state.liftVel) < 0.08) {
+      && Math.abs(liftTarget - state.lift) < 0.003
+      && Math.abs(state.liftVel) < 0.04;
+
+    if (finished) {
       state.frame = 0;
       state.lastFrame = 0;
       state.x = state.targetX;
@@ -1092,6 +1152,7 @@ function moveHorizontalPill(state: PillState) {
       state.barScaleVel = 0;
       if (!state.dragging) state.overscrollX = 0;
       state.glideUntil = 0;
+      state.fastFlight = false;
       state.pullX = state.targetPullX;
       state.pullY = state.targetPullY;
       state.pullVelX = 0;
@@ -1102,8 +1163,15 @@ function moveHorizontalPill(state: PillState) {
       state.frame = requestAnimationFrame(step);
     }
     paintHorizontalPill(state);
+    if (finished) {
+      flushSettledCallbacks();
+    }
   };
   state.frame = requestAnimationFrame(step);
+}
+
+function nowOrTime(time: number): number {
+  return time;
 }
 
 function positionPill(state: PillState, animate: boolean) {
@@ -1229,18 +1297,16 @@ function positionPill(state: PillState, animate: boolean) {
   }
 
   pill.classList.toggle('is-parent-pill', resolved.isParentPill);
-  state.lastPillVisibility = setCachedStyle(pill, 'visibility', state.lastPillVisibility, '');
-  state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, '');
   host.classList.add('has-liquid-pill');
 
   if (horizontal) {
     const dockResized = Math.abs(bounds.width - state.dockWidth) > 2
       || Math.abs(bounds.height - state.dockHeight) > 2;
     const sizeChanged = dockResized
-      || Math.abs(bounds.width - state.dockWidth) > 0.25
-      || Math.abs(bounds.height - state.dockHeight) > 0.25
-      || Math.abs(target.width - state.targetWidth) > 0.25
-      || Math.abs(target.height - state.height) > 0.25;
+      || Math.abs(bounds.width - state.dockWidth) > 1.5
+      || Math.abs(bounds.height - state.dockHeight) > 1.5
+      || Math.abs(target.width - state.targetWidth) > 1.5
+      || Math.abs(target.height - state.height) > 1.5;
     if (state.pressed && !dockResized && !changed) return;
     if (state.pressed) state.cancelPress?.();
 
@@ -1294,7 +1360,7 @@ function positionPill(state: PillState, animate: boolean) {
       || Math.abs(state.barScale) > 0.002
       || Math.hypot(state.pullX, state.pullY) > 0.02
       || Math.abs(state.x - left) > 0.35;
-    if (wasHorizontal && !sizeChanged && (state.frame || (animate && needsSettle))) {
+    if (wasHorizontal && !dockResized && (state.frame || state.lift > 0.002 || (animate && needsSettle))) {
       moveHorizontalPill(state);
     } else {
       snapHorizontalPill(state);
@@ -1329,6 +1395,8 @@ function positionPill(state: PillState, animate: boolean) {
   }
 
   // Preserve the sliding desktop and tablet sidebar indicator.
+  state.lastPillVisibility = setCachedStyle(pill, 'visibility', state.lastPillVisibility, '');
+  state.lastPillOpacity = setCachedStyle(pill, 'opacity', state.lastPillOpacity, '');
   const transition = animate && state.lastKey.startsWith('v:') && !isReducedMotion;
   pill.classList.toggle('no-pill-transition', !transition);
   state.lastPillW = target.width;
@@ -1496,7 +1564,10 @@ function attachDragScrub(state: PillState) {
     cancel(dragged || shouldSwitch, switchingOnTap);
     const seqBefore = state.syncSeq;
     if (shouldSwitch && targetTab) {
-      if (switchingOnTap) state.glideUntil = performance.now() + 210;
+      if (switchingOnTap) {
+        state.glideUntil = performance.now() + 240;
+        state.fastFlight = isAndroidHost();
+      }
       targetTab.click();
     }
     if (state.syncSeq === seqBefore) {
@@ -1552,6 +1623,7 @@ function attachDragScrub(state: PillState) {
     grabOffsetX = event.clientX - (pressedTab.box.left + pressedTab.box.width / 2);
     pressedTabEl = pressedTab.element;
     state.glideUntil = 0;
+    state.fastFlight = false;
     state.overscrollX = 0;
     state.pressed = true;
     state.targetX = pressedTab.box.left - dockLeft;
@@ -1617,13 +1689,13 @@ function registerPillHost(container: HTMLElement, host: HTMLElement, tag: 'li' |
 
   const state: PillState = {
     container, host, barSurface, barGlow, barRecess, barRecessSurface, barRecessGlow, pill, pillInner, accentLayer, accentSignature: '', accentTabs: [], droplet,
-    lastKey: '', pressed: false, dragging: false, glideUntil: 0, frame: 0, lastFrame: 0,
-    x: 0, width: 0, targetX: 0, targetWidth: 0, velocity: 0, lift: 0, liftVel: 0,
+    lastKey: '', pressed: false, dragging: false, fastFlight: false, glideUntil: 0, frame: 0, lastFrame: 0,
+    x: 0, width: 0, targetX: 0, targetWidth: 0, velocity: 0, lift: 0, liftVel: 0, liftOpening: false,
     barScale: 0, barScaleVel: 0,
     overscrollX: 0, pullX: 0, pullY: 0, pullVelX: 0, pullVelY: 0, targetPullX: 0, targetPullY: 0,
     deform: 0, deformVel: 0, lastBarX: 0, lastBarY: 0,
     lastPillW: 0, lastPillH: 0, lastPillOpacity: '', lastPillVisibility: '', lastDropletActive: false, lastBarAnimating: false,
-    lastGlowOpacity: '', lastBarTransform: '', lastBarCutout: '', lastRecessClip: '',
+    lastGlowOpacity: '', lastBarTransform: '', lastBarCutout: '', lastRecessVisibility: '', lastRecessClip: '',
     lastRecessTransform: '', lastAccentClip: '', lastDropletOpacity: '', lastDropletTransform: '',
     containerLeftInHost: 0, containerTopInHost: 0,
     top: 0, height: 0, dockWidth: 0, dockHeight: 0, leftRoom: 0, rightEdge: 0, bottomEdge: 0,
@@ -1706,7 +1778,8 @@ export function setupLiquidNav() {
       if (event.target === tree) syncInstant();
     });
   }
-  const layoutClassKey = () => `${document.documentElement.dataset.theme ?? ''}|${document.body.className}`;
+  const LAYOUT_BODY_CLASSES = ['is-desktop', 'is-android', 'is-macos', 'billing-center-active', 'keyboard-open'];
+  const layoutClassKey = () => `${document.documentElement.dataset.theme ?? ''}|${LAYOUT_BODY_CLASSES.filter(c => document.body.classList.contains(c)).join(',')}`;
   let lastLayoutKey = layoutClassKey();
   const observeLayout = new MutationObserver(() => {
     const nextKey = layoutClassKey();

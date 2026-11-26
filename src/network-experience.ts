@@ -1,9 +1,9 @@
 import type { AdapterInventory, DualStackReport, FamilyConnectivity, NetworkSchedule, NetworkStatePayload } from './models';
 
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-export const compactFamilyLabel = (family: FamilyConnectivity) => family.status === 'reachable'
+export const compactFamilyLabel = (family: Pick<FamilyConnectivity, 'status' | 'durationMs'>) => family.status === 'reachable'
   ? `${Math.round(family.durationMs)} ms`
-  : ({ timeout: '超时', checking: '检测中', unreachable: '未通过', not_configured: '未配置', dns_error: 'DNS 失败', tls_error: 'TLS 失败', connection_error: '连接失败', response_error: '响应异常', unknown: '未确认' } as Record<string, string>)[family.status] || '未确认';
+  : ({ timeout: '超时', checking: '检测中', unreachable: '未通过', not_configured: '未配置', unavailable: '无法探测', dns_error: 'DNS 失败', tls_error: 'TLS 失败', connection_error: '连接失败', response_error: '响应异常', unknown: '未确认' } as const)[family.status];
 
 export class NetworkExperience {
   private inventory: AdapterInventory | null = null;
@@ -183,14 +183,15 @@ export class NetworkExperience {
   renderHealth(health: DualStackReport) {
     const generation = health.generation || 0; const probeId = health.probeId || 0;
     if (generation < this.generation || (generation === this.generation && probeId < this.probeId)) return;
-    if (this.health && generation === this.health.generation && probeId === this.health.probeId && Date.parse(health.checkedAt) < Date.parse(this.health.checkedAt)) return;
+    if (this.health && health.scope === this.health.scope && generation === this.health.generation && probeId === this.health.probeId && Date.parse(health.checkedAt) < Date.parse(this.health.checkedAt)) return;
     this.generation = generation; this.probeId = probeId;
     this.health = health;
     for (const [id, family] of [['ipv4-health', health.ipv4], ['ipv6-health', health.ipv6]] as const) {
       const node = element(id); node.className = `family-status ${family.status}`;
       node.querySelector('strong')!.textContent = compactFamilyLabel(family);
       node.querySelector('.family-marker')!.textContent = family.status === 'reachable' ? '✓' : family.status === 'checking' ? '…' : family.status === 'not_configured' ? '–' : '×';
-      node.title = `${new Date(health.checkedAt).toLocaleTimeString()} · ${family.detail}`;
+      const source = health.scope === 'physical' ? '网卡直连' : '系统路由';
+      node.title = `${source} · ${new Date(health.checkedAt).toLocaleTimeString()} · ${family.detail}`;
     }
   }
 

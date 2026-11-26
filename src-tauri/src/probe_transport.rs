@@ -6,11 +6,21 @@ use http_body_util::BodyExt;
 use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpSocket,
 };
+
+const PUBLIC_RESOLVERS: [&str; 3] = ["223.5.5.5", "223.6.6.6", "2400:3200::1"];
+const IPV6_DNS_ATTEMPT: Duration = Duration::from_millis(500);
+pub(crate) const IPV6_PROBE_HOST: &str = "ipv6.msftconnecttest.com";
+
+pub(crate) struct Ipv6Resolution {
+    pub(crate) configured: Result<Vec<IpAddr>, ProbeFailure>,
+    pub(crate) public: Option<Result<Vec<IpAddr>, ProbeFailure>>,
+}
 
 fn failure(kind: &'static str, detail: &str) -> ProbeFailure {
     ProbeFailure {
@@ -150,8 +160,11 @@ pub(crate) async fn request(
     let host = url.host_str().unwrap_or("").trim_matches(['[', ']']);
     let addresses = if let Ok(ip) = host.parse::<IpAddr>() {
         vec![ip]
+    } else if ipv6 {
+        let resolution = resolve_ipv6(network, direct, host).await;
+        resolution.public.unwrap_or(resolution.configured)?
     } else {
-        resolve(network, direct, ipv6, host).await?
+        resolve_configured(network, direct, false, host).await?
     };
     let mut jobs: FuturesUnordered<_> = addresses
         .into_iter()
@@ -169,8 +182,54 @@ pub(crate) async fn request(
     Err(error)
 }
 
+fn require_addresses(addresses: Vec<IpAddr>) -> Result<Vec<IpAddr>, ProbeFailure> {
+    if addresses.is_empty() {
+        Err(failure("dns_error", "DNS 未返回此地址族的目标地址"))
+    } else {
+        Ok(addresses)
+    }
+}
+
+pub(crate) async fn resolve_ipv6(
+    network: &serde_json::Value,
+    direct: bool,
+    host: &str,
+) -> Ipv6Resolution {
+    attempt_ipv6_resolution(
+        resolve_configured(network, direct, true, host),
+        query_resolvers(network, direct, true, host, public_resolvers()),
+    )
+    .await
+}
+
+async fn attempt_ipv6_resolution(
+    configured: impl std::future::Future<Output = Result<Vec<IpAddr>, ProbeFailure>>,
+    public: impl std::future::Future<Output = Result<Vec<IpAddr>, ProbeFailure>>,
+) -> Ipv6Resolution {
+    let configured = tokio::time::timeout(IPV6_DNS_ATTEMPT, configured)
+        .await
+        .unwrap_or_else(|_| Err(failure("dns_error", "配置的 DNS 查询 AAAA 超时")));
+    let public = if configured.is_err() {
+        let result = tokio::time::timeout(IPV6_DNS_ATTEMPT, public)
+            .await
+            .unwrap_or_else(|_| Err(failure("dns_error", "公共 DNS 查询 AAAA 超时")));
+        Some(result)
+    } else {
+        None
+    };
+    Ipv6Resolution { configured, public }
+}
+
+pub(crate) async fn resolve_system(
+    network: &serde_json::Value,
+    ipv6: bool,
+    host: &str,
+) -> Result<Vec<IpAddr>, ProbeFailure> {
+    resolve_configured(network, false, ipv6, host).await
+}
+
 #[cfg(target_os = "android")]
-async fn resolve(
+async fn resolve_configured(
     network: &serde_json::Value,
     direct: bool,
     ipv6: bool,
@@ -239,14 +298,14 @@ async fn resolve(
             current = entry.ai_next;
         }
         unsafe { libc::freeaddrinfo(result) };
-        Ok(addresses)
+        require_addresses(addresses)
     })
     .await
     .map_err(|_| failure("dns_error", "DNS 查询未完成"))?
 }
 
 #[cfg(not(target_os = "android"))]
-async fn resolve(
+async fn resolve_configured(
     network: &serde_json::Value,
     direct: bool,
     ipv6: bool,
@@ -255,13 +314,15 @@ async fn resolve(
     if !direct {
         return tokio::net::lookup_host((host, 0))
             .await
-            .map(|values| {
-                values
-                    .map(|address| address.ip())
-                    .filter(|ip| ip.is_ipv6() == ipv6)
-                    .collect()
-            })
-            .map_err(|_| failure("dns_error", "系统 DNS 未能解析探测目标"));
+            .map_err(|_| failure("dns_error", "系统 DNS 未能解析探测目标"))
+            .and_then(|values| {
+                require_addresses(
+                    values
+                        .map(|address| address.ip())
+                        .filter(|ip| ip.is_ipv6() == ipv6)
+                        .collect(),
+                )
+            });
     }
     // Never reuse system Fake-IP results for a socket bypassing the TUN.
     // Configured campus resolvers and public fallback DNS all use the selected
@@ -273,18 +334,32 @@ async fn resolve(
         .chain(network["dnsServers"].as_array().into_iter().flatten())
         .filter_map(|value| value.as_str()?.parse().ok())
         .collect();
-    servers.extend(
-        ["223.5.5.5", "223.6.6.6", "2400:3200::1"]
-            .iter()
-            .filter_map(|value| value.parse::<IpAddr>().ok()),
-    );
+    if !ipv6 {
+        servers.extend(public_resolvers());
+    }
     servers.sort();
     servers.dedup();
+    query_resolvers(network, true, ipv6, host, servers).await
+}
+
+fn public_resolvers() -> impl Iterator<Item = IpAddr> {
+    PUBLIC_RESOLVERS
+        .iter()
+        .filter_map(|address| address.parse().ok())
+}
+
+async fn query_resolvers(
+    network: &serde_json::Value,
+    direct: bool,
+    ipv6: bool,
+    host: &str,
+    servers: impl IntoIterator<Item = IpAddr>,
+) -> Result<Vec<IpAddr>, ProbeFailure> {
     let mut jobs: FuturesUnordered<_> = servers
         .into_iter()
-        .map(|server| dns_query(network, host, ipv6, server))
+        .map(|server| dns_query(network, direct, host, ipv6, server))
         .collect();
-    let mut last = failure("dns_error", "直连 DNS 未能解析探测目标");
+    let mut last = failure("dns_error", "查询未返回有效的目标地址");
     while let Some(value) = jobs.next().await {
         match value {
             Ok(addresses) if !addresses.is_empty() => return Ok(addresses),
@@ -295,9 +370,9 @@ async fn resolve(
     Err(last)
 }
 
-#[cfg(not(target_os = "android"))]
 async fn dns_query(
     network: &serde_json::Value,
+    direct: bool,
     host: &str,
     ipv6: bool,
     server: IpAddr,
@@ -321,13 +396,13 @@ async fn dns_query(
     bind_route(
         &socket2::SockRef::from(&socket),
         network,
-        true,
+        direct,
         server.is_ipv6(),
     )?;
     socket
         .connect(SocketAddr::new(server, 53))
         .await
-        .map_err(|_| failure("dns_error", "无法连接直连 DNS"))?;
+        .map_err(|_| failure("dns_error", "无法连接 DNS 服务器"))?;
     socket
         .send(&query)
         .await
@@ -341,7 +416,6 @@ async fn dns_query(
         .ok_or_else(|| failure("dns_error", "DNS 未返回有效目标地址"))
 }
 
-#[cfg(any(test, not(target_os = "android")))]
 fn parse_dns(packet: &[u8], query: &[u8], ipv6: bool) -> Option<Vec<IpAddr>> {
     // Match ID and the entire question; reject truncated/failed replies. Only
     // answer records of the requested family are allowed through.
@@ -532,6 +606,24 @@ fn bind_android(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipv6_uses_public_dns_only_when_configured_dns_fails() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let ipv6 = "2001:db8::1234".parse().unwrap();
+            let configured = attempt_ipv6_resolution(async { Ok(vec![ipv6]) }, async {
+                panic!("public DNS must not be queried after a system DNS success")
+            })
+            .await;
+            assert!(configured.configured.is_ok());
+            assert!(configured.public.is_none());
+
+            let fallback =
+                attempt_ipv6_resolution(std::future::pending(), async { Ok(vec![ipv6]) }).await;
+            assert_eq!(fallback.configured.unwrap_err().kind, "dns_error");
+            assert_eq!(fallback.public.unwrap().unwrap(), vec![ipv6]);
+        });
+    }
 
     #[test]
     fn dns_reply_checks_question_family_and_rejects_fake_ip() {

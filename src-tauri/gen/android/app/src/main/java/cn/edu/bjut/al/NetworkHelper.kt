@@ -27,6 +27,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import kotlin.concurrent.withLock
+import org.json.JSONArray
 import org.json.JSONObject
 
 private data class PhysicalNetworkSnapshot(
@@ -512,6 +513,16 @@ class NetworkHelper {
                 val wifiNetwork = wifiSnapshot?.network
                 val physicalCapabilities = physicalSnapshot?.capabilities
                 val physicalLinkProperties = physicalSnapshot?.linkProperties
+                val defaultDnsServers = if (includeWifiDetails) {
+                    val link = if (activeNetwork == physicalNetwork) {
+                        physicalLinkProperties
+                    } else {
+                        activeNetwork?.let(connectivityManager::getLinkProperties)
+                    }
+                    link?.dnsServers.orEmpty().mapNotNull { it.hostAddress }
+                } else {
+                    emptyList()
+                }
                 val transport = when {
                     physicalCapabilities == null -> if (vpnActive) "vpn" else "none"
                     physicalCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
@@ -608,6 +619,7 @@ class NetworkHelper {
                     .put("networkId", physicalNetwork?.toString() ?: "")
                     .put("physicalNetworkHandle", physicalNetwork?.networkHandle?.toString() ?: "")
                     .put("defaultNetworkHandle", activeNetwork?.networkHandle?.toString() ?: "")
+                    .put("defaultDnsServers", JSONArray(defaultDnsServers))
                     .put("identityNetworkId", physicalNetwork?.toString() ?: "")
                     .put("defaultNetworkId", activeNetwork?.toString() ?: "")
                     .put("wifiNetworkId", wifiNetwork?.toString() ?: "")

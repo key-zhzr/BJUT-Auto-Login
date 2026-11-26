@@ -3,8 +3,20 @@
 
 use crate::network_probe::NETWORK_PROBE_TIMEOUT;
 use futures_util::{stream::FuturesUnordered, StreamExt};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
+
+const WIRED_SERVERS: &[&str] = &["172.21.0.21:53", "172.21.201.22:53"];
+const WI_FI_SERVERS: &[&str] = &["10.21.200.28:53"];
+const ALL_IPV4_SERVERS: &[&str] = &[WIRED_SERVERS[0], WIRED_SERVERS[1], WI_FI_SERVERS[0]];
+
+pub(crate) fn is_known_server(address: IpAddr) -> bool {
+    ALL_IPV4_SERVERS
+        .iter()
+        .filter_map(|server| server.parse::<SocketAddr>().ok())
+        .any(|server| server.ip() == address)
+        || "2001:da8:216:215d::6666".parse::<IpAddr>().ok() == Some(address)
+}
 
 pub(crate) fn campus_dns_servers(
     host: &str,
@@ -14,15 +26,15 @@ pub(crate) fn campus_dns_servers(
     // may have no physical route context (including VPN access); race both
     // campus resolver sets within the same timeout instead of assuming Wi-Fi.
     if source_ipv4.is_none() && host == "jfself.bjut.edu.cn" {
-        return &["172.21.0.21:53", "172.21.201.22:53", "10.21.200.28:53"];
+        return ALL_IPV4_SERVERS;
     }
     let wired = source_ipv4
         .map(|address| matches!(address.octets(), [172, 26, _, _]))
         .unwrap_or(host == super::LGN_HOST || host == super::LGN6_HOST);
     if wired {
-        &["172.21.0.21:53", "172.21.201.22:53"]
+        WIRED_SERVERS
     } else {
-        &["10.21.200.28:53"]
+        WI_FI_SERVERS
     }
 }
 

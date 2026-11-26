@@ -241,9 +241,16 @@ export interface DiagnosticStep {
   id: string;
   label: string;
   status: 'success' | 'warning' | 'error' | 'skipped' | 'checking';
+  summary?: string;
   message: string;
   durationMs: number;
+  connectivity?: {
+    system: [ConnectivityCell, ConnectivityCell];
+    direct: [ConnectivityCell, ConnectivityCell];
+  };
 }
+
+type ConnectivityCell = Pick<FamilyConnectivity, 'status' | 'durationMs'>;
 
 export interface DiagnosticReport {
   stale?: boolean;
@@ -259,7 +266,7 @@ export interface DiagnosticReport {
 
 export interface FamilyConnectivity {
   addresses: string[];
-  status: 'reachable' | 'unreachable' | 'not_configured' | 'unknown' | 'timeout' | 'checking' | 'dns_error' | 'tls_error' | 'connection_error' | 'response_error';
+  status: 'reachable' | 'unreachable' | 'not_configured' | 'unavailable' | 'unknown' | 'timeout' | 'checking' | 'dns_error' | 'tls_error' | 'connection_error' | 'response_error';
   detail: string;
   durationMs: number;
 }

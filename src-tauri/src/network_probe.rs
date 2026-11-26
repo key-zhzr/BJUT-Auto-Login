@@ -1,18 +1,19 @@
 use futures_util::future::{select, Either};
 use std::future::Future;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub(crate) const NETWORK_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+pub(crate) const DIAGNOSTIC_BUDGET: Duration = Duration::from_secs(2);
 
 /// Poll all diagnostic work while emitting bounded progress. The timer is
 /// dropped with the work, so a finished/cancelled run leaves no background task.
 pub(crate) async fn run_diagnostic_probes<D: Future, I: Future, G: Future>(
+    deadline: tokio::time::Instant,
     dns: D,
     internet: I,
     gateway: G,
     mut progress: impl FnMut(u8),
 ) -> (D::Output, I::Output, G::Output) {
-    let started = Instant::now();
     let mut work = Box::pin(futures_util::future::join3(dns, internet, gateway));
     progress(42);
     loop {
@@ -25,8 +26,10 @@ pub(crate) async fn run_diagnostic_probes<D: Future, I: Future, G: Future>(
             Either::Left((result, _)) => return result,
             Either::Right((_, pending)) => {
                 work = pending;
-                let elapsed = started.elapsed().as_millis();
-                let fraction = (elapsed * 54 / NETWORK_PROBE_TIMEOUT.as_millis()).min(54);
+                let elapsed = DIAGNOSTIC_BUDGET.saturating_sub(
+                    deadline.saturating_duration_since(tokio::time::Instant::now()),
+                );
+                let fraction = (elapsed.as_millis() * 54 / DIAGNOSTIC_BUDGET.as_millis()).min(54);
                 progress(42 + fraction as u8);
             }
         }
@@ -55,12 +58,18 @@ mod tests {
             let mut progress = Vec::new();
             let result = tokio::time::timeout(
                 Duration::from_secs(2),
-                run_diagnostic_probes(task(1), task(2), task(3), |percent| {
-                    progress.push(percent);
-                    if percent > 42 && started.load(Ordering::SeqCst) == 3 {
-                        release.add_permits(3);
-                    }
-                }),
+                run_diagnostic_probes(
+                    tokio::time::Instant::now() + DIAGNOSTIC_BUDGET,
+                    task(1),
+                    task(2),
+                    task(3),
+                    |percent| {
+                        progress.push(percent);
+                        if percent > 42 && started.load(Ordering::SeqCst) == 3 {
+                            release.add_permits(3);
+                        }
+                    },
+                ),
             )
             .await
             .unwrap();

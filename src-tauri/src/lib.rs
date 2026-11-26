@@ -26,13 +26,14 @@ mod network_repair;
 mod network_schedule;
 use network_repair::AdapterRestartTarget;
 mod network_trust;
-use campus_dns::{campus_dns_servers, query_campus_dns_ipv4};
+use campus_dns::query_campus_dns_ipv4;
 use network_probe::{run_diagnostic_probes, NETWORK_PROBE_TIMEOUT};
 mod account_policy;
 mod connectivity;
 #[cfg(desktop)]
 mod desktop_tray;
 mod device_usage;
+mod diagnostic_dns;
 mod diagnostic_paths;
 mod diagnostic_tools;
 mod internet_probe;
@@ -1341,8 +1342,11 @@ struct DiagnosticStep {
     id: String,
     label: String,
     status: String,
+    summary: String,
     message: String,
     duration_ms: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connectivity: Option<diagnostic_paths::ConnectivityMatrix>,
 }
 
 #[derive(serde::Serialize)]
@@ -5519,14 +5523,17 @@ fn make_diagnostic_step(
     label: &str,
     started: std::time::Instant,
     status: &str,
+    summary: impl Into<String>,
     message: String,
 ) -> DiagnosticStep {
     DiagnosticStep {
         id: id.to_string(),
         label: label.to_string(),
         status: status.to_string(),
+        summary: summary.into(),
         message,
         duration_ms: started.elapsed().as_millis(),
+        connectivity: None,
     }
 }
 
@@ -5582,7 +5589,7 @@ async fn restart_lgn_adapter(
                 .unwrap_or_default(),
         )
         .is_ok_and(|configuration| configuration.resembles_reported_ipv6_failure());
-        if diagnose_lgn_ipv6_rust(compatibility, route.as_ref())
+        if diagnose_lgn_ipv6_rust(compatibility, route.as_ref(), NETWORK_PROBE_TIMEOUT)
             .await
             .is_ok()
             && !configuration_issue

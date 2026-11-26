@@ -251,6 +251,12 @@ impl LgnLinkConfiguration {
 }
 
 #[cfg(target_os = "macos")]
+pub(crate) fn scoped_dns_servers(interface: &str) -> Vec<String> {
+    let dns = crate::network_platform::macos_read_command("/usr/sbin/scutil", &["--dns"]);
+    parse_link_configuration(interface, "", "", &dns).dns_servers
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn lgn_link_configuration(interface: &str) -> LgnLinkConfiguration {
     use crate::network_platform::macos_read_command;
     parse_link_configuration(

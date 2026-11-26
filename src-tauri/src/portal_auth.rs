@@ -697,6 +697,7 @@ async fn probe_login_type(
     compatibility: VpnCompatibility,
     login_type: LoginType,
     route_context: Option<&PortalRouteContext>,
+    budget: Duration,
 ) -> LoginTypeDetection {
     let mut probes = vec![probe_primary_portal(compatibility, &login_type, route_context).boxed()];
     if login_type == LoginType::Type3
@@ -725,7 +726,7 @@ async fn probe_login_type(
         probes
             .push(probe_type1_http_portal_only(compatibility, &login_type, route_context).boxed());
     }
-    finish_portal_probes(login_type.clone(), probes, NETWORK_PROBE_TIMEOUT).await
+    finish_portal_probes(login_type.clone(), probes, budget).await
 }
 
 async fn probe_primary_portal(
@@ -951,7 +952,14 @@ pub(crate) async fn detect_login_type_details_rust(
     }
     let probes = login_probe_candidates(ssid, transport, route_context)
         .into_iter()
-        .map(|candidate| probe_login_type(compatibility, candidate, route_context));
+        .map(|candidate| {
+            probe_login_type(
+                compatibility,
+                candidate,
+                route_context,
+                NETWORK_PROBE_TIMEOUT,
+            )
+        });
     select_prioritized_probes(probes).await
 }
 
@@ -960,10 +968,11 @@ pub(crate) async fn diagnose_login_gateways(
     ssid: &str,
     transport: &str,
     route_context: Option<&PortalRouteContext>,
+    budget: Duration,
 ) -> Vec<LoginTypeDetection> {
     let mut candidates = login_probe_candidates(ssid, transport, route_context);
     // Diagnostics inspect all three gateways; authentication keeps the stricter
-    // transport-specific candidate set. All share one three-second budget.
+    // transport-specific candidate set. All share the caller's budget.
     for candidate in [LoginType::Type1, LoginType::Type2, LoginType::Type3] {
         if !candidates.contains(&candidate) {
             candidates.push(candidate);
@@ -971,7 +980,7 @@ pub(crate) async fn diagnose_login_gateways(
     }
     let probes = candidates
         .into_iter()
-        .map(|candidate| probe_login_type(compatibility, candidate, route_context));
+        .map(|candidate| probe_login_type(compatibility, candidate, route_context, budget));
     futures_util::future::join_all(probes).await
 }
 
@@ -1398,8 +1407,9 @@ async fn fetch_lgn_observed_ipv6(client: &Client) -> Result<(String, &'static st
 pub(crate) async fn diagnose_lgn_ipv6_rust(
     compatibility: VpnCompatibility,
     route_context: Option<&PortalRouteContext>,
+    timeout: Duration,
 ) -> Result<String, String> {
-    discover_lgn_ipv6(compatibility, NETWORK_PROBE_TIMEOUT, route_context)
+    discover_lgn_ipv6(compatibility, timeout, route_context)
         .await
         .map(|(_address, source)| {
             format!("可用（{source}）；已取得 IPv4+IPv6 联动认证所需的 IPv6 地址")

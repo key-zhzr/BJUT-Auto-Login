@@ -1,6 +1,39 @@
-/** Keep the Android scroll area above the keyboard, without a floating nav bar. */
+/** Keep the Android scroll area edge-to-edge with native system-bar insets and
+ * stay above the keyboard, without a floating nav bar. */
 export function setupAndroidKeyboard() {
   if (!document.body.classList.contains('is-android')) return;
+  let lastInsetsKey = '';
+  const applySafeAreaInsets = (top: number, right: number, bottom: number, left: number) => {
+    const clean = (v: unknown) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? +n.toFixed(2) : 0;
+    };
+    const t = clean(top);
+    const r = clean(right);
+    const b = clean(bottom);
+    const l = clean(left);
+    const key = `${t},${r},${b},${l}`;
+    if (key === lastInsetsKey) return;
+    lastInsetsKey = key;
+    const style = document.documentElement.style;
+    style.setProperty('--android-inset-top', `${t}px`);
+    style.setProperty('--android-inset-right', `${r}px`);
+    style.setProperty('--android-inset-bottom', `${b}px`);
+    style.setProperty('--android-inset-left', `${l}px`);
+    window.dispatchEvent(new CustomEvent('bjut-safe-area-change'));
+  };
+
+  window.__nativeSafeAreaInsets = applySafeAreaInsets;
+  const rawInsets = window.AndroidBridge?.getSafeAreaInsets?.();
+  if (rawInsets) {
+    try {
+      const parsed = JSON.parse(rawInsets) as Partial<Record<'top' | 'right' | 'bottom' | 'left', number>>;
+      applySafeAreaInsets(parsed.top ?? 0, parsed.right ?? 0, parsed.bottom ?? 0, parsed.left ?? 0);
+    } catch {
+      // Ignore malformed native inset payloads.
+    }
+  }
+
   let nativeVisible: boolean | null = null;
   let nativeHeight = 0;
   let baseline = window.innerHeight;
