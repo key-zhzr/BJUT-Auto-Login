@@ -208,14 +208,11 @@ async fn probe_family(
     FamilyConnectivity {
         addresses,
         status: status.into(),
-        detail: format!(
-            "{}。探测未通过不等于该地址族不可用。",
-            errors
-                .iter()
-                .map(|error| error.detail.as_str())
-                .collect::<Vec<_>>()
-                .join("；")
-        ),
+        detail: errors
+            .iter()
+            .map(|error| error.detail.as_str())
+            .collect::<Vec<_>>()
+            .join("；"),
         duration_ms: started.elapsed().as_millis(),
     }
 }

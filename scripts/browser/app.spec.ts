@@ -1754,25 +1754,56 @@ test('overscroll rubber-band, scroll position memory & non-adjacent android slid
   const overscroll = await page.evaluate(async () => {
     const main = document.getElementById('main-content')!;
     const dash = document.getElementById('dashboard')!;
+    const card = dash.querySelector<HTMLElement>('.status-card')!;
+    const header = dash.querySelector<HTMLElement>('.page-header')!;
     const nav = document.getElementById('nav')!;
     const navTopBefore = nav.getBoundingClientRect().top;
+    const headerTopBefore = header.getBoundingClientRect().top;
     const obsY = getComputedStyle(main).overscrollBehaviorY;
-    main.scrollTop = 0;
-    for (let i = 0; i < 3; i++) {
+
+    // 1. Top boundary crossing during continuous scroll triggers overscroll
+    main.scrollTop = 12;
+    for (let i = 0; i < 4; i++) {
       main.dispatchEvent(new WheelEvent('wheel', {deltaY: -120, cancelable: true, bubbles: true}));
     }
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const bouncedTransform = dash.style.transform;
+    const topBouncedTransform = card.style.transform;
+    const dashContainerTransform = dash.style.transform;
     const navTopDuring = nav.getBoundingClientRect().top;
-    const end = performance.now() + 800;
-    while (dash.style.transform && performance.now() < end) {
+    const headerTopDuring = header.getBoundingClientRect().top;
+    const end = performance.now() + 900;
+    while (card.style.transform && performance.now() < end) {
       await new Promise(requestAnimationFrame);
     }
-    return {obsY, bouncedTransform, navTopDiff: Math.abs(navTopDuring - navTopBefore), settledTransform: dash.style.transform};
+
+    // 2. Bottom overscroll on #dashboard
+    main.scrollTop = Math.max(0, main.scrollHeight - main.clientHeight);
+    for (let i = 0; i < 4; i++) {
+      main.dispatchEvent(new WheelEvent('wheel', {deltaY: 120, cancelable: true, bubbles: true}));
+    }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const bottomBouncedTransform = card.style.transform;
+    const endBottom = performance.now() + 900;
+    while (card.style.transform && performance.now() < endBottom) {
+      await new Promise(requestAnimationFrame);
+    }
+
+    return {
+      obsY,
+      topBouncedTransform,
+      bottomBouncedTransform,
+      dashContainerTransform,
+      navTopDiff: Math.abs(navTopDuring - navTopBefore),
+      headerTopDiff: Math.abs(headerTopDuring - headerTopBefore),
+      settledTransform: card.style.transform,
+    };
   });
   expect(overscroll.obsY).toBe('none');
-  expect(overscroll.bouncedTransform).toMatch(/^translate3d\(0px,\s*[1-9]\d*(\.\d+)?px,\s*0px\)$/);
+  expect(overscroll.dashContainerTransform).toBe('');
+  expect(overscroll.topBouncedTransform).toMatch(/^translate3d\(0px,\s*[1-9]\d*(\.\d+)?px,\s*0px\)$/);
+  expect(overscroll.bottomBouncedTransform).toMatch(/^translate3d\(0px,\s*-[1-9]\d*(\.\d+)?px,\s*0px\)$/);
   expect(overscroll.navTopDiff).toBeLessThan(0.5);
+  expect(overscroll.headerTopDiff).toBeLessThan(0.5);
   expect(overscroll.settledTransform).toBe('');
 
   // Scroll memory: Settings Home <-> Subpage and Dashboard <-> Accounts
@@ -2113,4 +2144,168 @@ test('macOS desktop sidebar stays opaque without behind-window glass underlay', 
     navOpaque: true,
     bodyOpaque: true,
   });
+});
+
+test('dashboard same-day timestamp, macOS dropdown open/scroll-close, billing overscroll & overlapping slide transition', async ({page}) => {
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+
+  // Desktop macOS: timestamp omits today date & Basic dropdown keeps morphing across held pointerdown + tracks scroll on close
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  await expect(page.locator('#update-timestamp')).toHaveText(/^\d{2}:\d{2}:\d{2}$/);
+
+  await page.locator('#nav .nav-item[data-target="settings"]').click();
+  await page.locator('[data-settings-target="appearance"]').click();
+  await expect(page.locator('#setting-theme .custom-select-trigger')).toBeVisible();
+
+  const triggerBox = (await page.locator('#setting-theme .custom-select-trigger').boundingBox())!;
+  await page.mouse.move(triggerBox.x + triggerBox.width / 2, triggerBox.y + triggerBox.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(75);
+  const heldOpenState = await page.evaluate(() => {
+    const wrapper = document.getElementById('setting-theme')!;
+    const menu = wrapper.querySelector<HTMLElement>('.custom-select-options')!;
+    return {
+      isOpen: wrapper.classList.contains('open'),
+      isMorphing: wrapper.classList.contains('is-morphing'),
+      menuHeight: parseFloat(menu.style.height || '0'),
+    };
+  });
+  await page.mouse.up();
+  expect(heldOpenState.isOpen).toBe(true);
+  expect(heldOpenState.isMorphing).toBe(true);
+  expect(heldOpenState.menuHeight).toBeGreaterThan(20);
+  await expect(page.locator('#setting-theme.custom-select.is-morphing')).toHaveCount(0, {timeout: 2000});
+
+  // Scroll #main-content while closing on Basic theme and ensure menu tracks viewport offset & finishes cleanly
+  const scrollTrackClose = await page.evaluate(async () => {
+    const main = document.getElementById('main-content')!;
+    const settingsPage = document.getElementById('settings')!;
+    const wrapper = document.getElementById('setting-theme')!;
+    const trigger = wrapper.querySelector<HTMLElement>('.custom-select-trigger')!;
+    const menu = wrapper.querySelector<HTMLElement>('.custom-select-options')!;
+    const prevPad = settingsPage.style.paddingBottom;
+    settingsPage.style.paddingBottom = '420px';
+    const beforeScroll = main.scrollTop;
+    const prevRect = menu.getBoundingClientRect();
+    const prevMenuCenter = prevRect.top + prevRect.height / 2;
+    trigger.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+    main.scrollTop = Math.min(main.scrollHeight - main.clientHeight, beforeScroll + 48);
+    const actualScrollDelta = main.scrollTop - beforeScroll;
+    main.dispatchEvent(new Event('scroll'));
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const midRect = menu.getBoundingClientRect();
+    const midMenuCenter = midRect.top + midRect.height / 2;
+    const liveTrigRect = trigger.getBoundingClientRect();
+    const liveTrigCenter = liveTrigRect.top + liveTrigRect.height / 2;
+    const closingActive = wrapper.classList.contains('closing');
+    main.scrollTop = beforeScroll;
+    settingsPage.style.paddingBottom = prevPad;
+    return {
+      closingActive,
+      actualScrollDelta,
+      centerDelta: prevMenuCenter - midMenuCenter,
+      centerGapToTrigger: Math.abs(midMenuCenter - liveTrigCenter),
+    };
+  });
+  expect(scrollTrackClose.closingActive).toBe(true);
+  expect(scrollTrackClose.actualScrollDelta).toBeGreaterThanOrEqual(40);
+  expect(scrollTrackClose.centerDelta).toBeGreaterThan(25);
+  expect(scrollTrackClose.centerGapToTrigger).toBeLessThan(20);
+  await expect(page.locator('#setting-theme.custom-select.closing')).toHaveCount(0, {timeout: 2000});
+
+  // Android mobile: billing overscroll + settings open dropdown -> dashboard slide overlap
+  await page.setViewportSize({width: 390, height: 844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await expect(page.locator('#qa-run')).toBeVisible();
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+  await expect(page.locator('#app-loading-mask')).not.toHaveClass(/is-visible/, {timeout: 15000});
+
+  await page.locator('#nav .nav-item[data-target="dashboard"]').click();
+  await page.locator('#btn-open-billing').click();
+  await expect(page.locator('#billing-center.active')).toBeVisible();
+  await expect(page.locator('#main-content')).not.toHaveClass(/is-page-sliding/, {timeout: 2000});
+
+  const billingBounce = await page.evaluate(async () => {
+    const main = document.getElementById('main-content')!;
+    const header = document.querySelector<HTMLElement>('#billing-center .page-header')!;
+    const source = document.getElementById('router-billing-source')!;
+    const content = document.querySelector<HTMLElement>('#billing-center .billing-workbench-content')!;
+    const mobileNav = document.querySelector<HTMLElement>('.billing-mobile-nav')!;
+    const headerTopBefore = header.getBoundingClientRect().top;
+    const mobileNavBefore = mobileNav.getBoundingClientRect();
+    const sourceWasHidden = source.hidden;
+    if (sourceWasHidden) source.hidden = false;
+    main.scrollTop = 0;
+    for (let i = 0; i < 4; i++) {
+      main.dispatchEvent(new WheelEvent('wheel', {deltaY: -120, cancelable: true, bubbles: true}));
+    }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const sourceTransform = source.style.transform;
+    const contentTransform = content.style.transform;
+    const headerTopDuring = header.getBoundingClientRect().top;
+    const mobileNavDuring = mobileNav.getBoundingClientRect();
+    const end = performance.now() + 900;
+    while (content.style.transform && performance.now() < end) {
+      await new Promise(requestAnimationFrame);
+    }
+    if (sourceWasHidden) source.hidden = true;
+    return {
+      sourceTransform,
+      contentTransform,
+      headerTopDiff: Math.abs(headerTopDuring - headerTopBefore),
+      navTopDiff: Math.abs(mobileNavDuring.top - mobileNavBefore.top),
+      navVisible: mobileNavDuring.height > 24 && mobileNavDuring.width > 120,
+    };
+  });
+  expect(billingBounce.sourceTransform).toMatch(/^translate3d\(0px,\s*[1-9]\d*(\.\d+)?px,\s*0px\)$/);
+  expect(billingBounce.contentTransform).toBe(billingBounce.sourceTransform);
+  expect(billingBounce.headerTopDiff).toBeLessThan(0.5);
+  expect(billingBounce.navTopDiff).toBeLessThan(0.5);
+  expect(billingBounce.navVisible).toBe(true);
+
+  await page.locator('#btn-close-billing').click();
+  await expect(page.locator('#dashboard.active')).toBeVisible();
+  await expect(page.locator('#main-content')).not.toHaveClass(/is-page-sliding/, {timeout: 2000});
+
+  await page.locator('#nav .nav-item[data-target="settings"]').click();
+  await expect(page.locator('#settings.active')).toBeVisible();
+  await expect(page.locator('#main-content')).not.toHaveClass(/is-page-sliding/, {timeout: 2000});
+  await page.locator('[data-settings-target="appearance"]').click();
+  await page.locator('#setting-theme .custom-select-trigger').click();
+  await expect(page.locator('#setting-theme.custom-select.open')).toBeVisible();
+
+  // Overlapping switch back to dashboard while dropdown is open
+  const overlapStats = await page.evaluate(async () => {
+    const times: number[] = [];
+    let running = true;
+    const start = performance.now();
+    await new Promise<void>(resolve => {
+      const sample = (ts: number) => {
+        times.push(ts);
+        if (running && performance.now() - start < 700) {
+          requestAnimationFrame(sample);
+        } else {
+          resolve();
+        }
+      };
+      requestAnimationFrame(sample);
+      document.querySelector<HTMLElement>('#nav .nav-item[data-target="dashboard"]')!.click();
+      window.setTimeout(() => { running = false; }, 520);
+    });
+    const deltas: number[] = [];
+    for (let i = 1; i < times.length; i++) deltas.push(times[i] - times[i - 1]);
+    return {
+      frames: deltas.length,
+      maxDelta: Math.max(...deltas, 0),
+      dashActive: document.getElementById('dashboard')!.classList.contains('active'),
+    };
+  });
+  expect(overlapStats.dashActive).toBe(true);
+  expect(overlapStats.frames).toBeGreaterThan(8);
+  await expect(page.locator('.custom-select.open, .custom-select.closing')).toHaveCount(0, {timeout: 2500});
 });

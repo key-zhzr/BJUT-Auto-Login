@@ -344,7 +344,7 @@
                   <h2>无感认证</h2>
                   <span id="billing-mauth-badge" class="billing-state-badge neutral">未知</span>
                 </div>
-                <p>开启后，计费系统可按已绑定设备识别校园网会话；仅适用于 bjut_wifi。</p>
+                <p>开启后，已绑定 MAC 的设备连接 bjut_wifi 可自动免密上网。</p>
               </div>
               <button id="btn-toggle-billing-mauth" class="btn btn-secondary btn-sm" type="button" disabled>状态未知</button>
             </div>
@@ -374,7 +374,7 @@
                   <h2>近期上网记录</h2>
                   <span id="billing-history-count" class="billing-count-badge">0</span>
                 </div>
-                <p>时间、地址、流量与计费方式均来自计费系统；点击展开。</p>
+                <p>点击展开最近的上网时间、IP、流量与计费方式。</p>
               </div>
               <i class="billing-collapse-chevron" data-lucide="chevron-down"></i>
             </summary>
@@ -664,7 +664,7 @@
                   <i data-lucide="qr-code"></i> 显示微信支付二维码
                 </button>
               </div>
-              <p class="billing-inline-note">到账状态可自动查询，但任何扣费或网费转入订单只提交一次，结果不明确时不会自动重复扣费。支付宝与微信均由学校支付平台发起，App 不读取支付密码。</p>
+              <p class="billing-inline-note">扣费和网费转入订单不会自动重复提交，避免重复扣款；支付宝与微信由学校支付平台处理，App 不读取支付密码。</p>
             </div>
           </section>
 
@@ -1077,7 +1077,7 @@
                 <div class="setting-item">
                   <div class="setting-info">
                     <h4>更多控制台选项</h4>
-                    <p>在控制台显示指定的账号和登录方式组件</p>
+                    <p>在控制台显示手动选择账号和认证方式的入口</p>
                   </div>
                   <label class="switch">
                     <input type="checkbox" id="setting-more-options">
@@ -1305,7 +1305,7 @@
                 <div class="setting-item">
                   <div class="setting-info">
                     <h4>后台异常</h4>
-                    <p>无界面检测核心或后台服务运行失败</p>
+                    <p>后台检测服务异常退出或中断时通知</p>
                   </div>
                   <label class="switch">
                     <input type="checkbox" id="setting-android-notify-background-errors" checked>
@@ -1338,7 +1338,7 @@
 
               <div class="settings-group glass-card">
                 <h3>设备流量统计</h3>
-                <div class="setting-item"><div class="setting-info"><h4>优先使用余量充足的账号</h4><p>依据已开启统计取得的新鲜计费数据排序，独立账号顺序优先。</p></div><label class="switch"><input id="setting-prefer-flow" type="checkbox"><span class="slider round"></span></label></div>
+                <div class="setting-item"><div class="setting-info"><h4>优先使用余量充足的账号</h4><p>开启流量统计后优先使用剩余流量多的账号；已单独指定的顺序优先。</p></div><label class="switch"><input id="setting-prefer-flow" type="checkbox"><span class="slider round"></span></label></div>
                 <div class="setting-item"><div class="setting-info"><h4>设备流量统计</h4><p>开启后每分钟记录计费流量并绘制曲线。Android 在前台更新。</p></div><label class="switch"><input id="setting-traffic-monitor" type="checkbox"><span class="slider round"></span></label></div>
                 <div class="setting-item"><div class="setting-info"><h4>流量统计范围</h4></div><div class="traffic-scope"><label><input type="radio" name="setting-traffic-scope" value="local" checked>仅本机设备</label><label><input type="radio" name="setting-traffic-scope" value="all">全部在线设备</label></div></div>
                 <div class="traffic-retention-controls">

@@ -374,6 +374,19 @@ for (const [hour, minute, open] of [[5,59,false],[6,0,true],[22,59,true],[23,0,f
 }
 console.log('Beijing recharge-hours boundaries passed');
 
+const {
+  formatDashboardTimestamp,
+} = await import('../src/ui-text.ts');
+
+{
+  const today = new Date(2026, 10, 26, 14, 0, 0);
+  assert.equal(formatDashboardTimestamp('2026-11-26 09:05:03', today), '09:05:03');
+  assert.equal(formatDashboardTimestamp('2026-11-25 23:59:58', today), '2026-11-25 23:59:58');
+  assert.equal(formatDashboardTimestamp('--', today), '--');
+  assert.equal(formatDashboardTimestamp('测试', today), '测试');
+  console.log('Dashboard timestamp formatting cases passed');
+}
+
 const {default:QR} = await import('qrcode');
 const {default:jsQR} = await import('jsqr');
 for (const text of frames) {

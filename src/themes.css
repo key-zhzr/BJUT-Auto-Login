@@ -1623,6 +1623,13 @@ html:root[data-theme] {
   filter: brightness(0.93);
 }
 
+:root[data-theme="basic"] .custom-select:is(.open, .closing, .is-morphing) .custom-select-trigger:not(:disabled):not([aria-disabled="true"]):active {
+  transform: none;
+  filter: none;
+  opacity: 1;
+  transition: none !important;
+}
+
 :root[data-theme="basic"] .custom-option:not([aria-disabled="true"]):active {
   transform: none;
   filter: none;
@@ -1782,16 +1789,19 @@ html:root[data-theme] {
   will-change: transform, opacity;
 }
 
-:root[data-theme="basic"] body:not(.is-android) .custom-select.is-morphing .custom-select-options {
+:root[data-theme="basic"] .custom-select.is-morphing .custom-select-options {
   overflow: hidden !important;
   max-height: none !important;
-  contain: layout style;
+  contain: layout style paint;
   will-change: transform, height, border-radius, opacity;
 }
 
-:root[data-theme="basic"] body.is-android .custom-select.is-morphing .custom-select-options {
-  contain: layout style;
+:root[data-theme="basic"] .custom-select.is-morphing .custom-select-trigger {
   will-change: transform, opacity;
+}
+
+:root[data-theme="basic"] .custom-select.is-morphing .custom-option:not(.morph-visible) {
+  visibility: hidden;
 }
 
 :root[data-theme="basic"] .custom-select.closing .custom-select-options {

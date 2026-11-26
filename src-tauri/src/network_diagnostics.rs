@@ -156,9 +156,7 @@ pub(super) async fn run_network_diagnostics(
         } else if route_ip.is_empty() {
             "无法取得访问校园认证目标时系统选择的源 IPv4".to_string()
         } else if !route_uses_physical_ipv4 {
-            format!(
-                "校园认证目标当前走 {route_ip}，该地址像 VPN/TUN Fake-IP；不会将它当作物理网卡地址"
-            )
+            format!("校园认证目标当前走了 VPN 虚拟地址（{route_ip}），请在 VPN 中放行校园网段")
         } else if ip.is_empty() {
             format!(
                 "系统路由使用 {route_ip}，但未取得对应物理接口及 IPv4；已禁止不绑定接口的认证请求"
@@ -202,7 +200,7 @@ pub(super) async fn run_network_diagnostics(
         "error"
     };
     let campus_message = format!(
-        "传输类型：{}\n本地网段：{}\nlgn 有线特征：{}\nSSID 特征：{}\nWi-Fi BSSID：{}\n身份同接口且新鲜：{}\n校园目标路由绑定：{}",
+        "传输类型：{}\n本地网段：{}\nlgn 有线特征：{}\nSSID 特征：{}\nWi-Fi BSSID：{}\n网卡信息已同步：{}\n校园目标路由绑定：{}",
         if transport.is_empty() { "未知" } else { &transport },
         if campus_ip { "符合" } else { "不符合" },
         if lgn_wired_hint {
@@ -318,10 +316,8 @@ pub(super) async fn run_network_diagnostics(
             .into(),
             message: match connection.session_online {
                 Some(true) => "所选认证网卡已有校园在线会话",
-                Some(false) => {
-                    "所选认证网卡尚无校园在线会话；其他网卡或 VPN 的互联网可用不代表此网卡已认证"
-                }
-                None => "暂未确认所选网卡的校园会话；请核对网关与认证状态",
+                Some(false) => "所选认证网卡尚未登录校园网（当前外网可能经过 VPN 或其他网卡）",
+                None => "未能确认所选网卡的校园网登录状态，请检查认证网关",
             }
             .into(),
             duration_ms: connection.session_duration_ms,
@@ -464,9 +460,9 @@ pub(super) async fn run_network_diagnostics(
                 if result.login_ready {
                     "登录接口与响应校验通过"
                 } else if result.portal_detected {
-                    "门户已发现，但登录条件未完全就绪"
+                    "已发现认证页，暂无法直接登录"
                 } else if result.timed_out {
-                    "在 3 秒诊断预算内无响应"
+                    "等待响应超时（3 秒）"
                 } else {
                     "未探测到"
                 }
@@ -550,7 +546,7 @@ pub(super) async fn run_network_diagnostics(
     } else if online {
         (
             "success",
-            format!("互联网已联通，校园认证网关仍已逐项探测。\n{gateway_details}"),
+            format!("互联网已连通，校园认证网关检测完成。\n{gateway_details}"),
         )
     } else {
         (
@@ -585,57 +581,48 @@ pub(super) async fn run_network_diagnostics(
         ("changed", "检测期间网络或认证状态已改变，请重新诊断")
     } else if physical_unconfirmed && online {
         if network["captivePortal"].as_bool().unwrap_or(false) {
-            ("auth_required", "系统路由可联网，但当前 Wi-Fi 仍需完成认证")
+            (
+                "auth_required",
+                "当前可通过其他路径上网，但此 Wi-Fi 仍需登录校园网",
+            )
         } else {
             (
                 "partial",
-                "系统路由可联网，但当前认证网卡直连尚未通过，请核对校园认证状态",
+                "当前可通过其他路径上网，但所选网卡直连测试未通过",
             )
         }
     } else if session_unconfirmed && online {
-        ("partial", "系统互联网可达，所选认证网卡的校园会话尚未确认")
+        ("partial", "外网已通，但所选网卡的校园网登录状态待确认")
     } else if online && (ip.is_empty() || transport == "none") {
-        ("partial", "系统互联网可达，但认证网卡尚未取得可用地址")
+        ("partial", "外网已通，但认证网卡尚未获取到 IP 地址")
     } else if online && !dual_stack.online() {
-        (
-            "partial",
-            "系统互联网可达，但暂未完成 IPv4/IPv6 独立探测，请查看各项结果",
-        )
+        ("partial", "外网已通，IPv4 / IPv6 分项连接测试尚未完成")
     } else if online
         && dual_stack.ipv6.status != "reachable"
         && dual_stack.ipv6.status != "not_configured"
     {
-        (
-            "partial",
-            "互联网可达，IPv6 独立探测暂未通过（不等于 IPv6 不可用）",
-        )
+        ("partial", "外网已通，IPv6 连接测试未通过")
     } else if online
         && dual_stack.ipv4.status != "reachable"
         && dual_stack.ipv4.status != "not_configured"
     {
-        (
-            "partial",
-            "互联网可达，IPv4 独立探测暂未通过（不等于 IPv4 不可用）",
-        )
+        ("partial", "外网已通，IPv4 连接测试未通过")
     } else if online {
-        ("healthy", "网络工作正常，互联网已连通")
+        ("healthy", "网络正常，互联网已连通")
     } else if login_type != LoginType::Unknown {
-        ("auth_required", "已连接校园网，但需要完成账号认证")
+        ("auth_required", "已连接校园网，需要登录账号")
     } else if type1_requires_maximum {
         (
             "auth_required",
-            "已连接宿舍校园网；认证网关仅支持 HTTP，等待用户确认最高兼容模式",
+            "已连接宿舍校园网；该网关仅支持 HTTP，请切换至“最高兼容”后再登录",
         )
     } else if ip.is_empty() || transport == "none" {
         (
             "no_network",
-            "未取得网络地址，请检查 Wi-Fi、有线连接或系统权限",
+            "未获取到网络地址，请检查 Wi-Fi、网线或系统权限",
         )
     } else if mobile_data {
-        (
-            "offline",
-            "移动数据存在，但 App 自身的独立目标未验证互联网连通性",
-        )
+        ("offline", "当前为移动数据网络，外网连接测试未通过")
     } else {
         (
             "offline",

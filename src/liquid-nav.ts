@@ -447,12 +447,16 @@ function scheduleDropletWarmup(state: PillState) {
   const warmKey = `${Math.round(state.barBox.width)}x${Math.round(state.barBox.height)}:${Math.round(state.lensWidth)}x${Math.round(state.lensHeight)}`;
   if (state.warmedGeometry === warmKey) return;
 
-  if (document.getElementById('app-loading-mask')?.classList.contains('is-visible')) {
+  if (
+    document.getElementById('app-loading-mask')?.classList.contains('is-visible')
+    || document.getElementById('main-content')?.classList.contains('is-page-sliding')
+    || document.querySelector('.custom-select.is-morphing')
+  ) {
     if (!state.warmupTimer) {
       state.warmupTimer = window.setTimeout(() => {
         state.warmupTimer = 0;
         scheduleDropletWarmup(state);
-      }, 120);
+      }, 180);
     }
     return;
   }
@@ -877,7 +881,9 @@ function paintHorizontalPill(state: PillState) {
     const localCy = barH / 2 + (hcY - barY - barH / 2) / barScaleY;
     const localW = lensWidth / barScaleX;
     const localH = lensHeight / barScaleY;
-    const snapPx = Math.abs(state.velocity) > 300 ? 1 : 0.5;
+    const isAndroidSliding = document.body.classList.contains('is-android')
+      && (Math.abs(state.velocity) > 220 || document.getElementById('main-content')?.classList.contains('is-page-sliding'));
+    const snapPx = isAndroidSliding ? 1.5 : Math.abs(state.velocity) > 300 ? 1 : 0.5;
     const snap = (value: number) => Math.round(value / snapPx) * snapPx;
     const holeW = snap(localW);
     const holeH = snap(localH);
@@ -940,7 +946,10 @@ function paintHorizontalPill(state: PillState) {
     const localW = lensWidth / pressScale;
     const localH = lensHeight / pressScale;
     const localR = clipRadius / pressScale;
-    const snapTab = Math.abs(state.velocity) > 300 ? 1 : 0.5;
+    const snapTab = (document.body.classList.contains('is-android')
+      && (Math.abs(state.velocity) > 220 || document.getElementById('main-content')?.classList.contains('is-page-sliding')))
+      ? 1.5
+      : Math.abs(state.velocity) > 300 ? 1 : 0.5;
     const snapT = (value: number) => Math.round(value / snapTab) * snapTab;
     const tabHoleW = snapT(localW);
     const tabHoleH = snapT(localH);

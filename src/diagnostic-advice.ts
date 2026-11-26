@@ -12,12 +12,12 @@ export function diagnosticAdvice(report: DiagnosticReport): string[] {
     if (failed('campus_route'))
         messages.push('校园目标路由异常：在 VPN 中放行校园网段，并核对认证网卡。');
     if (failed('authentication_session'))
-        messages.push('认证会话未确认：可先查询当前账号状态，避免连续重复提交登录。');
+        messages.push('尚未确认校园网会话：建议先刷新账号状态，避免连续重复登录。');
     if (failed('internet'))
-        messages.push('请分别对照当前网络与网卡直连结果：当前网络通过、直连失败时，检查 Wi-Fi 待认证及 VPN 是否改走其他上游。');
+        messages.push('当前系统路由与网卡直连结果不一致：若系统已通但网卡直连失败，请检查 Wi-Fi 是否未登录或 VPN 接管了流量。');
     if (report.dualStack?.ipv6.status === 'not_configured')
-        messages.push('当前网卡未取得可用 IPv6 地址，请检查上游分配；登录成功不会自动提供 IPv6 前缀。');
+        messages.push('当前网卡未获取到 IPv6 地址；若路由器或端口未下发 IPv6，仅完成网页登录不会获得 IPv6。');
     if (!messages.length && report.overall !== 'healthy')
-        messages.push('请对照已完成的模块检查接口、认证和路由，可用“链路检查”进一步定位。');
+        messages.push('请结合上方结果排查接口、认证与路由，或点“链路检查”进一步定位。');
     return messages;
 }

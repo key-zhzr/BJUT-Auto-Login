@@ -71,7 +71,7 @@ export function renderDiagnosticReportView(report: DiagnosticReport, options: { 
 function classifyStepValueTone(value: string, stepStatus: DiagnosticStep['status']): string {
   if (/^(?:通过|符合|已取得|同源|是)(?:$|（|\s|·)|解析成功|解析正常|校验通过|可用$/.test(value)) return 'is-ok';
   if (/^(?:未配置|未探测到|不适用|检测中)(?:$|（|\s|·)/.test(value)) return 'is-muted';
-  if (/^(?:超时|失败|未通过|不符合|缺失|否|不可用)(?:$|（|\s|·)|门户已发现|无响应|错误/.test(value)) {
+  if (/^(?:超时|失败|未通过|不符合|缺失|否|不可用)(?:$|（|\s|·)|门户已发现|已发现认证页|无响应|错误/.test(value)) {
     return stepStatus === 'error' ? 'is-error' : 'is-warn';
   }
   return '';

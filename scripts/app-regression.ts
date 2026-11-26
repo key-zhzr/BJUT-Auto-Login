@@ -199,7 +199,11 @@ mockIPC(async (cmd, payload: any = {}) => {
     ],preferredInterface:'',selectionSupported:!mobileLayout};
   }
   if (cmd === 'get_network_schedule') return {intervalSeconds:15,interfacePollSeconds:4,reason:'模拟检查'};
-  if (cmd === 'get_current_network_state') return {state:'BjutCampus',loginType:'lgn-wired',ip:'172.26.1.2',ssid:'',bssid:'',timestamp:'测试'};
+  if (cmd === 'get_current_network_state') {
+    const nowLocal = new Date();
+    const ymd = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`;
+    return {state:'BjutCampus',loginType:'lgn-wired',ip:'172.26.1.2',ssid:'',bssid:'',timestamp:`${ymd} 12:30:45`};
+  }
   if (cmd === 'get_countdown_status') return {status:'ticking',seconds:15};
   if (cmd === 'get_update_target') return {
     currentVersion: '0.1.6',

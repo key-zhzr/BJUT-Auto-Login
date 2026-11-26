@@ -47,7 +47,7 @@ const fields: Field[] = [
   {key:'traffic_hour_days',label:'小时汇总保留（天）',default:'90',min:1,max:3660},
   {key:'traffic_day_days',label:'每日汇总保留（天）',default:'366',min:1,max:36600},
   {key:'traffic_storage_mb',label:'统计存储上限（MB）',default:'2',min:1,max:128,hint:'按闪存中的实际压缩大小计算，内存临时数据不计入'},
-  {key:'prefer_remaining_flow',label:'优先使用余量充足的账号',hint:'依据已开启统计取得的新鲜计费数据排序，独立账号顺序优先',flag:true,default:'0'},
+  {key:'prefer_remaining_flow',label:'优先使用余量充足的账号',hint:'开启流量统计后优先使用剩余流量多的账号；已单独指定的顺序优先',flag:true,default:'0'},
   {key:'billing_interval',label:'计费检查间隔（秒）',min:900,max:86400,default:'21600'},
   {key:'billing_alerts',label:'用量不足时推送',hint:'通过已配置的 PushPlus 提醒，每个账号每天最多一次',flag:true,default:'1'},
   {key:'balance_threshold',label:'余额提醒线（元）',min:0,max:999999,default:'5'},

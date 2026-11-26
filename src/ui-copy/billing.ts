@@ -19,57 +19,57 @@ export const BILLING_COPY = {
   panels: {
     mauth: {
       title: '无感认证',
-      description: '开启后，计费系统可按已绑定设备识别校园网会话；仅适用于 bjut_wifi。',
+      description: '开启后，已绑定 MAC 的设备连接 bjut_wifi 可自动免密上网。',
     },
     online: {
       title: '当前在线会话',
-      description: '注销会话可能会中断对应设备的校园网连接。',
+      description: '下线会话会断开对应设备的校园网连接。',
     },
     history: {
       title: '近期上网记录',
-      description: '时间、地址、流量与计费方式均来自计费系统；点击展开。',
+      description: '点击展开最近的上网时间、IP、流量与计费方式。',
     },
     records: {
       title: '账单与办理记录',
-      description: '选择记录类型、日期或年份后查询。',
+      description: '选择记录类型和日期范围后查询。',
     },
     services: {
       title: '账号服务',
-      description: '报停、复通、套餐预约与消费保护。',
+      description: '办理停机保号、复通、下月套餐预约和消费限额。',
     },
     devices: {
       title: '设备管理',
-      description: '查看、绑定或解绑用于无感认证的 MAC 地址。',
+      description: '绑定或解绑用于无感认证的 MAC 地址。',
     },
     recharge: {
       title: '充值',
-      description: '选择支付方式，为自己或他人充值网费。',
+      description: '使用校园卡、支付宝或微信为自己或他人充网费。',
     },
     security: {
       title: '安全设置',
-      description: '修改统一认证密码，并更新已保存的密码。',
+      description: '修改统一认证密码，并同步更新本机保存的密码。',
     },
   } satisfies Record<string, BillingPanelCopy>,
   serviceActions: {
     stopReopen: {
       title: '停复机',
-      description: '暂停或恢复校园网服务，提交前请确认。',
+      description: '暂停或恢复校园网服务。',
     },
     consumeLimit: {
       title: '消费保护',
-      description: '输入非负金额，最多两位小数；999999 表示不限制。',
+      description: '填入非负金额（最多两位小数），填 999999 表示不限制。',
     },
     package: {
       title: '预约套餐',
-      description: '下方会直接标记当前周期与下一周期套餐；未预约时，下一周期继续使用当前套餐。',
+      description: '当前套餐和已预约的下周期套餐会在下方标出；未预约时下月沿用原套餐。',
     },
   },
   recharge: {
     hoursTitle: '充值服务开放时间：每日 06:00–23:00',
-    hoursDescription: '按北京时间显示开放时段，其他时段仍可尝试充值。',
-    initialState: '填写目标学工号和金额后，先核对账户再确认扣费。',
-    initialMethodDescription: '将先核对校园卡余额和目标账户，二次确认后再执行一次扣费。',
-    safetyNote: '到账状态可自动查询，但任何扣费或网费转入订单只提交一次，结果不明确时不会自动重复扣费。支付宝与微信均由学校支付平台发起，App 不读取支付密码。',
+    hoursDescription: '开放时段按北京时间显示，其余时段也可尝试发起订单。',
+    initialState: '填好目标学工号和金额后，先核对账户信息再确认扣费。',
+    initialMethodDescription: '先查询校园卡余额与目标账户状态，二次确认后才会提交扣款。',
+    safetyNote: '扣费和网费转入订单不会自动重复提交，避免重复扣款；支付宝与微信由学校支付平台处理，App 不读取支付密码。',
   },
   security: {
     passwordTitle: '修改统一认证密码',

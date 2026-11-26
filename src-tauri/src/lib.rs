@@ -1997,7 +1997,7 @@ async fn run_headless_network_check(
         return serde_json::json!({
             "status": if online { "online" } else { "cellular" },
             "notification_category": "network",
-            "notification": if online { "移动数据已连接，校园网探测已暂停" } else { "移动数据连通性暂未确认" },
+            "notification": if online { "移动数据已连接，校园网探测已暂停" } else { "移动数据已连接，外网连接待确认" },
             "logs": logs,
         });
     }
@@ -4440,7 +4440,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                 &app,
                 &state,
                 "网络",
-                "系统路由可联网，但当前认证网卡直连尚未通过；继续确认校园网认证状态",
+                "当前经系统其他路径可上网，所选校园网卡直连尚未通过，继续核对校园网状态",
                 "info",
             );
         }
@@ -5004,7 +5004,7 @@ async fn trigger_network_check(app: tauri::AppHandle, state: Arc<AppState>, full
                                                             &app,
                                                             &state,
                                                             "网络",
-                                                            "认证网关报告当前 IP 已在线，且独立互联网探测已通过；停止遍历其他账号",
+                                                            "当前 IP 已在线且外网测试通过，停止尝试后续账号",
                                                             "success",
                                                         );
                                                     } else {

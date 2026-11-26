@@ -63,7 +63,7 @@ import {
 } from './appearance';
 import { IS_ANDROID, IS_WINDOWS, readTextFromClipboard, writeTextToClipboard } from './platform';
 import { requestNetworkTrustApproval, showNetworkTrustListModal } from './network-trust';
-import { applyConfiguredUiText, UI_TEXT } from './ui-text';
+import { applyConfiguredUiText, formatDashboardTimestamp, formatLocalDateTime, UI_TEXT } from './ui-text';
 import { SETTINGS_COPY } from './ui-copy/settings';
 import { formatBuildTimestamp, formatBytes, isBuildTimestamp, renderReleaseNotes, selectUpdateAsset } from './update-utils';
 import { getReleaseUpdate, loadGitHubReleases, releaseFromOfficialManifest } from './update-source';
@@ -185,11 +185,12 @@ const macosDockPolicyReady = initializeMacosDockPolicy();
 
 const warmedPageIds = new Set<string>(['dashboard']);
 let androidPrewarmTimer: number | null = null;
+let androidSubpagePrewarmed = false;
 
 function scheduleAndroidPagePrewarm() {
   if (!IS_ANDROID || window.innerWidth > 768 || androidPrewarmTimer !== null) return;
   const queue = ['settings', 'accounts', 'diagnostics', 'logs'].filter(id => !warmedPageIds.has(id));
-  if (!queue.length) return;
+  if (!queue.length && androidSubpagePrewarmed) return;
   const step = () => {
     androidPrewarmTimer = null;
     const mainEl = document.getElementById('main-content');
@@ -199,19 +200,40 @@ function scheduleAndroidPagePrewarm() {
       return;
     }
     const nextId = queue.shift();
-    if (!nextId) return;
-    const el = document.getElementById(nextId);
-    if (el && !el.classList.contains('active') && !warmedPageIds.has(nextId)) {
-      warmedPageIds.add(nextId);
-      el.classList.add('page-prewarm');
-      void el.offsetHeight;
-      window.requestAnimationFrame(() => {
-        el.classList.remove('page-prewarm');
-        if (queue.length) androidPrewarmTimer = window.setTimeout(step, 180);
-      });
+    if (nextId) {
+      const el = document.getElementById(nextId);
+      if (el && !el.classList.contains('active') && !warmedPageIds.has(nextId)) {
+        warmedPageIds.add(nextId);
+        el.classList.add('page-prewarm');
+        void el.offsetHeight;
+        window.requestAnimationFrame(() => {
+          el.classList.remove('page-prewarm');
+          if (queue.length || !androidSubpagePrewarmed) {
+            androidPrewarmTimer = window.setTimeout(step, 180);
+          }
+        });
+        return;
+      }
+      if (queue.length || !androidSubpagePrewarmed) {
+        androidPrewarmTimer = window.setTimeout(step, 40);
+      }
       return;
     }
-    if (queue.length) androidPrewarmTimer = window.setTimeout(step, 40);
+    if (!androidSubpagePrewarmed) {
+      androidSubpagePrewarmed = true;
+      const settingsEl = document.getElementById('settings');
+      if (settingsEl && !settingsEl.classList.contains('active')) {
+        const hiddenSubs = Array.from(settingsEl.querySelectorAll<HTMLElement>('.settings-subpage[data-settings-subpage][hidden]'));
+        if (hiddenSubs.length) {
+          settingsEl.classList.add('page-prewarm');
+          hiddenSubs.forEach(panel => { panel.hidden = false; });
+          void settingsEl.offsetHeight;
+          // Restore before yielding so a new selection owns the active subpage's visibility.
+          hiddenSubs.forEach(panel => { panel.hidden = true; });
+          settingsEl.classList.remove('page-prewarm');
+        }
+      }
+    }
   };
   androidPrewarmTimer = window.setTimeout(step, 280);
 }
@@ -1185,6 +1207,18 @@ async function loadConfigFromRust(): Promise<boolean> {
   }
 }
 
+let lastDashboardTimestampRaw: string | null = null;
+
+function refreshDashboardTimestampDisplay() {
+  if (!lastDashboardTimestampRaw) return;
+  const updateTimestamp = document.getElementById('update-timestamp');
+  if (!updateTimestamp) return;
+  const formatted = formatDashboardTimestamp(lastDashboardTimestampRaw);
+  if (updateTimestamp.textContent !== formatted) {
+    updateTimestamp.textContent = formatted;
+  }
+}
+
 function applyNetworkStatePayload(data: NetworkStatePayload) {
   networkExperience.renderState(data);
   routerWorkbench?.onNetworkState(data);
@@ -1206,7 +1240,7 @@ function applyNetworkStatePayload(data: NetworkStatePayload) {
   currentLoginType = loginType;
   updateNetworkStatus(state, loginType, data.loginMessage);
   if (data.systemOnline && state !== NetworkState.Online && state !== NetworkState.Checking) {
-    networkDetail.textContent += '；系统路径可以上网，认证网卡需要单独核对';
+    networkDetail.textContent += '；当前经其他网络上网，所选校园网卡仍需核对认证';
   }
   isChecking = false;
   if (state !== NetworkState.Checking) {
@@ -1231,7 +1265,9 @@ function applyNetworkStatePayload(data: NetworkStatePayload) {
 
   const updateTimestamp = document.getElementById('update-timestamp');
   if (updateTimestamp) {
-    updateTimestamp.textContent = data.timestamp || new Date().toLocaleString();
+    const rawTimestamp = data.timestamp || formatLocalDateTime();
+    lastDashboardTimestampRaw = rawTimestamp === '--' ? null : rawTimestamp;
+    updateTimestamp.textContent = formatDashboardTimestamp(rawTimestamp);
   }
 }
 
@@ -1253,6 +1289,7 @@ async function initializeRustEvents() {
   await Promise.all([
     settle('图片验证码', setupImageCaptchas()),
     settle('倒计时事件', listen<CountdownPayload>('countdown-tick', event => {
+      refreshDashboardTimestampDisplay();
       const data = event.payload;
       const countdownText = document.getElementById('countdown-text');
       if (!countdownText) return;
@@ -3040,9 +3077,9 @@ function restoreViewScrollPosition(key: string, currentScrollTop?: number): numb
 
 function openSettingsSubpage(
   subpage: string | null,
-  options: { animate?: boolean; resetScroll?: boolean; restoreScroll?: boolean; skipSave?: boolean; deferSummaries?: boolean } = {},
+  options: { animate?: boolean; resetScroll?: boolean; restoreScroll?: boolean; skipSave?: boolean; deferSummaries?: boolean; skipCloseSelect?: boolean } = {},
 ) {
-  CustomSelect.closeOpen();
+  if (!options.skipCloseSelect) CustomSelect.closeOpen();
   const prevSubpage = activeSettingsSubpage;
   const meta = subpage ? SETTINGS_SUBPAGE_META[subpage] : undefined;
   const nextSubpage = meta ? subpage : null;
@@ -3157,7 +3194,6 @@ function clearPageSlideState(flushTasks = false) {
 }
 
 function activatePage(target: string, navTarget = target) {
-  CustomSelect.closeOpen();
   let resolvedTarget = target;
   let resolvedNavTarget = navTarget;
   let requestedSettingsSubpage: string | null | undefined;
@@ -3180,6 +3216,9 @@ function activatePage(target: string, navTarget = target) {
     && window.innerWidth <= 768
     && !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
   );
+  if (!pageChanged || !shouldSlide) {
+    CustomSelect.closeOpen(pageChanged && !shouldSlide);
+  }
 
   let mainRectTop = 0;
   let prevRectTop = 0;
@@ -3256,7 +3295,7 @@ function activatePage(target: string, navTarget = target) {
       openSettingsSubpage(
         requestedSettingsSubpage,
         pageChanged
-          ? { animate: true, resetScroll: true, skipSave: true, restoreScroll: false }
+          ? { animate: true, resetScroll: true, skipSave: true, restoreScroll: false, skipCloseSelect: shouldSlide }
           : { animate: true, resetScroll: true },
       );
     } else if (pageChanged) {
@@ -3266,6 +3305,7 @@ function activatePage(target: string, navTarget = target) {
         skipSave: true,
         restoreScroll: false,
         deferSummaries: shouldSlide,
+        skipCloseSelect: shouldSlide,
       });
     } else {
       syncSettingsOverviewSummaries();
@@ -3285,7 +3325,8 @@ function activatePage(target: string, navTarget = target) {
 
   if (shouldSlide && prevPageEl && nextPageEl && mainEl) {
     const leaveTop = (prevRectTop - mainRectTop) + restoredScrollTop;
-    mainEl.classList.add('is-page-sliding', 'is-page-slide-prep');
+    mainEl.classList.add('is-page-sliding');
+    if (!wasTargetWarmed) mainEl.classList.add('is-page-slide-prep');
     prevPageEl.style.setProperty('--leave-top', `${leaveTop}px`);
     prevPageEl.style.setProperty('--leave-left', `${leaveLeft}px`);
     prevPageEl.style.setProperty('--leave-width', `${leaveWidth}px`);
@@ -3294,6 +3335,9 @@ function activatePage(target: string, navTarget = target) {
     prevPageEl.classList.add(forward ? 'page-slide-leave-left' : 'page-slide-leave-right');
     nextPageEl.classList.add(forward ? 'page-slide-from-right' : 'page-slide-from-left');
     activeLeavingPage = prevPageEl;
+    // Close any open dropdown AFTER prevPageEl receives --leave-top and slide classes
+    // so the closing morph tracks the sliding/scrolled trigger seamlessly.
+    CustomSelect.closeOpen();
     const animTarget = (resolvedTarget === 'billing-center'
       ? nextPageEl.querySelector<HTMLElement>(':scope > .page-header')
       : nextPageEl) || nextPageEl;
@@ -3311,14 +3355,14 @@ function activatePage(target: string, navTarget = target) {
       animTarget.addEventListener('animationend', onAnimEnd);
       timer = window.setTimeout(() => clearPageSlideState(true), 300);
     };
-    rafId = window.requestAnimationFrame(() => {
-      if (activeTransitionSeq !== pageTransitionSeq) return;
-      if (!wasTargetWarmed) {
+    if (wasTargetWarmed) {
+      releasePrep();
+    } else {
+      rafId = window.requestAnimationFrame(() => {
+        if (activeTransitionSeq !== pageTransitionSeq) return;
         rafId = window.requestAnimationFrame(releasePrep);
-      } else {
-        releasePrep();
-      }
-    });
+      });
+    }
     cancelPageSlide = () => {
       if (rafId) window.cancelAnimationFrame(rafId);
       if (timer !== null) window.clearTimeout(timer);
