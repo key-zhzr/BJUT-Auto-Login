@@ -1,11 +1,19 @@
-import {PLATFORMS,assetLabel,formatSize,formatPackageSize} from './downloads.js';
-const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+import { PLATFORMS, assetLabel, formatSize, formatPackageSize } from './downloads.js';
+const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+
+const PLATFORM_BADGES = {
+  windows: 'Windows 10 / 11',
+  macos: 'macOS 12+',
+  linux: 'Linux x86_64',
+  android: 'Android 9+',
+};
 
 export function downloadCards(catalog) {
-  const icons={windows:'windows',macos:'apple',linux:'linux',android:'android'};
-  return Object.entries(PLATFORMS).map(([platform,name])=> {
-    const assets=catalog.assets.filter(asset=>asset.platform===platform);
-    return `<article class="download-card" data-platform="${platform}"><div class="download-platform"><img class="platform-symbol" src="/icons/${icons[platform]}.svg" alt="" width="32" height="32"><h3>${name}</h3></div><div class="download-options">${assets.map(asset=>`<a class="download-option" data-asset="${asset.id}" href="${escape(asset.url)}"><span>${escape(assetLabel(asset))}</span><small>${formatSize(asset.size)} ↓</small></a>`).join('') || '<p>当前版本暂未提供</p>'}</div></article>`;
+  const icons = { windows: 'windows', macos: 'apple', linux: 'linux', android: 'android' };
+  return Object.entries(PLATFORMS).map(([platform, name]) => {
+    const assets = catalog.assets.filter(asset => asset.platform === platform);
+    const meta = PLATFORM_BADGES[platform] || '';
+    return `<article class="download-card" data-platform="${platform}"><div class="download-platform"><img class="platform-symbol" src="/icons/${icons[platform]}.svg" alt="" width="30" height="30"><div><h3>${name}</h3>${meta ? `<span class="download-platform-meta">${escape(meta)}</span>` : ''}</div></div><div class="download-options">${assets.map(asset => `<a class="download-option" data-asset="${asset.id}" href="${escape(asset.url)}"><span>${escape(assetLabel(asset))}</span><small>${formatSize(asset.size)} ↓</small></a>`).join('') || '<p>当前版本暂未提供</p>'}</div></article>`;
   }).join('\n');
 }
 
@@ -22,17 +30,17 @@ function renderOpenwrtCell(row, releasesUrl) {
         ? `<a class="openwrt-pkg-link" href="${escape(file.url)}"><span>${escape(label)} (${escape(file.version)})</span><small>${escape(sizeText)} ↓</small></a>`
         : `<div class="openwrt-pkg-meta"><span>${escape(label)} (${escape(file.version)})</span><small>${escape(sizeText)}</small></div>`;
       const shaHtml = file.sha256
-        ? `<div class="openwrt-sha-row"><span>SHA-256: <code class="openwrt-sha256">${escape(file.sha256)}</code></span></div>`
-        : `<div class="openwrt-sha-row"><small>校验值请核对 Release 的 SHA256SUMS</small></div>`;
+        ? `<div class="openwrt-sha-row"><span>SHA-256: <code class="openwrt-sha256">${escape(file.sha256)}</code></span><button type="button" class="openwrt-copy-sha" data-copy-sha="${escape(file.sha256)}" aria-label="复制 SHA-256">复制</button></div>`
+        : `<div class="openwrt-sha-row"><small>校验值见 Release SHA256SUMS</small></div>`;
       return `<div class="openwrt-pkg-item">${titleHtml}${shaHtml}</div>`;
     }).join('');
-    const latestHtml = row.latestBuild ? `<details class="openwrt-latest-build"><summary>已验证源码修订 ${escape(row.latestBuild.packageRevision)} 构建元数据</summary><div class="openwrt-latest-body"><p>源码提交：<code>${escape(row.latestBuild.sourceCommit || '')}</code> · SDK：<code>${escape(row.latestBuild.sdkContainer)}</code></p>${row.latestBuild.files.map(file => `<p><code>${escape(file.name)}</code> (${escape(formatPackageSize(file.size))})<br>SHA-256: <code class="openwrt-sha256">${escape(file.sha256)}</code></p>`).join('')}</div></details>` : '';
+    const latestHtml = row.latestBuild ? `<details class="openwrt-latest-build"><summary>已验证源码修订 ${escape(row.latestBuild.packageRevision)} 构建信息</summary><div class="openwrt-latest-body"><p>源码提交：<code>${escape(row.latestBuild.sourceCommit || '')}</code> · SDK：<code>${escape(row.latestBuild.sdkContainer)}</code></p>${row.latestBuild.files.map(file => `<p><code>${escape(file.name)}</code> (${escape(formatPackageSize(file.size))})<br>SHA-256: <code class="openwrt-sha256">${escape(file.sha256)}</code></p>`).join('')}</div></details>` : '';
     return `<div class="openwrt-sdk-box" data-openwrt-id="${escape(row.id)}" data-openwrt-format="${escape(row.format)}">${header}${items}${latestHtml}</div>`;
   }
   return `<div class="openwrt-sdk-box matrix-fallback" data-openwrt-id="${escape(row.id)}" data-openwrt-format="${escape(row.format)}">${header}<p class="openwrt-fallback-note">配套包：<code>bjut-autologin</code> (${escape(row.arch)}) + <code>luci-app-bjut-autologin</code>${row.format === 'ipk' ? ' (all)' : ''} · <a href="${escape(releasesUrl)}">前往 Release 下载并核对 SHA256SUMS ↗</a></p></div>`;
 }
 
-export function openwrtMatrixMarkup(openwrt, {formatFilter = 'all', query = ''} = {}) {
+export function openwrtMatrixMarkup(openwrt, { formatFilter = 'all', query = '' } = {}) {
   const normalizedQuery = String(query || '').trim().toLowerCase();
   const platforms = openwrt.platforms.filter(platform => {
     if (formatFilter !== 'all') {
@@ -45,7 +53,7 @@ export function openwrtMatrixMarkup(openwrt, {formatFilter = 'all', query = ''} 
   });
 
   if (!platforms.length) {
-    return `<p class="openwrt-empty">未找到匹配的目标平台或包架构，请尝试清空筛选条件。</p>`;
+    return `<p class="openwrt-empty">没有匹配的路由平台或架构，试试清空筛选条件。</p>`;
   }
 
   const rowsHtml = platforms.map(platform => {

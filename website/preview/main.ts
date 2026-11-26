@@ -13,7 +13,8 @@ import { Activity, BarChart2, CheckCircle, ChevronDown, Clock, createIcons, File
 
 const params = new URLSearchParams(location.search);
 const mobile = params.get('layout') === 'mobile';
-const colorMode = params.get('color') || 'system';
+let currentTheme: 'basic' | 'winui' = params.get('theme') === 'winui' ? 'winui' : 'basic';
+let currentColorMode = params.get('color') || 'system';
 const source = new DOMParser().parseFromString(appHtml, 'text/html');
 const app = source.getElementById('app')!;
 const titlebar = source.querySelector<HTMLElement>('.titlebar')!;
@@ -22,9 +23,30 @@ app.querySelectorAll('.page:not(#dashboard)').forEach(page => page.remove());
 app.querySelectorAll('script').forEach(script => script.remove());
 document.body.replaceChildren(...(mobile ? [app] : [titlebar, app]));
 document.body.classList.add(mobile ? 'is-android' : 'is-desktop');
-applyAppearance('basic', 'blue', colorMode);
-observeSystemColorScheme(() => applyAppearance('basic', 'blue', colorMode));
+
+function syncPreviewAppearance() {
+  applyAppearance(currentTheme, 'blue', currentColorMode);
+}
+
+syncPreviewAppearance();
+observeSystemColorScheme(() => syncPreviewAppearance());
 setupPageHeaders();
+
+window.addEventListener('message', event => {
+  if (event.origin !== location.origin || !event.data || typeof event.data !== 'object') return;
+  const data = event.data as { bjutPreviewTheme?: string; bjutPreviewColor?: string };
+  let changed = false;
+  if (data.bjutPreviewTheme === 'basic' || data.bjutPreviewTheme === 'winui') {
+    currentTheme = data.bjutPreviewTheme;
+    changed = true;
+  }
+  if (data.bjutPreviewColor === 'light' || data.bjutPreviewColor === 'dark' || data.bjutPreviewColor === 'system') {
+    currentColorMode = data.bjutPreviewColor;
+    changed = true;
+  }
+  if (changed) syncPreviewAppearance();
+});
+
 const element = (id: string) => document.getElementById(id)!;
 document.getElementById('device-usage-panel')?.setAttribute('hidden', '');
 element('network-status').textContent = UI_TEXT.networkStatus.onlineTitle;
@@ -39,12 +61,14 @@ element('info-balance').textContent = '36.00 元';
 element('info-flow').textContent = '82.4 GB';
 element('update-timestamp').textContent = '12:30:00';
 element('countdown-text').textContent = '15';
-for (const [id,time] of [['ipv4-health','28'],['ipv6-health','36']]) {
-  const node=element(id); node.className='family-status reachable';
-  node.querySelector('strong')!.textContent=`${time} ms`;
-  node.querySelector('.family-marker')!.textContent='✓';
+for (const [id, time] of [['ipv4-health', '28'], ['ipv6-health', '36']]) {
+  const node = element(id);
+  node.className = 'family-status reachable';
+  node.querySelector('strong')!.textContent = `${time} ms`;
+  node.querySelector('.family-marker')!.textContent = '✓';
 }
 createIcons({ icons: { Activity, BarChart2, CheckCircle, ChevronDown, Clock, FileText, Home, LayoutDashboard, LogIn, Minus, Power, ReceiptText, RefreshCw, Settings, ShieldCheck, Square, User, Users, WalletCards, X } });
 // This is a non-interactive presentation, not an app sign-in surface.
-app.inert = true; titlebar.inert = true;
-document.documentElement.dataset.previewReady='true';
+app.inert = true;
+titlebar.inert = true;
+document.documentElement.dataset.previewReady = 'true';

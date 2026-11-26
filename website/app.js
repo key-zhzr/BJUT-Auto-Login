@@ -3,13 +3,65 @@ import { REPOSITORY, OPENWRT_REPOSITORY, PLATFORMS, releaseCatalog, releaseChann
 import { openwrtMatrixMarkup } from './render-downloads.js';
 
 let catalog = releaseCatalog(release);
-let channels = {release:catalog, prerelease:null};
+let channels = { release: catalog, prerelease: null };
 let channel = 'release';
-let device = {platform:null, arch:null, certain:false};
+let device = { platform: null, arch: null, certain: false };
 let manualArch = '';
 let openwrt = openwrtCatalog(null, openwrtTargets);
 let openwrtFormat = 'all';
 let openwrtQuery = '';
+let previewTheme = 'basic';
+let siteTheme = 'system';
+
+try {
+  const savedTheme = localStorage.getItem('bjut_site_theme');
+  if (savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'system') siteTheme = savedTheme;
+} catch {}
+
+function broadcastToPreview(payload) {
+  for (const frame of document.querySelectorAll('iframe[data-preview-frame]')) {
+    try {
+      frame.contentWindow?.postMessage(payload, location.origin);
+    } catch {}
+  }
+}
+
+function applySiteTheme(nextTheme) {
+  siteTheme = nextTheme;
+  try {
+    localStorage.setItem('bjut_site_theme', siteTheme);
+  } catch {}
+  if (siteTheme === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = siteTheme;
+  for (const button of document.querySelectorAll('[data-site-theme]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.siteTheme === siteTheme));
+  }
+  broadcastToPreview({ bjutPreviewColor: siteTheme });
+  updatePreviewLinks();
+}
+
+function updatePreviewLinks() {
+  const suffix = `&theme=${previewTheme}${siteTheme === 'system' ? '' : `&color=${siteTheme}`}`;
+  for (const link of document.querySelectorAll('[data-preview-link]')) {
+    const layout = link.dataset.previewLink;
+    link.href = `/preview/index.html?layout=${layout}${suffix}`;
+  }
+}
+
+function applyPreviewTheme(nextTheme) {
+  previewTheme = nextTheme === 'winui' ? 'winui' : 'basic';
+  for (const button of document.querySelectorAll('[data-preview-theme]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.previewTheme === previewTheme));
+  }
+  const caption = document.querySelector('[data-preview-caption]');
+  if (caption) {
+    caption.textContent = previewTheme === 'winui'
+      ? 'WinUI 原生风格主题 · 桌面端与 Android 当前布局，使用示例数据'
+      : 'Basic 液态玻璃主题 · 桌面端与 Android 当前布局，使用示例数据';
+  }
+  updatePreviewLinks();
+  broadcastToPreview({ bjutPreviewTheme: previewTheme });
+}
 
 function rendererHint() {
   const canvas = document.createElement('canvas');
@@ -23,7 +75,7 @@ function rendererHint() {
 
 function renderRecommendation() {
   const selected = selectDeviceArch(device, manualArch);
-  const {asset, note} = catalog ? recommendDownload(selected, catalog) : {asset:null, note:'暂无可下载的预发布版，请选择正式版。'};
+  const { asset, note } = catalog ? recommendDownload(selected, catalog) : { asset: null, note: '当前暂无预发布版安装包，建议选择正式版。' };
   document.querySelectorAll('[data-smart-download]').forEach(link => {
     link.href = asset?.url || '#download';
     link.querySelector('[data-download-label]').textContent = asset
@@ -86,9 +138,17 @@ function renderOpenwrt() {
   }
   const matrixNode = document.getElementById('openwrt-matrix');
   if (matrixNode) {
-    matrixNode.innerHTML = openwrtMatrixMarkup(openwrt, {formatFilter: openwrtFormat, query: openwrtQuery});
+    matrixNode.innerHTML = openwrtMatrixMarkup(openwrt, { formatFilter: openwrtFormat, query: openwrtQuery });
   }
 }
+
+document.querySelectorAll('[data-site-theme]').forEach(button => button.addEventListener('click', () => {
+  applySiteTheme(button.dataset.siteTheme || 'system');
+}));
+
+document.querySelectorAll('[data-preview-theme]').forEach(button => button.addEventListener('click', () => {
+  applyPreviewTheme(button.dataset.previewTheme || 'basic');
+}));
 
 document.querySelectorAll('[data-release-channel]').forEach(button => button.addEventListener('click', () => {
   channel = button.dataset.releaseChannel;
@@ -112,6 +172,16 @@ document.getElementById('openwrt-platform-filter')?.addEventListener('input', ev
 });
 
 document.addEventListener('click', event => {
+  const shaButton = event.target.closest?.('[data-copy-sha]');
+  if (shaButton) {
+    const sha = shaButton.dataset.copySha || '';
+    if (!sha) return;
+    void navigator.clipboard?.writeText(sha).then(() => {
+      shaButton.textContent = '已复制';
+      setTimeout(() => { shaButton.textContent = '复制'; }, 1500);
+    }).catch(() => {});
+    return;
+  }
   const button = event.target.closest?.('[data-copy-code]');
   if (!button) return;
   const code = button.closest('.code-block')?.querySelector('pre code') || button.closest('.code-block')?.querySelector('pre');
@@ -126,6 +196,8 @@ document.addEventListener('click', event => {
   }).catch(() => {});
 });
 
+applySiteTheme(siteTheme);
+applyPreviewTheme(previewTheme);
 renderRecommendation();
 void readDevice(navigator, rendererHint).then(value => { device = value; renderRecommendation(); });
 
@@ -138,7 +210,7 @@ void (async () => {
       const response = await fetch(`https://api.github.com/repos/${repo}/${path}`, {
         signal: controller.signal,
         credentials: 'omit',
-        headers: {Accept: 'application/vnd.github+json'},
+        headers: { Accept: 'application/vnd.github+json' },
       });
       if (!response.ok) throw new Error('版本信息暂不可用');
       return response.json();
@@ -169,6 +241,10 @@ void (async () => {
 // Both documents render the client's own markup and CSS at real device sizes.
 for (const viewport of document.querySelectorAll('.preview-viewport')) {
   const frame = viewport.querySelector('iframe');
+  if (!frame) continue;
+  frame.addEventListener('load', () => {
+    broadcastToPreview({ bjutPreviewTheme: previewTheme, bjutPreviewColor: siteTheme });
+  });
   const resize = () => { frame.style.transform = `scale(${viewport.clientWidth / Number(frame.width)})`; };
   new ResizeObserver(resize).observe(viewport);
   resize();

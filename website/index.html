@@ -1,49 +1,313 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#f7f8fb" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#0d1322" media="(prefers-color-scheme: dark)">
-<title>BJUT Auto Login · 校园网连接助手</title><meta name="description" content="面向北京工业大学校园网的开源连接助手。自动登录、双栈诊断、账号管理与计费服务，支持 Windows、macOS、Linux、Android 与 OpenWrt 路由端。">
-<meta property="og:type" content="website"><meta property="og:site_name" content="BJUT Auto Login"><meta property="og:locale" content="zh_CN"><meta property="og:title" content="BJUT Auto Login · 校园网连接助手"><meta property="og:description" content="面向北京工业大学校园网的开源连接助手。自动登录、双栈诊断、账号管理与计费服务，支持 Windows、macOS、Linux、Android 与 OpenWrt 路由端。"><meta property="og:url" content="https://al.bjutdown.work/"><meta property="og:image" content="https://al.bjutdown.work/logo.png"><meta property="og:image:alt" content="BJUT Auto Login 图标">
-<meta name="twitter:card" content="summary"><meta name="twitter:title" content="BJUT Auto Login · 校园网连接助手"><meta name="twitter:description" content="面向北京工业大学校园网的开源连接助手。自动登录、双栈诊断、账号管理与计费服务，支持 Windows、macOS、Linux、Android 与 OpenWrt 路由端。"><meta name="twitter:image" content="https://al.bjutdown.work/logo.png"><meta name="twitter:image:alt" content="BJUT Auto Login 图标">
-<link rel="canonical" href="https://al.bjutdown.work/"><link rel="icon" href="/logo.png"><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f5f7fc" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#090e1a" media="(prefers-color-scheme: dark)">
+<title>BJUT Auto Login · 校园网连接助手</title>
+<meta name="description" content="面向北京工业大学校园网的开源连接助手。自动登录、双栈诊断、账号管理、流量统计与计费服务，支持 Windows、macOS、Linux、Android 与 OpenWrt 路由端。">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="BJUT Auto Login">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:title" content="BJUT Auto Login · 校园网连接助手">
+<meta property="og:description" content="面向北京工业大学校园网的开源连接助手。自动登录、双栈诊断、账号管理、流量统计与计费服务，支持 Windows、macOS、Linux、Android 与 OpenWrt 路由端。">
+<meta property="og:url" content="https://al.bjutdown.work/">
+<meta property="og:image" content="https://al.bjutdown.work/logo.png">
+<meta property="og:image:alt" content="BJUT Auto Login 图标">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="BJUT Auto Login · 校园网连接助手">
+<meta name="twitter:description" content="面向北京工业大学校园网的开源连接助手。自动登录、双栈诊断、账号管理、流量统计与计费服务，支持 Windows、macOS、Linux、Android 与 OpenWrt 路由端。">
+<meta name="twitter:image" content="https://al.bjutdown.work/logo.png">
+<meta name="twitter:image:alt" content="BJUT Auto Login 图标">
+<link rel="canonical" href="https://al.bjutdown.work/">
+<link rel="icon" href="/logo.png">
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/app.js"></script>
+</head>
 <body>
 <a class="skip" href="#main">跳到主要内容</a>
-<header class="site-header wrap"><a class="brand" href="/" aria-label="BJUT Auto Login 首页"><img src="/logo.png" width="34" height="34" alt=""><span>BJUT<span class="brand-light"> Auto Login</span></span></a><nav aria-label="主导航"><a href="#features">功能</a><a href="#download">下载</a><a href="/guide/Getting-Started/">使用指南</a><a href="https://github.com/key-zhzr/BJUT-Auto-Login" class="github">GitHub <span aria-hidden="true">↗</span></a></nav></header>
+<header class="site-header">
+  <div class="wrap site-header-inner">
+    <a class="brand" href="/" aria-label="BJUT Auto Login 首页">
+      <img src="/logo.png" width="34" height="34" alt="">
+      <span>BJUT<span class="brand-light"> Auto Login</span></span>
+    </a>
+    <nav class="site-nav" aria-label="主导航">
+      <a href="#features">特性</a>
+      <a href="#download">下载</a>
+      <a href="#openwrt-download">OpenWrt</a>
+      <a href="/guide/Getting-Started/">使用指南</a>
+      <div class="site-theme-switch" role="group" aria-label="站点配色">
+        <button type="button" data-site-theme="system" aria-pressed="true" title="跟随系统明暗">自动</button>
+        <button type="button" data-site-theme="light" aria-pressed="false" title="浅色界面">浅色</button>
+        <button type="button" data-site-theme="dark" aria-pressed="false" title="深色界面">深色</button>
+      </div>
+      <a href="https://github.com/key-zhzr/BJUT-Auto-Login" class="github">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+  </div>
+</header>
+
 <main id="main">
-<section class="hero wrap">
-<div class="hero-copy"><div class="eyebrow"><span class="dot" aria-hidden="true"></span> 为北工大校园网而做</div><h1>连接校园，<br class="phone-break">少一点等待。</h1><p class="intro">从自动登录到网络诊断，<br class="desktop-break">把日常连接的小事，交给 BJUT Auto Login。</p><div class="hero-actions"><a class="button primary" data-smart-download href="#download"><span data-download-label>选择安装包</span><span aria-hidden="true">↓</span></a><a class="button secondary" href="/guide/Getting-Started/">快速开始 <span aria-hidden="true">↗</span></a></div><p class="download-hint" data-download-hint aria-live="polite">Windows · macOS · Linux · Android</p></div>
-<div class="preview-pair" aria-label="桌面端和移动端界面展示">
-<figure class="preview-desktop"><figcaption><span>桌面端</span><a href="/preview/index.html?layout=desktop" target="_blank" rel="noopener" aria-label="在新标签页放大查看桌面端界面预览">放大查看 <span aria-hidden="true">↗</span></a></figcaption><div class="preview-viewport desktop-viewport"><iframe title="BJUT-AL 桌面端控制台，示例数据" src="/preview/index.html?layout=desktop" width="1080" height="740" tabindex="-1" sandbox="allow-scripts allow-same-origin"></iframe></div></figure>
-<figure class="preview-mobile"><figcaption><span>Android</span><a href="/preview/index.html?layout=mobile" target="_blank" rel="noopener" aria-label="在新标签页放大查看 Android 界面预览">放大查看 <span aria-hidden="true">↗</span></a></figcaption><div class="preview-viewport mobile-viewport"><iframe title="BJUT-AL Android 控制台，示例数据" src="/preview/index.html?layout=mobile" width="390" height="844" tabindex="-1" sandbox="allow-scripts allow-same-origin"></iframe></div></figure>
-<p class="preview-caption">Basic 主题（随系统明暗切换） · 客户端当前布局，使用示例数据</p>
-</div>
-</section>
-<section class="compatibility wrap" aria-label="支持的校园网类型"><span>适配三类校园网</span><div>bjut_wifi</div><div>bjut-sushe</div><div>lgn 有线双栈</div></section>
-<section id="features" class="features wrap"><div class="section-heading"><p class="eyebrow">日常所需，集中在一起</p><h2>少些反复操作，<br>多些连接的确定感。</h2></div><div class="feature-grid">
-<article><span class="feature-icon blue" aria-hidden="true">↻</span><h3>连接变化，自动接上</h3><p>识别校园网络并自动认证。多账号按顺序尝试，网络稳定时减少后台检测。</p><a href="/guide/Getting-Started/">了解自动登录 <span aria-hidden="true">↗</span></a></article>
-<article><span class="feature-icon mint" aria-hidden="true">⌁</span><h3>哪一步受阻，看得清</h3><p>诊断结果逐项出现。IPv4、IPv6 与 VPN 路径分开检查，快速定位连接问题。</p><a href="/guide/Network/">查看诊断指南 <span aria-hidden="true">↗</span></a></article>
-<article><span class="feature-icon violet" aria-hidden="true">▤</span><h3>用量和账单，就近查看</h3><p>查看校园网余额、流量和在线设备，也能查询账单、调整服务或充值网费。</p><a href="/guide/Billing/">了解计费服务 <span aria-hidden="true">↗</span></a></article>
-</div></section>
-<section class="privacy wrap"><div><p class="eyebrow">开源 · 本机保存</p><h2>你的账号，<br>由你掌握。</h2></div><div><p>账号密码保存在本机安全存储。迁移到另一台设备时，可选择需要的内容，通过加密备份或二维码导入。</p><p>项目代码公开，欢迎检查、改进和反馈问题。</p><a class="text-link" href="/guide/Privacy/">隐私与安全说明 <span aria-hidden="true">↗</span></a></div></section>
-<section id="download" class="downloads wrap"><div class="section-heading"><p class="eyebrow">开始使用</p><h2>在你的设备上，连接校园。</h2><p>稳定版跟随项目 GitHub Latest Release，预发布版单独列出。<span id="release-version"><!-- RELEASE_VERSION --></span></p></div><div class="release-channel" role="group" aria-label="下载频道"><button type="button" data-release-channel="release" aria-pressed="true">正式版 · Latest Release</button><button type="button" data-release-channel="prerelease" aria-pressed="false">预发布版 · Pre-release</button></div><div class="recommended-download"><div><strong>为你的设备选择安装包</strong><p data-download-hint aria-live="polite">正在识别系统…</p><label id="android-architecture" hidden>Android 架构 <select id="android-arch-choice"><option value="">自动推荐</option><option value="arm64">ARM64 · 普通手机</option><option value="x64">x86_64 · Intel / 模拟器</option></select></label></div><a class="button primary" data-smart-download href="#download"><span data-download-label>选择安装包</span><span aria-hidden="true">↓</span></a></div><div class="download-grid"><!-- DOWNLOAD_CARDS --></div><p class="download-note">预发布版可能仍在测试，日常使用建议选择正式版。接口离线或受限时自动保留已验证的发布直链与 Windows 离线安装包。<a href="https://github.com/key-zhzr/BJUT-Auto-Login/releases">查看全部版本 <span aria-hidden="true">↗</span></a></p>
-<div id="openwrt-download" class="openwrt-downloads" aria-labelledby="openwrt-heading">
-<div class="openwrt-header">
-<div><p class="eyebrow">OpenWrt / ImmortalWrt 路由端</p><h3 id="openwrt-heading">OpenWrt APK / IPK 与架构下载矩阵</h3><p class="openwrt-sub">固定官方 SDK：OpenWrt <strong>25.12.5 → APK</strong>、<strong>24.10.8 → IPK</strong>（非 Android APK）。每项构建同时提供 <code>bjut-autologin</code> 核心包与 <code>luci-app-bjut-autologin</code> 界面包。<span id="openwrt-release-version"><!-- OPENWRT_VERSION --></span></p></div>
-<div class="openwrt-controls">
-<div class="openwrt-format-group" role="group" aria-label="OpenWrt 包格式筛选"><button type="button" data-openwrt-format="all" aria-pressed="true">全部格式 (19)</button><button type="button" data-openwrt-format="apk" aria-pressed="false">25.12.5 · APK (10)</button><button type="button" data-openwrt-format="ipk" aria-pressed="false">24.10.8 · IPK (9)</button></div>
-<label class="openwrt-search-label" for="openwrt-platform-filter"><span class="sr-only">筛选路由平台或包架构</span><input id="openwrt-platform-filter" type="search" placeholder="筛选 Target / 架构 / 设备…" autocomplete="off"></label>
-</div>
-</div>
-<div id="openwrt-matrix" aria-live="polite"><!-- OPENWRT_MATRIX --></div>
-<div class="openwrt-verify-bar">
-<div class="openwrt-verify-copy">
-<p><strong>校验与元数据回退说明：</strong>安装前可在路由器执行 <code>ubus call system board</code> 与 <code>opkg print-architecture</code> / <code>apk --print-arch</code> 核对平台和架构；下载后使用 <code>sha256sum -c SHA256SUMS</code> 校验完整性。官网仅展示已验证的元数据与真实 SHA-256，不编造未发布包或校验值。</p>
-<div class="openwrt-meta-links"><a id="openwrt-builds-link" href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/releases/download/openwrt-v0.1.6-r13/builds.json">构建清单 builds.json <span aria-hidden="true">↗</span></a><a id="openwrt-sums-link" href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/releases/download/openwrt-v0.1.6-r13/SHA256SUMS">校验文件 SHA256SUMS <span aria-hidden="true">↗</span></a><a href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/releases">路由端 Releases <span aria-hidden="true">↗</span></a><a href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/actions/workflows/openwrt-packages.yml">Actions 编译工作流 <span aria-hidden="true">↗</span></a><a href="/guide/OpenWrt/#下载与架构矩阵">查看路由端指南 <span aria-hidden="true">↗</span></a></div>
-</div>
-<div class="code-block compact-code"><div class="code-block-bar"><span>路由器架构查询与校验命令</span><button type="button" class="copy-code" data-copy-code aria-label="复制校验命令">复制代码</button></div><pre><code>ubus call system board
-sha256sum -c SHA256SUMS</code></pre></div>
-</div>
-</div>
-</section>
-<section id="faq" class="faq wrap"><h2>你可能想知道</h2><details><summary>这是学校官方应用吗？</summary><p>不是。BJUT Auto Login 是开源第三方工具，由项目维护者独立开发，与学校官方应用无隶属关系。</p></details><details><summary>可以与 VPN 一起使用吗？</summary><p>支持多档 VPN 兼容策略。建议先使用默认设置，遇到问题时在网络诊断中查看当前网络和网卡直连的结果。<a href="/guide/Network/#vpn-兼容策略">查看使用说明</a>。</p></details><details><summary>有 OpenWrt 路由器版本吗？</summary><p>路由端已在<a href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt">独立仓库</a>维护，提供多上游自动认证、LuCI 界面与 App 局域网协作。<a href="/guide/OpenWrt/">查看路由端说明</a>。</p></details><details><summary>遇到问题如何反馈？</summary><p>先运行网络诊断，再到 GitHub 提交问题。请附上系统版本、应用版本及脱敏诊断信息，不要公开账号密码。<a href="https://github.com/key-zhzr/BJUT-Auto-Login/issues">提交反馈 <span aria-hidden="true">↗</span></a></p></details></section>
-</main><footer class="wrap"><a class="brand" href="/">BJUT Auto Login</a><p>开源第三方校园网工具 · MIT License</p><div><a href="/guide/Getting-Started/">使用指南</a><a href="https://github.com/key-zhzr/BJUT-Auto-Login/wiki">Wiki</a><a href="https://github.com/key-zhzr/BJUT-Auto-Login">源代码 <span aria-hidden="true">↗</span></a></div></footer>
-</body></html>
+  <section class="hero wrap">
+    <div class="hero-copy">
+      <div class="hero-pill">
+        <span class="dot" aria-hidden="true"></span>
+        <span>开源第三方工具 · 为北京工业大学校园网而做</span>
+      </div>
+      <h1>校园网认证、<br class="phone-break">双栈诊断与计费，<br>装好就少操心。</h1>
+      <p class="intro">原生支持 Windows、macOS、Linux、Android 与 OpenWrt 路由器。断网即重连，IPv4 / IPv6 与 VPN 各走各路，用量、账单和续费一处看完。</p>
+      <div class="hero-actions">
+        <a class="button primary" data-smart-download href="#download">
+          <span data-download-label>选择安装包</span>
+          <span aria-hidden="true">↓</span>
+        </a>
+        <a class="button secondary" href="#download">所有平台与路由包</a>
+        <a class="button ghost" href="/guide/Getting-Started/">使用指南 <span aria-hidden="true">↗</span></a>
+      </div>
+      <p class="download-hint" data-download-hint aria-live="polite">正在识别设备系统…</p>
+    </div>
+
+    <div class="preview-stage" aria-label="桌面端与 Android 界面实时预览">
+      <div class="preview-toolbar">
+        <div class="preview-toolbar-left">
+          <span class="preview-badge">真实界面构建</span>
+          <p class="preview-caption" data-preview-caption>Basic 液态玻璃主题 · 桌面端与 Android 当前布局，使用示例数据</p>
+        </div>
+        <div class="preview-theme-switch" role="group" aria-label="切换客户端预览主题">
+          <button type="button" data-preview-theme="basic" aria-pressed="true">Basic 液态玻璃</button>
+          <button type="button" data-preview-theme="winui" aria-pressed="false">WinUI 原生风格</button>
+        </div>
+      </div>
+
+      <div class="preview-pair">
+        <figure class="preview-desktop">
+          <figcaption>
+            <span>桌面端控制台</span>
+            <a data-preview-link="desktop" href="/preview/index.html?layout=desktop" target="_blank" rel="noopener" aria-label="在新标签页放大查看桌面端界面预览">单独打开 <span aria-hidden="true">↗</span></a>
+          </figcaption>
+          <div class="preview-viewport desktop-viewport">
+            <iframe data-preview-frame="desktop" title="BJUT-AL 桌面端控制台，示例数据" src="/preview/index.html?layout=desktop" width="1080" height="740" tabindex="-1" sandbox="allow-scripts allow-same-origin"></iframe>
+          </div>
+        </figure>
+        <figure class="preview-mobile">
+          <figcaption>
+            <span>Android</span>
+            <a data-preview-link="mobile" href="/preview/index.html?layout=mobile" target="_blank" rel="noopener" aria-label="在新标签页放大查看 Android 界面预览">单独打开 <span aria-hidden="true">↗</span></a>
+          </figcaption>
+          <div class="preview-viewport mobile-viewport">
+            <iframe data-preview-frame="mobile" title="BJUT-AL Android 控制台，示例数据" src="/preview/index.html?layout=mobile" width="390" height="844" tabindex="-1" sandbox="allow-scripts allow-same-origin"></iframe>
+          </div>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="compatibility wrap" aria-label="支持接入场景">
+    <div class="compat-item">
+      <span class="compat-label">宿舍网络</span>
+      <strong>bjut-sushe</strong>
+      <small>TLS 认证 · 双栈门户同步登录</small>
+    </div>
+    <div class="compat-item">
+      <span class="compat-label">校园无线</span>
+      <strong>bjut_wifi</strong>
+      <small>SSID / BSSID 校验 · 防误连假热点</small>
+    </div>
+    <div class="compat-item">
+      <span class="compat-label">有线双栈</span>
+      <strong>lgn / lgn6</strong>
+      <small>独立网卡绑定 · 固定校园 DNS 解析</small>
+    </div>
+    <div class="compat-item">
+      <span class="compat-label">全端覆盖</span>
+      <strong>桌面 / 手机 / 路由</strong>
+      <small>Rust 核心 · 低功耗保活 · 局域网协作</small>
+    </div>
+  </section>
+
+  <section id="features" class="features wrap">
+    <div class="section-heading">
+      <p class="eyebrow">核心能力</p>
+      <h2>把认证、排障和计费<br>做成顺手工具。</h2>
+    </div>
+    <div class="bento-grid">
+      <article class="bento-card bento-wide">
+        <span class="feature-icon blue" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/><path d="M8 12l3 3 5-5"/></svg>
+        </span>
+        <h3>换网即连，多号按顺序自动切</h3>
+        <p>实时监听有线插拔和 Wi-Fi 切换，连上校园网自动完成认证；多账号按优先级顺延尝试，联网稳定后自动降低后台轮询频率。</p>
+        <a href="/guide/Getting-Started/">查看快速开始 <span aria-hidden="true">↗</span></a>
+      </article>
+
+      <article class="bento-card">
+        <span class="feature-icon mint" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h6l2-5 3 10 2-5h3"/><rect x="3" y="4" width="18" height="16" rx="3"/></svg>
+        </span>
+        <h3>IPv4 / IPv6 与 VPN 共存</h3>
+        <p>提供四档 VPN 兼容策略，认证请求绑定物理网卡，诊断页对比系统默认路由与网卡直连延迟，一眼定位卡点。</p>
+        <a href="/guide/Network/">查看网络与诊断 <span aria-hidden="true">↗</span></a>
+      </article>
+
+      <article class="bento-card">
+        <span class="feature-icon violet" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/></svg>
+        </span>
+        <h3>计费中心与流量统计</h3>
+        <p>直接查看余额、流量和在线终端，分段导出完整账单 CSV，校外可通过 WebVPN 访问，支持每分钟流量统计与月末余额提醒。</p>
+        <a href="/guide/Billing/">查看计费与充值 <span aria-hidden="true">↗</span></a>
+      </article>
+
+      <article class="bento-card">
+        <span class="feature-icon amber" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><path d="M13 17h8"/><path d="M17 13v8"/></svg>
+        </span>
+        <h3>Basic 与 WinUI 双主题</h3>
+        <p>Basic 带来液态玻璃导航与原位弹性菜单，WinUI 贴合 Windows 11 原生导航风格；全端支持浅色 / 深色与自定义强调色。</p>
+        <a href="/guide/Features/">了解界面与特性 <span aria-hidden="true">↗</span></a>
+      </article>
+
+      <article class="bento-card bento-wide">
+        <span class="feature-icon cyan" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 17h.01M10 17h.01"/><path d="M12 13V7"/><path d="M8 9c2.2-2.2 5.8-2.2 8 0"/><path d="M5 6c3.9-3.9 10.1-3.9 14 0"/></svg>
+        </span>
+        <h3>OpenWrt 多上游协同与 LuCI 工作台</h3>
+        <p>路由端覆盖 OpenWrt 25.12.5 APK 与 24.10.8 IPK，配套六页 App 风格 LuCI 界面；手机或电脑连上同一局域网即可直接同步账号和流量记录。</p>
+        <a href="/guide/OpenWrt/">查看 OpenWrt 指南 <span aria-hidden="true">↗</span></a>
+      </article>
+    </div>
+  </section>
+
+  <section class="privacy wrap">
+    <div class="privacy-main">
+      <p class="eyebrow">开源 · 本机优先</p>
+      <h2>账号和凭据只留在你的设备里。</h2>
+      <p>密码分别存入 Windows DPAPI、macOS 私有加密文件、Linux Secret Service 与 Android Keystore。不会上传到任何第三方服务器，也不会随日志导出明文。</p>
+      <div class="privacy-links">
+        <a class="text-link" href="/guide/Privacy/">隐私与安全详情 <span aria-hidden="true">↗</span></a>
+        <a class="text-link" href="/guide/Backup/">加密备份与二维码迁移 <span aria-hidden="true">↗</span></a>
+      </div>
+    </div>
+    <ul class="privacy-specs" aria-label="安全实现要点">
+      <li><strong>TLS + 公钥固定</strong><span>宿舍网关采用固定证书指纹验证，避免错误证书环境明文发号</span></li>
+      <li><strong>PBKDF2 + AES-256-GCM</strong><span>配置导入与导出使用独立备份密码在 Rust 侧加密封装</span></li>
+      <li><strong>日志自动脱敏</strong><span>所有导出包与诊断信息自动屏蔽密码、Cookie 与支付令牌</span></li>
+    </ul>
+  </section>
+
+  <section id="download" class="downloads wrap">
+    <div class="section-heading">
+      <p class="eyebrow">下载客户端</p>
+      <h2>为你的设备获取安装包</h2>
+      <p>正式版跟随 GitHub Latest Release，测试中改动放在预发布版。<span id="release-version"><!-- RELEASE_VERSION --></span></p>
+    </div>
+
+    <div class="release-channel" role="group" aria-label="下载频道">
+      <button type="button" data-release-channel="release" aria-pressed="true">正式版 · Latest Release</button>
+      <button type="button" data-release-channel="prerelease" aria-pressed="false">预发布版 · Pre-release</button>
+    </div>
+
+    <div class="recommended-download">
+      <div>
+        <strong>推荐安装包</strong>
+        <p data-download-hint aria-live="polite">正在识别系统…</p>
+        <label id="android-architecture" hidden>
+          Android 架构
+          <select id="android-arch-choice">
+            <option value="">自动推荐</option>
+            <option value="arm64">ARM64 · 普通手机</option>
+            <option value="x64">x86_64 · Intel / 模拟器</option>
+          </select>
+        </label>
+      </div>
+      <a class="button primary" data-smart-download href="#download">
+        <span data-download-label>选择安装包</span>
+        <span aria-hidden="true">↓</span>
+      </a>
+    </div>
+
+    <div class="download-grid"><!-- DOWNLOAD_CARDS --></div>
+    <p class="download-note">日常使用建议下载正式版。GitHub 接口受限或离线时，下方直链与 Windows 离线安装包仍可直接使用。<a href="https://github.com/key-zhzr/BJUT-Auto-Login/releases">查看全部版本 <span aria-hidden="true">↗</span></a></p>
+
+    <div id="openwrt-download" class="openwrt-downloads" aria-labelledby="openwrt-heading">
+      <div class="openwrt-header">
+        <div>
+          <p class="eyebrow">OpenWrt / ImmortalWrt 路由端</p>
+          <h3 id="openwrt-heading">OpenWrt APK / IPK 下载矩阵</h3>
+          <p class="openwrt-sub">官方 SDK 构建：<strong>OpenWrt 25.12.5 → APK</strong>、<strong>24.10.8 → IPK</strong>（这里的 APK 是 OpenWrt 新版包格式）。同时提供 <code>bjut-autologin</code> 核心包与 <code>luci-app-bjut-autologin</code> 界面包。<span id="openwrt-release-version"><!-- OPENWRT_VERSION --></span></p>
+        </div>
+        <div class="openwrt-controls">
+          <div class="openwrt-format-group" role="group" aria-label="OpenWrt 包格式筛选">
+            <button type="button" data-openwrt-format="all" aria-pressed="true">全部 (19)</button>
+            <button type="button" data-openwrt-format="apk" aria-pressed="false">25.12.5 · APK (10)</button>
+            <button type="button" data-openwrt-format="ipk" aria-pressed="false">24.10.8 · IPK (9)</button>
+          </div>
+          <label class="openwrt-search-label" for="openwrt-platform-filter">
+            <span class="sr-only">筛选路由平台或包架构</span>
+            <input id="openwrt-platform-filter" type="search" placeholder="筛选 Target / 架构 / 型号…" autocomplete="off">
+          </label>
+        </div>
+      </div>
+
+      <div id="openwrt-matrix" aria-live="polite"><!-- OPENWRT_MATRIX --></div>
+
+      <div class="openwrt-verify-bar">
+        <div class="openwrt-verify-copy">
+          <p><strong>安装前核对：</strong>在路由器终端查看 <code>ubus call system board</code> 与 <code>opkg print-architecture</code> / <code>apk --print-arch</code> 确认架构一致；下载后使用 <code>sha256sum -c SHA256SUMS</code> 核对完整性。</p>
+          <div class="openwrt-meta-links">
+            <a id="openwrt-builds-link" href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/releases/download/openwrt-v0.1.6-r13/builds.json">构建清单 builds.json <span aria-hidden="true">↗</span></a>
+            <a id="openwrt-sums-link" href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/releases/download/openwrt-v0.1.6-r13/SHA256SUMS">校验文件 SHA256SUMS <span aria-hidden="true">↗</span></a>
+            <a href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/releases">路由端 Releases <span aria-hidden="true">↗</span></a>
+            <a href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt/actions/workflows/openwrt-packages.yml">Actions 构建工作流 <span aria-hidden="true">↗</span></a>
+            <a href="/guide/OpenWrt/#下载与架构矩阵">查看路由端指南 <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <div class="code-block compact-code">
+          <div class="code-block-bar">
+            <span>架构查询与校验命令</span>
+            <button type="button" class="copy-code" data-copy-code aria-label="复制校验命令">复制代码</button>
+          </div>
+          <pre><code>ubus call system board
+sha256sum -c SHA256SUMS</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq" class="faq wrap">
+    <h2>常见问题</h2>
+    <details>
+      <summary>这是学校官方客户端吗？</summary>
+      <p>不是。BJUT Auto Login 是面向北京工业大学校园网的开源第三方工具，按 MIT 协议开放源代码，与学校信息中心无隶属关系。</p>
+    </details>
+    <details>
+      <summary>开着 VPN 或代理还能用吗？</summary>
+      <p>可以。默认策略固定已知校园地址并通过物理网卡发起认证，不影响日常代理规则。如需调整策略可先运行“网络诊断”，详见<a href="/guide/Network/#vpn-兼容策略">VPN 兼容策略</a>。</p>
+    </details>
+    <details>
+      <summary>支持哪些 OpenWrt 路由器？</summary>
+      <p>已在<a href="https://github.com/key-zhzr/BJUT-Auto-Login-OpenWrt">独立路由端仓库</a>维护，支持 MT798x、MT7621、IPQ60xx、x86_64 等 10 类主流平台，提供多上游独立认证和 LuCI 管理页。<a href="/guide/OpenWrt/">查看路由端指南</a>。</p>
+    </details>
+    <details>
+      <summary>遇到连接异常怎么反馈最有效？</summary>
+      <p>先在“网络诊断”中等待检测完成，导出脱敏诊断包，然后前往 GitHub 提交 Issue，并附带系统版本与复现步骤。反馈前不要粘贴明文密码或原始配置文件。<a href="https://github.com/key-zhzr/BJUT-Auto-Login/issues">提交反馈 <span aria-hidden="true">↗</span></a></p>
+    </details>
+  </section>
+</main>
+
+<footer class="wrap site-footer">
+  <div>
+    <a class="brand" href="/">BJUT Auto Login</a>
+    <p>开源第三方校园网工具 · MIT License</p>
+  </div>
+  <div class="footer-links">
+    <a href="/guide/Getting-Started/">使用指南</a>
+    <a href="/guide/OpenWrt/">OpenWrt 路由端</a>
+    <a href="https://github.com/key-zhzr/BJUT-Auto-Login/wiki">Wiki</a>
+    <a href="https://github.com/key-zhzr/BJUT-Auto-Login">源代码 <span aria-hidden="true">↗</span></a>
+  </div>
+</footer>
+</body>
+</html>

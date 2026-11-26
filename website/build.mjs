@@ -58,12 +58,18 @@ await build({
 const guideIndex = [];
 const pagesMap = new Map([['/', shell]]);
 
-for (const [slug, title] of pages) {
+for (let index = 0; index < pages.length; index++) {
+  const [slug, title] = pages[index];
   const markdown = await readFile(`${root}../wiki/${slug}.md`, 'utf8');
   const { content, tocHtml, sections } = renderGuidePage(markdown, { slug, title, validSlugs });
   guideIndex.push(...sections);
   const navLinks = pages.map(([page, label]) => `<a href="/guide/${page}/"${page === slug ? ' class="current" aria-current="page"' : ''}>${label}</a>`).join('');
-  const searchBox = `<div class="guide-search"><label for="guide-search-input" class="sr-only">搜索使用指南</label><input id="guide-search-input" type="search" placeholder="搜索指南章节…" autocomplete="off" aria-controls="guide-search-results"><div id="guide-search-results" class="guide-search-results" role="region" aria-label="指南搜索结果" aria-live="polite" hidden></div></div>`;
+  const searchBox = `<div class="guide-search"><label for="guide-search-input" class="sr-only">搜索使用指南</label><input id="guide-search-input" type="search" placeholder="搜索指南章节（按 / 聚焦）…" autocomplete="off" aria-controls="guide-search-results"><div id="guide-search-results" class="guide-search-results" role="region" aria-label="指南搜索结果" aria-live="polite" hidden></div></div>`;
+  const prevPage = index > 0 ? pages[index - 1] : null;
+  const nextPage = index < pages.length - 1 ? pages[index + 1] : null;
+  const pagerHtml = (prevPage || nextPage)
+    ? `<nav class="guide-pager" aria-label="章节导航">${prevPage ? `<a class="guide-pager-link prev" href="/guide/${prevPage[0]}/"><small>上一篇</small><strong>← ${prevPage[1]}</strong></a>` : ''}${nextPage ? `<a class="guide-pager-link next" href="/guide/${nextPage[0]}/"><small>下一篇</small><strong>${nextPage[1]} →</strong></a>` : ''}</nav>`
+    : '';
   const pageTitle = `${title} · BJUT Auto Login`;
   const html = shell
     .replace(/<title>.*?<\/title>/, `<title>${pageTitle}</title>`)
@@ -72,9 +78,10 @@ for (const [slug, title] of pages) {
     .replace('<meta name="twitter:title" content="BJUT Auto Login · 校园网连接助手">', `<meta name="twitter:title" content="${pageTitle}">`)
     .replace('<meta property="og:url" content="https://al.bjutdown.work/">', `<meta property="og:url" content="https://al.bjutdown.work/guide/${slug}/">`)
     .replace('<link rel="canonical" href="https://al.bjutdown.work/">', `<link rel="canonical" href="https://al.bjutdown.work/guide/${slug}/">`)
-    .replace(/<main id="main">[\s\S]*?<\/main>/, `<main id="main" class="guide-layout wrap"><nav class="guide-nav" aria-label="使用指南">${searchBox}<div class="guide-nav-links">${navLinks}</div></nav><article class="guide-content">${content}</article>${tocHtml}</main>`)
-    .replace('href="#features"', 'href="/#features"')
-    .replace('href="#download"', 'href="/#download"')
+    .replace(/<main id="main">[\s\S]*?<\/main>/, `<main id="main" class="guide-layout wrap"><nav class="guide-nav" aria-label="使用指南">${searchBox}<div class="guide-nav-links">${navLinks}</div></nav><article class="guide-content">${content}${pagerHtml}</article>${tocHtml}</main>`)
+    .replaceAll('href="#features"', 'href="/#features"')
+    .replaceAll('href="#download"', 'href="/#download"')
+    .replaceAll('href="#openwrt-download"', 'href="/#openwrt-download"')
     .replace('<script type="module" src="/app.js"></script>', '<script type="module" src="/guide.js"></script>');
   await mkdir(`${output}guide/${slug}/`, { recursive: true });
   await writeFile(`${output}guide/${slug}/index.html`, html);
@@ -87,10 +94,11 @@ const notFoundHtml = shell
   .replace(/<title>.*?<\/title>/, '<title>页面暂未找到 · BJUT Auto Login</title>')
   .replace('<meta property="og:title" content="BJUT Auto Login · 校园网连接助手">', '<meta property="og:title" content="页面暂未找到 · BJUT Auto Login">')
   .replace('<meta name="twitter:title" content="BJUT Auto Login · 校园网连接助手">', '<meta name="twitter:title" content="页面暂未找到 · BJUT Auto Login">')
-  .replace('href="#features"', 'href="/#features"')
-  .replace('href="#download"', 'href="/#download"')
-  .replace('<script type="module" src="/app.js"></script>', '')
-  .replace(/<main id="main">[\s\S]*?<\/main>/, '<main id="main" class="wrap features"><h1>页面暂未找到</h1><p>可以回到首页，或查阅使用指南。</p><a class="button primary" href="/">返回首页</a></main>');
+  .replaceAll('href="#features"', 'href="/#features"')
+  .replaceAll('href="#download"', 'href="/#download"')
+  .replaceAll('href="#openwrt-download"', 'href="/#openwrt-download"')
+  .replace('<script type="module" src="/app.js"></script>', '<script type="module" src="/guide.js"></script>')
+  .replace(/<main id="main">[\s\S]*?<\/main>/, '<main id="main" class="wrap features"><h1>页面暂未找到</h1><p style="margin:12px 0 24px;color:var(--muted)">该链接可能已移动，请返回首页或查看使用指南。</p><a class="button primary" href="/">返回首页</a></main>');
 await writeFile(`${output}404.html`, notFoundHtml);
 pagesMap.set('/404.html', notFoundHtml);
 
