@@ -13,12 +13,15 @@ test('diagnostics show a two-by-two link matrix and keep DNS reasons in the deta
   await expect(dns).toContainText('公网可解析 · 校内域名可解析');
   await expect(dns).not.toContainText('公共 DNS 回退');
   await dns.getByRole('button', {name:'系统 DNS详细信息'}).click();
-  const modal = page.locator('#alert-modal');
+  const modal = page.locator('#diagnostic-step-details-dialog');
   await expect(modal).toBeVisible();
-  await expect(modal).toContainText('公共 DNS 回退）：解析成功');
+  await expect(modal).toContainText('公共 DNS 回退');
+  await expect(modal).toContainText('解析成功');
   await expect(modal).toContainText('172.21.0.21 · 已知校园 DNS');
-  await modal.locator('#btn-alert-ok').click();
+  await modal.getByRole('button', {name: '关闭'}).click();
+  await expect(modal).toBeHidden();
   await page.getByRole('button', {name:'互联网连通性详细信息'}).click();
+  await expect(modal).toBeVisible();
   await expect(modal).toContainText('网卡直连 IPv6 未完成连通性校验');
   await expect(modal).not.toContainText('公共 DNS 回退');
 });
@@ -2643,4 +2646,432 @@ test('platform-scoped overscroll, reverse scroll continuation, router modules, s
   expect(tapResult.dropletFrames).toBeGreaterThan(4);
   expect(tapResult.earlyPillFlash, JSON.stringify(tapResult.flashDetails)).toBe(0);
   await expect(page.locator('#settings.active')).toBeVisible();
+});
+
+test('diagnostics and logs headers stay single-row and overflow menus clamp cleanly across viewports', async ({page}) => {
+  const assertSingleRowAndOverflow = async (platform: 'android' | 'windows', width: number, height: number) => {
+    await page.setViewportSize({width, height});
+    await page.goto(`http://127.0.0.1:1433/scripts/app-regression.html?platform=${platform}`);
+    await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+
+    await page.locator('#nav [data-target="diagnostics"]').first().click();
+    await expect(page.locator('#diagnostics.active')).toBeVisible();
+    await page.locator('#diagnostics.active').evaluate(async el => {
+      await Promise.all(el.getAnimations().map(animation => animation.finished.catch(() => undefined)));
+    });
+    await expect(page.locator('#btn-route-trace')).toHaveCount(0);
+    await expect(page.locator('#diagnostic-summary #btn-run-diagnostics')).toBeVisible();
+
+    const diagHeader = await page.evaluate(() => {
+      const header = document.querySelector<HTMLElement>('#diagnostics .page-header')!.getBoundingClientRect();
+      const title = document.querySelector<HTMLElement>('#diagnostics .page-header h1')!.getBoundingClientRect();
+      const more = document.getElementById('btn-diagnostics-more')!.getBoundingClientRect();
+      return {
+        headerHeight: header.height,
+        titleCenterY: title.top + title.height / 2,
+        moreCenterY: more.top + more.height / 2,
+        moreRight: more.right,
+      };
+    });
+    expect(diagHeader.headerHeight).toBeLessThanOrEqual(76);
+    expect(Math.abs(diagHeader.titleCenterY - diagHeader.moreCenterY)).toBeLessThanOrEqual(14);
+    expect(diagHeader.moreRight).toBeLessThanOrEqual(width + 1);
+
+    await page.locator('#btn-diagnostics-more').click();
+    const diagMenu = page.locator('#diagnostics-overflow-menu');
+    await expect(diagMenu).toBeVisible();
+    await expect(diagMenu.locator('#btn-copy-diagnostics')).toBeVisible();
+    await expect(diagMenu.locator('#btn-issue-preview')).toBeVisible();
+    const diagMenuBox = await diagMenu.boundingBox();
+    expect(diagMenuBox).not.toBeNull();
+    expect(diagMenuBox!.x).toBeGreaterThanOrEqual(0);
+    expect(diagMenuBox!.y).toBeGreaterThanOrEqual(0);
+    expect(diagMenuBox!.x + diagMenuBox!.width).toBeLessThanOrEqual(width + 1);
+    expect(diagMenuBox!.y + diagMenuBox!.height).toBeLessThanOrEqual(height + 1);
+
+    await page.keyboard.press('Escape');
+    await expect(diagMenu).toBeHidden();
+
+    await page.locator('#btn-diagnostics-more').click();
+    await expect(diagMenu).toBeVisible();
+    await page.locator('#btn-issue-preview').click();
+    await expect(diagMenu).toBeHidden();
+    const issueDialog = page.locator('#issue-preview-dialog');
+    await expect(issueDialog).toBeVisible();
+    await issueDialog.getByRole('button', {name: '取消'}).click();
+    await expect(issueDialog).toBeHidden();
+
+    await page.locator('#nav [data-target="logs"]').first().click();
+    await expect(page.locator('#logs.active')).toBeVisible();
+    await page.locator('#logs.active').evaluate(async el => {
+      await Promise.all(el.getAnimations().map(animation => animation.finished.catch(() => undefined)));
+    });
+    const logsHeader = await page.evaluate(() => {
+      const header = document.querySelector<HTMLElement>('#logs .page-header')!.getBoundingClientRect();
+      const title = document.querySelector<HTMLElement>('#logs .page-header h1')!.getBoundingClientRect();
+      const search = document.getElementById('btn-toggle-log-search')!.getBoundingClientRect();
+      const more = document.getElementById('btn-logs-more')!.getBoundingClientRect();
+      return {
+        headerHeight: header.height,
+        titleCenterY: title.top + title.height / 2,
+        searchCenterY: search.top + search.height / 2,
+        moreCenterY: more.top + more.height / 2,
+        moreRight: more.right,
+      };
+    });
+    expect(logsHeader.headerHeight).toBeLessThanOrEqual(76);
+    expect(Math.abs(logsHeader.titleCenterY - logsHeader.searchCenterY)).toBeLessThanOrEqual(14);
+    expect(Math.abs(logsHeader.titleCenterY - logsHeader.moreCenterY)).toBeLessThanOrEqual(14);
+    expect(logsHeader.moreRight).toBeLessThanOrEqual(width + 1);
+
+    await page.locator('#btn-logs-more').click();
+    const logsMenu = page.locator('#logs-overflow-menu');
+    await expect(logsMenu).toBeVisible();
+    await expect(logsMenu.locator('#btn-toggle-log-filters')).toBeVisible();
+    await expect(logsMenu.locator('#btn-diagnostic-bundle')).toBeVisible();
+    await expect(logsMenu.locator('#btn-export-logs')).toBeVisible();
+    await expect(logsMenu.locator('#btn-clear-logs')).toBeVisible();
+    const logsMenuBox = await logsMenu.boundingBox();
+    expect(logsMenuBox).not.toBeNull();
+    expect(logsMenuBox!.x).toBeGreaterThanOrEqual(0);
+    expect(logsMenuBox!.y).toBeGreaterThanOrEqual(0);
+    expect(logsMenuBox!.x + logsMenuBox!.width).toBeLessThanOrEqual(width + 1);
+    expect(logsMenuBox!.y + logsMenuBox!.height).toBeLessThanOrEqual(height + 1);
+
+    await page.locator('#btn-toggle-log-filters').click();
+    await expect(logsMenu).toBeHidden();
+    await expect(page.locator('#log-filter-controls')).toBeVisible();
+
+    await page.locator('#btn-logs-more').click();
+    await expect(logsMenu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(logsMenu).toBeHidden();
+  };
+
+  await assertSingleRowAndOverflow('android', 390, 844);
+  await assertSingleRowAndOverflow('windows', 1280, 800);
+});
+
+test('diagnostic info button opens step details modal with badge, duration, formatted details, and copy', async ({page}) => {
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=macos');
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+
+  await page.locator('#nav [data-target="diagnostics"]').first().click();
+  await page.locator('#btn-run-diagnostics').click();
+
+  const dnsInfoBtn = page.getByRole('button', {name: '系统 DNS详细信息'});
+  await expect(dnsInfoBtn).toBeVisible();
+  await expect(dnsInfoBtn).toHaveClass(/diagnostic-info-icon-btn/);
+  expect((await dnsInfoBtn.textContent())?.trim()).toBe('');
+  await expect(dnsInfoBtn.locator('svg')).toHaveCount(1);
+
+  await dnsInfoBtn.click();
+  const modal = page.locator('#diagnostic-step-details-dialog');
+  await expect(modal).toBeVisible();
+  await expect(modal.locator('.health-badge')).toBeVisible();
+  await expect(modal.locator('.diagnostic-detail-duration')).toContainText('ms');
+  expect(await modal.locator('.diagnostic-detail-item').count()).toBeGreaterThanOrEqual(2);
+  await expect(modal).toContainText('172.21.0.21 · 已知校园 DNS');
+
+  await modal.getByRole('button', {name: /复制详情|已复制/}).click();
+  const copied = await page.evaluate(() => (window as any).__MOCK_CLIPBOARD__ || '');
+  expect(copied).toContain('系统 DNS');
+  expect(copied).toContain('172.21.0.21');
+
+  await modal.getByRole('button', {name: '关闭'}).click();
+  await expect(modal).toBeHidden();
+});
+
+test('logs view virtualizes 5,000 entries, manages scroll FAB, filters rapidly, and keeps text selectable', async ({page}) => {
+  await page.addInitScript(() => {
+    const logs = [];
+    for (let i = 0; i < 5000; i += 1) {
+      if (i === 4501) {
+        logs.push({
+          time: '2026-11-28 18:00:00',
+          module: '系统',
+          message: '=== SESSION START === 合成日志 #4501',
+          type: 'info',
+        });
+        continue;
+      }
+      logs.push({
+        time: `2026-11-28 18:${String(Math.floor(i / 60) % 60).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}`,
+        module: i === 42 ? '认证' : i % 5 === 0 ? '网络' : '系统',
+        message: i === 42 ? '合成日志 #42 payload-needle-alpha' : `合成日志 #${i} 状态探测事件完成`,
+        type: i % 10 === 0 ? 'error' : i % 7 === 0 ? 'success' : 'info',
+      });
+    }
+    (window as any).__MOCK_LOGS__ = logs;
+  });
+
+  await page.setViewportSize({width: 390, height: 844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+
+  await page.locator('#nav [data-target="logs"]').first().click();
+  await expect(page.locator('#logs.active')).toBeVisible();
+  await expect(page.locator('#log-filter-count')).toContainText('5000');
+
+  const initialMetrics = await page.evaluate(() => {
+    const content = document.getElementById('logs-content')!;
+    const scroller = document.querySelector<HTMLElement>('.logs-container')!;
+    const wrap = document.querySelector<HTMLElement>('.logs-viewport-wrap')!.getBoundingClientRect();
+    const nav = document.getElementById('nav')!.getBoundingClientRect();
+    return {
+      domCount: content.querySelectorAll('.log-entry').length,
+      userSelect: getComputedStyle(content).userSelect,
+      clientHeight: scroller.clientHeight,
+      scrollHeight: scroller.scrollHeight,
+      wrapBottom: wrap.bottom,
+      navTop: nav.top,
+    };
+  });
+  expect(initialMetrics.domCount).toBeGreaterThanOrEqual(8);
+  expect(initialMetrics.domCount).toBeLessThanOrEqual(80);
+  expect(initialMetrics.userSelect).toBe('text');
+  expect(initialMetrics.clientHeight).toBeGreaterThan(120);
+  expect(initialMetrics.scrollHeight).toBeGreaterThan(initialMetrics.clientHeight * 5);
+  expect(initialMetrics.wrapBottom).toBeLessThanOrEqual(initialMetrics.navTop + 4);
+  await expect(page.locator('#btn-scroll-logs')).toBeHidden();
+
+  await page.waitForTimeout(220);
+  await page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>('.logs-container')!;
+    scroller.dispatchEvent(new WheelEvent('wheel', {deltaY: -120, bubbles: true}));
+    scroller.scrollTop = 0;
+  });
+
+  await expect(page.locator('#btn-scroll-logs')).toBeVisible();
+  await expect(page.locator('#logs-content')).toContainText('合成日志 #0');
+  const fabGeometry = await page.evaluate(() => {
+    const fab = document.getElementById('btn-scroll-logs')!.getBoundingClientRect();
+    const wrap = document.querySelector<HTMLElement>('.logs-viewport-wrap')!.getBoundingClientRect();
+    const nav = document.getElementById('nav')!.getBoundingClientRect();
+    return {
+      fabBottom: fab.bottom,
+      fabRight: fab.right,
+      wrapBottom: wrap.bottom,
+      wrapRight: wrap.right,
+      navTop: nav.top,
+    };
+  });
+  expect(fabGeometry.fabBottom).toBeLessThanOrEqual(fabGeometry.wrapBottom + 2);
+  expect(fabGeometry.fabBottom).toBeLessThanOrEqual(fabGeometry.navTop + 2);
+  expect(fabGeometry.fabRight).toBeLessThanOrEqual(fabGeometry.wrapRight + 2);
+
+  await page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>('.logs-container')!;
+    scroller.dispatchEvent(new WheelEvent('wheel', {deltaY: 120, bubbles: true}));
+    scroller.scrollTop = Math.floor(scroller.scrollHeight / 2);
+  });
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll<HTMLElement>('#logs-content .log-entry'));
+      const indices = rows.map(el => Number(el.dataset.logIndex ?? '-1')).filter(n => n >= 0);
+      return {
+        count: rows.length,
+        minIdx: indices.length ? Math.min(...indices) : -1,
+        maxIdx: indices.length ? Math.max(...indices) : -1,
+      };
+    });
+  }).toMatchObject({
+    minIdx: expect.any(Number),
+    maxIdx: expect.any(Number),
+  });
+  const midMetrics = await page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('#logs-content .log-entry'));
+    const indices = rows.map(el => Number(el.dataset.logIndex ?? '-1')).filter(n => n >= 0);
+    return {
+      count: rows.length,
+      minIdx: Math.min(...indices),
+      maxIdx: Math.max(...indices),
+    };
+  });
+  expect(midMetrics.count).toBeLessThanOrEqual(80);
+  expect(midMetrics.minIdx).toBeGreaterThan(500);
+  expect(midMetrics.maxIdx).toBeLessThan(4500);
+
+  await page.locator('#btn-scroll-logs').click();
+  await expect(page.locator('#logs-content')).toContainText('合成日志 #4999');
+  await expect(page.locator('#btn-scroll-logs')).toBeHidden();
+
+  await page.locator('#btn-toggle-log-search').click();
+  await expect(page.locator('#log-search-bar')).toBeVisible();
+  await page.locator('#log-search').fill('payload-needle-alpha');
+  await expect(page.locator('#log-filter-count')).toContainText('1 / 5000');
+  await expect(page.locator('#logs-content .log-entry')).toHaveCount(1);
+  await expect(page.locator('#logs-content')).toContainText('合成日志 #42');
+
+  await page.locator('#btn-clear-log-search').click();
+  await expect(page.locator('#log-search')).toHaveValue('');
+  await expect(page.locator('#log-filter-count')).toContainText('5000 条');
+
+  await page.locator('#btn-logs-more').click();
+  await page.locator('#btn-toggle-log-filters').click();
+  await expect(page.locator('#log-filter-controls')).toBeVisible();
+  await page.locator('#log-level-filter .custom-select-trigger').click();
+  await page.locator('#log-level-filter .custom-option[data-value="error"]').click();
+  await expect(page.locator('#log-filter-count')).toContainText('500 / 5000');
+  await expect(page.locator('#logs-filter-summary-badge')).toContainText('1 项已选');
+  await expect(page.locator('#btn-logs-more')).toHaveClass(/has-active-dot/);
+});
+
+test('native shell guards viewport, Android touch long-press & scrollbars, desktop context menus, and keyboard shortcuts', async ({page}) => {
+  await page.goto('http://127.0.0.1:1433/index.html', {waitUntil: 'domcontentloaded'});
+  const appViewportMeta = await page.evaluate(
+    () => document.querySelector('meta[name="viewport"]')?.getAttribute('content') || '',
+  );
+  expect(appViewportMeta).toContain('maximum-scale=1.0');
+  expect(appViewportMeta).toContain('user-scalable=no');
+
+  // Part A: Android shell guards
+  await page.addInitScript(() => {
+    (window as any).__MOCK_LOGS__ = [
+      {time: '2026-11-28 18:10:01', module: '网络', message: '校园网链路检测完成', type: 'info'},
+      {time: '2026-11-28 18:10:02', module: '认证', message: '门户会话刷新成功', type: 'success'},
+    ];
+  });
+  await page.setViewportSize({width: 390, height: 844});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=android');
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+
+  const androidShell = await page.evaluate(() => {
+    const isAndroidBody = document.body.classList.contains('is-android');
+    const scroller = document.querySelector<HTMLElement>('.logs-container')!;
+    const scrollbarWidth = getComputedStyle(scroller, '::-webkit-scrollbar').width;
+    return {isAndroidBody, scrollbarWidth};
+  });
+  expect(androidShell.isAndroidBody).toBe(true);
+  expect(androidShell.scrollbarWidth).toBe('0px');
+
+  await page.locator('#nav [data-target="logs"]').first().click();
+  await page.locator('#btn-toggle-log-search').click();
+  await expect(page.locator('#logs-content .log-entry').first()).toBeVisible();
+
+  const longPressSequence = await page.evaluate(() => {
+    const calls: boolean[] = [];
+    (window as any).AndroidBridge = {
+      setLongPressAllowed(allowed: boolean) {
+        calls.push(Boolean(allowed));
+      },
+    };
+    const navBtn = document.querySelector('#nav .nav-item[data-target="dashboard"]')!;
+    navBtn.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, pointerType: 'touch'}));
+    const afterControl = calls.at(-1);
+
+    const searchInput = document.getElementById('log-search')!;
+    searchInput.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, pointerType: 'touch'}));
+    const afterInput = calls.at(-1);
+
+    const logEntry = document.querySelector('#logs-content .log-entry')!;
+    logEntry.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, pointerType: 'touch'}));
+    const afterLogEntry = calls.at(-1);
+
+    delete (window as any).AndroidBridge;
+    return {afterControl, afterInput, afterLogEntry};
+  });
+  expect(longPressSequence).toEqual({
+    afterControl: false,
+    afterInput: true,
+    afterLogEntry: true,
+  });
+
+  // Part B: Desktop custom context menus & shortcut suppression
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.goto('http://127.0.0.1:1433/scripts/app-regression.html?platform=windows');
+  await page.getByRole('button', {name: '隐藏验收面板', exact: true}).click();
+
+  // Copyable field & blank area context menus on dashboard
+  const copyable = page.locator('#dashboard .dashboard-update-value').filter({hasNotText: /^(--|暂无|未知)$/}).first();
+  await expect(copyable).toBeVisible();
+  await copyable.click({button: 'right'});
+  const ctxMenu = page.locator('#desktop-context-menu');
+  await expect(ctxMenu).toBeVisible();
+  await expect(ctxMenu.getByRole('menuitem', {name: /^复制/}).first()).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(ctxMenu).toBeHidden();
+
+  await page.locator('#dashboard .page-header h1').click({button: 'right'});
+  await expect(ctxMenu).toBeVisible();
+  await expect(ctxMenu.getByRole('menuitem', {name: '立即检测网络'})).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(ctxMenu).toBeHidden();
+
+  // Ctrl+F on #logs opens search bar & input context menu cut/copy/paste/select-all works
+  await page.locator('#nav [data-target="logs"]').first().click();
+  await expect(page.locator('#logs.active')).toBeVisible();
+  await page.keyboard.press('Control+f');
+  await expect(page.locator('#log-search-bar')).toBeVisible();
+  await expect(page.locator('#log-search')).toBeFocused();
+
+  await page.locator('#log-search').fill('hello');
+  await page.locator('#log-search').click({button: 'right'});
+  await expect(ctxMenu).toBeVisible();
+  await expect(ctxMenu.getByRole('menuitem', {name: '剪切'})).toBeVisible();
+  await expect(ctxMenu.getByRole('menuitem', {name: '复制'})).toBeVisible();
+  await expect(ctxMenu.getByRole('menuitem', {name: '粘贴'})).toBeVisible();
+  await expect(ctxMenu.getByRole('menuitem', {name: '全选'})).toBeVisible();
+  await ctxMenu.getByRole('menuitem', {name: '全选'}).click();
+  await page.locator('#log-search').click({button: 'right'});
+  await ctxMenu.getByRole('menuitem', {name: '复制'}).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__MOCK_CLIPBOARD__ || '')).toBe('hello');
+  await page.locator('#btn-clear-log-search').click();
+
+  // Log row context menu: copy line, filter by module, copy all filtered logs
+  const networkLogRow = page.locator('#logs-content .log-entry', {hasText: '校园网链路检测完成'}).first();
+  await expect(networkLogRow).toBeVisible();
+  await networkLogRow.click({button: 'right'});
+  await expect(ctxMenu).toBeVisible();
+  await expect(ctxMenu.getByRole('menuitem', {name: '复制此条日志'})).toBeVisible();
+  await expect(ctxMenu.getByRole('menuitem', {name: '按「网络」筛选'})).toBeVisible();
+  await expect(ctxMenu.getByRole('menuitem', {name: '复制全部筛选日志'})).toBeVisible();
+  await ctxMenu.getByRole('menuitem', {name: '按「网络」筛选'}).click();
+  await expect(page.locator('#logs-filter-summary-badge')).toContainText('模块: 网络');
+  await expect(page.locator('#log-filter-count')).toContainText('1 / 2');
+
+  // Native contextmenu stays suppressed inside open modals
+  await page.locator('#nav [data-target="accounts"]').first().click();
+  await page.locator('#btn-show-add').click();
+  await expect(page.locator('#add-modal')).toBeVisible();
+  const modalContextPrevented = await page.evaluate(() => {
+    const modalBody = document.querySelector('#add-modal .modal-content')!;
+    const ev = new MouseEvent('contextmenu', {bubbles: true, cancelable: true, button: 2});
+    modalBody.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  });
+  expect(modalContextPrevented).toBe(true);
+
+  // Keyboard shortcuts: F5 / Ctrl+R / Ctrl+P / Ctrl+= prevented, while Ctrl+A/C/V inside editable input preserved
+  const shortcutResults = await page.evaluate(() => {
+    const input = document.getElementById('acc-username') as HTMLInputElement;
+    input.focus();
+    input.value = '25000123';
+
+    const dispatchKey = (target: EventTarget, init: KeyboardEventInit) => {
+      const ev = new KeyboardEvent('keydown', {bubbles: true, cancelable: true, ...init});
+      target.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+
+    return {
+      f5Prevented: dispatchKey(document, {key: 'F5'}),
+      ctrlRPrevented: dispatchKey(document, {key: 'r', ctrlKey: true}),
+      ctrlPPrevented: dispatchKey(document, {key: 'p', ctrlKey: true}),
+      ctrlEqualPrevented: dispatchKey(document, {key: '=', ctrlKey: true}),
+      ctrlAPreserved: !dispatchKey(input, {key: 'a', ctrlKey: true}),
+      ctrlCPreserved: !dispatchKey(input, {key: 'c', ctrlKey: true}),
+      ctrlVPreserved: !dispatchKey(input, {key: 'v', ctrlKey: true}),
+    };
+  });
+  expect(shortcutResults).toEqual({
+    f5Prevented: true,
+    ctrlRPrevented: true,
+    ctrlPPrevented: true,
+    ctrlEqualPrevented: true,
+    ctrlAPreserved: true,
+    ctrlCPreserved: true,
+    ctrlVPreserved: true,
+  });
 });

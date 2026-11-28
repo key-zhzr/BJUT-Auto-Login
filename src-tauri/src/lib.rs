@@ -52,6 +52,7 @@ mod update_metadata;
 mod usage_history;
 #[cfg(desktop)]
 mod window_geometry;
+mod webview_hardening;
 mod windows_backdrop;
 #[cfg(target_os = "windows")]
 mod windows_credentials;
@@ -1137,7 +1138,7 @@ use portal_auth::{
     logout_from_campus_network_rust, portal_client, AuthStack, LoginType,
     PortalLoginFailureDisposition, PortalRouteContext,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::Emitter;
@@ -1379,7 +1380,7 @@ struct AppState {
     config: RwLock<AppConfig>,
     credential_storage_status: Mutex<String>,
     account_health: Mutex<HashMap<String, AccountHealth>>,
-    logs: Mutex<Vec<LogEntry>>,
+    logs: Mutex<VecDeque<LogEntry>>,
     countdown: AtomicI32,
     is_checking: AtomicBool,
     pending_full_check: AtomicBool,
@@ -3689,6 +3690,17 @@ fn parse_log_line(line: &str) -> Option<LogEntry> {
     })
 }
 
+fn trim_log_deque(logs: &mut VecDeque<LogEntry>, max_entries: usize) {
+    while logs.len() > max_entries {
+        logs.pop_front();
+    }
+}
+
+fn push_log_deque_entry(logs: &mut VecDeque<LogEntry>, entry: LogEntry, max_entries: usize) {
+    logs.push_back(entry);
+    trim_log_deque(logs, max_entries);
+}
+
 fn initialize_log_history(app: &tauri::AppHandle, state: &AppState) {
     let path = get_log_path(app);
     #[allow(unused_mut)]
@@ -3767,10 +3779,7 @@ fn initialize_log_history(app: &tauri::AppHandle, state: &AppState) {
     let mut memory = state.logs.lock().unwrap();
     memory.clear();
     memory.extend(lines.iter().filter_map(|line| parse_log_line(line)));
-    if memory.len() > MAX_LOG_ENTRIES {
-        let remove_count = memory.len() - MAX_LOG_ENTRIES;
-        memory.drain(..remove_count);
-    }
+    trim_log_deque(&mut memory, MAX_LOG_ENTRIES);
 }
 
 fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &str, log_type: &str) {
@@ -3816,10 +3825,7 @@ fn rust_log(app: &tauri::AppHandle, state: &AppState, module: &str, message: &st
     }
     {
         let mut logs = state.logs.lock().unwrap();
-        logs.push(entry.clone());
-        if logs.len() > MAX_LOG_ENTRIES {
-            logs.remove(0);
-        }
+        push_log_deque_entry(&mut logs, entry.clone(), MAX_LOG_ENTRIES);
     }
     let _ = app.emit("log-event", entry);
 }
@@ -5641,7 +5647,7 @@ async fn restart_lgn_adapter(
 
 #[tauri::command]
 fn get_logs(state: tauri::State<Arc<AppState>>) -> Vec<LogEntry> {
-    state.logs.lock().unwrap().clone()
+    state.logs.lock().unwrap().iter().cloned().collect()
 }
 
 #[tauri::command]
@@ -8189,7 +8195,7 @@ pub fn run() {
             }),
             credential_storage_status: Mutex::new("unknown".to_string()),
             account_health: Mutex::new(load_account_health(_app.handle())),
-            logs: Mutex::new(Vec::new()),
+            logs: Mutex::new(VecDeque::new()),
             countdown: AtomicI32::new(15),
             is_checking: AtomicBool::new(false),
             pending_full_check: AtomicBool::new(false),
@@ -8444,6 +8450,10 @@ pub fn run() {
             let full_details = !app_is_in_background(&init_handle, &init_state);
             trigger_network_check(init_handle, init_state, full_details).await;
         });
+
+        if let Some(window) = _app.get_webview_window("main") {
+            webview_hardening::configure_main_webview(&window);
+        }
 
         #[cfg(desktop)]
         {
@@ -9745,5 +9755,39 @@ mod tests {
                 "{invalid} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn vecdeque_log_storage_caps_at_max_entries_and_evicts_oldest_in_order() {
+        let mut logs = VecDeque::new();
+        for index in 0..5100 {
+            push_log_deque_entry(
+                &mut logs,
+                LogEntry {
+                    time: format!("2026-11-28 10:00:{:02}", index % 60),
+                    module: "测试".to_string(),
+                    message: format!("entry-{index}"),
+                    log_type: "info".to_string(),
+                },
+                MAX_LOG_ENTRIES,
+            );
+        }
+        assert_eq!(logs.len(), MAX_LOG_ENTRIES);
+        assert_eq!(logs.front().map(|e| e.message.as_str()), Some("entry-100"));
+        assert_eq!(logs.back().map(|e| e.message.as_str()), Some("entry-5099"));
+        for (offset, entry) in logs.iter().enumerate() {
+            assert_eq!(entry.message, format!("entry-{}", 100 + offset));
+        }
+
+        let mut bulk = VecDeque::from_iter((0..5050).map(|index| LogEntry {
+            time: "2026-11-28 10:00:00".to_string(),
+            module: "初始化".to_string(),
+            message: format!("bulk-{index}"),
+            log_type: "info".to_string(),
+        }));
+        trim_log_deque(&mut bulk, MAX_LOG_ENTRIES);
+        assert_eq!(bulk.len(), MAX_LOG_ENTRIES);
+        assert_eq!(bulk.front().map(|e| e.message.as_str()), Some("bulk-50"));
+        assert_eq!(bulk.back().map(|e| e.message.as_str()), Some("bulk-5049"));
     }
 }

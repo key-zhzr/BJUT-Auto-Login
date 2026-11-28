@@ -26,6 +26,7 @@ interface AndroidBridgeApi {
   openWechat?(url: string): boolean;
   getSafeAreaInsets?(): string;
   setSystemBarsStyle?(isDark: boolean, bgHex: string): void;
+  setLongPressAllowed?(allowed: boolean): void;
 }
 
 interface NavigatorConnection extends EventTarget {

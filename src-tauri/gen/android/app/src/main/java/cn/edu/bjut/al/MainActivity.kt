@@ -42,6 +42,7 @@ class MainActivity : TauriActivity() {
   @Volatile private var lastInsetBottomDp = 0f
   @Volatile private var lastInsetLeftDp = 0f
   @Volatile private var lastInsetSignature = ""
+  @Volatile private var allowWebViewLongPress = false
 
   private fun isSystemNightMode(config: Configuration = resources.configuration): Boolean {
     return (config.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
@@ -228,6 +229,22 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
     appWebView = webView
     webView.overScrollMode = android.view.View.OVER_SCROLL_NEVER
+    webView.isVerticalScrollBarEnabled = false
+    webView.isHorizontalScrollBarEnabled = false
+    webView.isScrollbarFadingEnabled = true
+    webView.settings.setSupportZoom(false)
+    webView.settings.builtInZoomControls = false
+    webView.settings.displayZoomControls = false
+    webView.isHapticFeedbackEnabled = false
+    webView.setOnLongClickListener { view ->
+      if (!allowWebViewLongPress) {
+        view.isHapticFeedbackEnabled = false
+        true // consume long-press: no text selection ActionMode, no haptic buzz
+      } else {
+        view.isHapticFeedbackEnabled = true
+        false // allow native selection/paste on inputs & explicitly selectable text
+      }
+    }
     val isDark = appThemeDarkOverride ?: isSystemNightMode()
     val defaultBg = if (isDark) Color.rgb(15, 23, 42) else Color.rgb(238, 242, 247)
     webView.setBackgroundColor(defaultBg)
@@ -818,6 +835,14 @@ class MainActivity : TauriActivity() {
         .put("bottom", lastInsetBottomDp.toDouble())
         .put("left", lastInsetLeftDp.toDouble())
         .toString()
+    }
+
+    @JavascriptInterface
+    fun setLongPressAllowed(allowed: Boolean) {
+      activity.allowWebViewLongPress = allowed
+      activity.runOnUiThread {
+        activity.appWebView?.isHapticFeedbackEnabled = allowed
+      }
     }
 
     @JavascriptInterface

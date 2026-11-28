@@ -25,6 +25,8 @@ let overscrollBounce: { reset: () => void } = { reset: () => {} };
 import { loginBillingWebVpn } from './billing-webvpn';
 import { setupImageCaptchas } from './image-captcha';
 import { NetworkProgressView, type NetworkCheckProgress } from './network-progress-view';
+import './virtual-logs.css';
+import './context-menu.css';
 import { AnimatedVisibility } from './animated-visibility';
 import { setupAndroidKeyboard } from './android-keyboard';
 import { RechargeHours } from './recharge-hours';
@@ -36,12 +38,20 @@ import { setupKeyboardNavigation } from './keyboard-navigation';
 import { isLiquidNavAnimating, setupLiquidNav, syncLiquidNav, whenLiquidNavSettled } from './liquid-nav';
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Bell, Check, CheckCircle, ChevronDown, ChevronUp,
-  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
-  Fingerprint, History, Home, Info, LayoutDashboard, Loader, LogIn, MessageSquareWarning, Minimize2, Minus, MonitorSmartphone, Palette, Pause, Play, Plus, Power, Route, Router, Smartphone,
-  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Trash2, User, UserSearch, Users, Wifi,
+  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, Filter, GripVertical,
+  Fingerprint, History, Home, Info, LayoutDashboard, Loader, LogIn, MessageSquareWarning, Minimize2, Minus, MonitorSmartphone, MoreVertical, Palette, Pause, Play, Plus, Power, Route, Router, Smartphone,
+  QrCode, ReceiptText, RefreshCw, Scissors, Search, Settings, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Trash2, User, UserSearch, Users, Wifi,
   WalletCards, WifiOff, X,
 } from 'lucide';
 import { refreshAllThemeIcons, renderThemeIcons } from './winui-icons';
+import {
+  setupHeaderOverflowMenus,
+  setOverflowTriggerActiveDot,
+  type HeaderOverflowMenusController,
+} from './header-overflow-menu';
+import { VirtualLogsController, type VirtualLogsStateSummary } from './virtual-logs';
+import { setupNativeShellGuard } from './native-shell-guard';
+import { setupDesktopContextMenu } from './context-menu';
 import { syncWinuiFluentTokens } from './winui-fluent-tokens';
 import { syncWindowsBackdrop } from './windows-backdrop';
 import Sortable from 'sortablejs';
@@ -93,14 +103,14 @@ const rechargeHours = new RechargeHours(() => invoke('get_network_time'));
 
 const icons = {
   Activity, AlertCircle, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpCircle, BarChart2, Bell, Check, CheckCircle, ChevronDown, ChevronUp,
-  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, GripVertical,
-  Fingerprint, History, Home, Info, LayoutDashboard, Loader, LogIn, MessageSquareWarning, Minimize2, Minus, MonitorSmartphone, Palette, Pause, Play, Plus, Power, Route, Router, Smartphone,
-  QrCode, ReceiptText, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Trash2, User, UserSearch, Users, Wifi,
+  ChevronLeft, ChevronRight, CircleDollarSign, ClipboardCopy, ClipboardPaste, Clock, Copy, CreditCard, Database, Download, Edit2, ExternalLink, Eye, FileText, Filter, GripVertical,
+  Fingerprint, History, Home, Info, LayoutDashboard, Loader, LogIn, MessageSquareWarning, Minimize2, Minus, MonitorSmartphone, MoreVertical, Palette, Pause, Play, Plus, Power, Route, Router, Smartphone,
+  QrCode, ReceiptText, RefreshCw, Scissors, Search, Settings, ShieldAlert, ShieldCheck, SlidersHorizontal, Square, Trash2, User, UserSearch, Users, Wifi,
   WalletCards, WifiOff, X,
 };
 
-function renderIcons(root: Element | Document | DocumentFragment = document) {
-  renderThemeIcons(root, icons);
+function renderIcons(root: ParentNode = document) {
+  renderThemeIcons(root as Element | Document | DocumentFragment, icons);
 }
 
 let lastWinuiEngineActive: boolean | null = null;
@@ -1358,7 +1368,7 @@ async function initializeRustEvents() {
     settle('登录阶段事件', listen<LoginProgress>('login-progress', event => loginProgressView.render(event.payload))),
     settle('检测调度事件', listen<NetworkSchedule>('network-schedule', event => networkExperience.renderSchedule(event.payload))),
     settle('网络诊断逐项结果', listen<{runId: string; step: DiagnosticStep}>('network-diagnostic-step', event => {
-      if (diagnosticRunActive && event.payload.runId === diagnosticRunId) renderDiagnosticStep(event.payload.step, customAlert);
+      if (diagnosticRunActive && event.payload.runId === diagnosticRunId) renderDiagnosticStep(event.payload.step, undefined, true, renderIcons);
     })),
     settle('网络诊断进度事件', listen<DiagnosticProgress>('network-diagnostic-progress', event => {
       if (!diagnosticRunActive || event.payload.runId !== diagnosticRunId) return;
@@ -1366,7 +1376,7 @@ async function initializeRustEvents() {
     })),
     settle('运行日志事件', listen<AppLogEntry>('log-event', event => {
       const data = event.payload;
-      renderLogEntry(data.module, data.message, data.type, data.time);
+      virtualLogs.append({ time: data.time, module: data.module, message: data.message, type: data.type });
     })),
     settle('更新进度事件', listen<UpdateProgress>('update-progress', event => {
       updateUpdateProgress(event.payload);
@@ -1436,16 +1446,6 @@ async function initializeRustEvents() {
   // from one another. A damaged log store, for example, cannot suppress the
   // live network event channel.
   await Promise.all([
-    settle('初始运行日志', invoke<AppLogEntry[]>('get_logs').then(initialLogs => {
-      logEntriesCache = initialLogs.map(entry => ({
-        time: entry.time,
-        module: entry.module,
-        message: entry.message,
-        type: entry.type,
-      }));
-      logsDirty = true;
-      logFilterCount.textContent = `${logEntriesCache.length} 条`;
-    })),
     settle('初始检测过程', invoke<NetworkCheckProgress | null>('get_network_check_progress').then(progress => { if (progress) networkProgressView.render(progress); })),
     settle('初始网络事件', invoke<NetworkEvent[]>('get_network_events').then(renderNetworkEvents)),
     settle('初始网卡', refreshNetworkAdapters()),
@@ -1492,127 +1492,76 @@ async function listenToRustEvents() {
 }
 
 function getLogsScroller(): HTMLElement | null {
-  const container = logsContent.parentElement;
-  if (container && getComputedStyle(container).overflowY !== 'visible') return container;
-  return document.querySelector<HTMLElement>('main');
+  return logsContent.closest<HTMLElement>('.logs-container') ?? logsContent.parentElement;
 }
 
-const ANDROID_LOG_RENDER_BATCH = 360;
-let renderedLogLimit = IS_ANDROID ? ANDROID_LOG_RENDER_BATCH : Number.MAX_SAFE_INTEGER;
-let logRenderFrame: number | null = null;
-let logFilterSignature = '';
-let logHistoryLoadPending = false;
-
-function logsAreAtBottom(scroller: HTMLElement | null): boolean {
-  return !scroller || scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 80;
-}
-
-function scheduleFilteredLogsRender() {
-  if (logRenderFrame !== null) return;
-  logRenderFrame = requestAnimationFrame(() => {
-    logRenderFrame = null;
-    renderFilteredLogs();
-  });
-}
-
-function renderLogEntry(module: string, message: string, type: 'info' | 'error' | 'success' | 'debug' = 'info', time?: string) {
+function shouldAcceptLogEntry(entry: Pick<AppLogEntry, 'module' | 'type'>): boolean {
   const currentLevel = localStorage.getItem('bjut_log_level') || 'info';
-  if (currentLevel === 'error' && type !== 'error') {
-    return;
+  if (currentLevel === 'error' && entry.type !== 'error') {
+    return false;
   }
-  if (currentLevel === 'info' && type === 'debug') {
-    return;
+  if (currentLevel === 'info' && entry.type === 'debug') {
+    return false;
   }
-
-  logEntriesCache.push({ time: time || new Date().toLocaleString(), module, message, type });
-  if (logEntriesCache.length > 5000) logEntriesCache.splice(0, logEntriesCache.length - 5000);
-  logsDirty = true;
-  if (logsContent.closest('.page')?.classList.contains('active')) {
-    const scroller = getLogsScroller();
-    if (logsAreAtBottom(scroller)) scheduleFilteredLogsRender();
-  } else {
-    logFilterCount.textContent = `${logEntriesCache.length} 条`;
-  }
+  return true;
 }
 
-function renderFilteredLogs(options: { resetWindow?: boolean; preserveScrollAnchor?: boolean } = {}) {
-  const logsPageActive = logsContent.closest('.page')?.classList.contains('active') ?? false;
-  const scroller = getLogsScroller();
-  const wasAtBottom = logsAreAtBottom(scroller);
-  const previousScrollHeight = scroller?.scrollHeight ?? 0;
-  const previousScrollTop = scroller?.scrollTop ?? 0;
-  const query = logSearch?.value.trim().toLocaleLowerCase() || '';
-  const level = logLevelFilter?.value || 'all';
-  let lastSessionStart = -1;
-  for (let index = logEntriesCache.length - 1; index >= 0; index -= 1) {
-    if (logEntriesCache[index].message.includes('=== SESSION START ===')) {
-      lastSessionStart = index;
-      break;
-    }
+let headerMenus: HeaderOverflowMenusController | null = null;
+let shellToastTimer: number | null = null;
+
+function showShellToast(message: string) {
+  let toast = document.getElementById('app-shell-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'app-shell-toast';
+    toast.className = 'app-shell-toast';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    document.body.appendChild(toast);
   }
-  const sessionStart = logSessionFilter?.value === 'current' && lastSessionStart >= 0 ? lastSessionStart : 0;
-  const visible = logEntriesCache.slice(sessionStart).filter(entry => {
-    if (level !== 'all' && entry.type !== level) return false;
-    if (!query) return true;
-    return `${entry.time} ${entry.module} ${entry.message}`.toLocaleLowerCase().includes(query);
-  });
-  const nextFilterSignature = `${logSessionFilter?.value || 'all'}\u0000${level}\u0000${query}`;
-  if (options.resetWindow || nextFilterSignature !== logFilterSignature) {
-    renderedLogLimit = IS_ANDROID ? ANDROID_LOG_RENDER_BATCH : Number.MAX_SAFE_INTEGER;
-    logFilterSignature = nextFilterSignature;
+  toast.textContent = message;
+  toast.classList.add('is-visible');
+  if (shellToastTimer !== null) {
+    window.clearTimeout(shellToastTimer);
   }
-  const renderStart = IS_ANDROID ? Math.max(0, visible.length - renderedLogLimit) : 0;
-  const rendered = visible.slice(renderStart);
-  const fragment = document.createDocumentFragment();
-  if (renderStart > 0) {
-    const sentinel = document.createElement('div');
-    sentinel.className = 'log-history-sentinel';
-    sentinel.dataset.remaining = String(renderStart);
-    sentinel.textContent = `继续上滑加载更早的 ${renderStart} 条日志`;
-    fragment.appendChild(sentinel);
-  }
-  rendered.forEach(item => {
-    const entry = document.createElement('div');
-    entry.className = item.message.includes('=== SESSION START ===') ? 'log-entry log-session-divider' : 'log-entry';
-    const timeElement = document.createElement('span');
-    timeElement.className = 'log-time';
-    timeElement.textContent = `[${item.time}]`;
-    const messageElement = document.createElement('span');
-    messageElement.className = `log-${item.type}`;
-    messageElement.textContent = `[${item.module}] ${item.message.replace('=== SESSION START ===', '启动会话')}`;
-    entry.append(timeElement, messageElement);
-    fragment.appendChild(entry);
-  });
-  logsContent.replaceChildren(fragment);
-  if (logFilterCount) {
-    logFilterCount.textContent = renderStart > 0
-      ? `${rendered.length} / ${visible.length} 条`
-      : `${visible.length} / ${logEntriesCache.length} 条`;
-  }
-  logsDirty = false;
-  requestAnimationFrame(() => {
-    if (!logsPageActive || !scroller) return;
-    if (options.preserveScrollAnchor) {
-      scroller.scrollTop = scroller.scrollHeight - previousScrollHeight + previousScrollTop;
-    } else if (wasAtBottom) {
-      scroller.scrollTop = scroller.scrollHeight;
-    }
-  });
+  shellToastTimer = window.setTimeout(() => {
+    toast?.classList.remove('is-visible');
+    shellToastTimer = null;
+  }, 2200);
 }
 
-function loadOlderLogsNearTop() {
-  if (!IS_ANDROID || logHistoryLoadPending) return;
-  const scroller = getLogsScroller();
-  const sentinel = logsContent.querySelector<HTMLElement>('.log-history-sentinel');
-  if (!scroller || !sentinel || scroller.scrollTop > 56) return;
-  const remaining = Number(sentinel.dataset.remaining || 0);
-  if (remaining <= 0) return;
-  logHistoryLoadPending = true;
-  requestAnimationFrame(() => {
-    renderedLogLimit += Math.min(ANDROID_LOG_RENDER_BATCH, remaining);
-    renderFilteredLogs({ preserveScrollAnchor: true });
-    logHistoryLoadPending = false;
-  });
+const virtualLogs = new VirtualLogsController({
+  shouldAcceptEntry: shouldAcceptLogEntry,
+});
+
+function syncLogHeaderIndicators(summary: VirtualLogsStateSummary = virtualLogs.getStateSummary()) {
+  headerMenus?.syncLogHeaderState();
+  setOverflowTriggerActiveDot('btn-logs-more', summary.hasActiveFilter);
+  const searchToggle = document.getElementById('btn-toggle-log-search');
+  if (searchToggle) {
+    const searchActive = summary.hasActiveSearch || Boolean(summary.activeModule);
+    searchToggle.classList.toggle('is-active', Boolean(headerMenus?.isLogSearchOpen()) || searchActive);
+    setOverflowTriggerActiveDot(searchToggle, searchActive);
+  }
+  const badge = document.getElementById('logs-filter-summary-badge');
+  if (badge && summary.activeModule) {
+    const extraCount = (summary.activeSession !== 'all' ? 1 : 0) + (summary.activeLevel !== 'all' ? 1 : 0);
+    badge.textContent = extraCount > 0 ? `${extraCount + 1} 项已选` : `模块: ${summary.activeModule}`;
+    badge.hidden = false;
+  }
+  if (summary.activeModule) {
+    queueMicrotask(() => {
+      const latest = virtualLogs.getStateSummary();
+      if (!latest.activeModule) return;
+      setOverflowTriggerActiveDot('btn-logs-more', latest.hasActiveFilter);
+      const badgeEl = document.getElementById('logs-filter-summary-badge');
+      if (badgeEl) {
+        const extra = (latest.activeSession !== 'all' ? 1 : 0) + (latest.activeLevel !== 'all' ? 1 : 0);
+        badgeEl.textContent = extra > 0 ? `${extra + 1} 项已选` : `模块: ${latest.activeModule}`;
+        badgeEl.hidden = false;
+      }
+    });
+  }
 }
 
 function customAlert(text: string, title = '提示'): Promise<void> {
@@ -2038,9 +1987,7 @@ let isChecking = false;
 let accountHealthCache = new Map<string, AccountHealth>();
 let lastDiagnosticReport: DiagnosticReport | null = null;
 let networkProfilesCache: NetworkProfile[] = [];
-let logEntriesCache: AppLogEntry[] = [];
 let routerWorkbench: RouterWorkbench | undefined;
-let logsDirty = true;
 let networkEventDebounce: number | null = null;
 let userInfoRequestId = 0;
 let userInfoLoading = false;
@@ -2235,6 +2182,117 @@ async function init() {
   syncStandaloneBillingSecurity();
 
   renderIcons();
+  headerMenus = setupHeaderOverflowMenus({
+    renderIcons,
+    onLogSearchToggle: open => {
+      if (open) {
+        virtualLogs.setActive(true);
+      }
+      syncLogHeaderIndicators(virtualLogs.getStateSummary());
+    },
+    onLogFiltersToggle: () => {
+      syncLogHeaderIndicators(virtualLogs.getStateSummary());
+    },
+  });
+  virtualLogs.setup({
+    logsContent,
+    scroller: getLogsScroller(),
+    scrollButton: btnScrollLogs,
+    searchInput: logSearch,
+    sessionFilter: logSessionFilter,
+    levelFilter: logLevelFilter,
+    filterCountElement: logFilterCount,
+    loadHistory: () => (window.__TAURI__ ? invoke<AppLogEntry[]>('get_logs') : Promise.resolve([])),
+    onStateChange: summary => {
+      syncLogHeaderIndicators(summary);
+    },
+    onModuleFilter: () => {
+      headerMenus?.setLogSearchOpen(true, false);
+    },
+  });
+  syncLogHeaderIndicators(virtualLogs.getStateSummary());
+  setupNativeShellGuard({
+    onFindShortcut: () => {
+      const logsPage = document.getElementById('logs');
+      if (!logsPage?.classList.contains('active')) {
+        return false;
+      }
+      headerMenus?.setLogSearchOpen(true, true);
+      return true;
+    },
+  });
+  setupDesktopContextMenu({
+    getActivePage: () => document.querySelector('#main-content > .page.active')?.id || 'dashboard',
+    triggerNetworkCheck: () => {
+      document.getElementById('btn-manual-update')?.click();
+    },
+    openPage: pageId => activatePage(pageId),
+    openLogs: () => activatePage('logs'),
+    exportLogs: () => btnExportLogs.click(),
+    openSearchLogs: () => {
+      activatePage('logs');
+      headerMenus?.setLogSearchOpen(true, true);
+    },
+    runDiagnostics: () => {
+      activatePage('diagnostics');
+      void runDiagnostics();
+    },
+    copyDiagnosticReport: () => btnCopyDiagnostics.click(),
+    hasDiagnosticReport: () => Boolean(lastDiagnosticReport),
+    openBillingCenter: () => {
+      activatePage('billing-center', 'dashboard');
+      if (!billingCenterData) void refreshBillingCenterData();
+    },
+    openAddAccount: () => {
+      activatePage('accounts');
+      resetSensitivePasswordInput(addAccPassword);
+      addModal.classList.remove('hidden');
+    },
+    runPrimaryPageAction: pageId => {
+      if (pageId === 'dashboard') {
+        document.getElementById('btn-manual-update')?.click();
+        return;
+      }
+      if (pageId === 'billing-center') {
+        btnRefreshBillingCenter.click();
+        return;
+      }
+      if (pageId === 'accounts') {
+        btnShowAdd.click();
+        return;
+      }
+      if (pageId === 'diagnostics') {
+        btnRunDiagnostics.click();
+        return;
+      }
+      if (pageId === 'logs') {
+        btnExportLogs.click();
+        return;
+      }
+      if (pageId === 'settings') {
+        document.getElementById('btn-check-update')?.click();
+      }
+    },
+    getLogEntryByIndex: index => virtualLogs.getEntryByIndex(index),
+    filterLogsByModule: moduleName => {
+      activatePage('logs');
+      headerMenus?.setLogSearchOpen(true, false);
+      virtualLogs.filterByModule(moduleName);
+    },
+    copyAllFilteredLogs: async () => {
+      await virtualLogs.ensureLoaded();
+      const text = virtualLogs.formatFilteredLogsText();
+      if (!text.trim()) {
+        showShellToast('当前没有可复制的日志');
+        return;
+      }
+      await writeTextToClipboard(text);
+      showShellToast('已复制全部筛选日志');
+    },
+    writeClipboard: writeTextToClipboard,
+    readClipboard: async () => (await readTextFromClipboard()) ?? '',
+    notify: message => showShellToast(message),
+  });
   settingAutoLogin.checked = autoLoginEnabled;
   settingWifiChangeDetect.checked = wifiChangeDetectEnabled;
   settingCheckInterval.value = checkInterval.toString();
@@ -2444,6 +2502,19 @@ async function init() {
     }
   }
   await finishAppLaunch();
+  if (window.__TAURI__) {
+    const warmUpLogs = () => {
+      void virtualLogs.ensureLoaded();
+    };
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+    };
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      idleWindow.requestIdleCallback(warmUpLogs, { timeout: 1800 });
+    } else {
+      window.setTimeout(warmUpLogs, 1500);
+    }
+  }
   await showStartupFailures();
   if(tosAccepted)onboarding.start();
 }
@@ -2596,7 +2667,7 @@ async function refreshCredentialStorageHealth() {
 }
 
 function renderDiagnosticReport(report: DiagnosticReport) {
-  renderDiagnosticReportView(report, { busy: diagnosticRunActive || adapterRestartActive, showDetails: customAlert, formatTime: formatHealthTime });
+  renderDiagnosticReportView(report, { busy: diagnosticRunActive || adapterRestartActive, formatTime: formatHealthTime, renderIcons });
 }
 
 let diagnosticRunActive = false;
@@ -3324,6 +3395,7 @@ function activatePage(target: string, navTarget = target) {
 
   let prevScrollTop = 0;
   if (pageChanged) {
+    headerMenus?.closeAll(true);
     pageTransitionSeq += 1;
     clearPageSlideState();
     prevScrollTop = saveViewScrollPosition(getViewScrollKey(prevPageId));
@@ -3479,9 +3551,12 @@ function activatePage(target: string, navTarget = target) {
       void Promise.all([refreshAccountHealth(), refreshCredentialStorageHealth()]);
     });
   }
-  if (resolvedTarget === 'logs' && logsDirty) {
+  virtualLogs.setActive(resolvedTarget === 'logs');
+  if (resolvedTarget === 'logs') {
     runAfterPageSlide(() => {
-      if (logsDirty) renderFilteredLogs();
+      if (document.getElementById('logs')?.classList.contains('active')) {
+        virtualLogs.syncScrollButton(true);
+      }
     });
   }
   if (resolvedTarget === 'settings') {
@@ -3510,6 +3585,7 @@ function handleAndroidBack() {
       '.config-transfer-dialog [data-cancel]',
       '.image-captcha-overlay:not(.hidden) [data-cancel]',
       '#billing-webvpn-modal [data-cancel]',
+      '.diagnostic-details-actions .btn-primary',
       '#btn-confirm-cancel',
       '#btn-alert-ok',
       '#btn-alipay-payment-close-icon',
@@ -4089,24 +4165,12 @@ function setupEventListeners() {
   });
 
   btnClearLogs.addEventListener('click', () => {
-    if (logRenderFrame !== null) {
-      cancelAnimationFrame(logRenderFrame);
-      logRenderFrame = null;
-    }
-    logEntriesCache = [];
-    renderedLogLimit = IS_ANDROID ? ANDROID_LOG_RENDER_BATCH : Number.MAX_SAFE_INTEGER;
-    logFilterSignature = '';
-    renderFilteredLogs({ resetWindow: true });
+    virtualLogs.clear();
     if (window.__TAURI__) {
       invoke('clear_all_logs').catch(e => console.error(e));
     }
     window.AndroidBridge?.clearServiceLogs?.();
   });
-
-  logSearch.addEventListener('input', () => renderFilteredLogs({ resetWindow: true }));
-  logSessionFilter.addEventListener('change', () => renderFilteredLogs({ resetWindow: true }));
-  logLevelFilter.addEventListener('change', () => renderFilteredLogs({ resetWindow: true }));
-  getLogsScroller()?.addEventListener('scroll', loadOlderLogsNearTop, { passive: true });
 
   btnDiagnosticBundle.addEventListener('click', async () => {
     if (!window.__TAURI__) return;
@@ -4136,7 +4200,8 @@ function setupEventListeners() {
         await customAlert(`完整日志已导出到：\n${destination}`);
         return;
       }
-      const text = logsContent.textContent || '';
+      await virtualLogs.ensureLoaded();
+      const text = virtualLogs.formatFilteredLogsText();
       if (!text.trim()) {
         await customAlert('当前没有可导出的日志。');
         return;
@@ -4153,12 +4218,7 @@ function setupEventListeners() {
     }
   });
 
-  btnScrollLogs.addEventListener('click', () => {
-    if (logsDirty) renderFilteredLogs();
-    const scroller = getLogsScroller();
-    if (scroller) requestAnimationFrame(() => scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' }));
-    else logsContent.scrollIntoView({ block: 'end', behavior: 'smooth' });
-  });
+  // Floating scroll-to-bottom FAB is managed by VirtualLogsController.
 
   settingAutoLogin.addEventListener('change', async (e) => {
     autoLoginEnabled = (e.target as HTMLInputElement).checked;
@@ -5324,7 +5384,7 @@ function log(module: string, message: string, type: 'info' | 'error' | 'success'
     invoke('log_from_js', { module, message, logType: type }).catch(() => {});
     return;
   }
-  renderLogEntry(module, message, type);
+  virtualLogs.append({ module, message, type });
 }
 
 // Accounts

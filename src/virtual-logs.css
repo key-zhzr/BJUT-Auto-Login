@@ -1,0 +1,340 @@
+/* ==========================================================================
+   Virtual Logs Viewport, Collapsible Search/Filter Panel & Floating FAB
+   ========================================================================== */
+
+#logs.page.active {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: visible;
+}
+
+#logs .page-header {
+  flex: 0 0 auto;
+}
+
+/* Collapsible Search & Filter Panel (#log-filters / #log-filters-drawer / .log-filters-panel) */
+#logs .log-filters,
+#logs #log-filters-drawer,
+#logs .log-filters-panel {
+  flex: 0 0 auto;
+  overflow: visible;
+  transition:
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin-bottom 180ms ease;
+}
+
+#logs .log-filters[hidden],
+#logs #log-filters-drawer[hidden],
+#logs .log-filters-panel[hidden],
+#logs .log-filters.is-collapsed,
+#logs #log-filters-drawer.is-collapsed,
+#logs .log-filters-panel.is-collapsed,
+#logs #log-search-bar[hidden],
+#logs #log-filter-controls[hidden],
+#logs #log-search-bar.is-collapsed,
+#logs #log-filter-controls.is-collapsed {
+  display: none !important;
+}
+
+#logs #log-search-bar,
+#logs #log-filter-controls {
+  transition:
+    opacity 160ms ease,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Scrollport Wrapper + Bounded Flex Container */
+.logs-viewport-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.logs-viewport-wrap > .logs-container,
+#logs .logs-container {
+  position: relative;
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 768px) {
+  #logs.page.active {
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+  }
+
+  #logs.page.active .logs-container {
+    min-height: 0;
+  }
+}
+
+/* Virtual List Content & Spacers */
+#logs-content {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 100%;
+  contain: layout style;
+}
+
+#logs-content:empty {
+  display: grid;
+  place-items: center;
+  min-height: 12rem;
+}
+
+.virtual-logs-spacer {
+  flex: 0 0 auto;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  pointer-events: none;
+  contain: strict;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#logs-content .log-entry {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0.42rem 0.1rem;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-border, rgba(148, 163, 184, 0.18)) 55%, transparent);
+}
+
+#logs-content .log-entry.log-session-divider {
+  margin: 0;
+  padding: 0.68rem 0.25rem;
+  border-top: 1px solid var(--card-border, var(--theme-border));
+  border-bottom: 1px solid var(--card-border, var(--theme-border));
+  color: var(--text-muted);
+}
+
+/* Preserve full text selection across virtualized rows on desktop & Android */
+#logs-content,
+#logs-content .log-entry,
+#logs-content .log-entry * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Override global content-visibility rule on Android so virtualized heights stay exact */
+body.is-android #logs-content {
+  contain: layout style;
+}
+
+body.is-android #logs-content .log-entry {
+  content-visibility: visible !important;
+  contain-intrinsic-size: none !important;
+  contain: layout style;
+}
+
+/* Floating Scroll-to-Bottom Capsule (#btn-scroll-logs) */
+.logs-viewport-wrap > #btn-scroll-logs,
+#btn-scroll-logs.logs-scroll-fab {
+  position: absolute;
+  right: 1.05rem;
+  bottom: 1rem;
+  z-index: 25;
+}
+
+.logs-container > #btn-scroll-logs {
+  position: sticky;
+  bottom: 0.9rem;
+  align-self: flex-end;
+  margin-top: -2.65rem;
+  margin-left: auto;
+  z-index: 25;
+}
+
+#btn-scroll-logs {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 0.92rem;
+  margin: 0;
+  border-radius: 999px;
+  border: 1px solid var(--theme-border-strong, rgba(148, 163, 184, 0.28));
+  background: var(--theme-raised-bg, rgba(26, 31, 54, 0.96));
+  color: var(--theme-text, var(--text-main));
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 560;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  -webkit-backdrop-filter: blur(14px) saturate(1.25);
+  backdrop-filter: blur(14px) saturate(1.25);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate3d(0, 10px, 0) scale(0.94);
+  transition:
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 180ms,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#btn-scroll-logs * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#btn-scroll-logs svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: var(--accent-color, var(--primary-color));
+}
+
+#btn-scroll-logs.is-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition:
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 0s,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+#btn-scroll-logs[hidden] {
+  display: none !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  body:not(.is-android) #btn-scroll-logs:hover {
+    border-color: color-mix(in srgb, var(--accent-color, var(--primary-color)) 52%, var(--theme-border-strong));
+    background: color-mix(in srgb, var(--theme-raised-bg) 88%, var(--accent-color, var(--primary-color)) 12%);
+    transform: translate3d(0, -1px, 0) scale(1);
+  }
+}
+
+#btn-scroll-logs:active {
+  transform: translate3d(0, 0, 0) scale(0.97);
+}
+
+/* Basic Light Mode */
+:root[data-theme="basic"][data-color-scheme="light"] #btn-scroll-logs {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(15, 23, 42, 0.14);
+  box-shadow:
+    0 10px 24px rgba(15, 23, 42, 0.14),
+    0 2px 6px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* Apple OS 27 Translucent Liquid Glass Pill */
+:root[data-theme="apple27"] #btn-scroll-logs {
+  background: color-mix(in srgb, var(--apple-glass, var(--theme-raised-bg)) 82%, transparent);
+  border-color: var(--apple-separator-opaque, var(--theme-border-strong));
+  -webkit-backdrop-filter: blur(22px) saturate(1.45);
+  backdrop-filter: blur(22px) saturate(1.45);
+}
+
+:root[data-theme="apple27"][data-color-scheme="dark"] #btn-scroll-logs {
+  background: rgba(44, 44, 46, 0.78);
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.5),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.24);
+}
+
+:root[data-theme="apple27"][data-color-scheme="light"] #btn-scroll-logs {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(60, 60, 67, 0.18);
+  box-shadow:
+    0 8px 24px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.94);
+}
+
+/* WinUI Fluent Raised Capsule */
+:root[data-theme="winui"] #btn-scroll-logs {
+  border-radius: 999px;
+  background: var(--win-flyout-solid, var(--theme-raised-bg));
+  border-color: var(--theme-border-strong);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+
+:root[data-theme="winui"][data-color-scheme="dark"] #btn-scroll-logs {
+  background: rgba(44, 44, 44, 0.94);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.44),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme="winui"][data-color-scheme="light"] #btn-scroll-logs {
+  background: rgba(252, 252, 252, 0.95);
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.12),
+    0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* Android Touch Ergonomics & Mobile Clearance */
+body.is-android #btn-scroll-logs {
+  min-height: 40px;
+  height: 40px;
+  padding: 0 1rem;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+@media (max-width: 768px) {
+  .logs-viewport-wrap > #btn-scroll-logs,
+  #btn-scroll-logs.logs-scroll-fab {
+    right: 0.85rem;
+    bottom: 0.85rem;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  #btn-scroll-logs,
+  :root[data-theme="apple27"] #btn-scroll-logs,
+  :root[data-theme="winui"] #btn-scroll-logs {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    background: var(--theme-card-solid) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #btn-scroll-logs,
+  #logs .log-filters,
+  #logs #log-filters-drawer,
+  #logs .log-filters-panel {
+    transition: none !important;
+  }
+}

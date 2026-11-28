@@ -1,4 +1,9 @@
 html.is-android,
+body.is-android {
+  touch-action: pan-x pan-y;
+}
+
+html.is-android,
 body.is-android,
 body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs-container, .billing-records-table-wrap) {
   overscroll-behavior: none;
@@ -9,6 +14,9 @@ body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs
 #main-content { position:relative; overflow-y:scroll; overflow-x:clip; scrollbar-gutter:auto; }
 .modal-content { scrollbar-gutter:auto; }
 .logs-container, .router-table-scroll, .billing-records-table-wrap { scrollbar-gutter:stable; }
+body.is-android :is(.logs-container, .router-table-scroll, .billing-records-table-wrap) {
+  scrollbar-gutter: auto;
+}
 /* Half the actual gutter offsets content to the physical scrollport center.
    This also works in WebKit versions without stable/both-edges support. */
 /* A transform on the page would make fixed mobile navigation page-relative. */
@@ -17,7 +25,9 @@ body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs
 /* Only scrolling content reserves space. A root gutter exposes the native
    window background; menu gutters leave unpainted bands beside each option. */
 #main-content { isolation: isolate; }
-:root[data-theme] body.is-android #main-content::-webkit-scrollbar {
+:root[data-theme] html.is-android::-webkit-scrollbar,
+:root[data-theme] body.is-android::-webkit-scrollbar,
+:root[data-theme] body.is-android *::-webkit-scrollbar {
   width: 0 !important;
   height: 0 !important;
   display: none !important;
@@ -48,9 +58,9 @@ body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs
   background: rgba(148, 163, 184, 0.48);
 }
 @media(max-width:768px) {
-  :root[data-theme] :is(.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap)::-webkit-scrollbar { width:3px!important; height:3px!important; background:transparent!important; }
+  :root[data-theme] body:not(.is-android) :is(.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap)::-webkit-scrollbar { width:3px!important; height:3px!important; background:transparent!important; }
   :root[data-theme] body:not(.is-android) #main-content::-webkit-scrollbar { width:3px!important; height:3px!important; background:transparent!important; }
-  :root[data-theme] :is(.logs-container,#router-logs-content)::-webkit-scrollbar { width:8px!important; height:8px!important; background:transparent!important; }
+  :root[data-theme] body:not(.is-android) :is(.logs-container,#router-logs-content)::-webkit-scrollbar { width:8px!important; height:8px!important; background:transparent!important; }
   :root[data-theme] body.is-android #main-content > .page:not(.page-slide-from-right):not(.page-slide-from-left):not(.page-slide-leave-left):not(.page-slide-leave-right) { animation: none; }
 
   :root[data-theme] body.is-android #main-content > .page {
@@ -194,8 +204,13 @@ body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs
   }
 }
 @supports not selector(::-webkit-scrollbar) {
+  :root[data-theme] html.is-android,
+  :root[data-theme] body.is-android,
+  :root[data-theme] body.is-android * {
+    scrollbar-width: none !important;
+  }
   @media(max-width:768px) {
-    :root[data-theme] :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap) { scrollbar-width: thin; }
+    :root[data-theme] body:not(.is-android) :is(#main-content,.modal-content,.custom-select-options,.router-table-scroll,.billing-records-table-wrap) { scrollbar-width: thin; }
   }
 }
 :root[data-theme] #main-content > .page > .page-header {
@@ -280,19 +295,19 @@ body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs
   font-weight: 700;
 }
 :root[data-theme] #btn-open-billing,
-:root[data-theme] .diagnostics-actions .btn,
-:root[data-theme] .logs-actions .btn {
-  min-height: 2.3rem;
+:root[data-theme] .diagnostics-actions .btn:not(.btn-icon),
+:root[data-theme] .logs-actions .btn:not(.btn-icon) {
+  min-height: 2.15rem;
   height: auto;
   margin: 0;
-  padding: .42rem .78rem;
+  padding: .36rem .78rem;
   align-self: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: .4rem;
+  gap: .38rem;
 }
-:root[data-theme] body.is-android :is(#btn-open-billing, .diagnostics-actions .btn, .logs-actions .btn) {
+:root[data-theme] body.is-android :is(#btn-open-billing, .diagnostics-actions .btn:not(.btn-icon), .logs-actions .btn:not(.btn-icon)) {
   min-height: 44px;
 }
 /* Keep account, access mode and refresh on one row at every breakpoint. */
@@ -326,8 +341,9 @@ body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs
 :root[data-theme] .logs-container::-webkit-scrollbar-track { margin-block: 10px; }
 :root[data-theme] #logs.page.active { overflow: visible; }
 :root[data-theme] #logs .log-filters { flex: 0 0 auto; }
+:root[data-theme] #logs .logs-viewport-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 :root[data-theme] #logs .logs-container { flex: 1 1 auto; min-height: 0; max-height: none; }
-:root[data-theme] #logs .logs-actions { flex-wrap: wrap; overflow: visible; }
+:root[data-theme] #logs .logs-actions { flex-wrap: nowrap; overflow: visible; }
 :root[data-theme] .custom-select.opens-up .custom-select-options {
   top: auto;
   bottom: calc(100% + 5px);
@@ -345,9 +361,23 @@ body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs
 }
 @media(max-width:768px) {
   :root[data-theme] #main-content > .page > .page-header h1 { font-size: 1.6rem; }
-  :root[data-theme] #main-content > :is(#diagnostics, #logs, #accounts, #billing-center) > .page-header { align-items:stretch; }
-  :root[data-theme] #logs .logs-actions { width: 100%; gap: .4rem; }
-  :root[data-theme] #logs .logs-actions .btn { flex: 1 1 calc(50% - .4rem); justify-content: center; margin: 0; }
+  :root[data-theme] #main-content > :is(#diagnostics, #logs) > .page-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+  }
+  :root[data-theme] #main-content > :is(#diagnostics, #logs) > .page-header h1 {
+    min-width: 0;
+  }
+  :root[data-theme] #main-content > :is(#accounts, #billing-center) > .page-header { align-items:stretch; }
+  :root[data-theme] :is(#diagnostics .diagnostics-actions, #logs .logs-actions) {
+    width: auto;
+    margin-left: auto;
+    flex-wrap: nowrap;
+    gap: .4rem;
+  }
+  :root[data-theme] #logs .logs-actions .btn { flex: 0 0 auto; margin: 0; }
   :root[data-theme] #main-content > .page > .page-header { gap: .5rem; }
 }
 .config-transfer-dialog { width:min(100%,480px); max-width:480px; max-height:calc(100dvh - 2rem); overflow:auto; padding:1.5rem; }
@@ -376,7 +406,7 @@ body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs
 
 .router-port-actions{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;width:100%}.router-port-actions .router-port-login{grid-column:1/-1}.router-port-actions .btn{min-width:0;margin:0}.router-port-card>.custom-select{width:100%;min-width:0}
 
-:root[data-theme] :is(.logs-container,#router-logs-content){scrollbar-width:auto}
+:root[data-theme] body:not(.is-android) :is(.logs-container,#router-logs-content){scrollbar-width:auto}
 
 :root[data-theme] .custom-select-options { overscroll-behavior: none; overscroll-behavior-y: none; }
 :root[data-theme] .router-source-row button[aria-pressed="true"] { color:var(--primary-color); background:rgba(var(--primary-rgb),.13); border:1px solid var(--primary-color); }
@@ -857,4 +887,57 @@ body.is-android :is(#main-content, .modal-content, .custom-select-options, .logs
 :root[data-theme][data-macos-native-glass="ns-glass-effect"] body:not(.is-desktop).is-macos :is(#nav, .billing-mobile-nav) .nav-liquid-droplet {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
+}
+
+/* Theme-aware Network Diagnostics hierarchy, status accents & details modal */
+:root[data-theme] #diagnostic-summary {
+  border-left: 4px solid var(--theme-border-strong, var(--text-muted));
+}
+:root[data-theme] #diagnostic-summary:is(.healthy, .diagnostic-success) {
+  border-left-color: var(--success);
+}
+:root[data-theme] #diagnostic-summary:is(.authentication_required, .diagnostic-warning) {
+  border-left-color: var(--warning);
+}
+:root[data-theme] #diagnostic-summary:is(.offline, .no_network, .diagnostic-error) {
+  border-left-color: var(--error);
+}
+:root[data-theme] #diagnostic-summary .diagnostic-run-btn {
+  min-height: 2.45rem;
+}
+:root[data-theme] body.is-android #diagnostic-summary .diagnostic-run-btn {
+  min-height: 44px;
+}
+:root[data-theme] .diagnostic-step {
+  background: var(--theme-subtle-bg, rgba(148, 163, 184, 0.08));
+  border-color: var(--theme-border, var(--card-border));
+}
+:root[data-theme] .diagnostic-info-icon-btn {
+  border-radius: 999px;
+  background: var(--theme-subtle-bg, rgba(148, 163, 184, 0.12));
+  color: var(--theme-text-muted, var(--text-muted));
+}
+:root[data-theme] .diagnostic-info-icon-btn:hover {
+  background: rgba(var(--accent-rgb, var(--primary-rgb)), 0.14);
+  border-color: rgba(var(--accent-rgb, var(--primary-rgb)), 0.36);
+  color: var(--accent-color, var(--primary-color));
+}
+:root[data-theme] .diagnostic-detail-item,
+:root[data-theme] .diagnostic-details-matrix {
+  background: var(--theme-subtle-bg, rgba(148, 163, 184, 0.08));
+  border-color: var(--theme-border, var(--card-border));
+}
+:root[data-theme="winui"] #diagnostic-summary:is(.healthy, .diagnostic-success) {
+  border-left-color: var(--win-status-success-fg, var(--success));
+}
+:root[data-theme="winui"] #diagnostic-summary:is(.authentication_required, .diagnostic-warning) {
+  border-left-color: var(--win-status-warning-fg, var(--warning));
+}
+:root[data-theme="winui"] #diagnostic-summary:is(.offline, .no_network, .diagnostic-error) {
+  border-left-color: var(--win-status-danger-fg, var(--error));
+}
+:root[data-theme="winui"] .diagnostic-info-icon-btn:hover {
+  background: var(--win-subtle-fill-hover, var(--win-control-fill-hover));
+  border-color: var(--win-control-stroke-default, var(--theme-border));
+  color: var(--win-text-primary, var(--text-main));
 }

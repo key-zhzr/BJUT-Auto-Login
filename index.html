@@ -2,7 +2,7 @@
 <html lang="zh-cn">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#0f172a" />
     <title>BJUT-Auto-Login</title>
     <script src="/theme-bootstrap.js"></script>
@@ -22,6 +22,7 @@
     <link rel="stylesheet" href="/src/theme-apple.css" />
     <link rel="stylesheet" href="/src/theme-winui.css" />
     <link rel="stylesheet" href="/src/page-layout.css" />
+    <link rel="stylesheet" href="/src/header-overflow-menu.css" />
   </head>
   <body>
     <div id="app-loading-mask" class="app-loading-mask is-visible" role="status" aria-live="polite">
@@ -792,18 +793,56 @@
           <header class="page-header diagnostics-header">
             <h1>网络诊断</h1>
             <div class="diagnostics-actions">
-              <button id="btn-route-trace" class="btn btn-secondary btn-sm" type="button"><i data-lucide="route"></i><span>链路检查</span></button>
-              <button id="btn-issue-preview" class="btn btn-secondary btn-sm" type="button"><i data-lucide="message-square-warning"></i><span>反馈问题</span></button>
-              <button id="btn-copy-diagnostics" class="btn btn-secondary btn-sm" type="button" disabled><i data-lucide="copy"></i><span>复制报告</span></button>
-              <button id="btn-run-diagnostics" class="btn btn-primary btn-sm" type="button"><i data-lucide="activity"></i><span>开始诊断</span></button>
+              <div class="header-overflow-anchor">
+                <button
+                  id="btn-diagnostics-more"
+                  class="btn-icon header-overflow-trigger"
+                  type="button"
+                  aria-label="更多诊断操作"
+                  title="更多操作"
+                  aria-expanded="false"
+                  aria-haspopup="menu"
+                  aria-controls="diagnostics-overflow-menu"
+                >
+                  <i data-lucide="more-vertical"></i>
+                  <span class="header-action-dot" hidden aria-hidden="true"></span>
+                </button>
+                <div
+                  id="diagnostics-overflow-menu"
+                  class="header-overflow-menu"
+                  role="menu"
+                  popover="manual"
+                  hidden
+                  aria-labelledby="btn-diagnostics-more"
+                >
+                  <button id="btn-copy-diagnostics" class="header-overflow-item" type="button" role="menuitem" disabled>
+                    <i data-lucide="copy"></i>
+                    <span>复制报告</span>
+                  </button>
+                  <button id="btn-issue-preview" class="header-overflow-item" type="button" role="menuitem">
+                    <i data-lucide="message-square-warning"></i>
+                    <span>反馈问题</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </header>
 
           <div id="diagnostic-summary" class="diagnostic-summary glass-card diagnostic-idle">
-            <div>
-              <span id="diagnostic-summary-badge" class="health-badge neutral">尚未诊断</span>
-              <h3 id="diagnostic-summary-title">点击“开始诊断”检查完整网络链路</h3>
-              <p id="diagnostic-summary-meta">诊断不会发送账号密码</p>
+            <div class="diagnostic-summary-body">
+              <div class="diagnostic-summary-head">
+                <div class="diagnostic-summary-copy">
+                  <span id="diagnostic-summary-badge" class="health-badge neutral">尚未诊断</span>
+                  <h3 id="diagnostic-summary-title">点击“开始诊断”检查完整网络链路</h3>
+                  <p id="diagnostic-summary-meta">仅检查连通性与路由状态，不发送账号密码</p>
+                </div>
+                <div class="diagnostic-summary-action">
+                  <button id="btn-run-diagnostics" class="btn btn-primary diagnostic-run-btn" type="button">
+                    <i data-lucide="activity"></i>
+                    <span>开始诊断</span>
+                  </button>
+                </div>
+              </div>
               <div id="diagnostic-progress" class="diagnostic-progress" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                 <div class="diagnostic-progress-label">
                   <span id="diagnostic-progress-text">准备诊断…</span>
@@ -878,32 +917,99 @@
           <header class="page-header logs-header">
             <h1>运行日志</h1>
             <div class="logs-actions">
-              <button id="btn-diagnostic-bundle" class="btn btn-secondary btn-sm" type="button"><i data-lucide="shield-check"></i> 复制诊断包</button>
-              <button id="btn-export-logs" class="btn btn-secondary btn-sm" type="button"><i data-lucide="download"></i> 导出日志</button>
-              <button id="btn-scroll-logs" class="btn btn-secondary btn-sm" type="button"><i data-lucide="arrow-down-to-line"></i> 滚动到底部</button>
-              <button id="btn-clear-logs" class="btn btn-danger btn-sm btn-log-danger" type="button">清空日志</button>
+              <button
+                id="btn-toggle-log-search"
+                class="btn btn-secondary btn-sm header-compact-action"
+                type="button"
+                aria-expanded="false"
+                aria-controls="log-search-bar"
+              >
+                <i data-lucide="search"></i>
+                <span>搜索</span>
+                <span class="header-action-dot" hidden aria-hidden="true"></span>
+              </button>
+              <div class="header-overflow-anchor">
+                <button
+                  id="btn-logs-more"
+                  class="btn-icon header-overflow-trigger"
+                  type="button"
+                  aria-label="更多日志操作"
+                  title="更多操作"
+                  aria-expanded="false"
+                  aria-haspopup="menu"
+                  aria-controls="logs-overflow-menu"
+                >
+                  <i data-lucide="more-vertical"></i>
+                  <span class="header-action-dot" hidden aria-hidden="true"></span>
+                </button>
+                <div
+                  id="logs-overflow-menu"
+                  class="header-overflow-menu"
+                  role="menu"
+                  popover="manual"
+                  hidden
+                  aria-labelledby="btn-logs-more"
+                >
+                  <button
+                    id="btn-toggle-log-filters"
+                    class="header-overflow-item"
+                    type="button"
+                    role="menuitem"
+                    aria-expanded="false"
+                    aria-controls="log-filter-controls"
+                  >
+                    <i data-lucide="filter"></i>
+                    <span class="header-overflow-item-label">筛选条件</span>
+                    <span id="logs-filter-summary-badge" class="header-overflow-badge" hidden></span>
+                  </button>
+                  <button id="btn-diagnostic-bundle" class="header-overflow-item" type="button" role="menuitem">
+                    <i data-lucide="shield-check"></i>
+                    <span>复制诊断包</span>
+                  </button>
+                  <button id="btn-export-logs" class="header-overflow-item" type="button" role="menuitem">
+                    <i data-lucide="download"></i>
+                    <span>导出日志</span>
+                  </button>
+                  <div class="header-overflow-divider" role="separator"></div>
+                  <button id="btn-clear-logs" class="header-overflow-item is-danger" type="button" role="menuitem">
+                    <i data-lucide="trash-2"></i>
+                    <span>清空日志</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </header>
-          <div class="log-filters glass-card">
-            <input id="log-search" type="search" placeholder="搜索时间、模块或内容" autocomplete="off">
-            <div class="custom-select compact-select" id="log-session-filter" aria-label="启动会话">
-              <div class="custom-select-trigger" tabindex="0"><span>全部启动</span><i data-lucide="chevron-down"></i></div>
-              <div class="custom-select-options">
-                <div class="custom-option selected" data-value="all">全部启动</div>
-                <div class="custom-option" data-value="current">本次启动</div>
+
+          <div id="log-filters-drawer" class="log-filters glass-card" hidden>
+            <div id="log-search-bar" class="log-search-bar" hidden>
+              <div class="log-search-input-wrap">
+                <i class="log-search-icon" data-lucide="search" aria-hidden="true"></i>
+                <input id="log-search" type="search" placeholder="搜索时间、模块或日志内容" autocomplete="off" />
+                <button id="btn-clear-log-search" class="btn-icon log-search-clear" type="button" aria-label="清空搜索" hidden>
+                  <i data-lucide="x"></i>
+                </button>
               </div>
             </div>
-            <div class="custom-select compact-select" id="log-level-filter" aria-label="日志级别">
-              <div class="custom-select-trigger" tabindex="0"><span>全部级别</span><i data-lucide="chevron-down"></i></div>
-              <div class="custom-select-options">
-                <div class="custom-option selected" data-value="all">全部级别</div>
-                <div class="custom-option" data-value="error">错误</div>
-                <div class="custom-option" data-value="success">成功</div>
-                <div class="custom-option" data-value="info">信息</div>
-                <div class="custom-option" data-value="debug">调试</div>
+            <div id="log-filter-controls" class="log-filter-controls" hidden>
+              <div class="custom-select compact-select" id="log-session-filter" aria-label="启动会话">
+                <div class="custom-select-trigger" tabindex="0"><span>全部启动</span><i data-lucide="chevron-down"></i></div>
+                <div class="custom-select-options">
+                  <div class="custom-option selected" data-value="all">全部启动</div>
+                  <div class="custom-option" data-value="current">本次启动</div>
+                </div>
+              </div>
+              <div class="custom-select compact-select" id="log-level-filter" aria-label="日志级别">
+                <div class="custom-select-trigger" tabindex="0"><span>全部级别</span><i data-lucide="chevron-down"></i></div>
+                <div class="custom-select-options">
+                  <div class="custom-option selected" data-value="all">全部级别</div>
+                  <div class="custom-option" data-value="error">错误</div>
+                  <div class="custom-option" data-value="success">成功</div>
+                  <div class="custom-option" data-value="info">信息</div>
+                  <div class="custom-option" data-value="debug">调试</div>
+                </div>
               </div>
             </div>
-            <span id="log-filter-count">0 条</span>
+            <span id="log-filter-count" class="log-filter-count">0 条</span>
           </div>
 
           <details id="router-logs-panel" class="glass-card router-page-panel" hidden open>
@@ -911,11 +1017,17 @@
             <div class="router-actions"><button id="btn-router-logs-refresh" class="btn btn-secondary btn-sm" type="button">刷新</button></div>
             <pre id="router-logs-content" class="router-log-content">正在读取…</pre>
           </details>
-          
-          <div class="logs-container glass-card">
-            <div id="logs-content" class="logs-content">
-              <!-- Dynamically populated -->
+
+          <div class="logs-viewport-wrap">
+            <div class="logs-container glass-card">
+              <div id="logs-content" class="logs-content">
+                <!-- Dynamically populated -->
+              </div>
             </div>
+            <button id="btn-scroll-logs" class="btn btn-secondary btn-sm logs-scroll-fab" type="button" hidden aria-label="滚动到日志底部">
+              <i data-lucide="arrow-down-to-line"></i>
+              <span>滚动到底部</span>
+            </button>
           </div>
         </section>
 

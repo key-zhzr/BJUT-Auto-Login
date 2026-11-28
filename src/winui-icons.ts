@@ -2,12 +2,14 @@ import { createIcons, type IconNode } from 'lucide';
 
 import activitySvg from '@fluentui/svg-icons/icons/pulse_20_regular.svg?raw';
 import alertCircleSvg from '@fluentui/svg-icons/icons/error_circle_20_regular.svg?raw';
+import arrowDownSvg from '@fluentui/svg-icons/icons/arrow_down_20_regular.svg?raw';
 import arrowDownToLineSvg from '@fluentui/svg-icons/icons/arrow_download_20_regular.svg?raw';
 import arrowLeftSvg from '@fluentui/svg-icons/icons/arrow_left_20_regular.svg?raw';
 import arrowRightSvg from '@fluentui/svg-icons/icons/arrow_right_20_regular.svg?raw';
 import arrowUpCircleSvg from '@fluentui/svg-icons/icons/arrow_circle_up_20_regular.svg?raw';
 import barChart2Svg from '@fluentui/svg-icons/icons/data_histogram_20_regular.svg?raw';
 import bellSvg from '@fluentui/svg-icons/icons/alert_20_regular.svg?raw';
+import bugSvg from '@fluentui/svg-icons/icons/bug_20_regular.svg?raw';
 import checkSvg from '@fluentui/svg-icons/icons/checkmark_20_regular.svg?raw';
 import checkCircleSvg from '@fluentui/svg-icons/icons/checkmark_circle_20_regular.svg?raw';
 import chevronDownSvg from '@fluentui/svg-icons/icons/chevron_down_20_regular.svg?raw';
@@ -23,10 +25,13 @@ import creditCardSvg from '@fluentui/svg-icons/icons/payment_20_regular.svg?raw'
 import databaseSvg from '@fluentui/svg-icons/icons/database_20_regular.svg?raw';
 import downloadSvg from '@fluentui/svg-icons/icons/arrow_download_20_regular.svg?raw';
 import edit2Svg from '@fluentui/svg-icons/icons/edit_20_regular.svg?raw';
+import eraserSvg from '@fluentui/svg-icons/icons/eraser_20_regular.svg?raw';
 import externalLinkSvg from '@fluentui/svg-icons/icons/open_20_regular.svg?raw';
 import eyeSvg from '@fluentui/svg-icons/icons/eye_20_regular.svg?raw';
 import fileTextSvg from '@fluentui/svg-icons/icons/document_text_20_regular.svg?raw';
+import filterSvg from '@fluentui/svg-icons/icons/filter_20_regular.svg?raw';
 import fingerprintSvg from '@fluentui/svg-icons/icons/fingerprint_20_regular.svg?raw';
+import globeSvg from '@fluentui/svg-icons/icons/globe_20_regular.svg?raw';
 import gripVerticalSvg from '@fluentui/svg-icons/icons/re_order_dots_vertical_20_regular.svg?raw';
 import historySvg from '@fluentui/svg-icons/icons/history_20_regular.svg?raw';
 import homeSvg from '@fluentui/svg-icons/icons/home_20_regular.svg?raw';
@@ -39,6 +44,8 @@ import messageSquareWarningSvg from '@fluentui/svg-icons/icons/chat_warning_20_r
 import minimize2Svg from '@fluentui/svg-icons/icons/arrow_minimize_20_regular.svg?raw';
 import minusSvg from '@fluentui/svg-icons/icons/subtract_20_regular.svg?raw';
 import monitorSmartphoneSvg from '@fluentui/svg-icons/icons/phone_desktop_20_regular.svg?raw';
+import moreHorizontalSvg from '@fluentui/svg-icons/icons/more_horizontal_20_regular.svg?raw';
+import moreVerticalSvg from '@fluentui/svg-icons/icons/more_vertical_20_regular.svg?raw';
 import paletteSvg from '@fluentui/svg-icons/icons/color_20_regular.svg?raw';
 import pauseSvg from '@fluentui/svg-icons/icons/pause_20_regular.svg?raw';
 import playSvg from '@fluentui/svg-icons/icons/play_20_regular.svg?raw';
@@ -49,13 +56,16 @@ import receiptTextSvg from '@fluentui/svg-icons/icons/receipt_20_regular.svg?raw
 import refreshCwSvg from '@fluentui/svg-icons/icons/arrow_clockwise_20_regular.svg?raw';
 import routeSvg from '@fluentui/svg-icons/icons/arrow_routing_20_regular.svg?raw';
 import routerSvg from '@fluentui/svg-icons/icons/router_20_regular.svg?raw';
+import scissorsSvg from '@fluentui/svg-icons/icons/cut_20_regular.svg?raw';
 import searchSvg from '@fluentui/svg-icons/icons/search_20_regular.svg?raw';
+import selectAllSvg from '@fluentui/svg-icons/icons/select_all_on_20_regular.svg?raw';
 import settingsSvg from '@fluentui/svg-icons/icons/settings_20_regular.svg?raw';
 import shieldAlertSvg from '@fluentui/svg-icons/icons/shield_error_20_regular.svg?raw';
 import shieldCheckSvg from '@fluentui/svg-icons/icons/shield_checkmark_20_regular.svg?raw';
 import slidersHorizontalSvg from '@fluentui/svg-icons/icons/options_20_regular.svg?raw';
 import smartphoneSvg from '@fluentui/svg-icons/icons/phone_20_regular.svg?raw';
 import squareSvg from '@fluentui/svg-icons/icons/stop_20_regular.svg?raw';
+import terminalSvg from '@fluentui/svg-icons/icons/window_console_20_regular.svg?raw';
 import trash2Svg from '@fluentui/svg-icons/icons/delete_20_regular.svg?raw';
 import userSvg from '@fluentui/svg-icons/icons/person_20_regular.svg?raw';
 import userSearchSvg from '@fluentui/svg-icons/icons/person_search_20_regular.svg?raw';
@@ -68,12 +78,14 @@ import xSvg from '@fluentui/svg-icons/icons/dismiss_20_regular.svg?raw';
 const FLUENT_SVG_MAP: Readonly<Record<string, string>> = {
   activity: activitySvg,
   'alert-circle': alertCircleSvg,
+  'arrow-down': arrowDownSvg,
   'arrow-down-to-line': arrowDownToLineSvg,
   'arrow-left': arrowLeftSvg,
   'arrow-right': arrowRightSvg,
   'arrow-up-circle': arrowUpCircleSvg,
   'bar-chart-2': barChart2Svg,
   bell: bellSvg,
+  bug: bugSvg,
   check: checkSvg,
   'check-circle': checkCircleSvg,
   'chevron-down': chevronDownSvg,
@@ -89,15 +101,19 @@ const FLUENT_SVG_MAP: Readonly<Record<string, string>> = {
   database: databaseSvg,
   download: downloadSvg,
   'edit-2': edit2Svg,
+  eraser: eraserSvg,
   'external-link': externalLinkSvg,
   eye: eyeSvg,
   'file-text': fileTextSvg,
+  filter: filterSvg,
   fingerprint: fingerprintSvg,
+  globe: globeSvg,
   'grip-vertical': gripVerticalSvg,
   history: historySvg,
   home: homeSvg,
   info: infoSvg,
   'layout-dashboard': layoutDashboardSvg,
+  'list-filter': filterSvg,
   loader: loaderSvg,
   'locate-fixed': locateFixedSvg,
   'log-in': logInSvg,
@@ -105,6 +121,8 @@ const FLUENT_SVG_MAP: Readonly<Record<string, string>> = {
   'minimize-2': minimize2Svg,
   minus: minusSvg,
   'monitor-smartphone': monitorSmartphoneSvg,
+  'more-horizontal': moreHorizontalSvg,
+  'more-vertical': moreVerticalSvg,
   palette: paletteSvg,
   pause: pauseSvg,
   play: playSvg,
@@ -115,13 +133,16 @@ const FLUENT_SVG_MAP: Readonly<Record<string, string>> = {
   'refresh-cw': refreshCwSvg,
   route: routeSvg,
   router: routerSvg,
+  scissors: scissorsSvg,
   search: searchSvg,
+  'select-all': selectAllSvg,
   settings: settingsSvg,
   'shield-alert': shieldAlertSvg,
   'shield-check': shieldCheckSvg,
   'sliders-horizontal': slidersHorizontalSvg,
   smartphone: smartphoneSvg,
   square: squareSvg,
+  terminal: terminalSvg,
   'trash-2': trash2Svg,
   user: userSvg,
   'user-search': userSearchSvg,

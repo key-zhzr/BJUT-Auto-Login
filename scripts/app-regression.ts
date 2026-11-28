@@ -231,7 +231,20 @@ mockIPC(async (cmd, payload: any = {}) => {
     build_timestamp: installedBuildTimestamp + 60 * Math.min(updateManifestReads++, 1),
     platforms: {},
   };
-  if (['get_logs','get_network_events','get_account_health','get_recoverable_recharges'].includes(cmd)) return [];
+  if (cmd === 'get_logs') {
+    const injected = (window as any).__MOCK_LOGS__;
+    return Array.isArray(injected) ? injected : [];
+  }
+  if (cmd === 'write_clipboard') {
+    (window as any).__MOCK_CLIPBOARD__ = String(payload?.text ?? '');
+    return null;
+  }
+  if (cmd === 'read_clipboard') {
+    return typeof (window as any).__MOCK_CLIPBOARD__ === 'string'
+      ? (window as any).__MOCK_CLIPBOARD__
+      : '';
+  }
+  if (['get_network_events','get_account_health','get_recoverable_recharges'].includes(cmd)) return [];
   if (cmd === 'plugin:window|is_visible' || cmd === 'plugin:window|is_focused') return true;
   if (cmd === 'plugin:window|is_minimized') return false;
   if (cmd === 'get_billing_center') {

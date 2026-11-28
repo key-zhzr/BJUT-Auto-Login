@@ -2123,15 +2123,26 @@ input:focus {
 
 .logs-header {
   display: flex;
+  flex-direction: row;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 0.75rem;
+}
+
+.logs-header h1,
+.diagnostics-header h1 {
+  min-width: 0;
 }
 
 .logs-actions {
   margin-left: auto;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   justify-content: flex-end;
-  gap: 0.5rem;
+  gap: 0.45rem;
+  flex-shrink: 0;
 }
 
 .btn-log-danger {
@@ -2274,25 +2285,28 @@ input:checked + .slider:before { transform: translateX(24px); }
 
 /* Diagnostics & account health */
 .diagnostics-header {
+  display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 1rem;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 0.75rem;
 }
 
 .diagnostics-actions {
+  margin-left: auto;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 0.5rem;
-}
-
-.diagnostics-actions .btn {
-  min-height: 2.3rem;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  flex-shrink: 0;
 }
 
 .diagnostic-summary,
 .diagnostic-panel {
   border-radius: 14px;
-  padding: 1.35rem;
+  padding: 1.25rem 1.35rem;
 }
 
 .diagnostic-summary {
@@ -2307,14 +2321,73 @@ input:checked + .slider:before { transform: translateX(24px); }
 .diagnostic-summary.diagnostic-success { border-left-color: var(--success); }
 .diagnostic-summary.diagnostic-warning { border-left-color: var(--warning); }
 .diagnostic-summary.diagnostic-error { border-left-color: var(--error); }
-.diagnostic-summary h3 { margin: 0.65rem 0 0.45rem; line-height: 1.4; }
+
+.diagnostic-summary-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.diagnostic-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem 1.15rem;
+}
+
+.diagnostic-summary-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.diagnostic-summary-action {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.diagnostic-run-btn {
+  min-height: 2.45rem;
+  padding: 0.52rem 1.15rem;
+  border-radius: 999px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.diagnostic-summary h3 {
+  margin: 0.55rem 0 0.35rem;
+  font-size: 1.06rem;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
 .diagnostic-summary p,
 .diagnostic-panel p { color: var(--text-muted); font-size: 0.88rem; }
 #diagnostic-summary-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem 0.5rem;
-  margin-top: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+@media (max-width: 640px) {
+  .diagnostic-summary,
+  .diagnostic-panel {
+    padding: 1.05rem 1.05rem;
+  }
+  .diagnostic-summary-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.78rem;
+  }
+  .diagnostic-summary-action {
+    width: 100%;
+  }
+  .diagnostic-run-btn {
+    width: 100%;
+    min-height: 2.65rem;
+    justify-content: center;
+  }
 }
 .diagnostic-meta-chip {
   display: inline-flex;
@@ -2650,10 +2723,16 @@ input:checked + .slider:before { transform: translateX(24px); }
 .diagnostic-step {
   display: flex;
   align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.88rem 0.95rem;
-  border-radius: 11px;
-  background: rgba(0, 0, 0, 0.16);
+  gap: 0.78rem;
+  padding: 0.9rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--theme-border, var(--card-border));
+  background: var(--theme-subtle-bg, rgba(148, 163, 184, 0.08));
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.diagnostic-step:hover {
+  border-color: rgba(var(--accent-rgb, var(--primary-rgb)), 0.28);
 }
 
 .account-health-info,
@@ -2664,16 +2743,16 @@ input:checked + .slider:before { transform: translateX(24px); }
   align-items: center;
   justify-content: space-between;
   gap: 0.65rem;
-  margin-bottom: 0.34rem;
+  margin-bottom: 0.36rem;
 }
 .diagnostic-step-header strong {
-  font-size: 0.9rem;
+  font-size: 0.92rem;
   font-weight: 600;
   color: var(--text-main);
 }
 .diagnostic-step-lead {
   margin: 0;
-  color: var(--text-main);
+  color: var(--text-muted);
   font-size: 0.82rem;
   line-height: 1.58;
   overflow-wrap: anywhere;
@@ -2682,6 +2761,45 @@ input:checked + .slider:before { transform: translateX(24px); }
   flex: 0 0 auto;
   white-space: nowrap;
 }
+.diagnostic-info-icon-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 120ms ease;
+}
+.diagnostic-info-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.diagnostic-info-icon-btn:hover {
+  background: rgba(var(--accent-rgb, var(--primary-rgb)), 0.14);
+  border-color: rgba(var(--accent-rgb, var(--primary-rgb)), 0.34);
+  color: var(--accent-color, var(--primary-color));
+}
+.diagnostic-info-icon-btn:active {
+  transform: scale(0.94);
+}
+.diagnostic-info-icon-btn:focus-visible {
+  outline: 2px solid var(--accent-color, var(--primary-color));
+  outline-offset: 2px;
+}
+body.is-android .diagnostic-info-icon-btn {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+}
+
 .diagnostic-connectivity {
   width: 100%;
   table-layout: fixed;
@@ -2693,7 +2811,7 @@ input:checked + .slider:before { transform: translateX(24px); }
 }
 .diagnostic-connectivity th,
 .diagnostic-connectivity td {
-  padding: 0.3rem 0.12rem;
+  padding: 0.36rem 0.42rem;
   border-bottom: 1px solid var(--theme-border, var(--card-border));
 }
 .diagnostic-connectivity tbody tr:last-child > * {
@@ -2704,11 +2822,124 @@ input:checked + .slider:before { transform: translateX(24px); }
   font-weight: 500;
 }
 .diagnostic-connectivity th:first-child {
+  width: 32%;
   text-align: left;
 }
-.diagnostic-connectivity td[data-status="reachable"] { color: var(--success); }
+.diagnostic-connectivity td[data-status="reachable"] {
+  color: var(--success);
+  font-weight: 600;
+}
 .diagnostic-connectivity td[data-status="timeout"] { color: var(--warning); }
+.diagnostic-connectivity td:is(
+  [data-status="connection_error"],
+  [data-status="dns_error"],
+  [data-status="tls_error"],
+  [data-status="response_error"],
+  [data-status="unknown"],
+  [data-status="unreachable"]
+) { color: var(--error); }
 .diagnostic-connectivity td:is([data-status="not_configured"], [data-status="unavailable"]) { color: var(--text-muted); }
+
+/* Diagnostic step details modal */
+.diagnostic-details-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-width: 0;
+}
+.diagnostic-details-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.diagnostic-detail-duration {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.22rem 0.58rem;
+  border-radius: 999px;
+  border: 1px solid var(--theme-border, var(--card-border));
+  background: var(--theme-subtle-bg, rgba(148, 163, 184, 0.1));
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.diagnostic-details-summary {
+  margin: 0;
+  padding: 0.72rem 0.88rem;
+  border-radius: 10px;
+  border: 1px solid rgba(var(--accent-rgb, var(--primary-rgb)), 0.24);
+  background: rgba(var(--accent-rgb, var(--primary-rgb)), 0.08);
+  color: var(--text-main);
+  font-size: 0.84rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.diagnostic-details-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: min(44vh, 360px);
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+.diagnostic-detail-item {
+  padding: 0.62rem 0.78rem;
+  border-radius: 10px;
+  border: 1px solid var(--theme-border, var(--card-border));
+  background: var(--theme-subtle-bg, rgba(148, 163, 184, 0.08));
+}
+.diagnostic-detail-item.is-pair {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.45rem 0.9rem;
+  flex-wrap: wrap;
+}
+.diagnostic-detail-key {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.diagnostic-detail-value {
+  color: var(--text-main);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+  margin-left: auto;
+}
+.diagnostic-detail-text {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 0.82rem;
+  line-height: 1.56;
+  overflow-wrap: anywhere;
+}
+.diagnostic-detail-value.is-mono,
+.diagnostic-detail-text.is-mono {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 0.79rem;
+}
+.diagnostic-details-matrix {
+  padding: 0.72rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid var(--theme-border, var(--card-border));
+  background: var(--theme-subtle-bg, rgba(148, 163, 184, 0.07));
+}
+.diagnostic-details-matrix h4 {
+  margin: 0 0 0.45rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.diagnostic-details-actions {
+  margin-top: 0.15rem;
+}
+
 .account-health-reason {
   display: block;
   margin-top: 0.38rem;
@@ -2725,19 +2956,29 @@ input:checked + .slider:before { transform: translateX(24px); }
 }
 .account-health-actions { display: flex; align-items: center; gap: 0.5rem; }
 .diagnostic-step-marker {
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 1.65rem;
+  height: 1.65rem;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  font-size: 0.8rem;
   font-weight: 700;
   background: rgba(148, 163, 184, 0.14);
 }
-.diagnostic-step.success .diagnostic-step-marker { color: var(--success); }
-.diagnostic-step.warning .diagnostic-step-marker { color: var(--warning); }
-.diagnostic-step.error .diagnostic-step-marker { color: var(--error); }
+.diagnostic-step.success .diagnostic-step-marker {
+  color: var(--success);
+  background: rgba(16, 185, 129, 0.14);
+}
+.diagnostic-step.warning .diagnostic-step-marker {
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.15);
+}
+.diagnostic-step.error .diagnostic-step-marker {
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.15);
+}
 .diagnostic-step.skipped .diagnostic-step-marker { color: var(--text-muted); }
 .diagnostic-step-enter {
   animation: diagnosticStepEnter 220ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
@@ -2758,12 +2999,16 @@ input:checked + .slider:before { transform: translateX(24px); }
 
 .log-filters {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.65rem;
-  padding: 0.75rem;
+  gap: 0.55rem 0.65rem;
+  padding: 0.65rem 0.75rem;
   margin-bottom: 0.75rem;
+}
+
+.log-filters[hidden] {
+  display: none;
 }
 
 .log-filters:has(.custom-select.open) {
@@ -3631,9 +3876,10 @@ input:checked + .slider:before { transform: translateX(24px); }
     padding: calc(1rem + var(--safe-top)) max(1rem, var(--safe-right)) calc(6.2rem + var(--safe-bottom)) max(1rem, var(--safe-left));
   }
   .logs-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.75rem;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.65rem;
   }
   #logs.page.active {
     height: 100%;
@@ -3641,26 +3887,21 @@ input:checked + .slider:before { transform: translateX(24px); }
   }
   #logs .page-header {
     margin-bottom: 0.55rem;
-    gap: 0.45rem;
+    gap: 0.5rem;
   }
   #logs .page-header h1 { font-size: 1.45rem; margin-bottom: 0; }
   .logs-actions {
-    width: 100%;
-    margin-left: 0;
+    width: auto;
+    margin-left: auto;
     flex-wrap: nowrap;
-    justify-content: flex-start;
-    overflow-x: auto;
-    scrollbar-width: none;
-    padding-bottom: 0.15rem;
+    justify-content: flex-end;
+    overflow: visible;
+    padding-bottom: 0;
   }
-  .logs-actions::-webkit-scrollbar { display: none; }
-  .logs-actions .btn { flex: 0 0 auto; padding: 0.42rem 0.58rem; font-size: 0.72rem; }
-  .log-filters { margin-bottom: 0.5rem; padding: 0.5rem; gap: 0.45rem; }
+  .log-filters { margin-bottom: 0.55rem; padding: 0.55rem; gap: 0.45rem; }
   .log-filters input,
   .log-filters select { padding: 0.5rem 0.65rem; font-size: 0.8rem; }
   .logs-container { min-height: 45dvh; }
-  .log-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .log-filters input { grid-column: 1 / -1; }
   .dashboard-override-grid { flex-direction: column; }
   .settings-about-meta { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
   .setting-item-vpn {
@@ -3697,17 +3938,17 @@ input:checked + .slider:before { transform: translateX(24px); }
   .network-profile-actions { width: 100%; }
   .network-profile-actions .btn { flex: 1; }
   .diagnostics-header {
-    align-items: flex-start;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.65rem;
   }
   .diagnostics-actions {
-    width: 100%;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .diagnostics-actions .btn {
-    width: 100%;
-    min-width: 0;
+    width: auto;
+    margin-left: auto;
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
   }
   .diagnostics-grid { grid-template-columns: 1fr; }
   .diagnostic-panel-header { align-items: center; flex-wrap: wrap; }
@@ -3867,8 +4108,12 @@ input:checked + .slider:before { transform: translateX(24px); }
     padding-right: max(0.75rem, var(--safe-right));
   }
   .page-header { gap: 0.65rem; }
-  .diagnostics-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .diagnostics-actions .btn { width: 100%; padding-left: 0.55rem; padding-right: 0.55rem; }
+  .diagnostics-actions {
+    width: auto;
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
   .settings-nav-item { grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.68rem; padding: 0.78rem 0.72rem; }
   .settings-nav-meta { display: none; }
   .setting-item { align-items: flex-start; }
@@ -6254,6 +6499,11 @@ pre,
 .diagnostic-advice *,
 .diagnostic-step-info,
 .diagnostic-step-info *,
+.diagnostic-details-summary,
+.diagnostic-details-list,
+.diagnostic-details-list *,
+.diagnostic-details-matrix,
+.diagnostic-details-matrix *,
 .diagnostic-panel-item-message,
 .diagnostic-panel-item-detail,
 .trace-hop,
